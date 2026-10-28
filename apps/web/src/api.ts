@@ -34,6 +34,7 @@ export type LarkBotConfig = { configured: true; appId: string; name: string; tab
 export type LarkConfig = { configured: boolean; bots: LarkBotConfig[]; listeningDisabled: boolean };
 export type LarkHookStatus = { agentId?: string; supported: boolean; installed: boolean; writable: boolean; trustRequired: boolean; hooksPath?: string; reason?: string; trustInstructions?: string };
 export type Session = { id: string; agentId: string; state: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null };
+export type AutostartStatus = { supported: boolean; enabled: boolean; reason?: string; plistPath?: string; entrypoint?: string };
 export type SelfUpdateStatus = { currentVersion: string; distTag: string; latestVersion?: string; updateAvailable: boolean; canUpdate: boolean; updating: boolean; lastError?: string; checkedAt?: number; checkError?: string };
 export type ExternalSession = { sessionId: string; cwd: string; title?: string; updatedAt?: string };
 export type ScheduleDelivery = 'new_session' | 'append';
@@ -218,6 +219,8 @@ export const api = {
     const data = await response.json().catch(() => ({}));
     throw new Error(data.error?.message ?? '登录失败');
   },
+  autostartStatus: () => json<AutostartStatus>('/api/system/autostart', undefined, true),
+  setAutostart: (enabled: boolean) => json<AutostartStatus>('/api/system/autostart', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) }),
   systemCapabilities: () => json<{ platform: string; directoryPicker: boolean; filePicker: boolean; workingDirectory: string }>('/api/system/capabilities'),
   skills: (cwd?: string) => json<SkillReference[]>(`/api/system/skills${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   selectDirectory: () => json<{ path: string }>('/api/system/select-directory', { method: 'POST' }),

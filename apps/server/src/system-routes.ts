@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { AutostartService } from './daemon/autostart.js';
 import { discoverSkills } from './skill-catalog.js';
 
 const execFileAsync = promisify(execFile);
@@ -10,6 +11,8 @@ export interface SystemRoutesOptions {
   selectDirectory?: () => Promise<string>;
   selectFile?: () => Promise<string>;
   discoverSkills?: typeof discoverSkills;
+  /** 开机自启（macOS launchd）；未提供时接口返回 supported:false。 */
+  autostart?: AutostartService;
 }
 
 async function selectMacDirectory() {
@@ -32,6 +35,14 @@ export async function registerSystemRoutes(app: FastifyInstance, options: System
   const platform = options.platform ?? process.platform;
   const supported = platform === 'darwin';
   app.get('/api/system/capabilities', async () => ({ platform, directoryPicker: supported, filePicker: supported, workingDirectory: process.cwd() }));
+  app.get('/api/system/autostart', async () => options.autostart?.status() ?? { supported: false, enabled: false, reason: '当前运行方式不支持' });
+  app.put<{ Body: { enabled?: unknown } }>('/api/system/autostart', async (request, reply) => {
+    const enabled = request.body?.enabled;
+    if (typeof enabled !== 'boolean') return reply.code(400).send({ error: { code: 'INVALID_AUTOSTART_REQUEST', message: 'enabled must be a boolean' } });
+    if (!options.autostart) return reply.code(501).send({ error: { code: 'AUTOSTART_UNSUPPORTED', message: '当前运行方式不支持开机自启' } });
+    try { return enabled ? await options.autostart.enable() : await options.autostart.disable(); }
+    catch (error) { return reply.code(409).send({ error: { code: 'AUTOSTART_FAILED', message: error instanceof Error ? error.message : String(error) } }); }
+  });
   app.get<{ Querystring: { cwd?: string } }>('/api/system/skills', async request => (options.discoverSkills ?? discoverSkills)(request.query.cwd));
   app.post('/api/system/select-directory', async (_request, reply) => {
     if (!supported) return reply.code(501).send({ error: { code: 'DIRECTORY_PICKER_UNSUPPORTED', message: 'The native directory picker is currently available on macOS only' } });

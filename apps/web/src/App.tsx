@@ -37,6 +37,7 @@ import { SessionSearchDialog } from './SessionSearchDialog';
 import { WebAccessDeniedPanel, shouldCancelOnAccessDenied } from './WebAccessDeniedPanel';
 import { AgentConfigDialog } from './AgentConfigDialog';
 import { ImportSessionDialog } from './ImportSessionDialog';
+import { AutostartToggle } from './AutostartToggle';
 import { SelfUpdateNotice } from './SelfUpdateNotice';
 import { SessionPane } from './SessionPane';
 import { TerminalPanel } from './TerminalPanel';
@@ -705,7 +706,7 @@ export default function App() {
       <div className="min-w-[268px] px-2 pb-1 flex flex-col gap-1"><button type="button" onClick={() => { setSidebarOpen(false); setScheduleOpen(true); }} className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-[12px] font-medium text-zinc-600 transition-[background-color,color,transform] duration-200 hover:bg-white/75 hover:text-zinc-900 active:scale-[.99]"><AlarmClock size={14}/><span>定时任务</span></button><button type="button" onClick={() => { setSidebarOpen(false); setArchivedOpen(true); }} className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-[12px] font-medium text-zinc-600 transition-[background-color,color,transform] duration-200 hover:bg-white/75 hover:text-zinc-900 active:scale-[.99]"><Archive size={14}/><span>归档会话</span><span className="ml-auto text-[10px] tabular-nums text-zinc-400">{archivedSessions.length}</span></button></div>
 
       <div className="min-w-[268px] px-2 pb-2 flex flex-col gap-1"><button type="button" onClick={() => { setSidebarOpen(false); setImportOpen(true); }} className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-[12px] font-medium text-zinc-600 transition-[background-color,color,transform] duration-200 hover:bg-white/75 hover:text-zinc-900 active:scale-[.99]"><FolderOpen size={14}/><span>导入外部会话</span></button><button type="button" onClick={() => setAgentConfigOpen(true)} className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-[12px] font-medium text-zinc-600 transition-[background-color,color,transform] duration-200 hover:bg-white/75 hover:text-zinc-900 active:scale-[.99]"><Bot size={14}/><span>Agent 设置</span></button><button type="button" onClick={() => setLarkOpen(true)} className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-[12px] font-medium text-zinc-600 transition-[background-color,color,transform] duration-200 hover:bg-white/75 hover:text-zinc-900 active:scale-[.99]"><Settings2 size={14}/><span>飞书设置</span></button></div>
-      <div className="min-w-[268px] border-t border-zinc-200 px-4 py-2.5 text-[10px] text-zinc-400"><SelfUpdateNotice enabled={!webDenied}/></div>
+      <div className="min-w-[268px] border-t border-zinc-200 px-4 py-2.5 text-[10px] text-zinc-400"><SelfUpdateNotice enabled={!webDenied}/><AutostartToggle enabled={!webDenied}/></div>
       </div>
       {/* 收起态细条（仅桌面）：展开 + 快捷新建 + 两个设置入口 */}
       <div className={`hidden h-full w-full flex-col items-center gap-1 py-3 ${sidebarCollapsed ? 'md:flex' : ''}`}>

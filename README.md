@@ -56,6 +56,22 @@ agent-dock update     # 更新全局包并重启后台服务
 
 工作目录按会话解析，优先级：`POST /api/sessions` 的 `cwd` → Agent 专属 `cwd` → 进程级 `--cwd` → 启动 `agent-dock` 时所在目录。
 
+### 开机自启（macOS）
+
+```bash
+agent-dock autostart enable     # 登录 macOS 后自动在后台启动
+agent-dock autostart status
+agent-dock autostart disable
+```
+
+也可以在 Web 控制台左下角版本行下面打开「开机自启」开关（仅本机所有者可见，沙箱和非 macOS 不显示）。
+
+它会写入 `~/Library/LaunchAgents/com.agent-dock.daemon.plist`，登录时执行一次 `agent-dock start`，日志在 `<根目录>/.agentdock/daemon/autostart.log`，复用你记忆的数据库根目录。注意几点：
+
+- 没有 `KeepAlive`：服务崩溃不会被 launchd 自动拉起，`stop` / `restart` / `update` 仍然由 `agent-dock` 自己管理，不会和 launchd 打架。
+- plist 里固定了启用时的 Node 路径和 `PATH`（让开机后的服务仍找得到 `codex`、`claude` 等 CLI）。升级或切换 Node 版本、`PATH` 里的工具位置变了之后，重新执行一次 `agent-dock autostart enable` 即可刷新。
+- 建议在全局安装的 `@agent-dock/cli` 下启用；从源码目录启用会指向该目录的构建产物。
+
 ### 前台与后台
 
 不带子命令的 `agent-dock` 在前台直接启动服务；只有显式的 `start` 才转入后台。两者互不干扰，可以同时用。

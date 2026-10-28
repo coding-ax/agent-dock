@@ -844,3 +844,36 @@ describe('web access gate', () => {
     expect(response.statusCode).not.toBe(401);
   });
 });
+
+describe('autostart routes', () => {
+  const status = { supported: true, enabled: false, plistPath: '/p.plist' };
+  const make = async () => {
+    const autostart = { status: vi.fn(() => status), enable: vi.fn(async () => ({ ...status, enabled: true })), disable: vi.fn(async () => status) };
+    const app = await buildApp({} as any, { system: { platform: 'darwin', autostart: autostart as any } });
+    return { app, autostart };
+  };
+
+  it('reports and toggles the login item', async () => {
+    const { app, autostart } = await make();
+    expect((await app.inject({ method: 'GET', url: '/api/system/autostart' })).json()).toEqual(status);
+    expect((await app.inject({ method: 'PUT', url: '/api/system/autostart', payload: { enabled: true } })).json()).toMatchObject({ enabled: true });
+    await app.inject({ method: 'PUT', url: '/api/system/autostart', payload: { enabled: false } });
+    expect(autostart.enable).toHaveBeenCalledTimes(1);
+    expect(autostart.disable).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('validates the body, surfaces failures and degrades without a service', async () => {
+    const { app, autostart } = await make();
+    expect((await app.inject({ method: 'PUT', url: '/api/system/autostart', payload: { enabled: 'yes' } })).statusCode).toBe(400);
+    autostart.enable.mockRejectedValueOnce(new Error('launchctl 失败'));
+    const failed = await app.inject({ method: 'PUT', url: '/api/system/autostart', payload: { enabled: true } });
+    expect(failed.statusCode).toBe(409);
+    expect(failed.json().error).toMatchObject({ code: 'AUTOSTART_FAILED', message: 'launchctl 失败' });
+    await app.close();
+    const bare = await buildApp({} as any, { system: { platform: 'darwin' } });
+    expect((await bare.inject({ method: 'GET', url: '/api/system/autostart' })).json()).toMatchObject({ supported: false, enabled: false });
+    expect((await bare.inject({ method: 'PUT', url: '/api/system/autostart', payload: { enabled: true } })).statusCode).toBe(501);
+    await bare.close();
+  });
+});

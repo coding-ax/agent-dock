@@ -76,6 +76,7 @@ export interface CliHandlers {
   daemonRestart?(options: CliOptions): void | Promise<void>;
   daemonStatus?(options: StatusCliOptions): void | Promise<void>;
   update?(options: UpdateCliOptions): void | Promise<void>;
+  autostart?(action: 'enable' | 'disable' | 'status', options: { json?: boolean }): void | Promise<void>;
   larkSend?(markdown: string | undefined, options: LarkCliOptions): void | Promise<void>;
   larkUpdate?(markdown: string | undefined, options: LarkCliOptions): void | Promise<void>;
   groupSelf?(): void | Promise<void>;
@@ -384,6 +385,11 @@ Changes take effect immediately; no restart needed.`);
     .option('--dist-tag <tag>', 'npm dist-tag to install (default: latest)', 'latest')
     .action(options => handlers.update?.(options));
 
+  const autostart = program.command('autostart').description('Start AgentDock automatically at login (macOS launchd)');
+  for (const [action, description] of [['enable', 'Install the login item (runs `agent-dock start` at login)'], ['disable', 'Remove the login item'], ['status', 'Show whether the login item is installed']] as const) {
+    autostart.command(action).description(description).option('--json', 'Output raw JSON').action(options => handlers.autostart?.(action, options));
+  }
+
   const addProcessCommands = (parent: Command) => {
     parent.command('start')
       .description('Start the AgentDock server in the background')
@@ -416,6 +422,7 @@ Examples:
   $ agent-dock status
   $ agent-dock restart --port 4410
   $ agent-dock update --dist-tag fix
+  $ agent-dock autostart enable
   $ agent-dock stop
   $ agent-dock daemon start --port 4310
   $ agent-dock daemon status

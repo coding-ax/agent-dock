@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { AutostartService } from './daemon/autostart.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { loadEnvFile } from 'node:process';
@@ -135,6 +136,12 @@ async function main() {
     daemonStatus: options => {
       const status = daemonStatus();
       process.stdout.write(`${options.json ? JSON.stringify({ ok: true, action: 'status', ...status }) : formatDaemonStatus(status, { interactive: interactiveOutput() })}\n`);
+    },
+    autostart: async (action, options) => {
+      const service = new AutostartService({ entrypoint: fileURLToPath(import.meta.url) });
+      const status = action === 'enable' ? await service.enable() : action === 'disable' ? await service.disable() : service.status();
+      if (options.json) { output({ action, ...status }); return; }
+      process.stdout.write(`${!status.supported ? `不支持：${status.reason}` : status.enabled ? `开机自启：已开启\n${status.plistPath}` : '开机自启：未开启'}\n`);
     },
     update: async options => {
       guardSelfRestart('update');

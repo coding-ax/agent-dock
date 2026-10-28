@@ -1,3 +1,4 @@
+import { AutostartService } from './daemon/autostart.js';
 import { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { loadConfig, type AppConfig } from '@agent-dock/agent-dock-config';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
@@ -72,7 +73,8 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string };
     const selfUpdate = options.cliEntrypoint ? new SelfUpdateService({ currentVersion: packageJson.version, packageName: packageJson.name, cliEntrypoint: options.cliEntrypoint, env }) : undefined;
     schedules = new ScheduleService(repos.schedules, repos.sessions, runtime);
-    app = await buildApp(runtime, { webRoot, webAuth, schedules, ...(selfUpdate ? { selfUpdate } : {}), llm: { service: llm }, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' } });
+    const autostart = options.cliEntrypoint ? new AutostartService({ entrypoint: options.cliEntrypoint, env }) : undefined;
+    app = await buildApp(runtime, { webRoot, webAuth, schedules, ...(selfUpdate ? { selfUpdate } : {}), ...(autostart ? { system: { autostart } } : {}), llm: { service: llm }, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' } });
     await app.listen(listenOptions(config));
     // 听到端口后再开始扫描：启动失败时不会先投递出去一半。
     schedules.start();

@@ -138,4 +138,9 @@ describe('AgentDock CLI', () => {
     await createCliProgram('0.0.6', { update }).parseAsync(['node', 'agent-dock', 'update', '--dist-tag', 'fix']);
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ distTag: 'fix' }));
   });
+  it('dispatches autostart subcommands', () => {
+    const autostart = vi.fn();
+    for (const action of ['enable', 'disable', 'status']) createCliProgram('0.0.5', { autostart }).parse(['node', 'agent-dock', 'autostart', action, '--json']);
+    expect(autostart.mock.calls.map(call => [call[0], call[1].json])).toEqual([['enable', true], ['disable', true], ['status', true]]);
+  });
 });
