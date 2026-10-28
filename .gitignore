@@ -1,0 +1,36 @@
+node_modules
+dist
+.vite
+coverage
+*.tsbuildinfo
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+.agentdock
+apps/server/public
+log/
+
+# 本地发包/构建时留下的缓存目录（npm 缓存、Swift module cache），体积以 G 计
+.npm-cache/
+.npm-cache-pub/
+.swift-modcache/
+
+# AgentBuddy skill installations
+.agents/
+# .claude 只放行仓库自带的开发 skill（AGENTS.md 引用），其余本地配置不提交
+.claude/*
+!.claude/skills
+.claude/skills/*
+!.claude/skills/agent-dock-self-dev
+.codex/
+.trae/
+agentbuddy.yaml
+agentbuddy-lock.yaml
+
+# 系统文件、日志与本地打包产物
+.DS_Store
+*.log
+*.tgz

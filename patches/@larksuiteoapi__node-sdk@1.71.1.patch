@@ -1,0 +1,229 @@
+diff --git a/es/index.js b/es/index.js
+index 8196d32573b247aaf3d8b66c6e9cc7df3fcdddc5..cc4f6b78b9f9cc2bf22eff2f0940af3f55bb57a0 100644
+--- a/es/index.js
++++ b/es/index.js
+@@ -94862,6 +94862,48 @@ class WSClient {
+         this.onReconnected = onReconnected;
+         this.handshakeTimeoutMs = handshakeTimeoutMs;
+         this.pingTimeoutSec = (_a = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.pingTimeout) !== null && _a !== void 0 ? _a : 0;
++        // [agent-dock patch] caller-tunable reconnect policy: hard attempt cap
++        // and exponential backoff. Persisted on the instance and re-applied
++        // after every successful endpoint pull, since pullConnectConfig
++        // overwrites ws settings with server-pushed ClientConfig.
++        this.reconnectMaxAttempts = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.reconnectMaxAttempts;
++        this.reconnectBaseIntervalMs = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.reconnectBaseIntervalMs;
++        this.reconnectMaxIntervalMs = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.reconnectMaxIntervalMs;
++        this.reconnectMultiplier = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.reconnectMultiplier;
++        this.applyReconnectOverrides();
++    }
++    /**
++     * [agent-dock patch] Re-apply caller-supplied reconnect policy over the
++     * WSConfig. Built-in defaults (and server-pushed ClientConfig) otherwise
++     * force an infinite, fixed-interval retry loop during long outages.
++     */
++    applyReconnectOverrides() {
++        const overrides = {};
++        if (typeof this.reconnectMaxAttempts === 'number' && this.reconnectMaxAttempts >= -1)
++            overrides.reconnectCount = this.reconnectMaxAttempts;
++        if (typeof this.reconnectBaseIntervalMs === 'number' && this.reconnectBaseIntervalMs > 0)
++            overrides.reconnectInterval = this.reconnectBaseIntervalMs;
++        if (typeof this.reconnectMultiplier === 'number' && this.reconnectMultiplier > 1)
++            overrides.reconnectMultiplier = this.reconnectMultiplier;
++        if (typeof this.reconnectMaxIntervalMs === 'number' && this.reconnectMaxIntervalMs > 0)
++            overrides.reconnectMaxIntervalMs = this.reconnectMaxIntervalMs;
++        if (Object.keys(overrides).length)
++            this.wsConfig.updateWs(overrides);
++    }
++    /**
++     * [agent-dock patch] Delay before the next reconnect attempt:
++     * base * multiplier^(attempt-1), capped at maxInterval. Falls back to the
++     * configured fixed interval when no multiplier (>1) is set.
++     */
++    reconnectDelayMs(attempt, baseInterval) {
++        const ws = this.wsConfig.getWS();
++        const multiplier = ws.reconnectMultiplier;
++        if (typeof multiplier !== 'number' || multiplier <= 1)
++            return baseInterval;
++        const maxInterval = typeof ws.reconnectMaxIntervalMs === 'number' && ws.reconnectMaxIntervalMs > 0
++            ? ws.reconnectMaxIntervalMs
++            : Infinity;
++        return Math.min(maxInterval, baseInterval * Math.pow(multiplier, Math.max(0, attempt - 1)));
+     }
+     /**
+      * Start the pong watchdog after sending a ping. If no inbound frame
+@@ -94972,6 +95014,9 @@ class WSClient {
+                     reconnectInterval: ClientConfig.ReconnectInterval * 1000,
+                     reconnectNonce: ClientConfig.ReconnectNonce * 1000
+                 });
++                // [agent-dock patch] server-pushed ClientConfig must not
++                // clobber the caller's reconnect policy.
++                this.applyReconnectOverrides();
+                 this.logger.debug('[ws]', `get connect config success, ws url: ${URL}`);
+                 return { ok: true };
+             }
+@@ -95149,16 +95194,22 @@ class WSClient {
+                             return;
+                         }
+                         this.logger.info('ws', `unable to connect to the server after trying ${count} times")`);
+-                        if (reconnectCount >= 0 && count >= reconnectCount) {
++                        // [agent-dock patch] re-read live config each attempt:
++                        // pullConnectConfig re-applies overrides on every pull,
++                        // and the delay follows exponential backoff.
++                        const liveWs = this.wsConfig.getWS();
++                        const liveReconnectCount = liveWs.reconnectCount;
++                        if (liveReconnectCount >= 0 && count >= liveReconnectCount) {
+                             this.isConnecting = false;
+                             this.terminalError = true;
+                             this.safeInvoke('onError', this.onError, new Error(`WebSocket reconnect exhausted after ${count} attempts`));
+                             return;
+                         }
++                        const backoffDelay = this.reconnectDelayMs(count, liveWs.reconnectInterval);
+                         this.reconnectInterval = setTimeout(() => {
+                             loopReConnect.bind(this)(count);
+-                        }, reconnectInterval);
+-                        this.reconnectInfo.nextConnectTime = Date.now() + reconnectInterval;
++                        }, backoffDelay);
++                        this.reconnectInfo.nextConnectTime = Date.now() + backoffDelay;
+                     });
+                 }).bind(this)(0);
+             }), reconnectNonceTime);
+@@ -95227,6 +95278,8 @@ class WSClient {
+                     reconnectInterval: ReconnectInterval * 1000,
+                     reconnectNonce: ReconnectNonce * 1000,
+                 });
++                // [agent-dock patch] pong 帧携带的服务端配置同样不能覆盖调用方的重连策略。
++                this.applyReconnectOverrides();
+                 this.logger.trace('[ws]', 'update wsConfig with pong data');
+             }
+         });
+diff --git a/lib/index.js b/lib/index.js
+index 07f416d716e7d773a0202306d66de41a616cdd8f..f43a827fb1c201acd7ad64aa774e59902880a0e9 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -94880,6 +94880,48 @@ class WSClient {
+         this.onReconnected = onReconnected;
+         this.handshakeTimeoutMs = handshakeTimeoutMs;
+         this.pingTimeoutSec = (_a = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.pingTimeout) !== null && _a !== void 0 ? _a : 0;
++        // [agent-dock patch] caller-tunable reconnect policy: hard attempt cap
++        // and exponential backoff. Persisted on the instance and re-applied
++        // after every successful endpoint pull, since pullConnectConfig
++        // overwrites ws settings with server-pushed ClientConfig.
++        this.reconnectMaxAttempts = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.reconnectMaxAttempts;
++        this.reconnectBaseIntervalMs = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.reconnectBaseIntervalMs;
++        this.reconnectMaxIntervalMs = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.reconnectMaxIntervalMs;
++        this.reconnectMultiplier = userWsConfig === null || userWsConfig === void 0 ? void 0 : userWsConfig.reconnectMultiplier;
++        this.applyReconnectOverrides();
++    }
++    /**
++     * [agent-dock patch] Re-apply caller-supplied reconnect policy over the
++     * WSConfig. Built-in defaults (and server-pushed ClientConfig) otherwise
++     * force an infinite, fixed-interval retry loop during long outages.
++     */
++    applyReconnectOverrides() {
++        const overrides = {};
++        if (typeof this.reconnectMaxAttempts === 'number' && this.reconnectMaxAttempts >= -1)
++            overrides.reconnectCount = this.reconnectMaxAttempts;
++        if (typeof this.reconnectBaseIntervalMs === 'number' && this.reconnectBaseIntervalMs > 0)
++            overrides.reconnectInterval = this.reconnectBaseIntervalMs;
++        if (typeof this.reconnectMultiplier === 'number' && this.reconnectMultiplier > 1)
++            overrides.reconnectMultiplier = this.reconnectMultiplier;
++        if (typeof this.reconnectMaxIntervalMs === 'number' && this.reconnectMaxIntervalMs > 0)
++            overrides.reconnectMaxIntervalMs = this.reconnectMaxIntervalMs;
++        if (Object.keys(overrides).length)
++            this.wsConfig.updateWs(overrides);
++    }
++    /**
++     * [agent-dock patch] Delay before the next attempt:
++     * base * multiplier^(attempt-1), capped at maxInterval. Falls back to the
++     * configured fixed interval when no multiplier (>1) is set.
++     */
++    reconnectDelayMs(attempt, baseInterval) {
++        const ws = this.wsConfig.getWS();
++        const multiplier = ws.reconnectMultiplier;
++        if (typeof multiplier !== 'number' || multiplier <= 1)
++            return baseInterval;
++        const maxInterval = typeof ws.reconnectMaxIntervalMs === 'number' && ws.reconnectMaxIntervalMs > 0
++            ? ws.reconnectMaxIntervalMs
++            : Infinity;
++        return Math.min(maxInterval, baseInterval * Math.pow(multiplier, Math.max(0, attempt - 1)));
+     }
+     /**
+      * Start the pong watchdog after sending a ping. If no inbound frame
+@@ -94990,6 +95032,9 @@ class WSClient {
+                     reconnectInterval: ClientConfig.ReconnectInterval * 1000,
+                     reconnectNonce: ClientConfig.ReconnectNonce * 1000
+                 });
++                // [agent-dock patch] server-pushed ClientConfig must not
++                // clobber the caller's reconnect policy.
++                this.applyReconnectOverrides();
+                 this.logger.debug('[ws]', `get connect config success, ws url: ${URL}`);
+                 return { ok: true };
+             }
+@@ -95167,16 +95212,22 @@ class WSClient {
+                             return;
+                         }
+                         this.logger.info('ws', `unable to connect to the server after trying ${count} times")`);
+-                        if (reconnectCount >= 0 && count >= reconnectCount) {
++                        // [agent-dock patch] re-read live config each attempt:
++                        // pullConnectConfig re-applies overrides on every pull,
++                        // and the delay follows exponential backoff.
++                        const liveWs = this.wsConfig.getWS();
++                        const liveReconnectCount = liveWs.reconnectCount;
++                        if (liveReconnectCount >= 0 && count >= liveReconnectCount) {
+                             this.isConnecting = false;
+                             this.terminalError = true;
+                             this.safeInvoke('onError', this.onError, new Error(`WebSocket reconnect exhausted after ${count} attempts`));
+                             return;
+                         }
++                        const backoffDelay = this.reconnectDelayMs(count, liveWs.reconnectInterval);
+                         this.reconnectInterval = setTimeout(() => {
+                             loopReConnect.bind(this)(count);
+-                        }, reconnectInterval);
+-                        this.reconnectInfo.nextConnectTime = Date.now() + reconnectInterval;
++                        }, backoffDelay);
++                        this.reconnectInfo.nextConnectTime = Date.now() + backoffDelay;
+                     });
+                 }).bind(this)(0);
+             }), reconnectNonceTime);
+@@ -95245,6 +95296,8 @@ class WSClient {
+                     reconnectInterval: ReconnectInterval * 1000,
+                     reconnectNonce: ReconnectNonce * 1000,
+                 });
++                // [agent-dock patch] pong 帧携带的服务端配置同样不能覆盖调用方的重连策略。
++                this.applyReconnectOverrides();
+                 this.logger.trace('[ws]', 'update wsConfig with pong data');
+             }
+         });
+diff --git a/types/index.d.ts b/types/index.d.ts
+index 28fb275dc1d0141b561fd044913364de04cc2da8..4e0269d8a4191e38744b462ecddf956cabd1350a 100644
+--- a/types/index.d.ts
++++ b/types/index.d.ts
+@@ -312307,6 +312307,28 @@ interface WSConfigOverrides {
+      * errors.
+      */
+     pingTimeout?: number;
++    /**
++     * [agent-dock patch] Maximum consecutive reconnect attempts before the
++     * client gives up and fires `onError`. -1 (or unset) keeps the SDK default
++     * of retrying forever.
++     */
++    reconnectMaxAttempts?: number;
++    /**
++     * [agent-dock patch] Base reconnect delay in milliseconds used by the
++     * exponential-backoff schedule. Also serves as the fixed delay when
++     * `reconnectMultiplier` is unset / <= 1.
++     */
++    reconnectBaseIntervalMs?: number;
++    /**
++     * [agent-dock patch] Upper bound of the backoff schedule in milliseconds.
++     */
++    reconnectMaxIntervalMs?: number;
++    /**
++     * [agent-dock patch] Backoff multiplier applied per failed attempt:
++     * delay(attempt n) = base * multiplier^(n-1). Values <= 1 mean fixed
++     * interval (SDK default behavior).
++     */
++    reconnectMultiplier?: number;
+ }
+ interface IConstructorParams {
+     appId: string;

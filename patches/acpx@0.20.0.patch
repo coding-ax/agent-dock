@@ -1,0 +1,40 @@
+diff --git a/dist/queue-owner-runtime-Be8sr9L5.js b/dist/queue-owner-runtime-Be8sr9L5.js
+index dc38270b99631302d5dd6654cad565ea61d75cd8..09558b235ac9f4d1152eaae77ce5213f76c869e7 100644
+--- a/dist/queue-owner-runtime-Be8sr9L5.js
++++ b/dist/queue-owner-runtime-Be8sr9L5.js
+@@ -1131,6 +1131,8 @@ const COPILOT_HELP_TIMEOUT_MS = 2e3;
+ const CLAUDE_CODE_DEFAULT_SETTING_SOURCES = ["project", "local"];
+ const QODER_BENIGN_STDOUT_LINES = /* @__PURE__ */ new Set(["Received interrupt signal. Cleaning up resources...", "Cleanup completed. Exiting..."]);
+ function resolveAgentCloseAfterStdinEndMs(agentCommand) {
++	// Codex ACP waits up to 2s for its app-server to release the session writer.
++	if (splitCommandLine(agentCommand).args.some(arg => basenameToken(arg) === "codex-acp.mjs")) return 4000;
+ 	const { command } = splitCommandLine(agentCommand);
+ 	return basenameToken(command) === "qodercli" ? QODER_AGENT_CLOSE_AFTER_STDIN_END_MS : DEFAULT_AGENT_CLOSE_AFTER_STDIN_END_MS;
+ }
+@@ -5107,7 +5109,9 @@ async function replaySessionPreferences(params) {
+ 			client: params.client,
+ 			record: params.record,
+ 			sessionId: params.sessionId,
+-			desiredModeId: params.createdFreshSession ? params.desiredModeId : void 0,
++			// ACP agents may restore history without restoring their in-memory mode.
++			// Replay the explicitly selected mode on loaded sessions as well.
++			desiredModeId: params.desiredModeId,
+ 			replay,
+ 			previousSessionId: params.originalSessionId,
+ 			timeoutMs: params.timeoutMs,
+diff --git a/dist/runtime.js b/dist/runtime.js
+index 7bdc8e8fc93e92df73028e45ae638a809e9ba329..17824c8ac7bb4b0cb0ac7cdbddf70ea044050472 100644
+--- a/dist/runtime.js
++++ b/dist/runtime.js
+@@ -1532,7 +1532,10 @@ var AcpRuntimeManager = class {
+ 		try {
+ 			await startRuntimeClient(client, agent, this.options.timeoutMs);
+ 			this.assertOpen();
+-			const session = await createOrLoadRuntimeSession(client, input.resumeSessionId, cwd);
++			// Upstream bounds client.start() but not the session/new or session/load
++			// that follows it. Without this, an agent that initializes and then stalls
++			// leaves ensureSession pending forever instead of failing on timeoutMs.
++			const session = await withTimeout(createOrLoadRuntimeSession(client, input.resumeSessionId, cwd), this.options.timeoutMs);
+ 			const record = await this.prepareInitialRuntimeRecord({
+ 				input,
+ 				client,

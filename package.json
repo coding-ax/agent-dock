@@ -1,0 +1,44 @@
+{
+  "name": "agent-dock-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.28.2",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild",
+      "node-pty"
+    ],
+    "patchedDependencies": {
+      "@larksuiteoapi/node-sdk@1.71.1": "patches/@larksuiteoapi__node-sdk@1.71.1.patch",
+      "acpx@0.20.0": "patches/acpx@0.20.0.patch"
+    }
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @agent-dock/cli --filter @agent-dock/agent-dock-web dev",
+    "dev:server": "pnpm --filter @agent-dock/cli dev",
+    "dev:web": "pnpm --filter @agent-dock/agent-dock-web dev",
+    "server": "pnpm build && pnpm --filter @agent-dock/cli start",
+    "lark:echo": "node scripts/lark-card-echo-bot.mjs",
+    "build:packages": "pnpm -r --filter './packages/**' build",
+    "build": "pnpm build:packages && pnpm --filter @agent-dock/agent-dock-web build && pnpm --filter @agent-dock/cli build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@agent-dock/agent-dock-acp-client": "workspace:*",
+    "@agent-dock/agent-dock-config": "workspace:*",
+    "@agent-dock/agent-dock-runtime": "workspace:*",
+    "@agent-dock/agent-dock-shared": "workspace:*",
+    "@agent-dock/agent-dock-storage": "workspace:*",
+    "@larksuiteoapi/node-sdk": "^1.71.1",
+    "@types/node": "22.15.30",
+    "tsx": "4.20.3",
+    "typescript": "5.8.3",
+    "vitest": "3.2.4"
+  }
+}

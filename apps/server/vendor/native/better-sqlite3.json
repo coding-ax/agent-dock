@@ -1,0 +1,15 @@
+{
+  "package": "better-sqlite3",
+  "targets": {
+    "linux-x64": {
+      "file": "linux-x64/better_sqlite3.node",
+      "version": "13.0.3",
+      "requires": {
+        "glibc": "2.28",
+        "libstdc++": "3.4.25"
+      },
+      "builtFrom": "debian:10 + g++ 8.3 (-std=c++2a) + node-gyp 9.4.0 + node 22.19.0",
+      "builtAt": "2026-10-19"
+    }
+  }
+}
