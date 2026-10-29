@@ -482,7 +482,7 @@ ACPX 0.20.0 已于 2026-10-21 验证可从空缓存下载，tarball 完整性与
 
 启动时读取 ACPX 内置注册表（`pi`、`codex`、`claude`、`gemini`、`cursor`、`copilot`、`trae`、`opencode`、`qwen`、`iflow`、`kilocode` 等），检查本地供应商 CLI 是否存在并调它的版本命令。**只有成功发现的 Agent** 才会出现在 `GET /api/agents`、Session 选择器和飞书默认 Agent 选择器里。Mock ACP、JSONL Demo 和 PTY Demo 仅供测试，不作为可选内置 Agent 发布。
 
-Codex 默认使用 PATH 中已安装的本机 Codex CLI；模型探测、版本展示和实际会话使用同一启动入口。`CODEX_PATH=/absolute/path/to/codex` 可指定本机的其他安装位置。不限制本机 Codex 版本，也不会自动切换到适配器依赖的 Codex。未安装或配置不兼容时明确报错，不修改用户配置。
+Codex 默认从 PATH 中发现本机 Codex CLI；macOS 上还会比较 `/Applications` 和 `~/Applications` 中 ChatGPT / Codex 桌面应用自带 CLI 的版本，选择较新版本，避免旧 CLI 无法使用 `gpt-6.1-sol` 等新模型。无法识别版本的自定义包装器保持原样，相同版本优先保留 PATH。模型探测、版本展示和实际会话使用同一启动入口。`CODEX_PATH=/absolute/path/to/codex` 显式指定路径时不做自动选择。不限制本机 Codex 版本，也不会自动切换到适配器依赖的 Codex。未安装或配置不兼容时明确报错，不修改用户配置。模型实际可用性仍取决于所选 CLI 和当前账号。
 
 使用内置 Codex 启动入口时，显式选择的模型会在创建 ACP 会话前通过当前子进程的 `CODEX_CONFIG` 注入；原有 provider、网关地址和鉴权配置保持不变，也不会改写共享的 `CODEX_HOME/config.toml`。模型探测采用相同规则，支持未出现在内置目录中的网关模型。若适配器仍拒绝该模型，会明确失败，不自动换成另一模型发起请求。
 
