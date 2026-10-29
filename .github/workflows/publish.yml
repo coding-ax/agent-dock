@@ -37,6 +37,8 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
+        env:
+          AGENT_DOCK_SKIP_NATIVE_CHECK: "1"
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck

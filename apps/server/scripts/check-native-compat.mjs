@@ -3,6 +3,8 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+if (process.env.AGENT_DOCK_SKIP_NATIVE_CHECK === '1') process.exit(0);
+
 // 安装期体检：这台机器能不能加载 better-sqlite3 的原生产物。加载不了不阻断安装（运行时还有随包兜底），
 // 但要在装的时候就告诉用户发生了什么、下一步是什么。判断逻辑与 src/native-compat.ts 保持一致。
 
