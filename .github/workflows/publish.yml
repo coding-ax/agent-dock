@@ -41,6 +41,9 @@ jobs:
           AGENT_DOCK_SKIP_NATIVE_CHECK: "1"
         run: pnpm install --frozen-lockfile
 
+      - name: Build workspace
+        run: pnpm build
+
       - name: Typecheck
         run: pnpm typecheck
 
