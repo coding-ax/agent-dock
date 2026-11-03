@@ -1,5 +1,5 @@
-import { AlertTriangle, BookOpen, BrainCircuit, ChevronDown, ChevronRight, CircleStop, CircleX, Database, FilePenLine, FlaskConical, GitBranch, Globe2, LoaderCircle, MessageSquare, Search, Square, Terminal, Users, Wrench } from 'lucide-react';
-import { memo, useState } from 'react';
+import { AlertTriangle, BookOpen, BrainCircuit, ChevronRight, CircleStop, CircleX, Database, FilePenLine, FlaskConical, GitBranch, Globe2, LoaderCircle, MessageSquare, Search, Square, Terminal, Users, Wrench } from 'lucide-react';
+import { memo, useEffect, useState, type ReactNode } from 'react';
 import { eventRenderSignature, groupRenderSignature, type TimelineActivityGroup, type TimelineEvent } from './timeline';
 import { MarkdownContent } from './MarkdownContent';
 import { AssistantMarkdown, ThinkingMarkdown } from './TypewriterText';
@@ -36,115 +36,127 @@ const ToolCard = memo(function ToolCard({ event, preferDescription = true }: { e
   const presentation = toolPresentation(data);
   const elapsed = formatElapsed(elapsedMilliseconds(data.startedAt ?? event.timestamp, terminal ? data.completedAt ?? event.timestamp : undefined));
   const statusLabel = failed ? '失败' : done ? '已完成' : '执行中'; const actionLabel = preferDescription ? toolDescription(data) ?? toolActionLabel(presentation, terminal) : toolActionLabel(presentation, terminal);
-  const tone = failed ? 'text-red-500' : done ? 'text-emerald-600' : 'text-blue-500';
-  return <div className="overflow-hidden">
-    <button type="button" data-timeline-disclosure disabled={!hasDetails} onClick={toggle} className="group/tool flex min-h-9 w-full items-center gap-2 py-1.5 text-left transition-colors hover:text-zinc-800 disabled:cursor-default">
-      <span className={`grid h-5 w-5 shrink-0 place-items-center ${tone}`}><ToolKindIcon kind={presentation.kind} size={13}/></span><span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500"><span className="font-medium text-zinc-700">{actionLabel}</span>{presentation.detail && <span title={presentation.detail} className="ml-1.5 font-mono text-zinc-400">{presentation.detail}</span>}</span>
-      <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[10px] tabular-nums text-zinc-400">{elapsed && <span>{elapsed}</span>}{!terminal ? <LoaderCircle size={11} className="animate-spin text-blue-500"/> : <span className={`h-1.5 w-1.5 rounded-full ${failed ? 'bg-red-500' : 'bg-emerald-500'}`}/>}<span className={tone}>{statusLabel}</span>{hasDetails && (open ? <ChevronDown size={12}/> : <ChevronRight size={12}/>)}</span>
+  const tone = failed ? 'text-red-400' : done ? 'text-zinc-400' : 'text-blue-400';
+  return <div className="ui-trace-row overflow-hidden">
+    <button type="button" data-timeline-disclosure disabled={!hasDetails} onClick={toggle} className="group/tool flex min-h-6 w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-zinc-50 disabled:cursor-default">
+      <span className={`grid h-4 w-4 shrink-0 place-items-center ${tone}`}><ToolKindIcon kind={presentation.kind} size={11}/></span><span className="min-w-0 flex-1 truncate text-[10px] text-zinc-400"><span className="text-zinc-500">{actionLabel}</span>{presentation.detail && <span title={presentation.detail} className="ml-1.5 font-mono text-zinc-400/70">{presentation.detail}</span>}</span>
+      <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-[9.5px] tabular-nums text-zinc-400/80">{elapsed && <span>{elapsed}</span>}{!terminal ? <LoaderCircle size={9} className="animate-spin text-blue-400"/> : failed ? <span className="text-red-400">{statusLabel}</span> : null}{hasDetails && <ChevronRight size={10} className={`text-zinc-300 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>}</span>
     </button>
-    {open && hasDetails && <div className="mb-2 ml-7 border-l border-zinc-200 pl-3"><pre className="m-0 max-h-72 overflow-auto whitespace-pre-wrap border-0 bg-transparent py-1 text-[10px] leading-5 text-zinc-500">{JSON.stringify({ ...(data.input !== undefined ? { input: data.input } : {}), ...(data.output !== undefined ? { output: data.output } : {}) }, null, 2)}</pre></div>}
+    {open && hasDetails && <div className="mb-1.5 ml-5 border-l border-zinc-100 pl-2.5"><pre className="m-0 max-h-72 overflow-auto whitespace-pre-wrap border-0 bg-transparent py-1 text-[10px] leading-[1.55] text-zinc-500">{JSON.stringify({ ...(data.input !== undefined ? { input: data.input } : {}), ...(data.output !== undefined ? { output: data.output } : {}) }, null, 2)}</pre></div>}
   </div>;
 }, (prev, next) => prev.preferDescription === next.preferDescription
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event));
 
+/** 高度/透明度一起过渡；折叠后的 300ms 内保留子节点，避免自动收起时内容瞬间消失。 */
+function AnimatedReveal({ open, children }: { open: boolean; children: ReactNode }) {
+  const [mounted, setMounted] = useState(open);
+  // 打开时在本次渲染就挂上内容，否则 0fr → 1fr 的过渡会从「空容器」开始，看不出展开动画。
+  if (open && !mounted) setMounted(true);
+  useEffect(() => {
+    if (open) return;
+    const timer = window.setTimeout(() => setMounted(false), 300);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+  return <div aria-hidden={!open} className={`grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+    <div className="min-h-0 overflow-hidden">{mounted ? children : null}</div>
+  </div>;
+}
+
 const ToolBatch = memo(function ToolBatch({ description, events }: { description: string; events: TimelineEvent[] }) {
   const running = events.some(event => event.data.status !== 'completed' && event.data.status !== 'failed');
-  // 同 ToolCard：批量行也由用户决定展开。原来跟着 running 自动开合会在批次收尾时整体塌陷。
   const [open, setOpen] = useState(false); const toggle = () => setOpen(value => !value);
   const failedCount = events.filter(event => event.data.status === 'failed').length;
-  const completedCount = events.filter(event => event.data.status === 'completed').length;
   const failed = failedCount > 0;
   const presentation = toolPresentation(events[0]!.data);
-  const tone = failed ? 'text-red-500' : running ? 'text-blue-500' : 'text-emerald-600';
-  const statusLabel = failed && completedCount ? '部分失败' : failed ? '失败' : running ? '执行中' : '已完成';
-  return <div className="overflow-hidden">
-    <button type="button" data-timeline-disclosure onClick={toggle} className="flex min-h-9 w-full items-center gap-2 py-1.5 text-left transition-colors">
-      <span className={`grid h-5 w-5 shrink-0 place-items-center ${tone}`}><ToolKindIcon kind={presentation.kind} size={13}/></span>
-      <HoverTooltipText content={description} className="min-w-0 flex-1 truncate text-[11px] font-medium text-zinc-700">{description}</HoverTooltipText><span className="shrink-0 whitespace-nowrap text-[10px] text-zinc-400">{events.length} 次操作</span>
-      {running ? <LoaderCircle size={11} className="shrink-0 animate-spin text-blue-500"/> : <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${failed ? 'bg-red-500' : 'bg-emerald-500'}`}/>}<span className={`shrink-0 whitespace-nowrap text-[10px] ${tone}`}>{statusLabel}</span>
-      {open ? <ChevronDown size={12} className="shrink-0 text-zinc-400"/> : <ChevronRight size={12} className="shrink-0 text-zinc-400"/>}
+  const tone = failed ? 'text-red-400' : running ? 'text-blue-400' : 'text-zinc-400';
+  return <div className="ui-trace-row overflow-hidden">
+    <button type="button" data-timeline-disclosure onClick={toggle} className="group/batch flex min-h-6 w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-zinc-50">
+      <span className={`grid h-4 w-4 shrink-0 place-items-center ${tone}`}><ToolKindIcon kind={presentation.kind} size={11}/></span>
+      <HoverTooltipText content={description} className="min-w-0 flex-1 truncate text-[10px] text-zinc-400 transition-colors group-hover/batch:text-zinc-600">{description}</HoverTooltipText>
+      {events.length > 1 && <span className="shrink-0 whitespace-nowrap text-[9.5px] tabular-nums text-zinc-400/80">×{events.length}</span>}
+      {running ? <LoaderCircle size={9} className="shrink-0 animate-spin text-blue-400"/> : failed ? <span className="shrink-0 text-[9.5px] text-red-400">失败</span> : null}
+      <ChevronRight size={10} className={`shrink-0 text-zinc-300 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>
     </button>
-    {open && <div className="mb-2 ml-7 border-l border-zinc-200 pl-3">{events.map(event => <ToolCard key={event.id} event={event} preferDescription={false}/>)}</div>}
+    <AnimatedReveal open={open}><div className="ml-2 border-l border-zinc-100 pl-2 pb-0.5">{events.map(event => <ToolCard key={event.id} event={event} preferDescription={false}/>)}</div></AnimatedReveal>
   </div>;
 }, (prev, next) => prev.description === next.description
   && prev.events.length === next.events.length
   && prev.events.every((event, index) => eventRenderSignature(event) === eventRenderSignature(next.events[index]!)));
 
+/** 折叠行只留一句可读的描述；完整 Markdown 与流式内容在展开后出现。 */
+function thinkingSummary(text: string | undefined) {
+  const line = (text ?? '').split('\n').map(item => item.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').replace(/[*~`>#]/g, '').trim()).find(Boolean) ?? '';
+  return line.length > 84 ? `${line.slice(0, 84).trimEnd()}…` : line;
+}
+
 const ThinkingBlock = memo(function ThinkingBlock({ event, replay = false, sessionId, live, caret }: { event: TimelineEvent; replay?: boolean; sessionId: string | undefined; live: boolean; caret: boolean }) {
-  const { open, toggle } = useAutoCollapse(live);
-  return <details open={open} className="reasoning group/think py-1.5">
-    <summary data-timeline-disclosure onClick={event => { event.preventDefault(); toggle(); }} className="flex cursor-pointer select-none items-center gap-2 py-1 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:text-zinc-800 focus-visible:rounded focus-visible:ring-2 focus-visible:ring-zinc-300 focus-visible:ring-inset">
-      <BrainCircuit size={13}/><span>思考过程</span>
-      <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-400 transition-transform group-open/think:rotate-90"/>
-    </summary>
-    {/* 挂载时就不在输出的思考（同一批事件里被后续内容盖过的、手动展开的历史阶段）直接给全文，
-        不再从 0 逐字重播；否则一批事件到达时好几段思考会同时「打字」。replay 只在首帧生效。 */}
-    {open && <ThinkingMarkdown text={event.data.text ?? ''} active={caret} replay={replay || !caret} sessionId={sessionId}/>}
-  </details>;
+  const [open, setOpen] = useState(false);
+  const summary = thinkingSummary(event.data.text);
+  return <div className="ui-trace-row">
+    <button type="button" data-timeline-disclosure data-live-thinking={caret || undefined} aria-expanded={open} onClick={() => setOpen(value => !value)} className="group/think flex min-h-6 w-full select-none items-center gap-1.5 rounded-md px-1 py-0.5 text-left outline-none transition-colors hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-zinc-300">
+      <BrainCircuit size={11} className="shrink-0 text-zinc-400"/>
+      <span className="shrink-0 text-[10px] font-medium text-zinc-500">思考</span>
+      <span className={`min-w-0 flex-1 truncate text-[10.5px] ${summary ? 'text-zinc-400' : 'text-zinc-400/70'}`}>{summary || (live ? '正在思考…' : '查看思考内容')}</span>
+      {caret && <LoaderCircle size={9} className="shrink-0 animate-spin text-blue-400"/>}
+      <ChevronRight size={10} className={`shrink-0 text-zinc-300 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>
+    </button>
+    <AnimatedReveal open={open}>
+      <div className="mb-1 ml-5 border-l border-zinc-100 py-1 pl-2.5">
+        <ThinkingMarkdown text={event.data.text ?? ''} active={caret} replay={replay || !caret} sessionId={sessionId}/>
+      </div>
+    </AnimatedReveal>
+  </div>;
 }, (prev, next) => prev.live === next.live && prev.caret === next.caret && prev.replay === next.replay && prev.sessionId === next.sessionId
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event));
 
 const ActivityContent = memo(function ActivityContent({ events, replay = false, sessionId, live = false, ongoing = false }: { events: TimelineEvent[]; replay?: boolean; sessionId: string | undefined; live?: boolean; ongoing?: boolean }) {
   const rows = groupToolActivityRows(events);
-  return <div className="space-y-1">
-    {/* live 取「整轮是否还在跑」，不取「是不是最后一行」：后者会让每出现一行新内容就把
-        上一段思考收起，流式过程中思考块反复开合。光标则只跟「最后一个阶段的最后一行」：
-        整轮在跑时每段思考都挂光标，会同时闪好几个。 */}
-    {rows.map((row, index) => row.kind === 'batch' ? <ToolBatch key={row.id} description={row.description} events={row.events}/> : row.event.type === 'text' ? null : row.event.type === 'thinking' ? <ThinkingBlock key={row.event.id} event={row.event} replay={replay} sessionId={sessionId} live={live} caret={ongoing && index === rows.length - 1}/> : <ToolCard key={row.event.id} event={row.event}/>)}
+  return <div className="space-y-0.5">
+    {rows.map((row, index) => {
+      if (row.kind === 'batch') return <ToolBatch key={row.id} description={row.description} events={row.events}/>;
+      const last = index === rows.length - 1;
+      if (row.event.type === 'thinking') return <ThinkingBlock key={row.event.id} event={row.event} replay={replay} sessionId={sessionId} live={live} caret={ongoing && last}/>;
+      if (row.event.type === 'text') {
+        const streaming = ongoing && last;
+        return <AssistantMarkdown key={row.event.id} text={row.event.data.text ?? ''} active={streaming} replay={replay || !streaming} compact assistantLabel="Agent" sessionId={sessionId}/>;
+      }
+      return <ToolCard key={row.event.id} event={row.event}/>;
+    })}
   </div>;
 }, (prev, next) => prev.live === next.live && prev.ongoing === next.ongoing && prev.replay === next.replay && prev.sessionId === next.sessionId
   && prev.events.length === next.events.length
   && prev.events.every((event, index) => eventRenderSignature(event) === eventRenderSignature(next.events[index]!)));
 
-const ActivityGroupPanel = memo(function ActivityGroupPanel({ group, replay = false, sessionId, ongoing = false, live = false }: { group: TimelineActivityGroup; replay?: boolean; sessionId: string | undefined; ongoing?: boolean; live?: boolean }) {
-  // live 是「整轮还在跑」，ongoing 只是「这是最后一个阶段」。旧写法拿 ongoing 当自动开合
-  // 的信号，于是每冒出一个新阶段，上一阶段的展开内容就被收起——一轮里反复塌陷，画面持续
-  // 跳动。整轮还在跑就保持展开，轮次结束后再收起。
-  const { open, toggle } = useAutoCollapse(live);
-  const toolCount = group.events.filter(event => event.type === 'tool_call' || event.type === 'tool_result').length;
-  const thinkingCount = group.events.filter(event => event.type === 'thinking').length;
-  const countLabel = [thinkingCount ? `${thinkingCount} 段思考` : '', toolCount ? `${toolCount} 次工具调用` : ''].filter(Boolean).join(' · ');
-  const elapsed = formatElapsed(elapsedMilliseconds(group.startedAt, ongoing ? undefined : group.completedAt));
-  const hasFailure = group.events.some(event => (event.type === 'tool_call' || event.type === 'tool_result') && event.data.status === 'failed');
-  return <details open={open} className="reasoning-group group/stage border-b border-zinc-200 text-sm text-zinc-500 last:border-b-0">
-    <summary data-timeline-disclosure onClick={event => { event.preventDefault(); toggle(); }} className="flex min-h-10 cursor-pointer select-none items-center gap-2 py-2 text-[12px] font-medium text-zinc-500 outline-none transition-colors hover:text-zinc-800 focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-zinc-300 focus-visible:ring-inset">
-      <HoverTooltipText content={group.labelTitle} className="min-w-0 flex-1 truncate text-zinc-700">{group.label}</HoverTooltipText>
-      {elapsed && <span className="shrink-0 whitespace-nowrap tabular-nums text-[10px] text-zinc-400">{elapsed}</span>}
-      {ongoing ? <LoaderCircle size={11} className="shrink-0 animate-spin text-blue-500"/> : <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${hasFailure ? 'bg-red-500' : 'bg-emerald-500'}`}/>}<span className={`shrink-0 whitespace-nowrap text-[10px] ${ongoing ? 'text-blue-600' : hasFailure ? 'text-red-600' : 'text-emerald-600'}`}>{ongoing ? '执行中' : hasFailure ? '部分失败' : '已完成'}</span>
-      <ChevronRight size={13} className="shrink-0 text-zinc-400 transition-transform group-open/stage:rotate-90"/>
-    </summary>
-    {open && <div className="pb-3 pl-5">
-      {countLabel && <div className="mb-1 flex items-center gap-2 text-[11px] font-medium text-zinc-500"><Wrench size={14}/><span>{countLabel}</span></div>}
-      <ActivityContent events={group.events} replay={replay} sessionId={sessionId} live={live} ongoing={ongoing}/>
-    </div>}
-  </details>;
-}, (prev, next) => prev.ongoing === next.ongoing && prev.live === next.live && prev.replay === next.replay && prev.sessionId === next.sessionId
-  && groupRenderSignature(prev.group) === groupRenderSignature(next.group));
-
 export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, replay = false, sessionId, hasAnswer = false, taskStatus = 'running', modelLabel, startedAt, completedAt }: { groups: TimelineActivityGroup[]; ongoing: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; sessionId: string | undefined; hasAnswer?: boolean; taskStatus?: string; modelLabel: string; startedAt?: string; completedAt?: string }) {
   // key 按 turn 稳定；完成时收起进行中的过程，之后仍可手动展开。
   const { open, toggle } = useAutoCollapse(ongoing);
   const elapsed = formatElapsed(elapsedMilliseconds(startedAt ?? groups[0]?.startedAt, ongoing ? undefined : completedAt ?? groups.at(-1)?.completedAt));
+  const events = groups.flatMap(group => group.events);
+  const thinkingCount = events.filter(event => event.type === 'thinking').length;
+  const toolCount = events.filter(event => event.type === 'tool_call' || event.type === 'tool_result').length;
+  const countLabel = [thinkingCount ? `${thinkingCount} 段思考` : '', toolCount ? `${toolCount} 次工具调用` : ''].filter(Boolean).join(' · ');
   const interrupted = taskStatus === 'interrupted' || taskStatus === 'cancelled';
   const failed = taskStatus === 'failed';
   const incomplete = taskStatus === 'incomplete';
   const statusLabel = ongoing ? '执行中' : interrupted ? '已取消' : failed ? '已失败' : incomplete ? '未完成' : '已完成';
-  const statusTone = ongoing ? 'text-blue-600' : interrupted ? 'text-zinc-500' : failed ? 'text-red-600' : incomplete ? 'text-amber-600' : 'text-emerald-600';
+  const statusTone = ongoing ? 'text-blue-500' : interrupted ? 'text-zinc-400' : failed ? 'text-red-500' : incomplete ? 'text-amber-600' : 'text-zinc-400';
   const missingFinal = !ongoing && !hasAnswer;
   const missingFinalText = interrupted ? '任务已中断，未产生最终输出。' : failed ? '任务执行失败，未产生最终输出。' : 'Agent 未返回最终输出。';
   return <>
-  <details open={open} aria-live={ongoing ? 'polite' : undefined} aria-label={`${modelLabel} 执行过程`} className="reasoning ui-timeline-item group/turn my-3 border-b border-zinc-200 text-sm text-zinc-500">
-    <summary data-timeline-disclosure onClick={event => { event.preventDefault(); toggle(); }} className="flex min-h-11 cursor-pointer select-none items-center gap-2 py-2.5 text-[12px] font-medium text-zinc-500 outline-none transition-colors hover:text-zinc-800 focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-zinc-300 focus-visible:ring-inset">
-      <span className="whitespace-nowrap">{elapsed ? `${ongoing ? '已耗时' : '耗时'} ${elapsed}` : '查看执行过程'}</span>
-      {ongoing ? <LoaderCircle size={11} className="shrink-0 animate-spin text-blue-500"/> : <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${interrupted ? 'bg-zinc-400' : failed ? 'bg-red-500' : incomplete ? 'bg-amber-500' : 'bg-emerald-500'}`}/>}<span className={`shrink-0 whitespace-nowrap text-[10px] ${statusTone}`}>{statusLabel}</span>
-      <ChevronRight size={13} className="shrink-0 text-zinc-400 transition-transform group-open/turn:rotate-90"/>
-      {groups.length > 0 && <span className="ml-auto text-[10px] tabular-nums text-zinc-400">{groups.length} 个阶段</span>}
-    </summary>
-    {open && <div className="pb-3 pl-5">
-      {groups.length ? groups.map((group, index) => <ActivityGroupPanel key={group.id} group={group} replay={replay} sessionId={sessionId} ongoing={ongoing && index === groups.length - 1} live={ongoing}/>) : <div className="flex items-center gap-2 py-2 text-[11px] text-zinc-400"><LoaderCircle size={12} className="animate-spin"/>等待模型输出</div>}
-    </div>}
-  </details>
-  {missingFinal && <div role="status" className="ui-timeline-item my-4 flex items-center gap-2 text-[12px] text-zinc-500">{failed ? <CircleX size={14} className="text-red-500"/> : interrupted ? <CircleStop size={14} className="text-zinc-400"/> : <MessageSquare size={14} className={incomplete ? 'text-amber-500' : 'text-zinc-400'}/>}<span>{missingFinalText}</span></div>}
+  <section aria-live={ongoing ? 'polite' : undefined} aria-label={`${modelLabel} 执行过程`} className="ui-timeline-item my-2 text-zinc-500">
+    <button type="button" data-timeline-disclosure aria-expanded={open} onClick={toggle} className="group/turn flex min-h-7 w-full select-none items-center gap-1.5 rounded-md py-0.5 text-left outline-none transition-colors hover:text-zinc-700 focus-visible:ring-2 focus-visible:ring-zinc-300">
+      <span className="shrink-0 whitespace-nowrap text-[10.5px] tabular-nums text-zinc-400">{elapsed ? `${ongoing ? '已耗时' : '耗时'} ${elapsed}` : '执行过程'}</span>
+      {countLabel && <><span aria-hidden className="shrink-0 text-[10px] text-zinc-300">·</span><span className="min-w-0 truncate text-[10px] tabular-nums text-zinc-400">{countLabel}</span></>}
+      {ongoing ? <LoaderCircle size={9} className="ml-auto shrink-0 animate-spin text-blue-400"/> : <span className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${interrupted ? 'bg-zinc-300' : failed ? 'bg-red-400' : incomplete ? 'bg-amber-400' : 'bg-emerald-400'}`}/>}<span className={`shrink-0 whitespace-nowrap text-[9.5px] ${statusTone}`}>{statusLabel}</span>
+      <ChevronRight size={11} className={`shrink-0 text-zinc-300 transition-transform duration-300 ${open ? 'rotate-90' : ''}`}/>
+    </button>
+    <AnimatedReveal open={open}>
+      <div className="pb-1 pt-0.5">
+        {groups.length ? <ActivityContent events={events} replay={replay} sessionId={sessionId} live={ongoing} ongoing={ongoing}/> : <div className="flex items-center gap-1.5 py-1 pl-1 text-[10px] text-zinc-400"><LoaderCircle size={10} className="animate-spin"/>等待模型输出</div>}
+      </div>
+    </AnimatedReveal>
+  </section>
+  {missingFinal && <div role="status" className="ui-timeline-item my-3 flex items-center gap-1.5 text-[11px] text-zinc-500">{failed ? <CircleX size={13} className="text-red-500"/> : interrupted ? <CircleStop size={13} className="text-zinc-400"/> : <MessageSquare size={13} className={incomplete ? 'text-amber-500' : 'text-zinc-400'}/>}<span>{missingFinalText}</span></div>}
   </>;
 }, (prev, next) => prev.ongoing === next.ongoing && prev.sessionId === next.sessionId && prev.hasAnswer === next.hasAnswer
   && prev.taskStatus === next.taskStatus && prev.modelLabel === next.modelLabel

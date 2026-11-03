@@ -74,7 +74,15 @@ function AgentPickerMenu({ cwd, top, left, agents, creatingPair, onSelect, onClo
 }
 
 function InlineSelect({ options, value, onChange }: { options: CompactOption[]; value: string; onChange(value: string): void }) {
-  return <Select className="ml-auto shrink-0" size="small" popupMatchSelectWidth={false} value={value} onChange={onChange} options={options.map(option => ({ value: option.value, label: option.label }))}/>;
+  return <Select
+    className="ui-inline-select ml-auto shrink-0"
+    size="small"
+    popupMatchSelectWidth={false}
+    value={value}
+    onChange={onChange}
+    suffixIcon={<ChevronDown size={12} className="text-zinc-400"/>}
+    options={options.map(option => ({ value: option.value, label: option.label }))}
+  />;
 }
 
 function AgentSelect({ agents, value, disabled, onChange }: { agents: Agent[]; value: string; disabled?: boolean; onChange(value: string): void }) {

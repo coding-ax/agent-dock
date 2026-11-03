@@ -27,28 +27,30 @@ function useAnimatedText(text: string, active: boolean, replay: boolean) {
 }
 
 /** 助手正文。只有正在流式输出时挂光标，历史/最终态与收尾 drain 都不挂。 */
-export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active, replay = false, final = false, assistantLabel = 'Agent', sessionId }: {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active, replay = false, final = false, compact = false, assistantLabel = 'Agent', sessionId }: {
   text: string;
   active: boolean;
   /** 首屏 payload 渲染出来的行：已经显示过的文本不重播。 */
   replay?: boolean;
   final?: boolean;
+  /** 执行过程里的中间 AgentText：比最终回答更紧凑，避免过程面板喧宾夺主。 */
+  compact?: boolean;
   assistantLabel?: string;
   sessionId: string | undefined;
 }) {
   const { revealed, caret, animateUnits } = useAnimatedText(text, active, replay);
   return <article
     aria-label={final ? `${assistantLabel} 最终输出` : undefined}
-    className={`assistant-output markdown ui-timeline-item ${final ? 'my-4' : 'my-5'} max-w-[78ch] text-[14px] leading-6 text-zinc-800 ${caret ? 'ui-typewriter-caret' : ''}`}
+    className={`assistant-output markdown ui-timeline-item max-w-[78ch] text-zinc-800 ${compact ? 'my-2 text-[13px] leading-[1.6]' : `${final ? 'my-4' : 'my-5'} text-[14px] leading-6`} ${caret ? 'ui-typewriter-caret' : ''}`}
   >
     <MarkdownContent sessionId={sessionId} animateUnits={animateUnits}>{revealed}</MarkdownContent>
   </article>;
-}, (prev, next) => prev.text === next.text && prev.active === next.active && prev.replay === next.replay && prev.final === next.final && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId);
+}, (prev, next) => prev.text === next.text && prev.active === next.active && prev.replay === next.replay && prev.final === next.final && prev.compact === next.compact && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId);
 
 /** 思考过程。折叠体里同样走逐字，只在 live 时挂光标。 */
 export const ThinkingMarkdown = memo(function ThinkingMarkdown({ text, active, replay = false, sessionId }: { text: string; active: boolean; replay?: boolean; sessionId: string | undefined }) {
   const { revealed, caret, animateUnits } = useAnimatedText(text, active, replay);
-  return <div className={`markdown pl-5 pt-1 text-[12px] leading-5 text-zinc-500 ${caret ? 'ui-typewriter-caret' : ''}`}>
+  return <div className={`markdown text-[11.5px] leading-[1.55] text-zinc-500 ${caret ? 'ui-typewriter-caret' : ''}`}>
     <MarkdownContent sessionId={sessionId} animateUnits={animateUnits}>{revealed}</MarkdownContent>
   </div>;
 }, (prev, next) => prev.text === next.text && prev.active === next.active && prev.replay === next.replay && prev.sessionId === next.sessionId);
