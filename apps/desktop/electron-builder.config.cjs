@@ -1,11 +1,14 @@
 'use strict';
 
 const { execFileSync } = require('node:child_process');
+const path = require('node:path');
 // The desktop shell ships the CLI, so it is versioned by the CLI package.
 // CI bumps apps/server/package.json; reading it here keeps the installer name,
 // the bundle version and the npm release on the same version without a second
 // file to update.
 const { version: appVersion } = require('../server/package.json');
+
+const entitlementsPath = path.join(__dirname, 'build', 'entitlements.mac.plist');
 
 // CI passes optional signing secrets through environment variables; an
 // unconfigured GitHub secret arrives as an empty string rather than being
@@ -40,6 +43,15 @@ function hasDeveloperIdIdentity() {
 
 const autoDiscovery = process.env.CSC_IDENTITY_AUTO_DISCOVERY !== 'false';
 const macIdentity = process.env.CSC_LINK || process.env.CSC_NAME || (autoDiscovery && hasDeveloperIdIdentity()) ? undefined : '-';
+
+// electron-builder's signer (@electron/osx-sign) walks the whole bundle and
+// probes every file with isBinaryFile in parallel. The bundled CLI runtime has
+// ~14k files, which exhausts the file-descriptor limit on macOS runners and
+// aborts with EMFILE. For ad-hoc builds, skip that signer and run native
+// codesign on the finished bundle in afterPack instead; codesign handles large
+// bundles without opening them all at once. Builds with a real certificate
+// keep using electron-builder's signer (and notarization).
+const adHocSign = macIdentity === '-';
 
 // All notarization credentials are read by electron-builder from the
 // environment; the option here only turns the step on or off. Supported:
@@ -86,17 +98,37 @@ module.exports = {
   asar: true,
   compression: 'maximum',
   artifactName: '${productName}-${version}-${os}-${arch}.${ext}',
+  // Runs before electron-builder's own signing step. Only used for the ad-hoc
+  // path; everything else goes through electron-builder as before.
+  afterPack: async context => {
+    if (!adHocSign || context.electronPlatformName !== 'darwin') {
+      return;
+    }
+    const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
+    console.log(`[desktop] ad-hoc signing ${appPath}`);
+    execFileSync('/usr/bin/codesign', [
+      '--force',
+      '--deep',
+      '--sign',
+      '-',
+      '--options',
+      'runtime',
+      '--entitlements',
+      entitlementsPath,
+      appPath
+    ], { stdio: 'inherit' });
+  },
   mac: {
     target: ['dmg', 'zip'],
     category: 'public.app-category.developer-tools',
     icon: 'build/icon.png',
-    identity: macIdentity,
+    identity: adHocSign ? null : macIdentity,
     hardenedRuntime: true,
     // Ad-hoc + hardened runtime is only safe because the entitlements below
     // include com.apple.security.cs.disable-library-validation.
     gatekeeperAssess: false,
-    entitlements: 'build/entitlements.mac.plist',
-    entitlementsInherit: 'build/entitlements.mac.plist',
+    entitlements: entitlementsPath,
+    entitlementsInherit: entitlementsPath,
     notarize: notarizeMac ? { teamId: process.env.APPLE_TEAM_ID } : false
   },
   dmg: {
