@@ -4,6 +4,8 @@ import type { ScheduleService } from './service.js';
 
 interface CreateBody { name?: string; sessionId?: string; template?: ScheduleSessionTemplate; delivery?: ScheduleDelivery; cron?: string; runAt?: string; intervalMinutes?: number; timezone?: string; prompt?: string; createdBySessionId?: string }
 
+interface UpdateBody { name?: string; prompt?: string; delivery?: ScheduleDelivery; sessionId?: string | null; template?: ScheduleSessionTemplate; cron?: string | null; runAt?: string | null; intervalMinutes?: number | null; timezone?: string }
+
 /**
  * 定时任务的 HTTP 入口。鉴权跟其他 /api 路由一样走全局中间件；
  * 「Agent 只能给自己和关联会话注册」的限制放在 CLI 侧，与 session send 一致。
@@ -29,6 +31,20 @@ export function registerScheduleRoutes(app: FastifyInstance, schedules: Schedule
       ...(body.createdBySessionId !== undefined ? { createdBySessionId: body.createdBySessionId } : {})
     });
     return reply.code(201).send(created);
+  });
+  app.patch<{ Params: { id: string }; Body: UpdateBody }>('/api/schedules/:id', async request => {
+    const body = request.body ?? {};
+    return schedules.update(request.params.id, {
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+      ...(body.delivery !== undefined ? { delivery: body.delivery } : {}),
+      ...(body.sessionId !== undefined ? { sessionId: body.sessionId } : {}),
+      ...(body.template !== undefined ? { template: body.template } : {}),
+      ...(body.cron !== undefined ? { cron: body.cron } : {}),
+      ...(body.runAt !== undefined ? { runAt: body.runAt } : {}),
+      ...(body.intervalMinutes !== undefined ? { intervalMinutes: body.intervalMinutes === null ? null : Number(body.intervalMinutes) } : {}),
+      ...(body.timezone !== undefined ? { timezone: body.timezone } : {})
+    });
   });
   app.get<{ Querystring: { limit?: string; sessionId?: string } }>('/api/schedule-runs', async request => {
     const limit = Number(request.query?.limit);

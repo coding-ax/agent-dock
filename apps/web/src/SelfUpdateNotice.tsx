@@ -1,8 +1,9 @@
+import { Spinner } from './Loaders';
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useInterval } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LoaderCircle, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { api, type SelfUpdateStatus } from './api';
 import { ConfirmDialog } from './ui-controls';
 import { HoverTooltip } from './HoverTooltip';
@@ -55,19 +56,19 @@ export function SelfUpdateNotice({ enabled }: { enabled: boolean }) {
   const target = watch?.targetVersion ?? data.latestVersion;
   const showBanner = updating || (data.updateAvailable && data.latestVersion);
   return <>
-    {showBanner && <div className="mb-2 flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white/80 pl-2.5 pr-1 text-[11px] text-zinc-600 shadow-[0_1px_2px_rgba(24,24,27,.04)]">
-      {updating ? <LoaderCircle size={13} className="shrink-0 animate-spin text-zinc-400"/> : <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"/>}
+    {showBanner && <div className="mb-2 flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white/80 pl-2.5 pr-1 text-[12px] text-zinc-600 shadow-[0_1px_2px_rgba(24,24,27,.04)]">
+      {updating ? <Spinner size={13} className="shrink-0 text-zinc-400"/> : <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"/>}
       <HoverTooltip content={target ? `${data.distTag} 通道 ${target}` : '新版本'}>
         <span className="min-w-0 flex-1 truncate">{updating ? '正在升级，完成后自动刷新' : <>新版本 <span className="font-mono text-zinc-800">{shortVersion(target!)}</span> 可用</>}</span>
       </HoverTooltip>
       {!updating && <HoverTooltip content={data.canUpdate ? '安装新版本并重启服务' : '前台运行时无法在界面升级，请在终端执行 agent-dock update'}>
-        <button type="button" disabled={!data.canUpdate} onClick={() => { start.reset(); setConfirmOpen(true); }} className="h-7 shrink-0 rounded-md px-2 text-[11px] font-medium text-zinc-900 transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 disabled:cursor-not-allowed disabled:text-zinc-400">升级</button>
+        <button type="button" disabled={!data.canUpdate} onClick={() => { start.reset(); setConfirmOpen(true); }} className="h-7 shrink-0 rounded-md px-2 text-[12px] font-medium text-zinc-900 transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 disabled:cursor-not-allowed disabled:text-zinc-400">升级</button>
       </HoverTooltip>}
     </div>}
-    <div className="flex h-6 items-center gap-1">
+    <div className="flex h-8 items-center gap-1 text-[12px]">
       <HoverTooltip content={data.currentVersion}><span className="min-w-0 truncate">AgentDock <span className="font-mono">{shortVersion(data.currentVersion)}</span></span></HoverTooltip>
       {!showBanner && <HoverTooltip content={check.isPending ? '正在检查更新' : '检查更新'}>
-        <button type="button" aria-label="检查更新" disabled={check.isPending} onClick={() => check.mutate()} className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-400 transition-[color,background-color,box-shadow,transform] duration-150 hover:bg-white hover:text-zinc-800 hover:shadow-[0_1px_2px_rgba(24,24,27,.08)] active:scale-[.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 disabled:pointer-events-none"><RefreshCw size={12} strokeWidth={2} className={check.isPending ? 'animate-spin text-zinc-500' : ''}/></button>
+        <button type="button" aria-label="检查更新" disabled={check.isPending} onClick={() => check.mutate()} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-400 transition-colors duration-150 hover:bg-white hover:text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 disabled:pointer-events-none"><RefreshCw size={13} strokeWidth={2} className={check.isPending ? 'animate-spin text-zinc-500' : ''}/></button>
       </HoverTooltip>}
     </div>
     {/* 侧边栏带 transform，内部的 fixed 会以侧边栏为包含块只盖住它自己；弹窗和 toast 挂到 body 才能全屏。 */}

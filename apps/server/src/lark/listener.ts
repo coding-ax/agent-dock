@@ -60,7 +60,7 @@ export interface LarkListener {
 type TraceEntry = { type: AgentEvent['type']; data: Record<string, any>; timestamp: string };
 type TraceGroup = { narratives: TraceEntry[]; actions: TraceEntry[] };
 type LarkCardElement = Record<string, any>;
-type LarkGroup = { sessionId?: string; sessionConfigKey?: string; /** 「托管给机器人」绑定到的目标会话：这个群只驱动它。 */ boundSessionId?: string; tail: Promise<void> };
+type LarkGroup = { sessionId?: string; sessionConfigKey?: string; /** 「托管给机器人」绑定到的目标会话：这个群只驱动它。 */ boundSessionId?: string; /** 会话级静态上下文已注入到哪条会话、内容签名是什么；相同就不再每轮重复注入。 */ staticPrompt?: { sessionId: string; signature: string }; tail: Promise<void> };
 type LarkTaskState = 'queued' | 'running' | 'interrupting' | 'interrupted' | 'completed' | 'failed';
 type LarkTask = {
   id: string;
@@ -1874,22 +1874,15 @@ export class LarkMessageCoordinator {
       : otherChats.length
         ? `\n- 机器人所在的其他群（不含当前群）：${otherChats.slice(0, 20).map(([, name]) => name).join('、')}${otherChats.length > 20 ? ` 等 ${otherChats.length} 个群` : ''}`
         : '';
-    const injected: string[] = [];
-    injected.push(`[AgentDock 机器人身份]
+    // 会话级上下文只在该会话首轮或内容变化时注入；后续轮次靠会话历史继承。
+    // 否则每轮都会把身份、@ 规则、回复方式、静默说明再复制一份，长会话里是 O(n²) 的浪费。
+    const staticInjected: string[] = [];
+    staticInjected.push(`[AgentDock 机器人身份]
 - 机器人名称：${config.name ?? config.appId}
 - App ID：${config.appId}${config.workspace ? `\n- 工作区：${config.workspace}` : ''}${currentChatLine}${otherChatsLine}
 - 在飞书消息里 @ 机器人（app）时，text 格式的 <at> 标签不会被解析（会原样显示）。需要 @ 机器人时使用 group send --to <机器人名称或其 open_id>，AgentDock 会自动以 post 格式提及对方；如需手动构造，post 的 at 元素为 {"tag":"at","user_id":"<对方 open_id>","user_name":"<名字>"}。user_id 必须是 ou_ 开头的 open_id（机器人也用 open_id）：填 app_id 或留空时，飞书只会把它显示成蓝色文字，不会通知任何人。open_id 通过 group peers / group members 获取；cli_ 开头的 app_id 只能用于识别机器人，不能作为 @ 目标。`);
-    if (config.preInjectPrompt?.trim()) injected.push(`[AgentDock 预注入 Prompt]\n${config.preInjectPrompt.trim()}`);
-    if (event.chatType === 'group' && config.groupToolsEnabled && config.groupToolsAllowSend) {
-      injected.push(`[AgentDock 飞书当前消息 · 系统上下文]
-- 当前消息 message_id：${event.messageId}
-- 当前消息 thread_id：${event.threadId?.trim() || '事件未提供'}
-- 若要延续当前讨论或回答当前提问，使用 group send --reply-to ${event.messageId} --in-thread。
-- 若内容是独立公告、新任务或不应归入当前讨论，使用 group send 且不要传 --reply-to/--in-thread。
-- reply-to 只能使用 om_* message_id，不能使用 omt_* thread_id。`);
-    }
     if (event.chatType === 'group') {
-      injected.push(`[AgentDock 飞书回复方式]
+      staticInjected.push(`[AgentDock 飞书回复方式]
 - 默认情况下，AgentDock 会根据消息上下文决定回复方式：话题内的回复会在话题中回复，顶层消息会直接回复。
 - 如果你希望改变本次最终结果卡片的回复方式，可以在回复前调用：group reply-mode --mode thread|direct
   - thread：在话题中回复（创建/加入话题）
@@ -1897,14 +1890,29 @@ export class LarkMessageCoordinator {
 - 该设置仅对当前任务的最终结果卡片生效；大多数情况下遵循默认行为即可。`);
     }
     if (config.quietReply) {
-      injected.push(`[AgentDock 静默回复模式 · 自动注入]
+      staticInjected.push(`[AgentDock 静默回复模式 · 自动注入]
 - 当前机器人开启了「静默回复」：本次任务**不会展示 trace 卡片**，你的**最后一条回复会由服务自动发送**到当前会话（无需、也请不要用 group send 重复发送最终答案）。
 - 请把这份自动发送的最终回复放在你的最后一条文本消息里，服务会在任务结束时把它发送到对应会话。
 - 如果你的最终回复需要 @ 某人，必须额外处理：最终自动发送的是纯文本，text 格式的 <at> 标签不会被解析（会原样显示），服务也不会替你 @ 任何人。
   - 需要 @ 时，请用 group send --to <对方 open_id> 单独发送一条消息（AgentDock 会自动以 post 格式提及对方），不要把 <at> 塞进最终回复里。
   - @ 的 user_id 必须是有效的 ou_ 开头 open_id；填 app_id 或留空只会显示成蓝色文字，不会通知任何人。对方 open_id 通过 group peers / group members 获取。`);
     }
-    if (gateEnabled && !highRiskAuthorized) injected.push(`[AgentDock 安全策略 · 自动注入]\n当前飞书发送人不在高危操作允许名单中。禁止执行匹配以下正则的操作，也不要通过脚本、子进程、MCP 或其他等价方式绕过：\n${highRiskPattern}\n如果用户要求此类操作，请明确说明已被 AgentDock 安全策略阻止。`);
+    // 每条新消息必须带上当前 message_id / thread_id，这部分是真正的轮次级信息。
+    const dynamicInjected: string[] = [];
+    // 预注入 Prompt 是用户自己的每轮指令，语义上就该每轮生效；不随 AgentDock 静态说明一起缓存。
+    if (config.preInjectPrompt?.trim()) dynamicInjected.push(`[AgentDock 预注入 Prompt]\n${config.preInjectPrompt.trim()}`);
+    if (event.chatType === 'group' && config.groupToolsEnabled && config.groupToolsAllowSend) {
+      dynamicInjected.push(`[AgentDock 飞书当前消息 · 系统上下文]
+- 当前消息 message_id：${event.messageId}
+- 当前消息 thread_id：${event.threadId?.trim() || '事件未提供'}
+- 延续当前讨论或回答当前提问：group send '...' --reply-to ${event.messageId} --in-thread
+- 独立公告、新任务或不应归入当前讨论：group send，不要传 --reply-to/--in-thread。`);
+    }
+    if (gateEnabled && !highRiskAuthorized) dynamicInjected.push(`[AgentDock 安全策略 · 自动注入]\n当前飞书发送人不在高危操作允许名单中。禁止执行匹配以下正则的操作，也不要通过脚本、子进程、MCP 或其他等价方式绕过：\n${highRiskPattern}\n如果用户要求此类操作，请明确说明已被 AgentDock 安全策略阻止。`);
+    const staticSignature = staticInjected.join('\n\n');
+    const staticAlreadyInjected = group.staticPrompt?.sessionId === session.id && group.staticPrompt.signature === staticSignature;
+    const injected = [...(staticAlreadyInjected ? [] : staticInjected), ...dynamicInjected];
+    if (!staticAlreadyInjected) group.staticPrompt = { sessionId: session.id, signature: staticSignature };
     const agentPrompt = injected.length ? `${injected.join('\n\n')}\n\n[用户请求]\n${prompt}` : prompt;
 
     if (this.runtime.dispatch) {

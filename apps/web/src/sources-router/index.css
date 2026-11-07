@@ -1,0 +1,64 @@
+.sr-app { display: grid; grid-template-columns: 270px minmax(0, 1fr); height: 100dvh; overflow: hidden; background: rgb(var(--bg)); color: rgb(var(--zinc-900)); }
+.sr-sidebar { display: flex; flex-direction: column; gap: 18px; min-height: 0; overflow-y: auto; padding: 26px 20px; border-right: 1px solid rgb(var(--zinc-200)); background: rgb(var(--rail)); }
+.sr-brand { display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: -.02em; }
+.sr-dot { width: 10px; height: 10px; border-radius: 999px; background: rgb(var(--zinc-900)); box-shadow: 0 0 0 4px rgb(var(--zinc-200)); }
+.sr-sidebar h1 { margin: 0; font-size: 20px; letter-spacing: -.03em; }
+.sr-muted, .sr-sidebar p { color: rgb(var(--zinc-600)); font-size: 12px; line-height: 1.7; }
+.sr-sidebar nav { display: grid; gap: 4px; }
+.sr-sidebar nav a { padding: 8px 10px; border-radius: 8px; color: rgb(var(--zinc-700)); text-decoration: none; font-size: 13px; }
+.sr-sidebar nav a.active { background: rgb(var(--zinc-200)); color: rgb(var(--zinc-900)); font-weight: 600; }
+.sr-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.sr-summary div { display: grid; gap: 4px; padding: 10px 8px; border: 1px solid rgb(var(--zinc-200)); border-radius: 10px; background: rgb(var(--surface)); }
+.sr-summary span { color: rgb(var(--zinc-500)); font-size: 12px; }
+.sr-summary strong { font-size: 18px; }
+.sr-router-card { display: grid; gap: 8px; margin-top: auto; padding: 14px; border: 1px solid rgb(var(--zinc-200)); border-radius: 12px; background: rgb(var(--surface)); }
+.sr-label { color: rgb(var(--zinc-500)); font-size: 12px; }
+.sr-router-card code, .sr-row code, .sr-case code, .sr-detail code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: rgb(var(--zinc-500)); overflow-wrap: anywhere; }
+.sr-router-card small { color: rgb(var(--zinc-600)); }
+.sr-main { min-width: 0; min-height: 0; overflow-y: auto; padding: 22px; }
+.sr-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.sr-panel { min-width: 0; border: 1px solid rgb(var(--zinc-200)); border-radius: 14px; background: rgb(var(--surface)); overflow: hidden; }
+.sr-panel-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid rgb(var(--zinc-200)); }
+.sr-panel-header h2 { margin: 0; font-size: 14px; }
+.sr-panel-header > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.sr-panel-body { padding: 14px; }
+.sr-app button, .sr-app input, .sr-app select { border: 1px solid rgb(var(--zinc-300)); border-radius: 8px; background: rgb(var(--bg)); color: rgb(var(--zinc-900)); padding: 7px 10px; font-size: 12px; }
+.sr-app button:disabled { opacity: .5; cursor: not-allowed; }
+.sr-app button:hover:not(:disabled), .sr-app select:hover { border-color: rgb(var(--zinc-500)); }
+.sr-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; margin-bottom: 12px; }
+.sr-list { display: grid; gap: 8px; max-height: 390px; overflow-y: auto; }
+.sr-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px; border: 1px solid rgb(var(--zinc-200)); border-radius: 10px; }
+.sr-row > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.sr-row strong, .sr-case strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-row span { color: rgb(var(--zinc-500)); font-size: 12px; }
+.sr-row-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.sr-badge { display: inline-flex; align-items: center; padding: 3px 7px; border: 1px solid rgb(var(--zinc-300)); border-radius: 999px; color: rgb(var(--zinc-700)); font-size: 12px; white-space: nowrap; }
+.sr-badge[data-status="closed"], .sr-badge[data-status="disabled"] { color: rgb(var(--zinc-500)); }
+.sr-badge[data-status="pending"], .sr-badge[data-status="waiting"] { border-color: rgb(var(--amber-200)); background: rgb(var(--amber-50)); }
+.sr-badge[data-status="running"], .sr-badge[data-status="open"] { border-color: rgb(var(--emerald-200)); background: rgb(var(--emerald-50)); }
+.sr-case { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; width: 100%; text-align: left; padding: 10px; border: 1px solid rgb(var(--zinc-200)); border-radius: 10px; background: rgb(var(--bg)); }
+.sr-case.selected { border-color: rgb(var(--zinc-500)); }
+.sr-case > span { display: grid; gap: 3px; min-width: 0; }
+.sr-case small { grid-column: 1 / -1; color: rgb(var(--zinc-500)); font-size: 12px; }
+.sr-detail-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sr-detail h3 { margin: 16px 0 8px; font-size: 12px; color: rgb(var(--zinc-600)); }
+.sr-timeline { display: grid; gap: 8px; max-height: 320px; overflow-y: auto; list-style: none; padding: 0; margin: 0; }
+.sr-timeline li { display: grid; grid-template-columns: 130px 110px minmax(0, 1fr); gap: 8px; padding-bottom: 8px; border-bottom: 1px solid rgb(var(--zinc-100)); font-size: 12px; }
+.sr-timeline time, .sr-timeline span { color: rgb(var(--zinc-500)); }
+.sr-timeline p { margin: 0; }
+.sr-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.sr-chips span { padding: 4px 8px; border: 1px solid rgb(var(--zinc-200)); border-radius: 999px; font-size: 12px; overflow-wrap: anywhere; }
+.sr-empty { margin: 0; padding: 18px 0; color: rgb(var(--zinc-500)); font-size: 12px; text-align: center; }
+.sr-notice { margin-bottom: 12px; padding: 9px 12px; border: 1px solid rgb(var(--emerald-200)); border-radius: 9px; background: rgb(var(--emerald-50)); font-size: 12px; }
+.sr-notice.error { border-color: rgb(var(--red-200)); background: rgb(var(--red-50)); }
+@media (max-width: 900px) {
+  /* 移动端改成单列文档流：整页只由 .sr-app 滚动，避免底部的 Router Session
+     卡片被固定 100dvh 的网格行裁掉。 */
+  .sr-app { display: block; height: 100dvh; overflow-y: auto; }
+  .sr-sidebar { overflow: visible; border-right: 0; border-bottom: 1px solid rgb(var(--zinc-200)); }
+  .sr-router-card { margin-top: 0; }
+  .sr-main { overflow: visible; }
+  .sr-grid { grid-template-columns: minmax(0, 1fr); }
+  .sr-form { grid-template-columns: minmax(0, 1fr); }
+  .sr-timeline li { grid-template-columns: minmax(0, 1fr); }
+}

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { execFile } from 'node:child_process';
+import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 import type { AutostartService } from './daemon/autostart.js';
 import { discoverSkills } from './skill-catalog.js';
@@ -34,7 +35,7 @@ async function selectMacFile() {
 export async function registerSystemRoutes(app: FastifyInstance, options: SystemRoutesOptions = {}) {
   const platform = options.platform ?? process.platform;
   const supported = platform === 'darwin';
-  app.get('/api/system/capabilities', async () => ({ platform, directoryPicker: supported, filePicker: supported, workingDirectory: process.cwd() }));
+  app.get('/api/system/capabilities', async () => ({ platform, directoryPicker: supported, filePicker: supported, workingDirectory: process.cwd(), homeDirectory: homedir() }));
   app.get('/api/system/autostart', async () => options.autostart?.status() ?? { supported: false, enabled: false, reason: '当前运行方式不支持' });
   app.put<{ Body: { enabled?: unknown } }>('/api/system/autostart', async (request, reply) => {
     const enabled = request.body?.enabled;

@@ -1,5 +1,5 @@
-import type { CreateScheduleInput, Schedule, ScheduleDelivery, ScheduleRun } from './api';
-import { defaultRecurrence, describeCron, describeInterval, recurrenceToTrigger, type Recurrence } from './recurrence';
+import type { CreateScheduleInput, Schedule, ScheduleDelivery, ScheduleRun, UpdateScheduleInput } from './api';
+import { defaultRecurrence, describeCron, describeInterval, recurrenceToTrigger, toLocalInput, type Recurrence } from './recurrence';
 
 /**
  * 定时任务面板的展示与表单规则。纯函数，不依赖 React，组件只管渲染。
@@ -151,4 +151,65 @@ export function parseScheduleTemplate(raw?: string | null): { agentId: string; c
 /** 由定时任务新建的会话。依据是它的 systemPrompt 种子（见 server 的 buildScheduleSessionSeed），不加表列。 */
 export function isScheduledSession(session: { systemPrompt?: string }): boolean {
   return /^你是定时任务 sch_/.test(session.systemPrompt ?? '');
+}
+
+
+const pad2 = (value: number) => String(value).padStart(2, '0');
+
+/**
+ * cron 反解回表单里的「周期」选项。只认表单自己能生成的几种形态；其余原样落到「自定义」，
+ * 这样编辑时不会把用户手写的表达式悄悄改掉。
+ */
+export function cronToRecurrence(cron: string): Recurrence {
+  const parts = cron.trim().split(/\s+/);
+  const custom: Recurrence = { ...defaultRecurrence, kind: 'custom', cron };
+  if (parts.length !== 5) return custom;
+  const [minute, hour, dom, month, dow] = parts as [string, string, string, string, string];
+  if (!/^\d+$/.test(minute) || dom !== '*' || month !== '*') return custom;
+  if (hour === '*' && dow === '*') return { ...defaultRecurrence, kind: 'hourly', minute: Number(minute), cron };
+  if (!/^\d+$/.test(hour)) return custom;
+  const time = `${pad2(Number(hour))}:${pad2(Number(minute))}`;
+  if (dow === '*') return { ...defaultRecurrence, kind: 'daily', time, cron };
+  if (dow === '1-5') return { ...defaultRecurrence, kind: 'weekdays', time, cron };
+  if (/^[0-6](,[0-6])*$/.test(dow)) return { ...defaultRecurrence, kind: 'weekly', time, weekdays: dow.split(',').map(Number), cron };
+  return custom;
+}
+
+/** 已有任务 → 编辑表单的初始值。 */
+export function scheduleToForm(schedule: Schedule, fallback: Pick<ScheduleFormState, 'agentId' | 'cwd'>): ScheduleFormState {
+  const template = parseScheduleTemplate(schedule.sessionTemplate);
+  const base: ScheduleFormState = {
+    ...emptyScheduleForm,
+    name: schedule.name,
+    prompt: schedule.prompt,
+    delivery: schedule.delivery,
+    agentId: template?.agentId ?? fallback.agentId,
+    cwd: template?.cwd ?? fallback.cwd,
+    model: template?.model ?? '',
+    appendSessionId: schedule.delivery === 'append' ? schedule.sessionId ?? '' : ''
+  };
+  if (schedule.intervalMinutes) {
+    const minutes = schedule.intervalMinutes;
+    const unit = minutes % 1440 === 0 ? { everyUnit: 'day' as const, every: minutes / 1440 } : minutes % 60 === 0 ? { everyUnit: 'hour' as const, every: minutes / 60 } : { everyUnit: 'minute' as const, every: minutes };
+    return { ...base, kind: 'recurring', recurrence: { ...defaultRecurrence, kind: 'interval', ...unit } };
+  }
+  if (schedule.cron) return { ...base, kind: 'recurring', recurrence: cronToRecurrence(schedule.cron) };
+  return { ...base, kind: 'once', runAt: schedule.runAt ? toLocalInput(new Date(schedule.runAt)) : '' };
+}
+
+/**
+ * 编辑表单 → PATCH 请求体。和创建共用同一套校验；触发时间的三个字段都显式给出（没用到的给 null），
+ * 因为服务端把「没给」当作「保持原值」，从 cron 换成固定间隔时必须把 cron 清掉。
+ */
+export function scheduleFormToUpdate(form: ScheduleFormState, options: { now?: Date } = {}): { input?: UpdateScheduleInput; error?: string } {
+  const result = scheduleFormToInput(form, options);
+  if (!result.input) return { error: result.error };
+  const { sessionId, template, prompt, delivery, name, cron, intervalMinutes, runAt, timezone } = result.input;
+  return { input: {
+    name: name ?? '', prompt, ...(delivery ? { delivery } : {}),
+    ...(delivery === 'append' && sessionId ? { sessionId } : {}),
+    ...(template ? { template } : {}),
+    cron: cron ?? null, intervalMinutes: intervalMinutes ?? null, runAt: runAt ?? null,
+    ...(timezone ? { timezone } : {})
+  } };
 }

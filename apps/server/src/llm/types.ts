@@ -16,12 +16,21 @@ import { z } from 'zod';
 export const llmFormats = ['openai-chat', 'openai-responses', 'anthropic-messages'] as const;
 export type LlmFormat = (typeof llmFormats)[number];
 
+/**
+ * Anthropic 兼容端点的鉴权头。Claude Code 用 ANTHROPIC_AUTH_TOKEN 时发的是
+ * `Authorization: Bearer`，而 Anthropic 原生 API Key 用 `x-api-key`；两种都常见。
+ */
+export const llmAuthTypes = ['api-key', 'bearer'] as const;
+export type LlmAuthType = (typeof llmAuthTypes)[number];
+
 /** 一个端点：去哪、用哪种格式说话、用哪个模型。 */
 export interface LlmEndpoint {
   format: LlmFormat;
   /** 已规范化：无尾斜杠。见 normalizeBaseUrl。 */
   baseUrl: string;
   apiKey: string;
+  /** Anthropic 格式的鉴权头；不填按 x-api-key 处理。 */
+  auth?: LlmAuthType;
   model: string;
   /** 端点上配的系统提示词；调用时传入的 systemPrompt 优先。 */
   systemPrompt?: string;
@@ -111,6 +120,7 @@ export interface StoredLlmEndpoint {
   format: LlmFormat;
   baseUrl: string;
   apiKey: string;
+  auth?: LlmAuthType;
   model: string;
   systemPrompt?: string;
   maxTokens?: number;
@@ -124,6 +134,8 @@ export interface PublicLlmEndpoint {
   format?: LlmFormat;
   baseUrl?: string;
   model?: string;
+  /** Anthropic 格式的鉴权头；默认 api-key。 */
+  auth?: LlmAuthType;
   /** 只报「有没有配密钥」。 */
   apiKeySet?: boolean;
   systemPrompt?: string;
@@ -144,6 +156,7 @@ export const llmEndpointInputSchema = z.object({
   format: z.enum(llmFormats),
   baseUrl: baseUrlSchema,
   apiKey: apiKeySchema.optional(),
+  auth: z.enum(llmAuthTypes).optional(),
   model: modelSchema,
   systemPrompt: z.string().optional(),
   maxTokens: z.number().int().positive().optional(),

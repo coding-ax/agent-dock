@@ -2,11 +2,13 @@ import { lazy, memo, Suspense, useState, type ReactNode } from 'react';
 import { useThrottle, useTimeout } from 'ahooks';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { rehypeTextUnits } from './rehype-text-units';
 import { Check, Copy } from 'lucide-react';
 import { Highlight, Prism, themes } from 'prism-react-renderer';
 import { localFileLink } from './file-preview-link';
 import { useDockStore } from './store';
+import { useResolvedTheme } from './theme';
 
 // 图片放大预览只在点开图片时才需要，动态加载以免把 lightbox 及其样式计入首屏。
 const ImageLightbox = lazy(() => import('./ImageLightbox'));
@@ -50,6 +52,7 @@ export function isBlockCode(className: string | undefined, children: ReactNode) 
 
 const CodeBlock = memo(function CodeBlock({ code, className }: { code: string; className?: string }) {
   const { language, label } = resolveCodeLanguage(className);
+  const dark = useResolvedTheme() === 'dark';
   const [copied, setCopied] = useState(false);
   // 「已复制」状态 1.5s 后自动回落。delay 传 undefined 即暂停，重复点击会重新计时，
   // 卸载清理由 useTimeout 自己收口，不用手持 timer 句柄。
@@ -71,15 +74,15 @@ const CodeBlock = memo(function CodeBlock({ code, className }: { code: string; c
       setCopied(true);
     } catch { setCopied(false); }
   };
-  return <div className="code-renderer group/code my-4 overflow-hidden rounded-xl border border-zinc-700/70 bg-[#18191d] shadow-[0_8px_24px_rgba(24,24,27,.12)] [contain:layout_paint]">
-    <div className="flex h-9 items-center border-b border-white/[.07] bg-white/[.025] px-3 text-[10px] text-zinc-400">
-      <span className="font-mono tracking-wide">{label}</span>
-      <button type="button" onClick={() => void copy()} className="ml-auto flex h-7 items-center gap-1.5 rounded-md px-2 font-medium text-zinc-400 transition-colors hover:bg-white/[.07] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500" aria-label={copied ? '代码已复制' : '复制代码'}>
+  return <div className="code-renderer group/code my-4 overflow-hidden rounded-[10px] border border-zinc-200 bg-[rgb(var(--code-bg))] [contain:layout_paint]">
+    <div className="flex h-8 items-center px-3">
+      <span className="font-mono text-[12px] text-zinc-500">{label}</span>
+      <button type="button" onClick={() => void copy()} className="ml-auto flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50" aria-label={copied ? '代码已复制' : '复制代码'}>
         {copied ? <Check size={12}/> : <Copy size={12}/>}<span>{copied ? '已复制' : '复制'}</span>
       </button>
     </div>
-    <Highlight theme={themes.vsDark} code={code} language={language}>
-      {({ className: prismClassName, style, tokens, getLineProps, getTokenProps }) => <pre className={`${prismClassName} code-renderer-scroll m-0 overflow-x-auto px-4 py-3.5 text-[12.5px] leading-6`} style={{ ...style, backgroundColor: 'transparent' }}><code>{tokens.map((line, lineIndex) => <span key={lineIndex} {...getLineProps({ line })} className="block min-h-6">{line.map((token, tokenIndex) => <span key={tokenIndex} {...getTokenProps({ token })}/>)}</span>)}</code></pre>}
+    <Highlight theme={dark ? themes.vsDark : themes.vsLight} code={code} language={language}>
+      {({ className: prismClassName, style, tokens, getLineProps, getTokenProps }) => <pre className={`${prismClassName} code-renderer-scroll m-0 overflow-x-auto px-4 pb-3.5 pt-1 text-[13px] leading-6`} style={{ ...style, backgroundColor: 'transparent' }}><code>{tokens.map((line, lineIndex) => <span key={lineIndex} {...getLineProps({ line })} className="block min-h-6">{line.map((token, tokenIndex) => <span key={tokenIndex} {...getTokenProps({ token })}/>)}</span>)}</code></pre>}
     </Highlight>
   </div>;
 });
@@ -111,11 +114,11 @@ const markdownComponents: Components = {
   // 跳链默认新开标签页：Agent 输出的链接若在同页打开会直接踢走当前会话时间线，很迷。
   // 统一 target="_blank" + rel，外部站内链接一律新开。
   a({ href, children }) {
-    return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-[#2563eb] underline decoration-[#2563eb]/40 underline-offset-2 hover:decoration-[#2563eb]">{children}</a>;
+    return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-link underline decoration-[#2563eb]/40 underline-offset-2 hover:decoration-[#2563eb]">{children}</a>;
   },
   code({ className, children }) {
     if (isBlockCode(className, children)) return <CodeBlock className={className} code={String(children).replace(/\n$/, '')}/>;
-    return <code className="rounded-[.3rem] bg-zinc-100 px-[.32rem] py-[.12rem] font-mono text-[.86em] text-zinc-800 ring-1 ring-inset ring-zinc-200">{children}</code>;
+    return <code className="rounded bg-zinc-100 px-[.32rem] py-[.12rem] font-mono text-[.9em] text-zinc-800">{children}</code>;
   },
   pre({ children }) { return <>{children}</>; },
   // 横向滚动放在外层 div 上，不能直接让 table display:block（iOS WebKit 会撑破容器导致整页横滑，见 index.css）。
@@ -125,7 +128,17 @@ const markdownComponents: Components = {
   // img 由 MarkdownContent 内部覆盖：它需要 sessionId 才能把 uploads 路径改写成可访问 URL。
 };
 
-export const MarkdownContent = memo(function MarkdownContent({ children, sessionId, throttleMs, animateUnits = false }: { children: string; sessionId: string | undefined; throttleMs?: number; /** 流式输出时给文字挂词级模糊入场；历史消息保持 false。 */ animateUnits?: boolean }) {
+const userCommandComponents: Components = {
+  ...markdownComponents,
+  code({ className, children }) {
+    if (isBlockCode(className, children)) return <CodeBlock className={className} code={String(children).replace(/\n$/, '')}/>;
+    // 用户消息开头的 /命令 在 TimelineItems 里被包成行内代码；这里换成彩色命令 chip。
+    if (/^\/[^\s]+$/.test(String(children))) return <code className="ui-slash-command">{children}</code>;
+    return <code className="rounded bg-zinc-100 px-[.32rem] py-[.12rem] font-mono text-[.9em] text-zinc-800">{children}</code>;
+  }
+};
+
+export const MarkdownContent = memo(function MarkdownContent({ children, sessionId, throttleMs, animateUnits = false, highlightSlashCommands = false }: { children: string; sessionId: string | undefined; throttleMs?: number; /** 流式输出时给文字挂词级模糊入场；历史消息保持 false。 */ animateUnits?: boolean; /** 用户消息：把开头的 /命令 渲染成彩色命令 chip。 */ highlightSlashCommands?: boolean }) {
   // 流式文本（思考过程 / 进行中的回复）每秒可达 40+ 次 token 更新，ReactMarkdown
   // 每次都对整段文本重新 parse、Prism 重新高亮全部代码块，主线程长任务会把
   // spinner 和整页拖成鬼畜闪。节流后 parse 频率降到个位数/秒；trailing 触发
@@ -133,14 +146,14 @@ export const MarkdownContent = memo(function MarkdownContent({ children, session
   const shown = useThrottle(children, { wait: throttleMs ?? 0 });
   const markdown = throttleMs ? shown : children;
   const components: Components = {
-    ...markdownComponents,
+    ...(highlightSlashCommands ? userCommandComponents : markdownComponents),
     a({ href, children }) {
       const filePath = href ? localFileLink(href) : undefined;
       if (filePath && sessionId) return <button type="button" title={filePath} onClick={() => {
         const dock = useDockStore.getState();
         dock.openTab({ id: `preview:${dock.primarySessionId}:${sessionId}:${filePath}`, kind: 'files', anchorSessionId: sessionId, filePath, title: filePath.split('/').at(-1) || '文件' });
-      }} className="font-medium text-[#2563eb] underline decoration-[#2563eb]/40 underline-offset-2 hover:decoration-[#2563eb]">{children}</button>;
-      return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-[#2563eb] underline decoration-[#2563eb]/40 underline-offset-2 hover:decoration-[#2563eb]">{children}</a>;
+      }} className="font-medium text-link underline decoration-[#2563eb]/40 underline-offset-2 hover:decoration-[#2563eb]">{children}</button>;
+      return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-link underline decoration-[#2563eb]/40 underline-offset-2 hover:decoration-[#2563eb]">{children}</a>;
     },
     img({ src, alt }) {
       const resolved = resolveImageSrc(src ?? '', sessionId);
@@ -150,5 +163,7 @@ export const MarkdownContent = memo(function MarkdownContent({ children, session
       return <LightboxImage src={resolved} alt={alt ?? ''} />;
     }
   };
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={animateUnits ? [rehypeTextUnits] : []} urlTransform={url => /^file:/i.test(url) ? url : defaultUrlTransform(url)} components={components}>{markdown}</ReactMarkdown>;
+  // remark-breaks：单个换行按用户输入保留（输入框已改成 Enter 换行）。否则多行提示词会被
+  // CommonMark 折叠成一整段，长命令 / 路径全挤在一起，既难读也难看。
+  return <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} rehypePlugins={animateUnits ? [rehypeTextUnits] : []} urlTransform={url => /^file:/i.test(url) ? url : defaultUrlTransform(url)} components={components}>{markdown}</ReactMarkdown>;
 });

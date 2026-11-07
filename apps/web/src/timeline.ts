@@ -15,19 +15,34 @@ export type TimelineSection =
  * JSON 长度兜底 tool input/output 变化。不能直接 JSON.stringify 全量 data：
  * 大 output 会让每次 SSE 批都付出全文序列化成本。
  */
+// 每个时间线事件算一次签名就够：memo 比较器每次父级渲染都会对所有历史项重新调用，
+// 其中工具事件还要 JSON.stringify 输入输出。算完缓存，后续渲染 O(1)。
+// 注意：增量构建会就地改写正在合并的事件（流式文本、工具状态），那些位置必须主动失效。
+const renderSignatureCache = new WeakMap<TimelineEvent, string>();
+
 export function eventRenderSignature(event: TimelineEvent): string {
+  const cached = renderSignatureCache.get(event);
+  if (cached !== undefined) return cached;
   const data = event.data as Record<string, unknown>;
   const text = typeof data.text === 'string' ? data.text.length : 0;
   const optimistic = data.optimistic ? ':optimistic' : '';
   const toolPayload = event.type === 'tool_call' || event.type === 'tool_result'
     ? `:${data.status as string ?? ''}:${typeof data.completedAt === 'string' ? 1 : 0}:${JSON.stringify(data.input ?? '').length + JSON.stringify(data.output ?? '').length}`
     : '';
-  return `${event.sequence}.${text}${optimistic}${toolPayload}`;
+  const signature = `${event.sequence}.${text}${optimistic}${toolPayload}`;
+  renderSignatureCache.set(event, signature);
+  return signature;
 }
+
+const groupSignatureCache = new WeakMap<TimelineActivityGroup, string>();
 
 /** 阶段组签名：id 稳定身份 + 组内事件的渲染签名序列。 */
 export function groupRenderSignature(group: TimelineActivityGroup): string {
-  return `${group.id}|${group.events.map(eventRenderSignature).join(',')}`;
+  const cached = groupSignatureCache.get(group);
+  if (cached !== undefined) return cached;
+  const signature = `${group.id}|${group.events.map(eventRenderSignature).join(',')}`;
+  groupSignatureCache.set(group, signature);
+  return signature;
 }
 
 // timestamp 是 ISO-8601，同长同格式，字典序即时间序：直接用 < / > 比而不用
@@ -108,11 +123,167 @@ export function startsImmediately(sessionState: string, mode: 'queue' | 'interru
   return !busyStates.has(sessionState) && !(tasks ?? []).some(task => task.status === 'queued');
 }
 
-export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = [], optimisticMessages: OptimisticMessage[] = [], sessionBusy = false): TimelineEvent[] {
+/** 增量构建状态：时间线本体 + 构建过程中跨事件维护的索引。 */
+type TimelineBuildState = {
+  timeline: TimelineEvent[];
+  toolIndexes: Map<string, number>;
+  seenWarnings: Set<string>;
+};
+
+type TimelineCacheEntry = TimelineBuildState & {
+  events: DockEvent[];
+  tasks: Task[] | undefined;
+  optimistic: OptimisticMessage[] | undefined;
+  sessionBusy: boolean;
+};
+
+/**
+ * 时间线增量缓存。
+ *
+ * 流式输出时 SSE 每帧合批写一次 events，`buildTimeline` 过去每次都从 0 扫全部事件；
+ * 30k 条事件的会话实测单次 38–55ms，等于流式期间每帧都把主线程焊死。
+ *
+ * 这里按「轮」做增量：事件对象在 mergeEventBatch 里是引用稳定的，新数组的前缀和旧数组
+ * 逐项 ===；从第一个变化位置往回找到该轮的用户消息起点，复用起点之前已经构建好的时间线，
+ * 只重算这一轮。工具调用/警告去重等跨事件状态一并保留，保证增量结果与全量逐字段一致。
+ *
+ * 缓存键用数组第一个事件对象（WeakMap）：不同会话的首事件不同，数组被回收后缓存也回收。
+ */
+const timelineCache = new WeakMap<DockEvent, TimelineCacheEntry>();
+const EMPTY_TASKS: Task[] = [];
+const EMPTY_OPTIMISTIC: OptimisticMessage[] = [];
+
+function isUserTextEvent(event: DockEvent) {
+  return event.type === 'text' && event.data?.role === 'user';
+}
+
+/** 与主循环里的合并条件保持一致：相邻同 taskId 的用户消息会拼成一条。 */
+function mergeableUserText(previous: TimelineEvent | undefined, current: DockEvent) {
+  return previous?.type === 'text' && previous.data.role === 'user'
+    && current.type === 'text' && current.data?.role === 'user'
+    && previous.data.taskId === current.data.taskId && !current.data?.optimistic;
+}
+
+/** 处理单个事件；完整构建与增量构建共用，避免两份规则漂移。 */
+function applyTimelineEvent(state: TimelineBuildState, event: DockEvent) {
+  const { timeline, toolIndexes, seenWarnings } = state;
+  if (event.type === 'status' || event.type === 'task' || event.type === 'completed' || event.type === 'raw_terminal') return;
+  const current = { ...event, data: { ...event.data } } as TimelineEvent;
+  const warning = warningText(current);
+  if (warning) {
+    const fingerprint = warning.toLocaleLowerCase();
+    if (seenWarnings.has(fingerprint)) return;
+    seenWarnings.add(fingerprint);
+    current.type = 'warning';
+    current.data = { ...current.data, text: warning, warningKind: /\bskills?\b/i.test(warning) ? 'skill' : 'agent' };
+  }
+  if (current.type === 'text' && current.data.role !== 'user' && typeof current.data.text === 'string') {
+    if (isAgentStreamErrorText(current.data.text)) return;
+    current.data.text = stripAgentStreamErrorSuffix(current.data.text);
+    if (!current.data.text) return;
+  }
+  const previous = timeline.at(-1);
+  const role = current.data.role ?? 'assistant';
+
+  if (current.type === 'text' && current.data.role === 'user') toolIndexes.clear();
+
+  if ((current.type === 'text' || current.type === 'thinking') && previous?.type === current.type && (previous.data.role ?? 'assistant') === role
+    && (role !== 'user' || (previous.data.taskId === current.data.taskId && !current.data.optimistic))) {
+    previous.data.text = `${previous.data.text ?? ''}${current.data.text ?? ''}`;
+    previous.sequence = current.sequence;
+    previous.timestamp = current.timestamp;
+    renderSignatureCache.delete(previous);
+    return;
+  }
+
+  if (current.type === 'tool_call' || current.type === 'tool_result') {
+    const toolId = typeof current.data.id === 'string' && current.data.id ? current.data.id : undefined;
+    const existingIndex = toolId === undefined ? undefined : toolIndexes.get(toolId);
+    if (existingIndex !== undefined) {
+      const existing = timeline[existingIndex];
+      const completed = current.data.status === 'completed' || current.data.status === 'failed';
+      existing.type = current.type;
+      existing.data = {
+        ...existing.data,
+        ...current.data,
+        name: mergedToolName(existing.data.name, current.data.name),
+        input: current.data.input ?? existing.data.input,
+        output: current.data.output ?? existing.data.output,
+        startedAt: existing.data.startedAt ?? existing.timestamp,
+        ...(completed ? { completedAt: current.timestamp } : {})
+      };
+      existing.sequence = current.sequence;
+      renderSignatureCache.delete(existing);
+      return;
+    }
+    current.data.startedAt = current.timestamp;
+    if (current.data.status === 'completed' || current.data.status === 'failed') current.data.completedAt = current.timestamp;
+    if (toolId) toolIndexes.set(toolId, timeline.length);
+  }
+
+  if (current.type === 'permission_request') {
+    const existing = timeline.findIndex(item => item.type === 'permission_request' && item.data.id === current.data.id);
+    if (existing >= 0) { timeline[existing] = current; return; }
+  }
+  timeline.push(current);
+}
+
+function rememberTimeline(events: DockEvent[], tasks: Task[] | undefined, optimistic: OptimisticMessage[] | undefined, sessionBusy: boolean, state: TimelineBuildState) {
+  if (!events.length) return;
+  timelineCache.set(events[0]!, { events, tasks, optimistic, sessionBusy, ...state });
+}
+
+/**
+ * 在变化位置所在的那一轮之前做检查点。返回本轮起点下标；返回 undefined 表示不能增量。
+ * 同 taskId 的连续用户消息会被主循环拼成一条，所以要一起回退到这段用户消息的开头。
+ */
+function incrementalCheckpoint(cached: TimelineCacheEntry, events: DockEvent[]): number | undefined {
+  const common = Math.min(cached.events.length, events.length);
+  let firstDiff = common;
+  for (let index = 0; index < common; index++) {
+    if (cached.events[index] !== events[index]) { firstDiff = index; break; }
+  }
+  let start = -1;
+  for (let index = Math.min(firstDiff, events.length - 1); index >= 0; index--) {
+    if (isUserTextEvent(events[index]!)) { start = index; break; }
+  }
+  if (start < 0) return undefined;
+  while (start > 0 && mergeableUserText(events[start - 1] as TimelineEvent, events[start]!)) start--;
+  // 时间线按 timestamp 排序，增量段必须仍然有序；乱序（极少）时退回全量。
+  for (let index = start + 1; index < events.length; index++) {
+    if (events[index - 1]!.timestamp > events[index]!.timestamp) return undefined;
+  }
+  return start;
+}
+
+export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = EMPTY_TASKS, optimisticMessages: OptimisticMessage[] = EMPTY_OPTIMISTIC, sessionBusy = false): TimelineEvent[] {
+  const cached = events.length ? timelineCache.get(events[0]!) : undefined;
+  if (cached && cached.tasks === tasks && cached.optimistic === optimisticMessages && cached.sessionBusy === sessionBusy && events.length >= cached.events.length) {
+    const unchanged = events.length === cached.events.length
+      && cached.events.every((event, index) => event === events[index]);
+    if (unchanged) return cached.timeline;
+    const start = incrementalCheckpoint(cached, events);
+    if (start !== undefined) {
+      const checkpoint = events[start]!;
+      const checkpointIndex = cached.timeline.findIndex(item => item.id === checkpoint.id);
+      const previous = checkpointIndex > 0 ? cached.timeline[checkpointIndex - 1] : undefined;
+      // 检查点前一条如果还能和本轮第一条用户消息合并，说明截断点在合并链中间，全量更安全。
+      if (checkpointIndex >= 0 && !mergeableUserText(previous, checkpoint)) {
+        const state: TimelineBuildState = {
+          timeline: cached.timeline.slice(0, checkpointIndex),
+          toolIndexes: new Map([...cached.toolIndexes].filter(([, position]) => position < checkpointIndex)),
+          seenWarnings: new Set(cached.timeline.slice(0, checkpointIndex)
+            .flatMap(item => item.type === 'warning' && typeof item.data.text === 'string' ? [item.data.text.toLocaleLowerCase()] : []))
+        };
+        for (let index = start; index < events.length; index++) applyTimelineEvent(state, events[index]!);
+        rememberTimeline(events, tasks, optimisticMessages, sessionBusy, state);
+        return state.timeline;
+      }
+    }
+  }
+
   const waitingIds = new Set(waitingQueuedTasks(tasks, sessionBusy).map(task => task.id));
-  const timeline: TimelineEvent[] = [];
-  const toolIndexes = new Map<string, number>();
-  const seenWarnings = new Set<string>();
+  const state: TimelineBuildState = { timeline: [], toolIndexes: new Map(), seenWarnings: new Set() };
   const eventTaskIds = new Set(events.filter(event => event.data?.role === 'user' && event.data?.taskId).map(event => event.data.taskId));
   const legacyPrompts = new Map<string, number>();
   for (const event of events) if (event.data?.role === 'user' && !event.data?.taskId) legacyPrompts.set(event.data.text, (legacyPrompts.get(event.data.text) ?? 0) + 1);
@@ -136,66 +307,9 @@ export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = [], opti
     }
   }
   const source = sortByTimestampThenSequence([...events, ...taskEvents]);
-  for (const event of source) {
-    if (event.type === 'status' || event.type === 'task' || event.type === 'completed' || event.type === 'raw_terminal') continue;
-    const current = { ...event, data: { ...event.data } } as TimelineEvent;
-    const warning = warningText(current);
-    if (warning) {
-      const fingerprint = warning.toLocaleLowerCase();
-      if (seenWarnings.has(fingerprint)) continue;
-      seenWarnings.add(fingerprint);
-      current.type = 'warning';
-      current.data = { ...current.data, text: warning, warningKind: /\bskills?\b/i.test(warning) ? 'skill' : 'agent' };
-    }
-    if (current.type === 'text' && current.data.role !== 'user' && typeof current.data.text === 'string') {
-      if (isAgentStreamErrorText(current.data.text)) continue;
-      current.data.text = stripAgentStreamErrorSuffix(current.data.text);
-      if (!current.data.text) continue;
-    }
-    const previous = timeline.at(-1);
-    const role = current.data.role ?? 'assistant';
-
-    if (current.type === 'text' && current.data.role === 'user') toolIndexes.clear();
-
-    if ((current.type === 'text' || current.type === 'thinking') && previous?.type === current.type && (previous.data.role ?? 'assistant') === role
-      && (role !== 'user' || (previous.data.taskId === current.data.taskId && !current.data.optimistic))) {
-      previous.data.text = `${previous.data.text ?? ''}${current.data.text ?? ''}`;
-      previous.sequence = current.sequence;
-      previous.timestamp = current.timestamp;
-      continue;
-    }
-
-    if (current.type === 'tool_call' || current.type === 'tool_result') {
-      const toolId = typeof current.data.id === 'string' && current.data.id ? current.data.id : undefined;
-      const existingIndex = toolId === undefined ? undefined : toolIndexes.get(toolId);
-      if (existingIndex !== undefined) {
-        const existing = timeline[existingIndex];
-        const completed = current.data.status === 'completed' || current.data.status === 'failed';
-        existing.type = current.type;
-        existing.data = {
-          ...existing.data,
-          ...current.data,
-          name: mergedToolName(existing.data.name, current.data.name),
-          input: current.data.input ?? existing.data.input,
-          output: current.data.output ?? existing.data.output,
-          startedAt: existing.data.startedAt ?? existing.timestamp,
-          ...(completed ? { completedAt: current.timestamp } : {})
-        };
-        existing.sequence = current.sequence;
-        continue;
-      }
-      current.data.startedAt = current.timestamp;
-      if (current.data.status === 'completed' || current.data.status === 'failed') current.data.completedAt = current.timestamp;
-      if (toolId) toolIndexes.set(toolId, timeline.length);
-    }
-
-    if (current.type === 'permission_request') {
-      const existing = timeline.findIndex(item => item.type === 'permission_request' && item.data.id === current.data.id);
-      if (existing >= 0) { timeline[existing] = current; continue; }
-    }
-    timeline.push(current);
-  }
-  return timeline;
+  for (const event of source) applyTimelineEvent(state, event);
+  rememberTimeline(events, tasks, optimisticMessages, sessionBusy, state);
+  return state.timeline;
 }
 
 const terminalTaskStatuses = new Set(['completed', 'failed', 'interrupted', 'cancelled']);
@@ -249,6 +363,51 @@ function activityLabel(events: TimelineEvent[]): { label: string; labelTitle: st
   const thinking = [...events].reverse().find(event => event.type === 'thinking');
   const fallback = thinking ? '思考过程' : '执行过程';
   return { label: fallback, labelTitle: fallback };
+}
+
+/**
+ * 一轮里按 Agent 实际输出顺序排好的「步骤」：思考、连续的工具调用（合并成一行）、Agent 正文。
+ * groups 把正文当成分组标题藏起来；步骤则让每种内容各占一行，原样按时间顺序展示。
+ */
+export type ActivityStep =
+  | { kind: 'thinking'; id: string; event: TimelineEvent }
+  | { kind: 'tools'; id: string; events: TimelineEvent[] }
+  | { kind: 'text'; id: string; event: TimelineEvent };
+
+/**
+ * 思考块的描述语句。ACP 的 agent_thought 只有一段文本，没有独立标题字段；
+ * 推理摘要习惯以「**标题**」或「# 标题」单独成行开头，这一行就是 Agent 给这段思考起的名字，
+ * 进行中取最新的一个（当前正在想什么），结束后取第一个（这段思考的主题）。
+ *
+ * 标题行是 Claude 的习惯，Codex 的推理是普通英文段落（实测开头是 "The user says ..."），
+ * 一个标题都没有。没有标题时退回第一行正文：否则折叠行永远只有一句「已思考」，
+ * 用户看不出这段到底在想什么。做进行中也不取最后一行——token 逐字到达时最后一行是半句话，
+ * 标题会跟着每个 token 乱跳。
+ */
+export function thinkingTitle(text: string | undefined, live: boolean): string | undefined {
+  if (!text) return;
+  const titles: string[] = [];
+  for (const line of text.split('\n')) {
+    const match = line.match(/^\s*(?:#{1,6}\s+(.+?)|\*\*(.+?)\*\*|__(.+?)__)\s*:?\s*$/);
+    const title = (match?.[1] ?? match?.[2] ?? match?.[3])?.replace(/[*_`]/g, '').trim();
+    if (title) titles.push(title);
+  }
+  if (titles.length) return live ? titles.at(-1) : titles[0];
+  const firstLine = text.split('\n').map(line => line.trim()).find(Boolean);
+  return firstLine ? previewText(firstLine) || undefined : undefined;
+}
+
+export function buildActivitySteps(groups: TimelineActivityGroup[]): ActivityStep[] {
+  const steps: ActivityStep[] = [];
+  for (const event of groups.flatMap(group => group.events)) {
+    if (event.type === 'tool_call' || event.type === 'tool_result') {
+      const previous = steps.at(-1);
+      if (previous?.kind === 'tools') previous.events.push(event);
+      else steps.push({ kind: 'tools', id: `tools-${event.id}`, events: [event] });
+    } else if (event.type === 'thinking') steps.push({ kind: 'thinking', id: event.id, event });
+    else if (event.type === 'text' && event.data.role !== 'user') steps.push({ kind: 'text', id: event.id, event });
+  }
+  return steps;
 }
 
 export function buildTimelineSections(timeline: TimelineEvent[], tasks: Task[] = []): TimelineSection[] {

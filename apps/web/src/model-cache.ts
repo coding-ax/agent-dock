@@ -25,7 +25,7 @@ const validResult = (value: unknown): value is AgentModelsResult => {
     && (result.source === undefined || result.source === 'acp' || result.source === 'cli' || result.source === 'agent');
 };
 
-export const agentModelsQueryKey = (agentId?: string, model?: string) => ['agent-models', agentId ?? '', model ?? ''] as const;
+export const agentModelsQueryKey = (agentId?: string, model?: string, sshHost?: string) => ['agent-models', agentId ?? '', model ?? '', sshHost ?? 'local'] as const;
 
 export function readCachedAgentModels(agentId: string, model?: string, storage: ModelCacheStorage | undefined = browserStorage(), now = Date.now()): AgentModelsResult | undefined {
   if (!agentId || !storage) return undefined;
@@ -52,15 +52,16 @@ export function reconcileAgentModels(result: AgentModelsResult, cached?: AgentMo
   return result;
 }
 
-export async function loadAgentModels(agentId: string, model?: string, refresh = false): Promise<AgentModelsResult> {
-  const cached = readCachedAgentModels(agentId, model);
+export async function loadAgentModels(agentId: string, model?: string, refresh = false, sshHost?: string): Promise<AgentModelsResult> {
+  // 远端模型目录取决于那台机器上的 Agent 配置，不能和本机共用 localStorage 缓存。
+  const cached = sshHost ? undefined : readCachedAgentModels(agentId, model);
   let result: AgentModelsResult;
-  try { result = await api.agentModels(agentId, model, refresh); }
+  try { result = await api.agentModels(agentId, model, refresh, sshHost); }
   catch (error) {
     if (cached?.source !== 'acp') throw error;
     return { ...cached, warning: 'Agent 配置请求失败，正在显示上次成功读取的选项，可重新读取。' };
   }
   const reconciled = reconcileAgentModels(result, cached);
-  if (!reconciled.warning) writeCachedAgentModels(agentId, model, reconciled);
+  if (!sshHost && !reconciled.warning) writeCachedAgentModels(agentId, model, reconciled);
   return reconciled;
 }

@@ -53,5 +53,5 @@ export function AgentIcon({ agentId, agentName, size = 14, onDark = false, class
   const brand = agentBrand(agentId, agentName);
   if (!brand) return <Bot size={size} aria-hidden="true" className={`shrink-0 ${className}`}/>;
   const extension = brand === 'iflow' ? 'png' : 'svg';
-  return <img src={`/agent-icons/${brand}.${extension}`} width={size} height={size} alt="" aria-hidden="true" className={`shrink-0 object-contain ${onDark && monochromeBrands.has(brand) ? 'brightness-0 invert' : ''} ${className}`}/>;
+  return <img src={`/agent-icons/${brand}.${extension}`} width={size} height={size} alt="" aria-hidden="true" className={`shrink-0 object-contain ${monochromeBrands.has(brand) ? 'ui-mono-brand' : ''} ${onDark && monochromeBrands.has(brand) ? 'brightness-0 invert' : ''} ${className}`}/>;
 }

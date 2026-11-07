@@ -42,6 +42,10 @@ export function encodeFrame(frame: TerminalFrame): string {
 }
 
 /** 选登录 shell：显式 $SHELL 优先；macOS 缺省 zsh，其他平台 bash。 */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 export function resolveLoginShell(env: NodeJS.ProcessEnv = process.env): { file: string; args: string[] } {
   if (env.SHELL) return { file: env.SHELL, args: ['-l'] };
   if (process.platform === 'darwin') return { file: '/bin/zsh', args: ['-l'] };
@@ -89,7 +93,7 @@ export class TerminalManager {
    * 接入会话终端：不存在则按需 spawn。client.send 用于向该客户端推帧，
    * 返回的句柄含 write/resize/close。
    */
-  attach(sessionId: string, cwd: string, client: { send(frame: TerminalFrame): void; alive: boolean }): {
+  attach(sessionId: string, cwd: string, client: { send(frame: TerminalFrame): void; alive: boolean }, options: { sshHost?: string } = {}): {
     write(data: string): void;
     resize(cols: number, rows: number): void;
     /** 关闭后给新连接的清屏序列提示（调用方决定何时发）。 */
@@ -97,7 +101,7 @@ export class TerminalManager {
   } {
     let entry = this.terminals.get(sessionId);
     if (!entry || entry.exited) {
-      entry = this.spawnTerminal(sessionId, cwd);
+      entry = this.spawnTerminal(sessionId, cwd, options.sshHost);
       this.terminals.set(sessionId, entry);
     }
     if (entry.lastClientAt) { clearTimeout(entry.lastClientAt); entry.lastClientAt = undefined; }
@@ -140,12 +144,23 @@ export class TerminalManager {
     for (const sessionId of [...this.terminals.keys()]) this.dispose(sessionId);
   }
 
-  private spawnTerminal(sessionId: string, cwd: string): TerminalEntry {
-    const { file, args } = resolveLoginShell();
+  private spawnTerminal(sessionId: string, cwd: string, sshHost?: string): TerminalEntry {
     const env: NodeJS.ProcessEnv = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
     // node-pty 在 env 里遇到 undefined 值会直接抛，过滤掉（与 PtyTransport 一致）。
     for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
-    const ptyProcess = this.spawnPty(file, args, { name: 'xterm-256color', cwd, env, cols: 80, rows: 24 });
+    let file: string;
+    let args: string[];
+    let localCwd = cwd;
+    if (sshHost) {
+      // The session cwd is a remote path; the local pty must start somewhere
+      // that exists. `cd` happens on the remote side.
+      file = 'ssh';
+      args = ['-tt', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'LogLevel=ERROR', sshHost, `cd ${shellQuote(cwd)} && exec $SHELL -l`];
+      localCwd = process.cwd();
+    } else {
+      ({ file, args } = resolveLoginShell());
+    }
+    const ptyProcess = this.spawnPty(file, args, { name: 'xterm-256color', cwd: localCwd, env, cols: 80, rows: 24 });
     const broadcast = (frame: TerminalFrame) => {
       for (const client of entry!.clients) {
         if (client.alive) {
@@ -157,7 +172,7 @@ export class TerminalManager {
       ptyProcess,
       clients: new Set(),
       cwd,
-      shell: file,
+      shell: sshHost ? `ssh ${sshHost}` : file,
       exited: false,
       broadcast
     };

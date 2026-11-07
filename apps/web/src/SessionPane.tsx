@@ -1,11 +1,13 @@
-import { PanelRight, AlarmClock, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Square, Archive, X, Folder, RefreshCw, ScrollText } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { ExitGate } from './ExitGate';
+import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Square, Archive, X, RefreshCw, ScrollText, MoreHorizontal } from 'lucide-react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type DockEvent, type Session, type Task } from './api';
 import { buildTimeline, buildTimelineSections, isStreamingSection, isTurnOngoing, startsImmediately, waitingQueuedTasks, type OptimisticMessage } from './timeline';
 import { ActivityPanel, TimelineItem } from './TimelineItems';
 import { Composer } from './Composer';
+import type { ComposerEditorHandle } from './ComposerEditor';
 import { AgentIcon } from './AgentIcon';
 import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, parsePromptToDraft, queuedImageThumbnailUrl, type ComposerReference } from './composer-utils';
 import { useTimelineAutoScroll } from './useTimelineAutoScroll';
@@ -15,9 +17,10 @@ import { mergeEventBatch } from './event-buffer';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { stateLabels, stateTone, busyStates } from './session-states';
 import { ConfirmDialog, IconButton } from './ui-controls';
-import { ScheduleDialog } from './ScheduleDialog';
-import { HandoverDialog } from './HandoverDialog';
+import { openAppDialog } from './dialog-store';
 import { larkSessionAppLink } from './lark-session-link';
+import { sessionLabel, workspaceLabel } from './session-groups';
+import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
 import { useDockStore, type PaneKind } from './store';
 import { createOptimisticMessageId } from './optimistic-message-id';
 import { useToast } from './Toast';
@@ -31,7 +34,54 @@ function PaneToggleButton({ open, onToggle }: { open: boolean; onToggle(): void 
   return <IconButton label={open ? '隐藏副屏' : '显示副屏'} active={open} onClick={onToggle}><PanelRight size={15}/></IconButton>;
 }
 
-export function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onTogglePane, onOpenRawLog }: {
+type SessionMenuItem = { id: string; label: string; icon: ReactNode; trailing?: ReactNode; danger?: boolean; disabled?: boolean; onSelect(): void };
+type SessionMenuGroup = { items: SessionMenuItem[] };
+
+/** 会话标题栏的 ⋯ 菜单：分组收纳所有会话级操作，支持上下键、回车、Esc。 */
+function SessionMenu({ groups }: { groups: SessionMenuGroup[] }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const close = () => setOpen(false);
+  useDismissOnOutsidePointer(root, open, close);
+  useEffect(() => {
+    if (!open) return;
+    menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); close(); trigger.current?.focus(); return; }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+      if (!items.length) return;
+      event.preventDefault();
+      const index = items.indexOf(document.activeElement as HTMLButtonElement);
+      const next = index < 0 ? (event.key === 'ArrowDown' ? 0 : items.length - 1) : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+  return <div ref={root} className="relative">
+    <button ref={trigger} type="button" aria-haspopup="menu" aria-expanded={open} aria-label="更多操作" onClick={() => setOpen(value => !value)} className={`grid h-8 w-8 place-items-center rounded-lg transition-[color,background-color] duration-150 hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${open ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}><MoreHorizontal size={16}/></button>
+    <ExitGate open={open}>
+      <div ref={menu} role="menu" aria-label="会话操作" className="ui-popover absolute right-0 top-[calc(100%+6px)] z-50 w-60 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_16px_48px_rgba(0,0,0,.16)]">
+        {groups.map((group, index) => <div key={index}>
+          {index > 0 && <div className="my-1 border-t border-zinc-100"/>}
+          {group.items.map(item => <button key={item.id} type="button" role="menuitem" disabled={item.disabled} onClick={() => { close(); item.onSelect(); }} className={`flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[14px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${item.danger ? 'text-red-600 hover:bg-red-50' : 'text-zinc-700 hover:bg-zinc-100'}`}>
+            <span className={`shrink-0 ${item.danger ? 'text-red-500' : 'text-zinc-500'}`}>{item.icon}</span>
+            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+            {item.trailing}
+          </button>)}
+        </div>)}
+      </div>
+    </ExitGate>
+  </div>;
+}
+
+export const SessionPane = memo(function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onTogglePane, onOpenRawLog }: {
   session: Session;
   agent?: Agent;
   pane: PaneKind;
@@ -45,8 +95,8 @@ export function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onT
   const secondary = pane === 'secondary';
   const [prompt, setPrompt] = useState(''); const [composerReferences, setComposerReferences] = useState<ComposerReference[]>([]); const [sendMode, setSendMode] = useState<SendMode>('queue');
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
-  const [actionError, setActionError] = useState<string>(); const [archiveConfirm, setArchiveConfirm] = useState(false); const [scheduleOpen, setScheduleOpen] = useState(false); const [systemPromptOpen, setSystemPromptOpen] = useState(false); const [handoverOpen, setHandoverOpen] = useState(false);
-  const composerTextarea = useRef<HTMLTextAreaElement>(null);
+  const [actionError, setActionError] = useState<string>(); const [archiveConfirm, setArchiveConfirm] = useState(false);
+  const composerTextarea = useRef<ComposerEditorHandle>(null);
 
   // 增量拉取是 append-only，无法修正已缓存的过期条目；focus 时退回一次全量拉取以自愈。
   // 每个 pane 各自持有一个布尔 ref，两个 pane 都会独立触发全量 refetch。
@@ -70,16 +120,18 @@ export function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onT
     enabled: true
   });
   const tasks = useQuery({ queryKey: ['tasks', session.id], queryFn: () => api.tasks(session.id), refetchInterval: 2_000, refetchIntervalInBackground: true });
+  const systemCapabilities = useQuery({ queryKey: ['system-capabilities'], queryFn: api.systemCapabilities, staleTime: 300_000 });
   const outputLabel = session.model ?? agent?.name ?? session.agentId ?? 'Agent';
-  const models = useQuery({ queryKey: agentModelsQueryKey(session.agentId, session.model), queryFn: () => loadAgentModels(session.agentId, session.model), enabled: !session.archivedAt, initialData: () => readCachedAgentModels(session.agentId, session.model), initialDataUpdatedAt: 0, refetchOnMount: 'always', staleTime: 60_000 });
-  const skills = useQuery({ queryKey: ['skills', session.cwd], queryFn: () => api.skills(session.cwd), enabled: !session.archivedAt, staleTime: 60_000 });
+  const models = useQuery({ queryKey: agentModelsQueryKey(session.agentId, session.model, session.sshHost), queryFn: () => loadAgentModels(session.agentId, session.model, false, session.sshHost), enabled: !session.archivedAt, initialData: () => session.sshHost ? undefined : readCachedAgentModels(session.agentId, session.model), initialDataUpdatedAt: 0, refetchOnMount: 'always', staleTime: 60_000 });
+  // Skills are read from the local filesystem; a remote session's cwd is a
+  // remote path, so scanning it locally would return another project's skills.
+  const skills = useQuery({ queryKey: ['skills', session.cwd], queryFn: () => api.skills(session.cwd), enabled: !session.archivedAt && !session.sshHost, staleTime: 60_000 });
   const composerContext = useMemo(() => contextStatsFromEvents(events.data), [events.data]);
   const advertisedCommands = useMemo(() => commandsFromEvents(events.data), [events.data]);
   const sessionBusy = busyStates.has(session.state);
   // 标题栏时钟上的高亮：只算启用中的。和弹窗共用同一个缓存键，弹窗里的增删改会自动刷新这里。
   const schedules = useQuery({ queryKey: ['schedules', session.id], queryFn: () => api.schedules(session.id), enabled: !session.archivedAt, staleTime: 30_000 });
   const activeSchedules = schedules.data?.filter(item => item.enabled).length ?? 0;
-  const sessions = useQuery({ queryKey: ['sessions'], queryFn: api.sessions, enabled: scheduleOpen });
   const timeline = useMemo(() => buildTimeline(events.data, tasks.data, optimisticMessages, sessionBusy), [events.data, tasks.data, optimisticMessages, sessionBusy]); const timelineSections = useMemo(() => buildTimelineSections(timeline, tasks.data), [timeline, tasks.data]);
   let latestUserIndex = -1;
   for (let index = timeline.length - 1; index >= 0; index--) if (timeline[index].type === 'text' && timeline[index].data.role === 'user') { latestUserIndex = index; break; }
@@ -141,7 +193,7 @@ export function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onT
     onError: error => setActionError(error.message)
   });
   const archive = useMutation({ mutationFn: () => api.archive(session.id), onSuccess: result => { qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === result.id ? result : item)); setArchiveConfirm(false); if (secondary) useDockStore.getState().tabs.filter(tab => tab.sessionId === session.id).forEach(tab => closeTab(tab.id)); else setSession(undefined); }, onError: error => setActionError(error.message) });
-  const refreshModels = useMutation({ mutationFn: ({ agentId, currentModel }: { agentId: string; currentModel?: string }) => loadAgentModels(agentId, currentModel, true), onSuccess: (result, variables) => { setActionError(undefined); qc.setQueryData(agentModelsQueryKey(variables.agentId, variables.currentModel), result); }, onError: error => setActionError(error.message) });
+  const refreshModels = useMutation({ mutationFn: ({ agentId, currentModel }: { agentId: string; currentModel?: string }) => loadAgentModels(agentId, currentModel, true, session.sshHost), onSuccess: (result, variables) => { setActionError(undefined); qc.setQueryData(agentModelsQueryKey(variables.agentId, variables.currentModel, session.sshHost), result); }, onError: error => setActionError(error.message) });
   const switchModel = useMutation({ mutationFn: (nextModel: string) => api.setSessionModel(session.id, nextModel), onSuccess: result => { setActionError(undefined); qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === result.id ? result : item)); void models.refetch(); }, onError: error => setActionError(error.message) });
   const switchReasoningEffort = useMutation({ mutationFn: (nextReasoningEffort: string) => api.setSessionReasoningEffort(session.id, nextReasoningEffort), onSuccess: result => { setActionError(undefined); qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === result.id ? result : item)); }, onError: error => setActionError(error.message) });
   const modelReadiness = getModelReadiness({ loaded: models.data !== undefined, loading: models.data === undefined && (models.isPending || models.isFetching || refreshModels.isPending), switching: switchModel.isPending, failed: models.data === undefined && models.isError });
@@ -190,37 +242,66 @@ export function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onT
 
   const act = async (action: string) => { try { setActionError(undefined); await api.action(session.id, action); } catch (error) { setActionError(error instanceof Error ? error.message : String(error)); } };
 
+  // ⋯ 菜单：会话 / 协作 / 危险操作三组。原标题栏上的每个按钮都能在这里找到。
+  const menuGroups: SessionMenuGroup[] = [
+    { items: [
+      ...(!session.archivedAt ? [{
+        id: 'schedules', label: '定时任务', icon: <AlarmClock size={16}/>,
+        ...(activeSchedules ? { trailing: <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[12px] tabular-nums text-zinc-500">{activeSchedules}</span> } : {}),
+        onSelect: () => openAppDialog('schedule', { sessionId: session.id })
+      } satisfies SessionMenuItem] : []),
+      ...(session.systemPrompt ? [{ id: 'system-prompt', label: '查看系统提示词', icon: <BookOpen size={16}/>, onSelect: () => openAppDialog('system-prompt', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
+      ...(secondary && onOpenRawLog ? [{ id: 'raw-log', label: '原始日志', icon: <ScrollText size={16}/>, onSelect: () => onOpenRawLog(session.id) } satisfies SessionMenuItem] : [])
+    ] },
+    { items: [
+      ...(handoverInfo ? [{ id: 'handover-open', label: `已托管：${handoverInfo.name}`, icon: <Bot size={16} className="text-emerald-600"/>, onSelect: () => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem] : []),
+      ...(!session.archivedAt && !handoverInfo && session.source !== 'lark' ? [{ id: 'handover', label: '托管到飞书机器人', icon: <Bot size={16}/>, onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
+      ...(!handoverInfo && larkLink ? [{ id: 'lark-open', label: larkLink.exact ? '在飞书中打开' : '在飞书中打开该话题', icon: <ExternalLink size={16}/>, onSelect: () => window.open(larkLink.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem] : []),
+      ...(!session.archivedAt && session.source === 'import' ? [{ id: 'sync', label: syncExternal.isPending ? `正在从 ${externalName} 同步…` : `从 ${externalName} 同步新消息`, icon: <RefreshCw size={16}/>, disabled: syncExternal.isPending || busyStates.has(session.state), onSelect: () => syncExternal.mutate() } satisfies SessionMenuItem] : [])
+    ] },
+    ...(!session.archivedAt ? [{ items: [{ id: 'archive', label: '归档会话', icon: <Archive size={16}/>, danger: true, disabled: archive.isPending, onSelect: () => { archive.reset(); setArchiveConfirm(true); } } satisfies SessionMenuItem] }] : [])
+  ];
+
   // h-full w-full：本组件既被当作并排的 flex 子项（主区），也被塞进 PaneHost 的
   // absolute inset-0 容器（右栏标签）。后者不是 flex 上下文，只写 flex-1 会撑不满，
   // 表现为右栏内容只占左上角一块。
   return <div className={`flex h-full min-w-0 w-full ${secondary ? 'border-l border-zinc-200' : ''}`}>
     <section className="flex min-w-0 flex-1 flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-1 border-b border-zinc-200 bg-white/80 px-3 backdrop-blur sm:px-4">
+      <header className="ui-topbar flex shrink-0 items-center gap-1 border-b border-zinc-200 bg-canvas px-3 sm:px-4">
         <span className="mr-1 md:hidden"><IconButton label="打开会话列表" onClick={onOpenSidebar}><Menu size={16}/></IconButton></span>
-        <div className="min-w-0"><div className="flex items-center gap-2 text-[13px] font-semibold"><AgentIcon agentId={session.agentId} agentName={agent?.name} size={16}/><span className="truncate">{agent?.name ?? session.agentId}</span><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/><span className="shrink-0 text-[11px] font-normal text-zinc-500">{stateLabels[session.state] ?? session.state}</span></div><div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-zinc-400"><Folder size={11} className="shrink-0"/><span title={session.cwd} className="truncate">{session.cwd}</span>{session.model && <span className="shrink-0">({session.model})</span>}</div></div>
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">{!session.archivedAt && busyStates.has(session.state) && <IconButton label="中断当前任务" onClick={() => void act('interrupt')}><Square size={14}/></IconButton>}{!session.archivedAt && <IconButton label={activeSchedules ? `定时任务（${activeSchedules} 个启用中）` : '定时任务'} active={activeSchedules > 0} onClick={() => setScheduleOpen(true)}><AlarmClock size={14}/></IconButton>}{session.systemPrompt && <IconButton label="查看系统提示词" onClick={() => setSystemPromptOpen(true)}><BookOpen size={14}/></IconButton>}{secondary && onOpenRawLog && <IconButton label="查看此侧边会话的原始日志" onClick={() => onOpenRawLog(session.id)}><ScrollText size={15}/></IconButton>}{!handoverInfo && larkLink && <IconButton label={larkLink.exact ? '在飞书中打开该会话' : '在飞书中打开该话题（若未定位请在群内查找）'} onClick={() => window.open(larkLink.url, '_blank', 'noopener,noreferrer')}><ExternalLink size={14}/></IconButton>}{handoverInfo && <IconButton label={`已托管：${handoverInfo.name}（打开托管群）`} onClick={() => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer')}><Bot size={14} className="text-emerald-600"/></IconButton>}{!session.archivedAt && !handoverInfo && session.source !== 'lark' && <IconButton label="托管给机器人" onClick={() => setHandoverOpen(true)}><Bot size={14}/></IconButton>}{!session.archivedAt && session.source === 'import' && <IconButton label={syncExternal.isPending ? `正在从 ${externalName} 同步…` : `从 ${externalName} 同步新消息：把你在 ${externalName} 里续聊的新轮次补进本会话`} disabled={syncExternal.isPending || busyStates.has(session.state)} onClick={() => syncExternal.mutate()}><RefreshCw size={14} className={syncExternal.isPending ? 'animate-spin' : ''}/></IconButton>}{!session.archivedAt && <IconButton label="永久归档" disabled={archive.isPending} onClick={() => { archive.reset(); setArchiveConfirm(true); }}><Archive size={15}/></IconButton>}{!secondary && onTogglePane && <PaneToggleButton open={Boolean(paneOpen)} onToggle={onTogglePane}/>}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[14px] font-semibold text-zinc-900">{sessionLabel(session, agent?.name)}</div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500">
+            <AgentIcon agentId={session.agentId} agentName={agent?.name} size={13}/>
+            <span className="min-w-0 truncate">{agent?.name ?? session.agentId}</span>
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>
+            <span className="shrink-0">{stateLabels[session.state] ?? session.state}</span>
+            <span className="shrink-0 text-zinc-300">·</span>
+            <span title={session.cwd} className="min-w-0 truncate">{workspaceLabel(session.cwd)}</span>
+            {session.sshHost && <span title={`通过 SSH 在 ${session.sshHost} 上运行`} className="shrink-0 rounded border border-sky-200 bg-sky-50 px-1 py-px text-[12px] font-medium leading-4 text-sky-700">SSH · {session.sshHost}</span>}
+          </div>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          {!session.archivedAt && busyStates.has(session.state) && <button type="button" onClick={() => void act('interrupt')} className="mr-1 flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[12px] font-medium text-white transition-colors hover:bg-zinc-700"><Square size={10} fill="currentColor"/>停止</button>}
+          {!secondary && onTogglePane && <PaneToggleButton open={Boolean(paneOpen)} onToggle={onTogglePane}/>}
+          <SessionMenu groups={menuGroups.filter(group => group.items.length)}/>
         </div>
       </header>
       {actionError && <div className="flex items-center border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700"><span className="min-w-0 truncate">{actionError}</span><button className="ml-2 shrink-0" onClick={() => setActionError(undefined)} aria-label="关闭错误提示"><X size={13}/></button></div>}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-      <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`mx-auto w-full max-w-[820px] px-5 py-8 sm:px-8 sm:py-10 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
-        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 animate-pulse rounded bg-zinc-200"/><div className="h-4 w-1/2 animate-pulse rounded bg-zinc-200"/><div className="h-20 animate-pulse rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineSections.map((section, index) => section.kind === 'event' ? <TimelineItem key={section.event.id} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, index === timelineSections.length - 1)} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/> : <ActivityPanel key={section.turnId} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}{sessionBusy && latestUserIndex >= 0 && !hasOngoingActivity && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[11px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[11px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
-        </div></div>{showScrollToBottom && <button type="button" onClick={timelineScroll.scrollToBottom} className="absolute bottom-4 right-5 z-10 flex h-9 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-[12px] font-medium text-zinc-700 shadow-[0_8px_24px_rgba(24,24,27,.12)] transition-colors hover:border-zinc-300 hover:bg-zinc-50" aria-label="回到最新消息">回到底部</button>}</div>
-      {session.archivedAt ? <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已永久归档，仅支持查看。</div> : <Composer sessionId={session.id} state={session.state} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} textareaRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
+      <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
+        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineSections.map((section, index) => section.kind === 'event' ? <TimelineItem key={section.event.id} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, index === timelineSections.length - 1)} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/> : <ActivityPanel key={section.turnId} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}{sessionBusy && latestUserIndex >= 0 && !hasOngoingActivity && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
+        </div></div>{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}</div>
+      {session.archivedAt ? <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已永久归档，仅支持查看。</div> : <Composer sessionId={session.id} state={session.state} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>
       </div>
     </section>
 
     {syncToast.toast}
-    {handoverOpen && <HandoverDialog session={session} agent={agent} onClose={() => setHandoverOpen(false)}/>}
     <ConfirmDialog open={archiveConfirm} tone="danger" title="归档此会话？" description="归档后会话将变为只读且无法恢复。历史消息和执行记录会保留在归档列表中。" confirmLabel="确认归档" busy={archive.isPending} error={archive.error?.message} onCancel={() => { if (!archive.isPending) setArchiveConfirm(false); }} onConfirm={() => archive.mutate()}/>
-    {scheduleOpen && <ScheduleDialog session={session} sessions={sessions.data ?? []} onClose={() => setScheduleOpen(false)} onOpenSession={setSession}/>}
-    {systemPromptOpen && session.systemPrompt && <div className="ui-overlay fixed inset-0 z-30 grid place-items-center bg-zinc-950/30 p-4 backdrop-blur-[2px]" onMouseDown={event => { if (event.currentTarget === event.target) setSystemPromptOpen(false); }}>
-      <div className="ui-dialog flex max-h-[80dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)]">
-        <div className="flex items-center border-b border-zinc-100 px-4 py-3"><div className="min-w-0"><h2 className="text-[14px] font-semibold text-zinc-900">系统提示词</h2><p className="mt-0.5 truncate text-[11px] text-zinc-500">创建时提示词</p></div><span className="ml-auto"><IconButton label="关闭" onClick={() => setSystemPromptOpen(false)}><X size={16}/></IconButton></span></div>
-        <div className="space-y-5 overflow-y-auto px-4 py-4"><section><h3 className="mb-2 text-[11px] font-semibold text-zinc-500">创建时提示词</h3><pre className="m-0 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-zinc-700">{session.systemPrompt}</pre></section></div>
-      </div>
-    </div>}
   </div>;
-}
+  // 会话数据更新（流式消息、任务轮询）会带着新的 props 渲染本组件。不在这里兜住的话，
+  // 长会话会把整条时间线上千个节点全部重新 diff 一遍。弹窗开关已移到 dialog-store，
+  // 打开弹窗不再经过 App/SessionPane；这里只兜住父子数据更新。
+}, (prev, next) => prev.session === next.session && prev.agent === next.agent && prev.pane === next.pane && prev.paneOpen === next.paneOpen);

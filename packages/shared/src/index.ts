@@ -105,6 +105,12 @@ export interface Session {
   permissionMode?: PermissionMode;
   source?: string;
   sourceId?: string;
+  /**
+   * SSH config alias this session runs on. Set when importing a remote
+   * external session; every agent process for this session is then started as
+   * `ssh <host>` instead of a local command.
+   */
+  sshHost?: string;
   archivedAt?: string;
   protocol?: Exclude<Protocol, 'auto'>;
   runId: string;
@@ -149,6 +155,8 @@ export interface ImportedTurn {
 export interface StartSessionInput {
   agentId: string;
   cwd?: string;
+  /** Only the import path sets this; ordinary session creation stays local. */
+  sshHost?: string;
   model?: string;
   reasoningEffort?: string;
   permissionMode?: PermissionMode;

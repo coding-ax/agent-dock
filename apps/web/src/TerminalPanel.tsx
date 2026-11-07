@@ -1,7 +1,8 @@
+import { Spinner } from './Loaders';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { LoaderCircle, RefreshCw, Terminal as TerminalIcon } from 'lucide-react';
+import { RefreshCw, Terminal as TerminalIcon } from 'lucide-react';
 import '@xterm/xterm/css/xterm.css';
 
 type ConnState = 'connecting' | 'open' | 'closed' | 'denied';
@@ -11,7 +12,7 @@ type ConnState = 'connecting' | 'open' | 'closed' | 'denied';
  * 同一会话的多个客户端共享服务端同一个 pty。断线做有限次退避重连；
  * 访问门 401/403（全局 'agentdock:web-access-denied' 事件）后停止重连。
  */
-export function TerminalPanel({ sessionId }: { sessionId: string }) {
+export function TerminalPanel({ sessionId, sshHost }: { sessionId: string; sshHost?: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<ConnState>('connecting');
   const [attempt, setAttempt] = useState(0);
@@ -22,7 +23,7 @@ export function TerminalPanel({ sessionId }: { sessionId: string }) {
     const host = hostRef.current;
     if (!host) return;
     const term = new Terminal({
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+      fontFamily: '"Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
       fontSize: 12.5,
       lineHeight: 1.25,
       cursorBlink: true,
@@ -102,12 +103,12 @@ export function TerminalPanel({ sessionId }: { sessionId: string }) {
   }, [sessionId, epoch]);
 
   return <div className="flex h-full min-h-0 flex-col bg-[#18181b]">
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-zinc-800 px-3 text-[11px] text-zinc-400">
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-zinc-800 px-3 text-[12px] text-zinc-400">
       <TerminalIcon size={13} className="text-zinc-300"/>
       <span className="font-medium text-zinc-300">终端</span>
-      <span className="truncate font-mono text-[10px] text-zinc-500">$SHELL -l · 会话工作目录</span>
-      <span className="ml-2 flex shrink-0 items-center gap-1 text-[10px]">
-        {state === 'connecting' && <><LoaderCircle size={11} className="animate-spin text-blue-400"/>连接中…</>}
+      <span className="truncate font-mono text-[12px] text-zinc-500">{sshHost ? `ssh ${sshHost} · 会话工作目录` : '$SHELL -l · 会话工作目录'}</span>
+      <span className="ml-2 flex shrink-0 items-center gap-1 text-[12px]">
+        {state === 'connecting' && <><Spinner size={11} className="text-blue-400"/>连接中…</>}
         {state === 'open' && <><span className="h-1.5 w-1.5 rounded-full bg-emerald-400"/>已连接</>}
         {state === 'closed' && <><span className="h-1.5 w-1.5 rounded-full bg-amber-400"/>已断开{attempt > 0 && `（第 ${attempt} 次重连）`}</>}
         {state === 'denied' && <><span className="h-1.5 w-1.5 rounded-full bg-red-400"/>访问凭证失效，不再重连</>}

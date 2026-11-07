@@ -1,5 +1,6 @@
+import { Spinner } from './Loaders';
 import { useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, ChevronRight, LoaderCircle, Sparkles, Wrench } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Sparkles, Wrench } from 'lucide-react';
 import type { Task, TurnRange } from './api';
 import { buildRoundActivity, processSummary, type RequestPayload, type RequestRound, type RequestRoundActivity, type RequestScope, type RequestTrajectory, type RoundActivityGap } from './session-request-log';
 import { ActivityPanel, TimelineItem } from './TimelineItems';
@@ -43,7 +44,7 @@ export function RequestTrajectoryView({ trajectory, context, wrap }: { trajector
   }, [rounds]);
   const shown = status === 'all' ? rounds : rounds.filter(round => round.status === status);
   return <div className="font-sans">
-    <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-zinc-500">
+    <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-zinc-500">
       <span className="tabular-nums">{rounds.length} 轮</span>
       <span aria-hidden className="text-zinc-300">·</span>
       <span className="tabular-nums">{trajectory.sentRounds} 轮保存了实际请求</span>
@@ -66,7 +67,7 @@ export function RequestTrajectoryView({ trajectory, context, wrap }: { trajector
 }
 
 function FilterChip({ active, count, onClick, children }: { active: boolean; count: number; onClick: () => void; children: ReactNode }) {
-  return <button type="button" aria-pressed={active} onClick={onClick} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${active ? 'border-zinc-300 bg-white text-zinc-900 shadow-sm' : 'border-transparent text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800'}`}>
+  return <button type="button" aria-pressed={active} onClick={onClick} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[12px] ${active ? 'border-zinc-300 bg-white text-zinc-900 shadow-sm' : 'border-transparent text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800'}`}>
     {children}<span className="tabular-nums text-zinc-400">{count}</span>
   </button>;
 }
@@ -84,7 +85,7 @@ function ScopeCard({ scope, wrap }: { scope: RequestScope; wrap: boolean }) {
     <NodeHeader title="会话创建" meta={scope.systemPrompt ? `${scope.systemPrompt.length} 字 System Prompt` : undefined}/>
     {scope.systemPrompt
       ? <TextBlock label="会话级 System Prompt" text={scope.systemPrompt} wrap={wrap}/>
-      : <p className="m-0 text-[11px] text-zinc-500">未设置或旧会话未保存 System Prompt。</p>}
+      : <p className="m-0 text-[12px] text-zinc-500">未设置或旧会话未保存 System Prompt。</p>}
   </section>;
 }
 
@@ -92,11 +93,11 @@ function RoundCard({ round, context, modelLabel, wrap }: { round: RequestRound; 
   const { payload } = round;
   return <section className="rounded-lg border border-zinc-200 bg-white">
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-zinc-100 px-2.5 py-1.5">
-      <span className="text-[11px] font-medium text-zinc-800">第 {round.index} 轮</span>
-      <span className="tabular-nums text-[10px] text-zinc-400" title={round.createdAt}>{formatClock(round.createdAt)}</span>
-      <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600">{taskStatusLabels[round.status] ?? round.status}</span>
+      <span className="text-[12px] font-medium text-zinc-800">第 {round.index} 轮</span>
+      <span className="tabular-nums text-[12px] text-zinc-400" title={round.createdAt}>{formatClock(round.createdAt)}</span>
+      <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[12px] text-zinc-600">{taskStatusLabels[round.status] ?? round.status}</span>
       {payloadBadge(payload)}
-      <span className="ml-auto truncate font-mono text-[10px] text-zinc-400" title={round.id}>{round.id}</span>
+      <span className="ml-auto truncate font-mono text-[12px] text-zinc-400" title={round.id}>{round.id}</span>
     </div>
     <div className="flex flex-col gap-2 px-2.5 py-2">
       {payload.state === 'sent' && payload.form === 'injected' ? <>
@@ -158,23 +159,23 @@ function RoundActivity({ round, context, modelLabel }: { round: RequestRound; co
   return <div className="border-t border-zinc-100 px-2.5 py-2">
     {finalEvent
       ? <TimelineItem event={finalEvent} final sessionId={context.sessionId} assistantLabel={modelLabel}/>
-      : missingFinal && <p className="m-0 text-[11px] text-zinc-500">{missingFinal}</p>}
-    {recoveredFinal && <p className="m-0 mt-1 text-[10px] text-zinc-400">最终输出取自本轮过程事件，记录里没有单独保存。</p>}
+      : missingFinal && <p className="m-0 text-[12px] text-zinc-500">{missingFinal}</p>}
+    {recoveredFinal && <p className="m-0 mt-1 text-[12px] text-zinc-400">最终输出取自本轮过程事件，记录里没有单独保存。</p>}
     {hasProcess && <details open={process.open} className="mt-2 border-t border-zinc-100">
-      <summary onClick={event => { event.preventDefault(); process.toggle(); }} className="flex cursor-pointer select-none items-center gap-1.5 py-1.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:text-zinc-800">
+      <summary onClick={event => { event.preventDefault(); process.toggle(); }} className="flex cursor-pointer select-none items-center gap-1.5 py-1.5 text-[12px] font-medium text-zinc-600 outline-none transition-colors hover:text-zinc-800">
         <Wrench size={12} className="shrink-0 text-zinc-400"/><span>思考与工具调用</span>
-        {summary && <span className="tabular-nums text-[10px] font-normal text-zinc-400">{summary}</span>}
+        {summary && <span className="tabular-nums text-[12px] font-normal text-zinc-400">{summary}</span>}
         {process.open ? <ChevronDown size={12} className="ml-auto shrink-0 text-zinc-400"/> : <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-400"/>}
       </summary>
       {process.open && <div className="pt-1">
-        {process.error && <p role="alert" className="m-0 mb-1 flex items-center gap-2 text-[11px] text-red-600">{process.error}
-          {!process.loaded && <button type="button" onClick={process.retry} className="rounded border border-red-200 px-1.5 py-0.5 text-[10px] hover:bg-red-50">重试</button>}
+        {process.error && <p role="alert" className="m-0 mb-1 flex items-center gap-2 text-[12px] text-red-600">{process.error}
+          {!process.loaded && <button type="button" onClick={process.retry} className="rounded border border-red-200 px-1.5 py-0.5 text-[12px] hover:bg-red-50">重试</button>}
         </p>}
-        {!process.loaded && process.loading && <p className="m-0 flex items-center gap-1.5 text-[11px] text-zinc-500"><LoaderCircle size={12} className="animate-spin"/>读取这一轮的事件…</p>}
+        {!process.loaded && process.loading && <p className="m-0 flex items-center gap-1.5 text-[12px] text-zinc-500"><Spinner size={12}/>读取这一轮的事件…</p>}
         {activity.state === 'available'
           ? <ActivityPanel groups={activity.groups} ongoing={false} sessionId={context.sessionId} hasAnswer={activity.hasAnswer} taskStatus={activity.taskStatus} modelLabel={modelLabel} startedAt={activity.startedAt} completedAt={activity.completedAt}/>
-          : process.loaded && activity.state === 'unavailable' && <p className="m-0 text-[11px] text-zinc-500">{gapCopy[activity.reason]}</p>}
-        {process.truncated && <button type="button" disabled={process.loading} onClick={process.loadMore} className="mt-1 rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-50">{process.loading ? '读取中…' : '加载剩余事件'}</button>}
+          : process.loaded && activity.state === 'unavailable' && <p className="m-0 text-[12px] text-zinc-500">{gapCopy[activity.reason]}</p>}
+        {process.truncated && <button type="button" disabled={process.loading} onClick={process.loadMore} className="mt-1 rounded border border-zinc-300 px-1.5 py-0.5 text-[12px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-50">{process.loading ? '读取中…' : '加载剩余事件'}</button>}
       </div>}
     </details>}
   </div>;
@@ -193,32 +194,32 @@ function unfetchedReason(context: RequestTrajectoryContext, round: RequestRound)
 }
 
 function PayloadDetail({ payload, wrap }: { payload: RequestPayload; wrap: boolean }) {
-  if (payload.state === 'not-sent') return <p className="m-0 text-[11px] text-zinc-500">未发送给 Agent：任务还在排队，或已被取消。</p>;
-  if (payload.state === 'unavailable') return <p className="m-0 text-[11px] text-zinc-500">历史任务未保存实际请求，无法还原。</p>;
+  if (payload.state === 'not-sent') return <p className="m-0 text-[12px] text-zinc-500">未发送给 Agent：任务还在排队，或已被取消。</p>;
+  if (payload.state === 'unavailable') return <p className="m-0 text-[12px] text-zinc-500">历史任务未保存实际请求，无法还原。</p>;
   if (payload.form === 'unrelated') return <div className="flex flex-col gap-1.5">
-    <p className="m-0 flex items-start gap-1 text-[11px] text-red-600"><AlertTriangle size={12} className="mt-0.5 shrink-0"/>保存的实际请求与可见文本没有包含关系，无法把差异归因成注入，下面原样展示。</p>
+    <p className="m-0 flex items-start gap-1 text-[12px] text-red-600"><AlertTriangle size={12} className="mt-0.5 shrink-0"/>保存的实际请求与可见文本没有包含关系，无法把差异归因成注入，下面原样展示。</p>
     <TextBlock label="实际发送（原文）" text={payload.text} wrap={wrap}/>
   </div>;
   return undefined;
 }
 
 function payloadBadge(payload: RequestPayload) {
-  if (payload.state === 'not-sent') return <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500">未发送</span>;
-  if (payload.state === 'unavailable') return <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500">请求未保存</span>;
-  if (payload.form === 'injected') return <span className="inline-flex items-center gap-0.5 rounded bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700"><Sparkles size={10}/>注入 {payload.prefix.length} 字</span>;
-  if (payload.form === 'unrelated') return <span className="inline-flex items-center gap-0.5 rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-600"><AlertTriangle size={10}/>正文不一致</span>;
+  if (payload.state === 'not-sent') return <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[12px] text-zinc-500">未发送</span>;
+  if (payload.state === 'unavailable') return <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[12px] text-zinc-500">请求未保存</span>;
+  if (payload.form === 'injected') return <span className="inline-flex items-center gap-0.5 rounded bg-sky-50 px-1.5 py-0.5 text-[12px] text-sky-700"><Sparkles size={10}/>注入 {payload.prefix.length} 字</span>;
+  if (payload.form === 'unrelated') return <span className="inline-flex items-center gap-0.5 rounded bg-red-50 px-1.5 py-0.5 text-[12px] text-red-600"><AlertTriangle size={10}/>正文不一致</span>;
   return undefined;
 }
 
 function NodeHeader({ title, meta }: { title: string; meta?: string }) {
   return <div className="mb-1.5 flex items-center gap-2 pt-0.5">
-    <span className="text-[11px] font-medium text-zinc-800">{title}</span>
-    {meta && <span className="tabular-nums text-[10px] text-zinc-500">{meta}</span>}
+    <span className="text-[12px] font-medium text-zinc-800">{title}</span>
+    {meta && <span className="tabular-nums text-[12px] text-zinc-500">{meta}</span>}
   </div>;
 }
 
 function Caption({ children }: { children: ReactNode }) {
-  return <p className="m-0 text-[11px] text-zinc-500">{children}</p>;
+  return <p className="m-0 text-[12px] text-zinc-500">{children}</p>;
 }
 
 // tone：injected 表示这段是 AgentDock 自己拼进去的（与「会话创建」节点同色系），
@@ -231,13 +232,13 @@ function TextBlock({ label, text, wrap, tone = 'plain', forceCollapsed = false }
   return <div key={label} className={`rounded-md border ${injected ? 'border-sky-200 border-l-2 border-l-sky-400 bg-sky-50/50' : 'border-zinc-200 bg-zinc-50'}`}>
     <div className={`flex items-center gap-2 border-b px-2 py-1 ${injected ? 'border-sky-100' : 'border-zinc-200/80'}`}>
       {injected && <Sparkles size={10} className="shrink-0 text-sky-500"/>}
-      <span className={`text-[10px] ${injected ? 'text-sky-700' : 'text-zinc-500'}`}>{label}</span>
-      <span className={`tabular-nums text-[10px] ${injected ? 'text-sky-600/70' : 'text-zinc-400'}`}>{text.length} 字</span>
-      {(long || forceCollapsed) && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} className={`ml-auto inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] ${injected ? 'text-sky-700 hover:bg-sky-100' : 'text-zinc-500 hover:bg-zinc-200/60 hover:text-zinc-900'}`}>
+      <span className={`text-[12px] ${injected ? 'text-sky-700' : 'text-zinc-500'}`}>{label}</span>
+      <span className={`tabular-nums text-[12px] ${injected ? 'text-sky-600/70' : 'text-zinc-400'}`}>{text.length} 字</span>
+      {(long || forceCollapsed) && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} className={`ml-auto inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[12px] ${injected ? 'text-sky-700 hover:bg-sky-100' : 'text-zinc-500 hover:bg-zinc-200/60 hover:text-zinc-900'}`}>
         {expanded ? <ChevronDown size={11}/> : <ChevronRight size={11}/>}{expanded ? '收起' : '展开'}
       </button>}
     </div>
-    <pre className={`m-0 px-2 py-1.5 font-mono text-[11px] leading-5 ${injected ? 'text-zinc-600' : 'text-zinc-700'} ${wrap ? 'whitespace-pre-wrap break-words' : 'overflow-x-auto whitespace-pre'}`}>{shown}{!expanded && '…'}</pre>
+    <pre className={`m-0 px-2 py-1.5 font-mono text-[12px] leading-5 ${injected ? 'text-zinc-600' : 'text-zinc-700'} ${wrap ? 'whitespace-pre-wrap break-words' : 'overflow-x-auto whitespace-pre'}`}>{shown}{!expanded && '…'}</pre>
   </div>;
 }
 

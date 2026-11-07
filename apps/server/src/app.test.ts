@@ -365,7 +365,7 @@ describe('HTTP API boundary', () => {
     const selectFile = vi.fn(async () => '/Users/test/project/App.tsx');
     const discoverSkills = vi.fn(async () => [{ name: 'review', description: 'Review code', path: '/Users/test/.codex/skills/review/SKILL.md', source: 'user' as const }]);
     const app = await buildApp({} as any, { system: { platform: 'darwin', selectDirectory, selectFile, discoverSkills } }); apps.push(app);
-    expect((await app.inject({ method: 'GET', url: '/api/system/capabilities' })).json()).toEqual({ platform: 'darwin', directoryPicker: true, filePicker: true, workingDirectory: process.cwd() });
+    expect((await app.inject({ method: 'GET', url: '/api/system/capabilities' })).json()).toEqual({ platform: 'darwin', directoryPicker: true, filePicker: true, workingDirectory: process.cwd(), homeDirectory: homedir() });
     expect((await app.inject({ method: 'POST', url: '/api/system/select-directory' })).json()).toEqual({ path: '/Users/test/project' });
     expect((await app.inject({ method: 'POST', url: '/api/system/select-file' })).json()).toEqual({ path: '/Users/test/project/App.tsx' });
     expect((await app.inject({ method: 'GET', url: '/api/system/skills?cwd=%2Frepo' })).json()).toEqual([{ name: 'review', description: 'Review code', path: '/Users/test/.codex/skills/review/SKILL.md', source: 'user' }]);

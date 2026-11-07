@@ -31,6 +31,23 @@ export interface CreateScheduleInput {
   createdBySessionId?: string;
 }
 
+/**
+ * 编辑定时任务。所有字段可选，没给的保持原值；触发时间相关的字段（cron / runAt / intervalMinutes / timezone）
+ * 只要动了任何一个，就按新值重新计算下一次触发——给 null 表示清掉那一项（从 cron 换成固定间隔时要把 cron 清掉）。
+ * 暂停中的任务编辑后仍保持暂停，不会因为改了内容就悄悄开始跑。
+ */
+export interface UpdateScheduleInput {
+  name?: string;
+  prompt?: string;
+  delivery?: ScheduleDelivery;
+  sessionId?: string | null;
+  template?: ScheduleSessionTemplate;
+  cron?: string | null;
+  runAt?: string | null;
+  intervalMinutes?: number | null;
+  timezone?: string;
+}
+
 export interface ScheduleServiceOptions {
   /** 扫描间隔；分钟级 cron 的触发误差不超过这个值。 */
   intervalMs?: number;
@@ -146,6 +163,47 @@ export class ScheduleService {
     };
     await this.schedules.save(schedule);
     return schedule;
+  }
+
+  async update(id: string, input: UpdateScheduleInput): Promise<ScheduleRecord> {
+    const current = await this.get(id);
+    const prompt = input.prompt !== undefined ? input.prompt.trim() : current.prompt;
+    if (!prompt) throw new RuntimeError('INVALID_SCHEDULE', '定时任务内容不能为空', 400);
+    const delivery = input.delivery ?? current.delivery;
+    if (delivery !== 'append' && delivery !== 'new_session') throw new RuntimeError('INVALID_SCHEDULE', `未知的投递方式：${String(delivery)}`, 400);
+    const sessionId = input.sessionId !== undefined ? input.sessionId?.trim() || null : current.sessionId ?? null;
+    if (delivery === 'append' && !sessionId) throw new RuntimeError('INVALID_SCHEDULE', '追加到会话必须指定会话', 400);
+    const session = sessionId ? await this.sessions.get(sessionId) : undefined;
+    // 只在换绑会话时校验；任务原本绑着的会话后来被归档了，不该让「改个名字」也失败。
+    if (sessionId && sessionId !== current.sessionId) {
+      if (!session) throw new RuntimeError('SESSION_NOT_FOUND', `会话不存在：${sessionId}`, 404);
+      if (session.archivedAt) throw new RuntimeError('SESSION_ARCHIVED', `会话已归档：${sessionId}`, 409);
+    }
+    let template: ScheduleSessionTemplate | undefined;
+    if (delivery === 'new_session') {
+      let saved: Partial<ScheduleSessionTemplate> | undefined;
+      try { saved = current.sessionTemplate ? JSON.parse(current.sessionTemplate) as ScheduleSessionTemplate : undefined; } catch { saved = undefined; }
+      template = normalizeTemplate(input.template) ?? normalizeTemplate(saved) ?? (session ? templateFrom(session) : undefined);
+      if (!template) throw new RuntimeError('INVALID_SCHEDULE', '每次新开会话需要指定 Agent 和工作目录，或绑定一个会话', 400);
+    }
+    const timezone = input.timezone?.trim() || current.timezone;
+    assertValidTimezone(timezone);
+    const cron = input.cron !== undefined ? input.cron?.trim() || null : current.cron ?? null;
+    const runAt = input.runAt !== undefined ? input.runAt?.trim() || null : current.runAt ?? null;
+    const intervalMinutes = input.intervalMinutes !== undefined ? input.intervalMinutes : current.intervalMinutes ?? null;
+    const timingChanged = input.cron !== undefined || input.runAt !== undefined || input.intervalMinutes !== undefined || input.timezone !== undefined;
+    const at = this.clock();
+    const nextRunAt = !current.enabled ? null : timingChanged ? initialNextRun({ cron, runAt, intervalMinutes, timezone }, at) : current.nextRunAt ?? null;
+    const updated: ScheduleRecord = {
+      ...current,
+      name: input.name !== undefined ? input.name.trim() || prompt.replace(/\s+/g, ' ').slice(0, 40) : current.name,
+      prompt, delivery, sessionId,
+      sessionTemplate: template ? JSON.stringify(template) : null,
+      cron, runAt, intervalMinutes, timezone, nextRunAt,
+      updatedAt: at.toISOString()
+    };
+    await this.schedules.save(updated);
+    return updated;
   }
 
   async pause(id: string) {

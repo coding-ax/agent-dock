@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTimeline, buildTimelineSections, isStreamingSection, isTurnOngoing, toolDisplayName } from './timeline';
+import { buildActivitySteps, thinkingTitle, buildTimeline, buildTimelineSections, eventRenderSignature, isStreamingSection, isTurnOngoing, toolDisplayName, type TimelineEvent } from './timeline';
 
 const event = (sequence: number, type: string, data: any) => ({ id: `e${sequence}`, sequence, type, timestamp: '', data });
 
@@ -409,5 +409,116 @@ describe('turn identity stability (闪屏修复)', () => {
       expect(before.groups.length).toBe(1);
       expect(after.groups.length).toBe(2);
     }
+  });
+});
+
+describe('buildActivitySteps', () => {
+  const ev = (id: string, type: string, data: Record<string, unknown> = {}): TimelineEvent => ({ id, sequence: 1, type, timestamp: '2026-01-01T00:00:00.000Z', data } as TimelineEvent);
+  const group = (events: TimelineEvent[]) => ({ id: 'g', label: '', labelTitle: '', events, startedAt: '2026-01-01T00:00:00.000Z' });
+
+  it('keeps thinking, agent text and tool calls in output order and merges consecutive tool calls', () => {
+    const steps = buildActivitySteps([group([
+      ev('t1', 'thinking', { text: '想' }),
+      ev('a1', 'text', { role: 'assistant', text: '先看看' }),
+      ev('c1', 'tool_call', { id: 'c1' }), ev('c2', 'tool_call', { id: 'c2' }),
+      ev('t2', 'thinking', { text: '再想' }),
+      ev('c3', 'tool_call', { id: 'c3' })
+    ])]);
+    expect(steps.map(step => step.kind)).toEqual(['thinking', 'text', 'tools', 'thinking', 'tools']);
+    expect(steps[2]!.kind === 'tools' && steps[2]!.events).toHaveLength(2);
+  });
+});
+
+describe('thinkingTitle', () => {
+  it('uses the bold / heading line the agent gave the thought, latest while live and first once settled', () => {
+    const text = '**检查仓库结构**\n\n先看目录。\n\n**定位报错**\n\n再看日志。';
+    expect(thinkingTitle(text, true)).toBe('定位报错');
+    expect(thinkingTitle(text, false)).toBe('检查仓库结构');
+    expect(thinkingTitle('## 规划方案\n内容', false)).toBe('规划方案');
+  });
+  it('falls back to the first prose line when the agent gave no markdown heading', () => {
+    // Codex 的推理没有标题行，只有普通段落：折叠行要能显示第一句，而不是只剩「已思考」。
+    expect(thinkingTitle('\n\nThe user says "巡检" — inspect traffic.\nSecond line.', false)).toBe('The user says "巡检" — inspect traffic.');
+    expect(thinkingTitle('这是一段**没有标题**的普通思考。', true)).toBe('这是一段没有标题的普通思考。');
+    expect(thinkingTitle('   \n\t\n', false)).toBeUndefined();
+    expect(thinkingTitle('', true)).toBeUndefined();
+    expect(thinkingTitle('**\n__\n#', false)).toBeUndefined();
+  });
+});
+
+describe('timeline incremental cache', () => {
+  const at = (sequence: number, type: string, data: Record<string, unknown>) => ({
+    id: `e${sequence}`, sequence, type,
+    timestamp: `2026-01-01T00:00:${String(sequence).padStart(2, '0')}.000Z`,
+    data
+  });
+  const user = (sequence: number, text: string, taskId = `task-${sequence}`) => at(sequence, 'text', { text, role: 'user', taskId });
+  // 克隆首事件即可绕开增量缓存，得到一份独立的全量构建结果用于对比。
+  const full = (events: any[], tasks: any[] = [], optimistic: any[] = [], busy = false) =>
+    buildTimeline(events.map((item, index) => index === 0 ? { ...item, data: { ...item.data } } : item), tasks, optimistic, busy);
+
+  it('appending a turn only rebuilds the tail and matches a full rebuild', () => {
+    const first = [user(1, '第一轮'), at(2, 'text', { text: '回答一' }), user(3, '第二轮')];
+    const before = buildTimeline(first);
+    const next = first.concat([at(4, 'text', { text: '回答' }), at(5, 'text', { text: '二' })]);
+    const after = buildTimeline(next);
+    expect(after).toEqual(full(next));
+    expect(after).not.toBe(before);
+    expect(buildTimeline(next)).toBe(after);
+  });
+
+  it('folds a tool result appended after a cached tool call', () => {
+    const first = [user(1, '跑命令'), at(2, 'tool_call', { id: 't1', name: 'Terminal', status: 'running', input: { command: 'pwd' } })];
+    buildTimeline(first);
+    const next = first.concat([at(3, 'tool_result', { id: 't1', name: 'tool call', status: 'completed', output: '/repo' })]);
+    const after = buildTimeline(next);
+    expect(after).toHaveLength(2);
+    expect(after[1]).toMatchObject({ type: 'tool_result', data: { id: 't1', name: 'Terminal', status: 'completed', output: '/repo' } });
+    expect(after).toEqual(full(next));
+  });
+
+  it('caches render signatures per event object without going stale across rebuilds', () => {
+    const before = buildTimeline([user(1, '一'), at(2, 'text', { text: '答一' })]);
+    const firstSignature = eventRenderSignature(before[1]!);
+    expect(eventRenderSignature(before[1]!)).toBe(firstSignature);
+    // 增量重建会为变化的那一轮创建新对象，缓存不能把旧签名带过去。
+    const changed = buildTimeline([user(1, '一'), at(2, 'text', { text: '答一（改）' })]);
+    expect(changed[1]).not.toBe(before[1]);
+    expect(eventRenderSignature(changed[1]!)).not.toBe(firstSignature);
+  });
+
+  it('rebuilds from the changed turn when a later batch updates an older turn', () => {
+    const turn1 = [user(1, '一'), at(2, 'text', { text: '答一' })];
+    const turn2 = [user(3, '二'), at(4, 'text', { text: '答二' })];
+    buildTimeline([...turn1, ...turn2]);
+    const changed = [turn1[0]!, at(2, 'text', { text: '答一（改）' }), ...turn2];
+    expect(buildTimeline(changed)).toEqual(full(changed));
+  });
+
+  it('keeps consecutive same-task user messages merged across batches', () => {
+    const first = [user(1, '第一句', 'task-x'), user(2, '第二句', 'task-x')];
+    buildTimeline(first);
+    const next = first.concat([user(3, '第三句', 'task-x')]);
+    const after = buildTimeline(next);
+    expect(after).toHaveLength(1);
+    expect(after[0]!.data.text).toBe('第一句第二句第三句');
+    expect(after).toEqual(full(next));
+  });
+
+  it('dedupes warnings across an incremental batch', () => {
+    const warning = 'Warning: Skill descriptions were shortened to fit the context budget.';
+    const first = [user(1, '一'), at(2, 'text', { text: warning })];
+    buildTimeline(first);
+    const next = first.concat([user(3, '二'), at(4, 'text', { text: warning }), at(5, 'text', { text: '继续' })]);
+    const after = buildTimeline(next);
+    expect(after.filter(item => item.type === 'warning')).toHaveLength(1);
+    expect(after).toEqual(full(next));
+  });
+
+  it('falls back to a full rebuild when tasks change', () => {
+    const events = [user(1, '一'), at(2, 'text', { text: '答' })];
+    buildTimeline(events, []);
+    const tasks = [{ id: 'task-9', sessionId: 's', prompt: '历史', status: 'completed', createdAt: '2026-01-01T00:00:00.500Z', updatedAt: '' }];
+    expect(buildTimeline(events, tasks)).toEqual(full(events, tasks));
   });
 });

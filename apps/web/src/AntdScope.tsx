@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { StyleProvider } from '@ant-design/cssinjs';
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, theme as antdTheme } from 'antd';
+import { useResolvedTheme } from './theme';
 import zhCN from 'antd/locale/zh_CN';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
@@ -16,10 +17,15 @@ dayjs.locale('zh-cn');
  * 主题色和字号对齐现有的 zinc 色板与 12px 表单字号。
  */
 export function AntdScope({ children }: { children: ReactNode }) {
+  const dark = useResolvedTheme() === 'dark';
+  const c = dark
+    ? { ink: '#f0f1f4', hover: '#d4d6dc', border: '#343740', placeholder: '#777c87', fill: '#272a31', fillHover: '#343740', mid: '#969ba6', outline: 'rgba(150, 155, 166, .25)', link: '#7daaff', surface: '#181a1f' }
+    : { ink: '#18181b', hover: '#3f3f46', border: '#e4e4e7', placeholder: '#a1a1aa', fill: '#f4f4f5', fillHover: '#e4e4e7', mid: '#71717a', outline: 'rgba(161, 161, 170, .2)', link: '#2563eb', surface: '#ffffff' };
   return <StyleProvider hashPriority="high">
     <ConfigProvider locale={zhCN} button={{ autoInsertSpace: false }} theme={{
-      token: { colorPrimary: '#18181b', colorLink: '#2563eb', colorBorder: '#e4e4e7', colorTextPlaceholder: '#a1a1aa', borderRadius: 6, fontSize: 12, controlHeight: 32, controlHeightLG: 36, fontSizeLG: 13, borderRadiusLG: 6, fontFamily: 'inherit', zIndexPopupBase: 1100, colorPrimaryHover: '#3f3f46', controlOutline: 'rgba(161, 161, 170, .2)', controlItemBgActive: '#f4f4f5', controlItemBgActiveHover: '#e4e4e7' },
-      components: { Segmented: { itemSelectedColor: '#18181b', trackBg: '#f4f4f5' }, DatePicker: { cellActiveWithRangeBg: '#f4f4f5', activeBorderColor: '#71717a', hoverBorderColor: '#a1a1aa' }, Input: { activeBorderColor: '#71717a', hoverBorderColor: '#a1a1aa' }, Select: { optionSelectedBg: '#f4f4f5', optionSelectedFontWeight: 500, activeBorderColor: '#71717a', hoverBorderColor: '#a1a1aa' } }
+      algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+      token: { colorPrimary: c.ink, colorTextLightSolid: dark ? '#0e0f12' : '#ffffff', colorLink: c.link, colorBorder: c.border, colorBgContainer: c.surface, colorBgElevated: c.surface, colorTextPlaceholder: c.placeholder, borderRadius: 8, fontSize: 12, controlHeight: 32, controlHeightLG: 36, fontSizeLG: 13, borderRadiusLG: 8, fontFamily: 'inherit', zIndexPopupBase: 1100, colorPrimaryHover: c.hover, controlOutline: c.outline, controlItemBgActive: c.fill, controlItemBgActiveHover: c.fillHover },
+      components: { Segmented: { itemSelectedColor: c.ink, trackBg: c.fill }, DatePicker: { cellActiveWithRangeBg: c.fill, activeBorderColor: c.mid, hoverBorderColor: c.placeholder }, Input: { activeBorderColor: c.mid, hoverBorderColor: c.placeholder }, Select: { optionSelectedBg: c.fill, optionSelectedFontWeight: 500, activeBorderColor: c.mid, hoverBorderColor: c.placeholder } }
     }}>{children}</ConfigProvider>
   </StyleProvider>;
 }

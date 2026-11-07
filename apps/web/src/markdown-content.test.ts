@@ -20,6 +20,14 @@ describe('stream-safe Markdown code rendering', () => {
   });
 });
 
+describe('多行提示词保留换行', () => {
+  it('单个换行渲染为 <br>，不会被折叠成一整段', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: undefined, children: '第一行\n第二行\n第三行' }));
+    expect(html).toContain('<br/>');
+    expect(html).not.toContain('第一行第二行');
+  });
+});
+
 describe('GFM markdown table rendering', () => {
   const table = [
     '| 列A | 列B |',

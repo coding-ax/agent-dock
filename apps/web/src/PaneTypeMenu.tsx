@@ -52,7 +52,7 @@ export function PaneTypeMenu({ anchor, shortcuts, onPick, onClose }: { anchor?: 
     {paneTypeOptions(shortcuts).map(option => <button key={option.kind} type="button" role="menuitem" onClick={() => onPick(option.kind)} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-700 transition-colors hover:bg-zinc-100">
       <span className="text-zinc-500">{icon(option.kind)}</span>
       <span className="min-w-0 flex-1 truncate">{option.label}</span>
-      {option.shortcut && <span className="shrink-0 font-mono text-[10px] text-zinc-400">{option.shortcut.label}</span>}
+      {option.shortcut && <span className="shrink-0 font-mono text-[12px] text-zinc-400">{option.shortcut.label}</span>}
     </button>)}
   </div>;
 }

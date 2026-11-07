@@ -31,6 +31,22 @@ export interface ListExternalSessionsOptions {
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 /**
+ * SSH 的 stderr 会混进 gcloud IAP 隧道的提示和 known_hosts 警告；把这些噪音拼进
+ * ACP 错误会掩盖真正的原因（例如远端未登录）。只保留有诊断价值的行。
+ */
+function meaningfulStderr(chunks: string[]): string {
+  return chunks.join('').split('\n')
+    .map(line => line.trim())
+    .filter(line => line
+      && !/^WARNING:\s*$/.test(line)
+      && !/^To increase the performance of the tunnel/i.test(line)
+      && !/^please see https:\/\/cloud\.google\.com\/iap\//i.test(line)
+      && !/^Warning: Permanently added .* known hosts/i.test(line))
+    .join('\n')
+    .trim();
+}
+
+/**
  * 通过 ACP `session/list` 读取某个 Agent 自己记录的会话。
  *
  * 直接用 SDK 拉一条临时 ACP 连接，不复用 AgentDock 运行时：
@@ -70,7 +86,7 @@ export async function listExternalSessions(agent: AgentConfig, options: ListExte
   try {
     return await Promise.race([collect(connection, options), timer]);
   } catch (error) {
-    const detail = stderr.join('').trim();
+    const detail = meaningfulStderr(stderr);
     if (detail && error instanceof Error && !error.message.includes(detail)) error.message = `${error.message}：${detail.slice(0, 400)}`;
     throw error;
   } finally {
@@ -177,7 +193,7 @@ export async function loadExternalSessionTranscript(agent: AgentConfig, sessionI
   try {
     return await Promise.race([replay(), timer]);
   } catch (error) {
-    const detail = stderr.join('').trim();
+    const detail = meaningfulStderr(stderr);
     const reason = describeAcpError(error);
     const message = detail && !reason.includes(detail) ? `${reason}：${detail.slice(0, 400)}` : reason;
     throw new Error(message, { cause: error });

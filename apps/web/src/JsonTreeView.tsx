@@ -6,7 +6,7 @@ const STRING_PREVIEW = 120;
 
 /** 完整记录的结构视图：逐层折叠，替代一整屏 JSON 文本。 */
 export function JsonTreeView({ value, wrap }: { value: unknown; wrap: boolean }) {
-  return <div className="font-mono text-[11px] leading-5 text-zinc-700">
+  return <div className="font-mono text-[12px] leading-5 text-zinc-700">
     <JsonNode label={undefined} value={value} depth={0} wrap={wrap}/>
   </div>;
 }
@@ -41,7 +41,7 @@ function Primitive({ value }: { value: unknown }) {
   const text = String(value);
   if (text.length <= STRING_PREVIEW) return <span className="text-emerald-700">{text}</span>;
   return <details className="m-0">
-    <summary className="cursor-pointer list-none text-emerald-700">{text.slice(0, STRING_PREVIEW)}…<span className="ml-1 text-[10px] text-zinc-400">共 {text.length} 字</span></summary>
+    <summary className="cursor-pointer list-none text-emerald-700">{text.slice(0, STRING_PREVIEW)}…<span className="ml-1 text-[12px] text-zinc-400">共 {text.length} 字</span></summary>
     <span className="text-emerald-700">{text}</span>
   </details>;
 }

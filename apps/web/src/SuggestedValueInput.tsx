@@ -17,11 +17,11 @@ export function SuggestedValueInput({ value, onChange, label, placeholder, sugge
       className="w-full"
       value={value}
       onChange={onChange}
-      options={suggestion ? [{ value: suggestion, label: <span className="block py-0.5"><span className="block text-[11px] font-medium text-zinc-700">{suggestionLabel}</span><span className="mt-0.5 block break-all font-mono text-[11px] text-zinc-500">{suggestion}</span></span> }] : []}
+      options={suggestion ? [{ value: suggestion, label: <span className="block py-0.5"><span className="block text-[12px] font-medium text-zinc-700">{suggestionLabel}</span><span className="mt-0.5 block break-all font-mono text-[12px] text-zinc-500">{suggestion}</span></span> }] : []}
       filterOption={false}
     >
       <Input size="large" aria-label={label} placeholder={placeholder} allowClear className="font-mono text-[12px]"/>
     </AutoComplete>
-    {value.trim() && <p className="mt-1 break-all font-mono text-[10px] leading-4 text-zinc-400" title={value}>{value}</p>}
+    {value.trim() && <p className="mt-1 break-all font-mono text-[12px] leading-4 text-zinc-400" title={value}>{value}</p>}
   </div>;
 }

@@ -1,13 +1,24 @@
-name: Publish patch to npm
+name: Publish to npm
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Version bump (patch or minor)'
+        type: choice
+        options:
+          - patch
+          - minor
+        default: patch
 
 permissions:
   contents: write
+  # npm provenance: lets registry.npmjs.org link the package back to this
+  # repository and the exact workflow run that built it.
+  id-token: write
 
 concurrency:
   group: npm-publish-main
@@ -15,7 +26,9 @@ concurrency:
 
 jobs:
   publish:
-    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    # The version-bump commit carries [skip release], so its push to main does
+    # not publish again. A manual dispatch always publishes.
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip release]') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -50,18 +63,20 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Bump patch version
+      - name: Bump version
         id: version
         working-directory: apps/server
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type || 'patch' }}
         run: |
-          npm version patch --no-git-tag-version
+          npm version "$RELEASE_TYPE" --no-git-tag-version
           node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));fs.appendFileSync(process.env.GITHUB_OUTPUT, 'value='+j.version+'\n')"
 
       - name: Publish to npm
         working-directory: apps/server
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --tag latest --registry=https://registry.npmjs.org
+        run: npm publish --provenance --tag latest --registry=https://registry.npmjs.org
 
       - name: Commit release version
         env:

@@ -82,38 +82,56 @@ export function groupSessions(sessions: Session[], agents: Agent[] = []): Worksp
   return [...workspaces.values()];
 }
 
-/** 侧边栏「最近操作」区最多显示多少条。默认 50，够覆盖一天的跳跃，又不至于让置顶区本身变成第二份长列表。 */
-export const RECENT_SESSION_LIMIT = 50;
+/* ---------- 按时间分组（侧栏默认视图） ---------- */
 
-export type RecentSessionEntry = {
-  session: Session;
-  /** 挂在它下面的侧边会话；与分组列表同一套归属规则。 */
-  sideChats: Session[];
-};
+export type TimeGroupKey = 'today' | 'yesterday' | 'last7' | 'last30' | 'earlier';
+export type TimeSessionGroup = { key: TimeGroupKey; label: string; sessions: Session[] };
+
+const TIME_GROUP_LABELS: Array<{ key: TimeGroupKey; label: string }> = [
+  { key: 'today', label: '今天' },
+  { key: 'yesterday', label: '昨天' },
+  { key: 'last7', label: '过去 7 天' },
+  { key: 'last30', label: '过去 30 天' },
+  { key: 'earlier', label: '更早' }
+];
 
 /**
- * 取最近操作过的 N 个会话。输入必须已按活动时间倒序——这是 visibleSessions 的既有契约。
- *
- * 侧边会话不单独占一条：它跟在父会话下面，和分组列表一致。否则「最近」里会出现一条
- * 孤零零的派生会话，看不出它从哪儿来。父会话不在最近窗口内的侧边会话直接不出现，
- * 分组列表里照常能找到它。
- *
- * **整块的位置按「组内最新成员」算，不是父会话自己**。分组优先于时间的代价就在这里：
- * 只取父会话自己的时间，会导致刚聊过的侧边会话被压在父会话的旧位次上，看起来就是
- * 「最近没按最后一次对话时间排序」。组内顺序不动，只抬高整块的位置。
+ * 本地日历日的序数。用 UTC 序数比较本地年月日，避免夏令时把 24 小时切成 23/25 小时导致跨天误判。
+ * 未来时间（时钟偏差）按今天处理。
  */
-export function recentSessions(sessions: Session[], limit = RECENT_SESSION_LIMIT): RecentSessionEntry[] {
-  const { children, nestedIds } = groupSideChats(sessions);
-  const entries: Array<RecentSessionEntry & { latest: string }> = [];
+const localDayOrdinal = (date: Date) => Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000);
+
+/**
+ * 按活跃时间把会话分到「今天 / 昨天 / 过去 7 天 / 过去 30 天 / 更早」。
+ * 输入已按时间倒序时组内顺序保持不变；空组不输出。
+ */
+export function groupSessionsByTime(sessions: Session[], now: Date = new Date()): TimeSessionGroup[] {
+  const today = localDayOrdinal(now);
+  const buckets = new Map<TimeGroupKey, Session[]>();
   for (const session of sessions) {
-    if (nestedIds.has(session.id)) continue;
-    const sideChats = children.get(session.id) ?? [];
-    // 空数组时 reduce 的初值就是父会话自己的时间，所以这一行同时覆盖了「没有侧边会话」。
-    const latest = sideChats.reduce((newest, child) => (sessionTime(child) > newest ? sessionTime(child) : newest), sessionTime(session));
-    entries.push({ session, sideChats, latest });
+    const parsed = new Date(sessionActivityTime(session));
+    const day = Number.isNaN(parsed.getTime()) ? today : localDayOrdinal(parsed);
+    const age = today - day;
+    const key: TimeGroupKey = age <= 0 ? 'today' : age === 1 ? 'yesterday' : age <= 7 ? 'last7' : age <= 30 ? 'last30' : 'earlier';
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(session); else buckets.set(key, [session]);
   }
-  entries.sort((left, right) => right.latest.localeCompare(left.latest));
-  return entries.slice(0, limit).map(({ session, sideChats }) => ({ session, sideChats }));
+  return TIME_GROUP_LABELS.flatMap(({ key, label }) => {
+    const list = buckets.get(key);
+    return list?.length ? [{ key, label, sessions: list }] : [];
+  });
+}
+
+/** 会话行悬停时显示的相对时间，如「3 分钟」「2 小时」「5 天」。 */
+export function relativeTimeLabel(iso: string, now: number = Date.now()) {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return '';
+  const minutes = Math.max(0, Math.floor((now - time) / 60_000));
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时`;
+  return `${Math.floor(hours / 24)} 天`;
 }
 
 /**

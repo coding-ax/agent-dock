@@ -89,6 +89,13 @@ describe('鉴权头', () => {
     expect(headers['anthropic-version']).toBeTruthy();
     expect(headers.authorization).toBeUndefined();
   });
+
+  it('Anthropic 代理凭证可以切到 Authorization: Bearer', () => {
+    const headers = llmAdapter('anthropic-messages').headers(endpoint('anthropic-messages', { auth: 'bearer' }));
+    expect(headers.authorization).toBe('Bearer sk-secret-value');
+    expect(headers['x-api-key']).toBeUndefined();
+    expect(headers['anthropic-version']).toBeTruthy();
+  });
 });
 
 describe('请求体', () => {

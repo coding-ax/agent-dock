@@ -1,5 +1,9 @@
 import { Command } from 'commander';
 import type { DaemonReadyInfo } from './daemon/command.js';
+import type {
+  CaseCloseCliOptions, CaseListCliOptions, SourceAddCliOptions, SourceRouterCliOptions,
+  SourceTestCliOptions, SourceUpdateCliOptions
+} from './sources-router/cli.js';
 
 export interface CliOptions {
   host?: string;
@@ -108,6 +112,21 @@ export interface CliHandlers {
   scheduleResume?(id: string, options: ScheduleControlCliOptions): void | Promise<void>;
   scheduleRun?(id: string, options: ScheduleControlCliOptions): void | Promise<void>;
   scheduleRemove?(id: string, options: ScheduleControlCliOptions): void | Promise<void>;
+  sourceAdd?(name: string, options: SourceAddCliOptions): void | Promise<void>;
+  sourceList?(options: SourceRouterCliOptions): void | Promise<void>;
+  sourceShow?(id: string, options: SourceRouterCliOptions): void | Promise<void>;
+  sourceEnable?(id: string, options: SourceRouterCliOptions): void | Promise<void>;
+  sourceDisable?(id: string, options: SourceRouterCliOptions): void | Promise<void>;
+  sourceLogs?(id: string, options: SourceRouterCliOptions & { limit?: string }): void | Promise<void>;
+  sourceTest?(id: string, fixture: string | undefined, options: SourceTestCliOptions): void | Promise<void>;
+  sourceUpdate?(id: string, options: SourceUpdateCliOptions): void | Promise<void>;
+  caseList?(options: CaseListCliOptions): void | Promise<void>;
+  caseShow?(id: string, options: SourceRouterCliOptions): void | Promise<void>;
+  caseEvents?(id: string, options: SourceRouterCliOptions): void | Promise<void>;
+  caseClose?(id: string, options: CaseCloseCliOptions): void | Promise<void>;
+  routerStatus?(options: SourceRouterCliOptions): void | Promise<void>;
+  routerOpen?(options: SourceRouterCliOptions): void | Promise<void>;
+  routerDryRun?(fixture: string | undefined, options: SourceRouterCliOptions & { source?: string }): void | Promise<void>;
 }
 
 const addCardOptions = (command: Command) => command
@@ -363,6 +382,45 @@ Delivery:
 Notes:
   Write the prompt as a complete, self-contained instruction: a new session cannot see this conversation.
   After adding, tell the user the next fire time printed by the command.`);
+
+  const commonSourceOptions = (command: Command) => command
+    .option('--database <file>', 'SQLite database path (defaults to the running daemon database)')
+    .option('--json', 'Output raw JSON');
+  const sources = program.command('source').description('管理外部消息源、规范化事件与试跑');
+  sources.command('add')
+    .description('创建消息源；密钥用 secret 名称引用，日志和列表不回显明文')
+    .argument('<name>', '消息源名称')
+    .option('--kind <kind>', 'webhook | poll | stream | worker', 'webhook')
+    .option('--config <json>', 'Source config JSON')
+    .option('--secret-ref <name>', '环境变量名称引用，可重复', (value: string, previous: string[]) => [...previous, value], [] as string[])
+    .option('--secret-env <NAME=value>', '写入密钥值，可重复；生产环境建议只用 secret-ref', (value: string, previous: string[]) => [...previous, value], [] as string[])
+    .option('--disabled', '创建后保持禁用')
+    .option('--database <file>', 'SQLite database path (defaults to the running daemon database)')
+    .option('--json', 'Output raw JSON')
+    .action((name, options) => handlers.sourceAdd?.(name, { ...options, enabled: !options.disabled }));
+  commonSourceOptions(sources.command('list').description('列出消息源（不返回 secret 明文）')).action(options => handlers.sourceList?.(options));
+  commonSourceOptions(sources.command('show').description('查看一个消息源').argument('<source-id>', 'Source ID (src_*)')).action((id, options) => handlers.sourceShow?.(id, options));
+  commonSourceOptions(sources.command('enable').description('启用消息源').argument('<source-id>', 'Source ID (src_*)')).action((id, options) => handlers.sourceEnable?.(id, options));
+  commonSourceOptions(sources.command('disable').description('禁用消息源').argument('<source-id>', 'Source ID (src_*)')).action((id, options) => handlers.sourceDisable?.(id, options));
+  commonSourceOptions(sources.command('logs').description('查看最近事件日志').argument('<source-id>', 'Source ID (src_*)')).option('--limit <count>', '最多显示条数', '20').action((id, options) => handlers.sourceLogs?.(id, options));
+  commonSourceOptions(sources.command('test').description('用 fixture 试跑规范化与 Router 决策，不落库').argument('<source-id>', 'Source ID (src_*)').argument('[fixture]', 'JSON fixture 路径；省略时从 stdin 读取')).action((id, fixture, options) => handlers.sourceTest?.(id, fixture, options));
+  commonSourceOptions(sources.command('update').description('更新消息源名称或配置').argument('<source-id>', 'Source ID (src_*)'))
+    .option('--name <name>', '新名称')
+    .option('--config <json>', 'Source config JSON')
+    .option('--secret-ref <name>', '环境变量名称引用，可重复', (value: string, previous: string[]) => [...previous, value], [] as string[])
+    .option('--secret-env <NAME=value>', '写入密钥值，可重复', (value: string, previous: string[]) => [...previous, value], [] as string[])
+    .action((id, options) => handlers.sourceUpdate?.(id, options));
+
+  const cases = program.command('case').description('查看 Case 聚合、时间线并关闭跟踪');
+  commonSourceOptions(cases.command('list').description('列出 Case')).option('--source <source-id>', '按消息源过滤').option('--status <status>', 'open | waiting | closed').action(options => handlers.caseList?.(options));
+  commonSourceOptions(cases.command('show').description('查看 Case 详情与时间线').argument('<case-id>', 'Case ID (case_*)')).action((id, options) => handlers.caseShow?.(id, options));
+  commonSourceOptions(cases.command('events').description('查看 Case 时间线').argument('<case-id>', 'Case ID (case_*)')).action((id, options) => handlers.caseEvents?.(id, options));
+  commonSourceOptions(cases.command('close').description('关闭 Case；保留历史，释放 open_key').argument('<case-id>', 'Case ID (case_*)')).option('--reason <reason>', '关闭原因').action((id, options) => handlers.caseClose?.(id, options));
+
+  const router = program.command('router').description('查看 Router 状态、打开固定会话并做无副作用试跑');
+  commonSourceOptions(router.command('status').description('查看 Router Session、Inbox、Source 与 Case')).action(options => handlers.routerStatus?.(options));
+  commonSourceOptions(router.command('open').description('显示或触发 Router Session 懒创建')).action(options => handlers.routerOpen?.(options));
+  commonSourceOptions(router.command('dry-run').description('用 fixture 返回 Router 决策，不创建会话或动作').argument('[fixture]', 'JSON fixture 路径；省略时从 stdin 读取')).option('--source <source-id>', '消息源 ID').action((fixture, options) => handlers.routerDryRun?.(fixture, options));
 
   const password = program.command('password').description('Manage the optional Web console password (stored as a scrypt hash in ~/.agentdock/web-password)');
   password.command('set')

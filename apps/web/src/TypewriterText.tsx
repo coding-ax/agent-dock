@@ -39,7 +39,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active,
   const { revealed, caret, animateUnits } = useAnimatedText(text, active, replay);
   return <article
     aria-label={final ? `${assistantLabel} 最终输出` : undefined}
-    className={`assistant-output markdown ui-timeline-item ${final ? 'my-4' : 'my-5'} max-w-[78ch] text-[14px] leading-6 text-zinc-800 ${caret ? 'ui-typewriter-caret' : ''}`}
+    className={`assistant-output markdown ui-timeline-item ${final ? 'mb-6 mt-2' : 'my-6'} max-w-[78ch] text-[15px] leading-[1.7] text-zinc-800 ${caret ? 'ui-typewriter-caret' : ''}`}
   >
     <MarkdownContent sessionId={sessionId} animateUnits={animateUnits}>{revealed}</MarkdownContent>
   </article>;
@@ -48,7 +48,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active,
 /** 思考过程。折叠体里同样走逐字，只在 live 时挂光标。 */
 export const ThinkingMarkdown = memo(function ThinkingMarkdown({ text, active, replay = false, sessionId }: { text: string; active: boolean; replay?: boolean; sessionId: string | undefined }) {
   const { revealed, caret, animateUnits } = useAnimatedText(text, active, replay);
-  return <div className={`markdown pl-5 pt-1 text-[12px] leading-5 text-zinc-500 ${caret ? 'ui-typewriter-caret' : ''}`}>
+  return <div className={`markdown pl-5 pt-1 text-[13px] leading-[1.7] text-zinc-500 ${caret ? 'ui-typewriter-caret' : ''}`}>
     <MarkdownContent sessionId={sessionId} animateUnits={animateUnits}>{revealed}</MarkdownContent>
   </div>;
 }, (prev, next) => prev.text === next.text && prev.active === next.active && prev.replay === next.replay && prev.sessionId === next.sessionId);

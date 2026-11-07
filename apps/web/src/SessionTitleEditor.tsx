@@ -15,7 +15,7 @@ import { api, type Session } from './api';
  * 提交后把返回的会话**原样替换**进 `['sessions']` 缓存——本地自己拼一遍 title 就会
  * 和服务端的口径分叉（比如清空后到底回落到 Agent 名还是 prompt）。
  */
-export function SessionTitleEditor({ session, label, nameClassName, hintClassName }: {
+export function SessionTitleEditor({ session, label, nameClassName, hintClassName, editButtonVisible = true }: {
   session: Session;
   /** 服务端算好的展示名（`session.title` 的最终形态，可能已回落到 Agent 名）。 */
   label: string;
@@ -23,6 +23,8 @@ export function SessionTitleEditor({ session, label, nameClassName, hintClassNam
   nameClassName: string;
   /** 来源标记的类名，同样由调用方决定是否常显。 */
   hintClassName?: string;
+  /** 行尾有运行状态指示时，悬停铅笔会压住它；这种行只保留双击改名。 */
+  editButtonVisible?: boolean;
 }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -101,7 +103,9 @@ export function SessionTitleEditor({ session, label, nameClassName, hintClassNam
       type="button"
       aria-label="重命名会话"
       onClick={event => { event.stopPropagation(); startEditing(); }}
-      className="grid h-4 w-4 shrink-0 place-items-center rounded text-zinc-400 opacity-0 transition-opacity hover:bg-zinc-200 hover:text-zinc-700 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100"
+      // 绝对定位到行尾、不占排版宽度；悬停时与相对时间交叉淡入淡出（时间在 App 里淡出）。
+      // 移动端没有 hover，直接常显。
+      className={`absolute right-2 top-1/2 z-10 h-4 w-4 -translate-y-1/2 place-items-center rounded text-zinc-400 opacity-0 transition-opacity hover:bg-zinc-200 hover:text-zinc-700 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100 ${editButtonVisible ? 'grid' : 'hidden'}`}
     >
       <Pencil size={10}/>
     </button>

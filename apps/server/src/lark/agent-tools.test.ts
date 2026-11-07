@@ -181,13 +181,31 @@ describe('Agent group collaboration domain service', () => {
     await expect(tools.isConfiguredPeer('cli_current', 'p2p_x', 'ou_peer')).resolves.toBe(false);
   });
 
-  it('injects group context for every dispatch path while leaving p2p sessions unchanged', async () => {
+  it('injects the full group context on the first turn and only a reminder afterwards', async () => {
     const { tools } = await setup({ cli_current: fakeClient() }, "'/usr/bin/node' '/app/cli.js'");
-    const prompt = await tools.promptForSession(session(), '继续处理');
-    expect(prompt).toContain("'/usr/bin/node' '/app/cli.js' group peers");
-    expect(prompt).toContain("group send '我已定位问题' --reply-to om_xxx --in-thread");
-    expect(prompt).toContain("group send '发布窗口已开启'");
+    const first = await tools.promptForSession(session(), '继续处理');
+    expect(first).toContain("'/usr/bin/node' '/app/cli.js' group peers");
+    expect(first).toContain("group send '我已定位问题' --reply-to om_xxx --in-thread");
+    expect(first).toContain("group send '发布窗口已开启'");
+
+    // 同一会话后续轮次只保留一行入口提醒，不重复整段工具说明。
+    const second = await tools.promptForSession(session(), '第二轮');
+    expect(second).toContain('[AgentDock 群工具提醒]');
+    expect(second).not.toContain('group peers');
+    expect(second.endsWith('第二轮')).toBe(true);
+
     await expect(tools.promptForSession(session({ sourceId: 'cli_current:oc_p2p:p2p' }), '继续处理')).resolves.toBe('继续处理');
+  });
+
+  it('uses a one-line credential reminder after the first turn', async () => {
+    const { tools } = await setup({ cli_current: fakeClient() });
+    const disabled = session({ sourceId: 'cli_disabled:oc_group:group' });
+    const first = await tools.promptForSession(disabled, '一');
+    expect(first).toContain('[AgentDock 凭证保密要求]');
+    expect(first).toContain('严禁');
+    const second = await tools.promptForSession(disabled, '二');
+    expect(second).toContain('[AgentDock 凭证保密提醒]');
+    expect(second).not.toContain('严禁在回复');
   });
 
   it('reminds the agent to keep credentials secret, including when group tools are disabled', async () => {

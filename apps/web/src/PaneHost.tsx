@@ -75,8 +75,8 @@ export function PaneHost({ tabs, mountedTabs, activeTabId, visible, shortcuts, a
 
     <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-zinc-200 px-1.5">
       <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-        {tabs.length === 0 && <span className="pl-2 text-[11px] font-medium text-zinc-500">副屏</span>}
-        {tabs.map(tab => <div key={tab.id} className={`group flex h-7 min-w-0 max-w-[180px] shrink-0 items-center rounded-md pl-2 pr-0.5 text-[11px] font-medium transition-colors ${activeTabId === tab.id ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900'}`}>
+        {tabs.length === 0 && <span className="pl-2 text-[12px] font-medium text-zinc-500">副屏</span>}
+        {tabs.map(tab => <div key={tab.id} className={`group flex h-7 min-w-0 max-w-[180px] shrink-0 items-center rounded-md pl-2 pr-0.5 text-[12px] font-medium transition-colors ${activeTabId === tab.id ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900'}`}>
           <button type="button" onClick={() => onActivate(tab.id)} title={tab.title} className="flex min-w-0 flex-1 items-center gap-1.5">
             {paneTabIcon(tab.kind)}
             <span className="min-w-0 truncate">{tab.title}</span>
@@ -97,12 +97,12 @@ export function PaneHost({ tabs, mountedTabs, activeTabId, visible, shortcuts, a
             <p className="mt-1.5 text-[12px] leading-5 text-zinc-500">选择一个面板，和当前会话并排使用。</p>
           </div>
           {(['继续工作', '查看上下文'] as const).map((group, groupIndex) => <section key={group} className={groupIndex === 0 ? '' : 'mt-6'}>
-            <h3 className="mb-2 px-1 text-[10px] font-semibold tracking-[.12em] text-zinc-400">{group}</h3>
+            <h3 className="mb-2 px-1 text-[12px] font-semibold tracking-[.12em] text-zinc-400">{group}</h3>
             <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-[0_2px_8px_rgba(24,24,27,.03)]">
               {paneTypeOptions(shortcuts).slice(groupIndex * 2, groupIndex * 2 + 2).map((option, index) => <button key={option.kind} type="button" onClick={() => onPick(option.kind)} className={`group flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-zinc-50 focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 ${index > 0 ? 'border-t border-zinc-100' : ''}`}>
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-zinc-100 bg-zinc-50 text-zinc-600">{paneTabIcon(option.kind, 17)}</span>
-                <span className="min-w-0 flex-1"><span className="block text-[12px] font-medium text-zinc-800">{option.label}</span><span className="mt-0.5 block text-[11px] leading-4 text-zinc-400">{paneDescriptions[option.kind]}</span></span>
-                {option.shortcut && <span className="shrink-0 font-mono text-[10px] text-zinc-400">{option.shortcut.label}</span>}
+                <span className="min-w-0 flex-1"><span className="block text-[12px] font-medium text-zinc-800">{option.label}</span><span className="mt-0.5 block text-[12px] leading-4 text-zinc-400">{paneDescriptions[option.kind]}</span></span>
+                {option.shortcut && <span className="shrink-0 font-mono text-[12px] text-zinc-400">{option.shortcut.label}</span>}
                 <ChevronRight size={13} className="shrink-0 text-zinc-300 transition-colors group-hover:text-zinc-500"/>
               </button>)}
             </div>

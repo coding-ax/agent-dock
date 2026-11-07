@@ -66,7 +66,7 @@ export function registerTerminalWebSockets(server: Server, runtime: AgentDockRun
           send(frame: TerminalFrame) { if (ws.readyState === ws.OPEN) ws.send(encodeFrame(frame)); }
         };
         let handle: ReturnType<TerminalManager['attach']>;
-        try { handle = manager.attach(sessionId, session.cwd, client); }
+        try { handle = manager.attach(sessionId, session.cwd, client, { ...(session.sshHost ? { sshHost: session.sshHost } : {}) }); }
         catch {
           ws.close(1011, '终端启动失败');
           return;

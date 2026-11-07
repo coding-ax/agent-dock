@@ -4,8 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { createAcpRuntime, createAgentRegistry, createRuntimeStore, type AcpPermissionDecision, type AcpRuntime, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeTurn, type AcpSessionStore } from 'acpx/runtime';
 import { isAgentStreamErrorText, type AgentConfig, type EventType, type PermissionMode, type ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
 import { testRegexWithTimeout } from './regex-timeout.js';
+import { readCodexThreadName } from './codex-thread-name.js';
 
 export * from './external-sessions.js';
+export * from './ssh-agent.js';
 
 /**
  * `type` 除了共享的事件词汇，还有一条 acpx 适配层私有的 `session_title`：
@@ -284,9 +286,12 @@ export class AcpxAdapter {
    */
   private async reportAgentTitle() {
     let raw: unknown;
-    try { raw = (await this.sessionStore.load(this.sessionKey))?.title; }
+    let threadId: string | undefined;
+    try { const record = await this.sessionStore.load(this.sessionKey); raw = record?.title; threadId = record?.acpSessionId; }
     catch { return; }
-    const title = typeof raw === 'string' && raw.trim() ? raw : undefined;
+    // Codex 的名字不走 ACP，而是写在它自己的 session_index.jsonl 里；有就优先用（它是 Codex 生成的真标题）。
+    const codexName = /codex/i.test([this.agent.id, this.agent.command, ...this.agent.args].join(' ')) ? await readCodexThreadName(threadId) : undefined;
+    const title = codexName ?? (typeof raw === 'string' && raw.trim() ? raw : undefined);
     // 不能每轮都推一条：Agent 每轮都可能重发同一个名字，去重后上层才不必反复落库。
     if (title === this.reportedTitle) return;
     this.reportedTitle = title;

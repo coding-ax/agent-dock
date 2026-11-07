@@ -1,11 +1,13 @@
+import { Spinner } from './Loaders';
 import { useMemo, useRef, useState } from 'react';
 import { useLocalStorageState } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Check, ExternalLink, LoaderCircle, Search, Users, X } from 'lucide-react';
+import { Bot, Check, ExternalLink, Search, Users, X } from 'lucide-react';
 import { Input } from 'antd';
 import { cleanChatName } from '@agent-dock/agent-dock-shared';
 import { api, type Agent, type Session } from './api';
 import { useModalFocusTrap } from './useModalFocusTrap';
+import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { parseLarkSourceId } from './lark-session-link';
 
 /**
@@ -114,40 +116,41 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
     }
   });
 
-  return <div className="ui-overlay fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-3 backdrop-blur-[2px]" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="托管给机器人" className="ui-dialog flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)]">
+  return <div className="ui-overlay fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-3" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="托管给机器人" className="ui-dialog flex max-h-[calc(100dvh-1.5rem)] w-full max-w-lg flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)]">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-100 px-4">
         <Bot size={16} className="text-zinc-500"/>
-        <span className="text-[14px] font-semibold">托管给机器人</span>
-        <span className="hidden truncate text-[11px] text-zinc-400 sm:inline">建一个飞书群，用群聊继续这个会话</span>
+        <span className="text-[16px] font-semibold">托管给机器人</span>
+        <span className="hidden truncate text-[12px] text-zinc-400 sm:inline">建一个飞书群，用群聊继续这个会话</span>
         <button type="button" onClick={onClose} aria-label="关闭" className="ml-auto grid h-8 w-8 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={16}/></button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {config.isLoading && <div className="flex items-center gap-2 text-[12px] text-zinc-400"><LoaderCircle size={13} className="animate-spin"/>正在读取机器人配置…</div>}
-        {!config.isLoading && !bots.length && <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">还没有配置任何飞书机器人。先到「飞书设置」添加一个，再回来托管。</div>}
+        <DeferredMount placeholder={<DeferredSkeleton/>}>
+        {config.isLoading && <div className="flex items-center gap-2 text-[12px] text-zinc-400"><Spinner size={13}/>正在读取机器人配置…</div>}
+        {!config.isLoading && !bots.length && <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-800">还没有配置任何飞书机器人。先到「飞书设置」添加一个，再回来托管。</div>}
 
         {bots.length > 0 && <>
-          <label className="block text-[11px] font-medium text-zinc-700">用哪个机器人</label>
+          <label className="block text-[12px] font-medium text-zinc-700">用哪个机器人</label>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {bots.map(item => <button key={item.appId} type="button" onClick={() => { setAppId(item.appId); setPicked([]); setKeyword(''); }} className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${item.appId === effectiveAppId ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'}`}>{item.name || item.appId}</button>)}
           </div>
 
-          <label className="mt-4 block text-[11px] font-medium text-zinc-700">群名称</label>
+          <label className="mt-4 block text-[12px] font-medium text-zinc-700">群名称</label>
           <Input size="large" value={name} onChange={event => setName(event.target.value)} className="mt-1.5 text-[13px]"/>
 
-          <div className="mt-4 flex items-center gap-1.5 text-[11px] font-medium text-zinc-700"><Users size={12}/>邀请成员<span className="font-normal text-zinc-400">（默认机器人创建者，可搜索/更换）</span></div>
+          <div className="mt-4 flex items-center gap-1.5 text-[12px] font-medium text-zinc-700"><Users size={12}/>邀请成员<span className="font-normal text-zinc-400">（默认机器人创建者，可搜索/更换）</span></div>
           <div className="mt-1.5 flex items-center gap-1.5">
-            <Input className="min-w-0 flex-1" value={keyword} onChange={event => setKeyword(event.target.value)} onPressEnter={event => { if (keyword.trim()) { event.preventDefault(); search.mutate(keyword.trim()); } }} placeholder="输入姓名后回车搜索（机器人可见范围）" prefix={<Search size={13} className="text-zinc-400"/>} suffix={(members.isFetching || search.isPending) ? <LoaderCircle size={12} className="animate-spin text-zinc-400"/> : <span/>}/>
-            <button type="button" disabled={!effectiveAppId || !keyword.trim() || search.isPending} onClick={() => search.mutate(keyword.trim())} className="h-8 shrink-0 rounded-md border border-zinc-200 px-2.5 text-[11px] text-zinc-600 hover:bg-zinc-50 disabled:opacity-40">搜索</button>
+            <Input className="min-w-0 flex-1" value={keyword} onChange={event => setKeyword(event.target.value)} onPressEnter={event => { if (keyword.trim()) { event.preventDefault(); search.mutate(keyword.trim()); } }} placeholder="输入姓名后回车搜索（机器人可见范围）" prefix={<Search size={13} className="text-zinc-400"/>} suffix={(members.isFetching || search.isPending) ? <Spinner size={12} className="text-zinc-400"/> : <span/>}/>
+            <button type="button" disabled={!effectiveAppId || !keyword.trim() || search.isPending} onClick={() => search.mutate(keyword.trim())} className="h-8 shrink-0 rounded-md border border-zinc-200 px-2.5 text-[12px] text-zinc-600 hover:bg-zinc-50 disabled:opacity-40">搜索</button>
           </div>
-          {(search.data?.error || search.error) && <p className="mt-1.5 text-[10px] text-amber-700">{search.data?.error ?? (search.error instanceof Error ? search.error.message : '搜索失败')}</p>}
+          {(search.data?.error || search.error) && <p className="mt-1.5 text-[12px] text-amber-700">{search.data?.error ?? (search.error instanceof Error ? search.error.message : '搜索失败')}</p>}
           {effectivePicked.length > 0 && <div className="mt-2.5 flex flex-wrap items-center gap-2 rounded-lg bg-zinc-50 px-2.5 py-2">
-            <span className="text-[10px] text-zinc-400">已选</span>
+            <span className="text-[12px] text-zinc-400">已选</span>
             {effectivePicked.map(openId => {
               const user = candidates.find(item => item.openId === openId);
               const avatar = avatarFor(openId);
-              return <span key={openId} className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-700">{avatar ? <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover"/> : <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-200 text-[10px] text-zinc-600">{(user?.name ?? '?').slice(0, 1)}</span>}{user?.name ?? openId}</span>;
+              return <span key={openId} className="flex items-center gap-1.5 text-[12px] font-medium text-zinc-700">{avatar ? <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover"/> : <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-200 text-[12px] text-zinc-600">{(user?.name ?? '?').slice(0, 1)}</span>}{user?.name ?? openId}</span>;
             })}
           </div>}
           <div className="mt-2.5 border-t border-zinc-100 pt-3">
@@ -155,25 +158,26 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
               {filtered.length > 0 ? <div className="flex flex-wrap gap-1.5">{filtered.map(user => {
                 const selected = effectivePicked.includes(user.openId);
                 const avatar = avatarFor(user.openId);
-                return <button key={user.openId} type="button" onClick={() => toggle(user.openId)} className={`flex h-8 items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2.5 text-[11px] transition-colors ${selected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>{avatar ? <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover"/> : <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-100 text-[10px] text-zinc-500">{(user.name || '?').slice(0, 1)}</span>}{user.name}{selected && <Check size={11}/>}</button>;
-              })}</div> : <p className="text-[11px] text-zinc-400">{members.isError && originChatId ? '读取原群成员失败（机器人可能不在该群）；用上面的搜索按姓名找人，或在下面填 open_id。' : '没有匹配的成员：换个名字搜索，或在下面填 open_id。'}</p>}
+                return <button key={user.openId} type="button" onClick={() => toggle(user.openId)} className={`flex h-8 items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2.5 text-[12px] transition-colors ${selected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>{avatar ? <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover"/> : <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-100 text-[12px] text-zinc-500">{(user.name || '?').slice(0, 1)}</span>}{user.name}{selected && <Check size={11}/>}</button>;
+              })}</div> : <p className="text-[12px] text-zinc-400">{members.isError && originChatId ? '读取原群成员失败（机器人可能不在该群）；用上面的搜索按姓名找人，或在下面填 open_id。' : '没有匹配的成员：换个名字搜索，或在下面填 open_id。'}</p>}
             </div>
           </div>
-          <Input value={manual} onChange={event => setManual(event.target.value)} placeholder="补充一个 open_id（ou_ 开头，可选）" className="mt-2 font-mono text-[11px]"/>
+          <Input value={manual} onChange={event => setManual(event.target.value)} placeholder="补充一个 open_id（ou_ 开头，可选）" className="mt-2 font-mono text-[12px]"/>
 
-          <p className="mt-3 text-[10px] leading-4 text-zinc-400">建群后，这个群的消息会直接进入当前会话；现有 Agent、模型、历史都保持不变。群里需要 @ 机器人来唤醒。机器人白名单内的群成员都能以完全信任权限驱动这个会话，请只拉信任的人。</p>
+          <p className="mt-3 text-[12px] leading-4 text-zinc-400">建群后，这个群的消息会直接进入当前会话；现有 Agent、模型、历史都保持不变。群里需要 @ 机器人来唤醒。机器人白名单内的群成员都能以完全信任权限驱动这个会话，请只拉信任的人。</p>
         </>}
 
-        {handover.error && <p role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] leading-5 text-red-700">{handover.error instanceof Error ? handover.error.message : String(handover.error)}</p>}
-        {created && <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[11px] leading-5 text-emerald-800">
+        {handover.error && <p role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-700">{handover.error instanceof Error ? handover.error.message : String(handover.error)}</p>}
+        {created && <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[12px] leading-5 text-emerald-800">
           已建群并绑定：<span className="font-medium">{created.name}</span>
           <a href={created.url} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-1 font-medium text-emerald-700 underline"><ExternalLink size={11}/>打开群聊</a>
         </div>}
+        </DeferredMount>
       </div>
 
       <div className="flex shrink-0 items-center justify-end gap-2 border-t border-zinc-100 px-4 py-3">
         <button type="button" onClick={onClose} className="rounded-lg border border-zinc-300 px-3.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50">{created ? '完成' : '取消'}</button>
-        {!created && <button type="button" disabled={!effectiveAppId || !name.trim() || handover.isPending} onClick={() => handover.mutate()} className="flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400">{handover.isPending && <LoaderCircle size={12} className="animate-spin"/>}建群并托管</button>}
+        {!created && <button type="button" disabled={!effectiveAppId || !name.trim() || handover.isPending} onClick={() => handover.mutate()} className="flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400">{handover.isPending && <Spinner size={12}/>}建群并托管</button>}
       </div>
     </div>
   </div>;

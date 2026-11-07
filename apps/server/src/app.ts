@@ -9,7 +9,8 @@ import { RuntimeError, type AgentConfig, type Session } from '@agent-dock/agent-
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { registerLarkRoutes, type LarkRoutesOptions } from './lark/routes.js';
 import { discoverAgentModels } from './agent-models.js';
-import { describeAcpError, listExternalSessions, loadExternalSessionTranscript } from '@agent-dock/agent-dock-acp-client';
+import { describeAcpError, listExternalSessions, loadExternalSessionTranscript, supportsSshAgent, wrapAgentForSsh } from '@agent-dock/agent-dock-acp-client';
+import { listSshHosts, probeSshHost, isValidSshHost } from './ssh/hosts.js';
 import { collectAgentDockOwnedSessionIds } from './agent-owned-sessions.js';
 import { getCodexUsage } from './codex-usage.js';
 import { getClaudeUsage } from './claude-usage.js';
@@ -18,6 +19,9 @@ import { registerSystemRoutes, type SystemRoutesOptions } from './system-routes.
 import { registerSelfUpdateRoutes, type SelfUpdateService } from './self-update.js';
 import { registerScheduleRoutes } from './schedules/routes.js';
 import type { ScheduleService } from './schedules/service.js';
+import { isSourceIngressRequest } from './sources-router/constants.js';
+import { registerSourceRouterRoutes } from './sources-router/routes.js';
+import type { SourceRouterService } from './sources-router/service.js';
 import { registerTerminalWebSockets } from './terminal-ws.js';
 import { registerFsRoutes } from './fs-routes.js';
 import { registerLlmRoutes, type LlmRoutesOptions } from './llm/service.js';
@@ -63,6 +67,23 @@ const contentTypes: Record<string, string> = {
   '.zip': 'application/zip'
 };
 
+/**
+ * Resolve a discovered SSH alias into a wrapped agent. The alias must come from
+ * the user's ssh config: accepting an arbitrary string here would let any API
+ * caller make the daemon ssh anywhere (and would also risk flag injection).
+ */
+function remoteAgentFor(agent: AgentConfig, host: string, cwd?: string): AgentConfig {
+  if (!isValidSshHost(host)) throw new RuntimeError('INVALID_SSH_HOST', 'SSH 主机别名不合法', 400);
+  const config = listSshHosts();
+  if (!config.hosts.some(item => item.alias === host)) {
+    throw new RuntimeError('SSH_HOST_NOT_FOUND', `未在 ${config.configPath} 中找到 SSH 主机：${host}`, 404);
+  }
+  if (!supportsSshAgent(agent)) throw new RuntimeError('SSH_AGENT_UNSUPPORTED', `远端暂不支持 ${agent.name}（仅 Claude Code / Codex）`, 400);
+  return wrapAgentForSsh(agent, host, cwd, { localCwd: process.cwd() });
+}
+
+const sshProbeCache = new Map<string, { at: number; value: Awaited<ReturnType<typeof probeSshHost>> }>();
+
 export interface BuildAppOptions {
   webRoot?: string;
   lark?: LarkRoutesOptions;
@@ -75,6 +96,8 @@ export interface BuildAppOptions {
   selfUpdate?: SelfUpdateService;
   /** 定时任务；不传表示这套路由不挂。 */
   schedules?: ScheduleService;
+  /** 消息源与 Router；不传表示这套路由不挂。 */
+  sourcesRouter?: SourceRouterService;
 }
 
 // 上传路由接受任意 content-type（浏览器会为 .md/.heic/.zip 等发出五花八门的类型），
@@ -205,6 +228,9 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       if (!url.pathname.startsWith('/api/')) return;
       // 密码登录本身就是拿凭证的入口，不能被访问门拦住；两个接口都不返回任何业务数据。
       if (url.pathname === '/api/auth/status' || url.pathname === '/api/auth/login') return;
+      // 外部 Source 只有自己的 HMAC 凭证，不能携带 Web cookie；精确豁免两个 Ingress POST，
+      // 业务路由仍会验签、校验 Source 启停和 body 大小。其余管理接口保持全局访问门。
+      if (isSourceIngressRequest(request.method, url.pathname)) return;
       // 群协作工具是给会话内 agent 调的机器接口，走独立的每会话 HMAC Bearer
       // 鉴权（agent-tools 内部 fail-closed 401），agent 进程没有浏览器 cookie，
       // 不能被 Web 访问门拦掉。
@@ -267,9 +293,37 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   });
 
   app.get('/health', async () => ({ ok: true }));
+  // Desktop shell ownership probe. A loopback port can already have a listener
+  // (another AgentDock daemon on *:4310 accepts 127.0.0.1 too), so "GET /health
+  // succeeded" does not prove the process we just spawned owns the port. The
+  // shell passes a per-launch nonce and only loads the UI after this returns it.
+  app.get('/api/desktop/instance', async (_request, reply) => {
+    const token = process.env.AGENTDOCK_DESKTOP_INSTANCE?.trim();
+    if (!token) return reply.code(404).send({ error: { code: 'NOT_DESKTOP', message: 'Not running under the desktop shell' } });
+    return { token, pid: process.pid };
+  });
+  // Auto-discovers hosts from ~/.ssh/config (including Include files). Returns
+  // aliases/options only; key material never leaves its files.
+  app.get('/api/ssh/hosts', async () => listSshHosts());
+  // Fixed read-only capability probe, cached briefly: the import panel probes
+  // on every host switch and SSH through an IAP tunnel is not cheap.
+  app.post<{ Body: { host?: string } }>('/api/ssh/probe', async request => {
+    const host = request.body?.host?.trim();
+    if (!host || !isValidSshHost(host)) throw new RuntimeError('INVALID_SSH_HOST', 'SSH 主机别名不合法', 400);
+    const config = listSshHosts();
+    if (!config.hosts.some(item => item.alias === host)) {
+      throw new RuntimeError('SSH_HOST_NOT_FOUND', `未在 ${config.configPath} 中找到 SSH 主机：${host}`, 404);
+    }
+    const cached = sshProbeCache.get(host);
+    if (cached && Date.now() - cached.at < 30_000) return cached.value;
+    const value = await probeSshHost(host);
+    sshProbeCache.set(host, { at: Date.now(), value });
+    return value;
+  });
   await registerSystemRoutes(app, options.system);
   if (options.selfUpdate) registerSelfUpdateRoutes(app, options.selfUpdate);
   if (options.schedules) registerScheduleRoutes(app, options.schedules);
+  if (options.sourcesRouter) registerSourceRouterRoutes(app, options.sourcesRouter);
   await registerLarkRoutes(app, { ...options.lark, runtime: options.lark?.runtime ?? runtime });
   app.get('/api/agents', async request => {
     // 停用的内置 agent 只在配置面板展示，面板入口仅 master token 可用（会话令牌拿到的列表不含停用项）。
@@ -290,15 +344,18 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     if (typeof request.body?.disabled !== 'boolean') throw new RuntimeError('INVALID_DISABLED', 'disabled 必须是布尔值', 400);
     return runtime.setAgentDisabled(request.params.id, request.body.disabled);
   });
-  app.get<{ Params: { id: string }; Querystring: { model?: string; refresh?: string } }>('/api/agents/:id/models', async request => {
-    const agent = (await runtime.listAgents()).find(item => item.id === request.params.id);
-    if (!agent) throw new RuntimeError('AGENT_NOT_FOUND', `Unknown agent: ${request.params.id}`, 404);
+  app.get<{ Params: { id: string }; Querystring: { model?: string; refresh?: string; sshHost?: string } }>('/api/agents/:id/models', async request => {
+    const configured = (await runtime.listAgents()).find(item => item.id === request.params.id);
+    if (!configured) throw new RuntimeError('AGENT_NOT_FOUND', `Unknown agent: ${request.params.id}`, 404);
+    const agent = request.query.sshHost?.trim() ? remoteAgentFor(configured, request.query.sshHost.trim()) : configured;
     return discoverAgentModels(agent, request.query.model?.trim() || undefined, request.query.refresh === '1' || request.query.refresh === 'true');
   });
   // 只读列举某个 Agent 自己记录的会话（ACP session/list），供导入面板选择；不落库、不建会话。
-  app.get<{ Params: { id: string }; Querystring: { cursor?: string; cwd?: string } }>('/api/agents/:id/external-sessions', async request => {
-    const agent = (await runtime.listAgents()).find(item => item.id === request.params.id);
-    if (!agent) throw new RuntimeError('AGENT_NOT_FOUND', `Unknown agent: ${request.params.id}`, 404);
+  app.get<{ Params: { id: string }; Querystring: { cursor?: string; cwd?: string; sshHost?: string } }>('/api/agents/:id/external-sessions', async request => {
+    const configured = (await runtime.listAgents()).find(item => item.id === request.params.id);
+    if (!configured) throw new RuntimeError('AGENT_NOT_FOUND', `Unknown agent: ${request.params.id}`, 404);
+    const sshHost = request.query.sshHost?.trim();
+    const agent = sshHost ? remoteAgentFor(configured, sshHost, request.query.cwd) : configured;
     const result = await listExternalSessions(agent, {
       ...(request.query.cursor ? { cursor: request.query.cursor } : {}),
       ...(request.query.cwd ? { filterCwd: request.query.cwd } : {}),
@@ -317,15 +374,17 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   });
   // 导入一个外部 ACP 会话：接管上下文 +（可选）把外部历史回填成 AgentDock 轮次。
   // 与 /api/sessions 分开，是因为 full 模式要先读一次外部转录再建会话，失败要做成明确的导入错误。
-  app.post<{ Body: { agentId: string; externalSessionId: string; cwd?: string; mode?: 'full' | 'session'; model?: string; reasoningEffort?: string } }>('/api/sessions/import', async request => {
+  app.post<{ Body: { agentId: string; externalSessionId: string; cwd?: string; mode?: 'full' | 'session'; model?: string; reasoningEffort?: string; sshHost?: string } }>('/api/sessions/import', async request => {
     try {
       const agentId = request.body?.agentId?.trim();
       const externalSessionId = request.body?.externalSessionId?.trim();
       if (!agentId || !externalSessionId) throw new RuntimeError('INVALID_IMPORT', 'agentId 与 externalSessionId 必填', 400);
-      const agent = (await runtime.listAgents()).find(item => item.id === agentId);
-      if (!agent) throw new RuntimeError('AGENT_NOT_FOUND', `Unknown agent: ${agentId}`, 404);
-      const cwd = request.body.cwd?.trim() || agent.cwd;
+      const configuredAgent = (await runtime.listAgents()).find(item => item.id === agentId);
+      if (!configuredAgent) throw new RuntimeError('AGENT_NOT_FOUND', `Unknown agent: ${agentId}`, 404);
+      const cwd = request.body.cwd?.trim() || configuredAgent.cwd;
       if (!cwd || !cwd.startsWith('/')) throw new RuntimeError('INVALID_IMPORT', '导入需要绝对路径的工作目录', 400);
+      const sshHost = request.body.sshHost?.trim() || undefined;
+      const agent = sshHost ? remoteAgentFor(configuredAgent, sshHost, cwd) : configuredAgent;
       const mode = request.body.mode === 'session' ? 'session' : 'full';
       let importTurns: Awaited<ReturnType<typeof loadExternalSessionTranscript>>['turns'] | undefined;
       if (mode === 'full') {
@@ -336,6 +395,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       const startInput = {
         agentId,
         cwd,
+        ...(sshHost ? { sshHost } : {}),
         ...(request.body.model?.trim() ? { model: request.body.model.trim() } : {}),
         ...(request.body.reasoningEffort?.trim() ? { reasoningEffort: request.body.reasoningEffort.trim() } : {}),
         resumeSessionId: externalSessionId,
@@ -435,8 +495,9 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     try {
       // 上一次读历史的临时连接释放 writer 锁约需 1 秒：连点两次时短暂退避重试，而不是报「外部占用」。
       const load = async (agent: AgentConfig, session: Session) => {
+        const effective = session.sshHost ? remoteAgentFor(agent, session.sshHost, session.cwd) : agent;
         for (let attempt = 1; ; attempt++) {
-          try { return await loadExternalSessionTranscript(agent, session.sourceId!, session.cwd, { timeoutMs: 60_000 }); }
+          try { return await loadExternalSessionTranscript(effective, session.sourceId!, session.cwd, { timeoutMs: 60_000 }); }
           catch (error) {
             if (attempt < 3 && /active writer/i.test(describeAcpError(error))) { await new Promise(resolve => setTimeout(resolve, 1_200)); continue; }
             throw error;

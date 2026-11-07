@@ -11,6 +11,8 @@ import { LarkAgentToolCapabilityRegistry, LarkAgentToolsService, loadOrCreateGro
 import { LlmEndpointService } from './llm/service.js';
 import { buildInitialSystemPrompt } from './initial-system-prompt.js';
 import { ScheduleService } from './schedules/service.js';
+import { createRuntimeRouterDriver } from './sources-router/driver.js';
+import { SourceRouterService } from './sources-router/service.js';
 import { defaultSessionTokenTtlMs, initWebAccess, issueMasterToken, loadOrCreateWebAccessSecret } from './web-access.js';
 
 export interface StartLocalServerOptions { env?: NodeJS.ProcessEnv; webRoot?: string; groupToolsCommand?: string; /** 当前 CLI 入口，给界面一键升级跑 `agent-dock update`；不传则不挂升级路由。 */ cliEntrypoint?: string }
@@ -55,6 +57,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
   });
   let app: Awaited<ReturnType<typeof buildApp>> | undefined;
   let schedules: ScheduleService | undefined;
+  let sourcesRouter: SourceRouterService | undefined;
   let closed = false;
   let webAuth: { enabled: boolean; secret?: string } = { enabled: false };
   try {
@@ -73,13 +76,30 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string };
     const selfUpdate = options.cliEntrypoint ? new SelfUpdateService({ currentVersion: packageJson.version, packageName: packageJson.name, cliEntrypoint: options.cliEntrypoint, env }) : undefined;
     schedules = new ScheduleService(repos.schedules, repos.sessions, runtime);
+    const routerDriver = env.AGENTDOCK_ROUTER_MODEL_MODE === 'true'
+      ? createRuntimeRouterDriver(runtime, {
+        agentId: env.AGENTDOCK_ROUTER_AGENT_ID ?? 'codex', cwd: config.defaultCwd,
+        ...(env.AGENTDOCK_ROUTER_MODEL ? { model: env.AGENTDOCK_ROUTER_MODEL } : {})
+      })
+      : undefined;
+    sourcesRouter = new SourceRouterService({ databaseUrl: config.databaseUrl, runtime, env, routerDriver, startRouterPoll: false });
     const autostart = options.cliEntrypoint ? new AutostartService({ entrypoint: options.cliEntrypoint, env }) : undefined;
-    app = await buildApp(runtime, { webRoot, webAuth, schedules, ...(selfUpdate ? { selfUpdate } : {}), ...(autostart ? { system: { autostart } } : {}), llm: { service: llm }, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' } });
+    app = await buildApp(runtime, { webRoot, webAuth, schedules, sourcesRouter, ...(selfUpdate ? { selfUpdate } : {}), ...(autostart ? { system: { autostart } } : {}), llm: { service: llm }, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' } });
     await app.listen(listenOptions(config));
     // 听到端口后再开始扫描：启动失败时不会先投递出去一半。
     schedules.start();
+    sourcesRouter.start();
   } catch (error) {
-    await schedules?.stop(); capabilities.close(); await runtime.shutdown(); repos.close(); throw error;
+    const results = await Promise.allSettled([
+      schedules?.stop() ?? Promise.resolve(),
+      app?.close() ?? Promise.resolve(),
+      sourcesRouter?.close() ?? Promise.resolve(),
+      runtime.shutdown()
+    ]);
+    capabilities.close();
+    repos.close();
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason);
+    throw new AggregateError([error, ...failures], 'AgentDock 启动失败');
   }
   return {
     config,
@@ -91,6 +111,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       // 先停调度（等当前一轮扫完），再关 runtime：避免关到一半时还在往里投递。
       await schedules?.stop();
       const results = await Promise.allSettled([app?.close() ?? Promise.resolve(), runtime.shutdown()]);
+      await sourcesRouter?.close().catch(() => undefined);
       capabilities.close();
       repos.close();
       const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason);

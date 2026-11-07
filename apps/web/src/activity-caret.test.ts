@@ -7,12 +7,18 @@ import { TooltipProvider } from './HoverTooltip';
 import type { TimelineActivityGroup, TimelineEvent } from './timeline';
 
 const thinking = (id: string, text: string): TimelineEvent => ({ id, sequence: 1, type: 'thinking', timestamp: '2026-01-01T00:00:00.000Z', data: { text } } as TimelineEvent);
+const assistantText = (id: string, text: string): TimelineEvent => ({ id, sequence: 1, type: 'text', timestamp: '2026-01-01T00:00:00.000Z', data: { role: 'assistant', text } } as TimelineEvent);
 const group = (id: string, events: TimelineEvent[]): TimelineActivityGroup => ({ id, label: id, labelTitle: id, events, startedAt: '2026-01-01T00:00:00.000Z' });
 const carets = (groups: TimelineActivityGroup[]) => renderToStaticMarkup(createElement(TooltipProvider, null, createElement(ActivityPanel, { groups, ongoing: true, sessionId: 's1', modelLabel: 'Claude' }))).split('ui-typewriter-caret').length - 1;
 
 describe('thinking caret', () => {
-  it('blinks only on the thinking that is still streaming while the turn runs', () => {
+  it('keeps thinking collapsed by default, so no caret until the user opens it', () => {
     const groups = [group('stage-1', [thinking('t1', 'first')]), group('stage-2', [thinking('t2', 'second')])];
+    expect(carets(groups)).toBe(0);
+  });
+
+  it('blinks only on the last agent text while the turn runs', () => {
+    const groups = [group('stage-1', [assistantText('a1', 'first'), thinking('t1', 'x'), assistantText('a2', 'second')])];
     expect(carets(groups)).toBe(1);
   });
 

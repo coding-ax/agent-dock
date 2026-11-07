@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildScheduleSessionSeed } from '../../server/src/schedules/service';
-import { bindableSessions, canResume, describeTrigger, emptyScheduleForm, isScheduledSession, scheduleFormToInput, scheduleState, describeCountdown, summarizeSchedules } from './schedule-view';
+import { bindableSessions, canResume, cronToRecurrence, describeTrigger, emptyScheduleForm, isScheduledSession, scheduleFormToInput, scheduleFormToUpdate, scheduleState, scheduleToForm, describeCountdown, summarizeSchedules } from './schedule-view';
+import type { Schedule } from './api';
 
 const now = new Date('2026-10-14T10:00:00Z');
 
@@ -96,5 +97,22 @@ describe('list overview', () => {
     ], now);
     expect(summary).toMatchObject({ active: 3, inactive: 1, dueToday: 2, ran24h: 1, failed24h: 1 });
     expect(summary.next?.id).toBe('b');
+  });
+});
+
+describe('editing a schedule', () => {
+  const schedule = (extra: Partial<Schedule>): Schedule => ({ id: 's', name: 'n', delivery: 'new_session', timezone: 'UTC', prompt: 'p', enabled: true, runCount: 0, createdAt: '', updatedAt: '', sessionTemplate: JSON.stringify({ agentId: 'codex', cwd: '/w', model: 'm' }), ...extra } as Schedule);
+  it('maps common cron shapes back to the form, and keeps hand-written ones as custom', () => {
+    expect(cronToRecurrence('30 9 * * *')).toMatchObject({ kind: 'daily', time: '09:30' });
+    expect(cronToRecurrence('0 18 * * 1-5')).toMatchObject({ kind: 'weekdays', time: '18:00' });
+    expect(cronToRecurrence('0 9 * * 1,3')).toMatchObject({ kind: 'weekly', weekdays: [1, 3] });
+    expect(cronToRecurrence('15 * * * *')).toMatchObject({ kind: 'hourly', minute: 15 });
+    expect(cronToRecurrence('0 9 1 * *')).toMatchObject({ kind: 'custom', cron: '0 9 1 * *' });
+  });
+  it('restores the agent, model and interval, and clears unused timing fields on update', () => {
+    const form = scheduleToForm(schedule({ intervalMinutes: 120 }), { agentId: '', cwd: '' });
+    expect(form).toMatchObject({ agentId: 'codex', cwd: '/w', model: 'm', kind: 'recurring', recurrence: { kind: 'interval', every: 2, everyUnit: 'hour' } });
+    const update = scheduleFormToUpdate({ ...form, agentId: 'claude' });
+    expect(update.input).toMatchObject({ template: { agentId: 'claude', cwd: '/w', model: 'm' }, intervalMinutes: 120, cron: null, runAt: null });
   });
 });

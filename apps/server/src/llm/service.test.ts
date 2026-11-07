@@ -256,6 +256,46 @@ describe('模型端点路由', () => {
     expect(JSON.parse(failed.split('\ndata: ')[1]!)).toMatchObject({ code: 'LLM_NOT_CONFIGURED' });
   });
 
+  it('complete 路由把 prompt 交给模型并返回正文，未配置时 409', async () => {
+    const { service, fetcher } = harness();
+    const app = await mount(service);
+    await app.inject({ method: 'PUT', url: '/api/llm', payload: validBody });
+    const completed = await app.inject({ method: 'POST', url: '/api/llm/complete', payload: { prompt: '写一句描述' } });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json()).toMatchObject({ text: '已就绪', model: 'gpt-5' });
+    const body = JSON.parse((fetcher.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.messages.at(-1)).toEqual({ role: 'user', content: '写一句描述' });
+
+    const empty = await app.inject({ method: 'POST', url: '/api/llm/complete', payload: { prompt: '  ' } });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json().error.code).toBe('INVALID_PROMPT');
+
+    await app.inject({ method: 'DELETE', url: '/api/llm' });
+    expect((await app.inject({ method: 'POST', url: '/api/llm/complete', payload: { prompt: '再来' } })).statusCode).toBe(409);
+  });
+
+  it('detect 只下发候选信息，apply 由服务端用候选密钥写库', async () => {
+    const { service } = harness();
+    const candidate = {
+      id: 'claude-code:settings', source: 'claude-code' as const, label: 'Claude Code（settings.json）',
+      format: 'anthropic-messages' as const, baseUrl: 'http://127.0.0.1:3425', model: 'claude-sonnet-5-5',
+      auth: 'bearer' as const, apiKey: SECRET
+    };
+    const app = await buildApp({} as any, { llm: { service, detect: async () => [candidate] } });
+
+    const detected = await app.inject({ method: 'GET', url: '/api/llm/detect' });
+    expect(detected.statusCode).toBe(200);
+    expect(detected.body).not.toContain(SECRET);
+    expect(detected.json()).toMatchObject({ candidates: [{ id: candidate.id, keySet: true, auth: 'bearer' }] });
+
+    const applied = await app.inject({ method: 'POST', url: '/api/llm/detect/apply', payload: { id: candidate.id } });
+    expect(applied.statusCode).toBe(200);
+    expect(applied.json()).toMatchObject({ configured: true, apiKeySet: true, auth: 'bearer', model: candidate.model });
+    expect(await service.endpoint()).toMatchObject({ apiKey: SECRET, auth: 'bearer', baseUrl: candidate.baseUrl });
+
+    expect((await app.inject({ method: 'POST', url: '/api/llm/detect/apply', payload: { id: 'missing' } })).statusCode).toBe(404);
+  });
+
   it('没挂 service 时路由不存在', async () => {
     const app = await mount();
     expect((await app.inject({ method: 'GET', url: '/api/llm' })).statusCode).toBe(404);

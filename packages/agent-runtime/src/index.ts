@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, RepositoryBundle, Session, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
 import { agentConfigSchema, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 export type { AgentConfig };
-import { AcpxAdapter, describeAcpError, type NormalizedDriverEvent } from '@agent-dock/agent-dock-acp-client';
+import { AcpxAdapter, describeAcpError, wrapAgentForSsh, type NormalizedDriverEvent } from '@agent-dock/agent-dock-acp-client';
 import { JsonlTransport, PipeTransport, probeAgent, PtyTransport, type ProbeMatrix } from '@agent-dock/agent-dock-transports';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -252,7 +252,7 @@ export class AgentDockRuntime {
     return (event: NormalizedDriverEvent) => this.enqueueDriverEvent(session, event);
   }
   private configureAgentForSession(agent: AgentConfig, session: Session): AgentConfig {
-    return {
+    const configured: AgentConfig = {
       ...agent,
       cwd: session.cwd,
       model: session.model,
@@ -261,6 +261,10 @@ export class AgentDockRuntime {
       permissionMode: session.permissionMode ?? agent.permissionMode,
       env: { ...agent.env, ...this.options.sessionEnvironment?.(session) }
     };
+    if (!session.sshHost) return configured;
+    // The session cwd is a remote absolute path and usually absent locally, so
+    // the ssh process itself runs from a local directory; the remote side cds.
+    return wrapAgentForSsh(configured, session.sshHost, session.cwd, { localCwd: process.cwd() });
   }
 
   async initialize(agents: AgentConfig[]) {
@@ -598,9 +602,14 @@ export class AgentDockRuntime {
     if (agent.disabled) throw new RuntimeError('AGENT_DISABLED', `Agent 已停用：${input.agentId}`, 409);
     // systemPrompt 允许按会话覆盖：注入的上下文走 ACP system prompt，不落成用户消息。
     const configured = { ...agent, cwd: input.cwd ?? agent.cwd ?? process.cwd(), model: input.model ?? agent.model, reasoningEffort: input.reasoningEffort ?? agent.reasoningEffort, systemPrompt: input.systemPrompt ?? agent.systemPrompt, permissionMode: 'full-trust' as const };
-    const capability = (this.options.probe ?? probeAgent)(configured, this.options.acpxCommand);
+    // A remote import was preceded by an SSH probe (and the remote agent CLI
+    // check); probing the *local* codex/claude executable here would reject a
+    // session that runs perfectly well on the remote host.
+    const capability = input.sshHost
+      ? { protocol: 'acp' as const, available: true, pause: false, resume: true }
+      : (this.options.probe ?? probeAgent)(configured, this.options.acpxCommand);
     if (!capability.available) throw new RuntimeError('AGENT_UNAVAILABLE', capability.detail ?? 'Agent unavailable', 503);
-    const session: Session = { id: makeId('ses'), agentId: agent.id, state: 'created', cwd: configured.cwd!, model: configured.model, reasoningEffort: configured.reasoningEffort, permissionMode: configured.permissionMode, source: input.source, sourceId: input.sourceId, protocol: capability.protocol, runId: makeId('run'), createdAt: now(), updatedAt: now(), systemPrompt: configured.systemPrompt };
+    const session: Session = { id: makeId('ses'), agentId: agent.id, state: 'created', cwd: configured.cwd!, model: configured.model, reasoningEffort: configured.reasoningEffort, permissionMode: configured.permissionMode, source: input.source, sourceId: input.sourceId, ...(input.sshHost ? { sshHost: input.sshHost } : {}), protocol: capability.protocol, runId: makeId('run'), createdAt: now(), updatedAt: now(), systemPrompt: configured.systemPrompt };
     if (this.options.createSystemPrompt) session.systemPrompt = this.options.createSystemPrompt(session);
     await this.repos.artifacts.ensureLocalProject(session.cwd);
     await this.repos.sessions.save(session);

@@ -1,9 +1,13 @@
+import { DockMascot } from './DockMascot';
 import { useMemo, useRef, useState, type RefObject } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type Session } from './api';
 import { Composer } from './Composer';
-import { buildPrompt, getModelReadiness, referenceFromUpload, uploadSessionFile, type ComposerReference } from './composer-utils';
+import { PromptTemplates } from './PromptTemplates';
+import type { ComposerEditorHandle } from './ComposerEditor';
+import { buildPrompt, getModelReadiness, referenceFromUpload, uploadSessionFile, isHomeDirectory, workspaceLabel, type ComposerReference } from './composer-utils';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
+import { sessionActivityTime } from './session-groups';
 
 /**
  * 空态草稿 Composer：还不存在 Session 时，把输入框、Agent、工作目录、模型、思考强度和
@@ -12,9 +16,9 @@ import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './m
  * 附件为什么不能当场传：/api/sessions/:id/uploads 需要 sessionId。草稿态先建一枚本地引用
  * chip 占位（图片用 objectURL 预览），create 成功后再逐件上传、换成真实路径再拼 prompt。
  */
-export function DraftComposer({ agents, sessions, onCreated, textareaRef }: {
+export function DraftComposer({ agents, sessions, onCreated, editorRef }: {
   agents: Agent[];
-  textareaRef?: RefObject<HTMLTextAreaElement | null>;
+  editorRef?: RefObject<ComposerEditorHandle | null>;
   sessions: Session[];
   onCreated(session: Session): void;
 }) {
@@ -50,6 +54,21 @@ export function DraftComposer({ agents, sessions, onCreated, textareaRef }: {
     }
     return list.slice(0, 30);
   }, [defaultWorkspace, sessions]);
+
+  // 最近用过的 3 个工作区（按最后一次对话时间），只做快捷选择，不触发任何请求。
+  const homeDirectory = capabilities.data?.homeDirectory;
+  const recentWorkspaces = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const session of [...sessions].filter(item => !item.archivedAt).sort((left, right) => sessionActivityTime(right).localeCompare(sessionActivityTime(left)))) {
+      // 主目录不是「项目」，放进快捷入口只会挤掉真正的工作区；它仍可在下拉里选。
+      if (!session.cwd || seen.has(session.cwd) || isHomeDirectory(session.cwd, homeDirectory)) continue;
+      seen.add(session.cwd);
+      list.push(session.cwd);
+      if (list.length === 3) break;
+    }
+    return list;
+  }, [homeDirectory, sessions]);
 
   const models = useQuery({
     queryKey: agentModelsQueryKey(effectiveAgentId, model),
@@ -89,6 +108,12 @@ export function DraftComposer({ agents, sessions, onCreated, textareaRef }: {
     for (const url of objectUrls.current) URL.revokeObjectURL(url);
     objectUrls.current.clear();
     stashed.current.clear();
+  };
+
+  const useTemplate = (text: string) => {
+    setPrompt(text);
+    // 填入后把焦点送回编辑器，用户可以直接改内容或按 Enter 发送。
+    requestAnimationFrame(() => editorRef?.current?.focus());
   };
 
   const submit = () => {
@@ -134,15 +159,16 @@ export function DraftComposer({ agents, sessions, onCreated, textareaRef }: {
     })();
   };
 
-  return <div className="w-full max-w-[820px]">
-    <div className="mb-5 text-center sm:mb-7">
-      <img src="/agent-dock.svg" alt="" aria-hidden="true" className="mx-auto h-12 w-12"/>
-      <h1 className="mt-5 text-xl font-semibold tracking-[-.03em]">选择 Agent，开始工作</h1>
-      <p className="mt-2 text-sm leading-6 text-zinc-500">在同一个工作台中运行 Codex、Claude、Cursor、Pi、Trae 或自定义 ACP Agent。</p>
+  // my-auto：内容比视口矮时垂直居中；比视口高时自动退化为 0，滚动容器不会把顶部的吉祥物裁掉。
+  return <div className="relative my-auto w-full max-w-[720px]">
+    <div className="flex flex-col items-center text-center">
+      <DockMascot size={88}/>
+      <h1 className="ui-empty-state ui-hero-title mt-4 text-[22px] font-semibold tracking-[-.02em]">有什么要做的？</h1>
     </div>
+    <div className="mt-6">
     <Composer
       draft
-      textareaRef={textareaRef}
+      editorRef={editorRef}
       sessionId=""
       state="idle"
       value={prompt}
@@ -167,6 +193,7 @@ export function DraftComposer({ agents, sessions, onCreated, textareaRef }: {
       workspace={cwd}
       onWorkspaceChange={setCwd}
       workspaceSuggestion={defaultWorkspace}
+      homeDirectory={homeDirectory}
       workspaceOptions={workspaceOptions}
       directoryPickerAvailable={capabilities.data?.directoryPicker}
       pickingDirectory={pickDirectory.isPending}
@@ -184,7 +211,12 @@ export function DraftComposer({ agents, sessions, onCreated, textareaRef }: {
       onReasoningEffortChange={setReasoningEffort}
       onRefreshModels={() => refreshModels.mutate()}
     />
-    {error && <p role="alert" className="mt-2 text-center text-[11px] text-red-600">{error}</p>}
-    {references.length > 0 && <p className="mt-2 text-center text-[10px] text-zinc-400">{references.length} 个附件会在会话创建后上传</p>}
+    </div>
+    <PromptTemplates onUse={useTemplate}/>
+    {recentWorkspaces.length > 0 && <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
+      {recentWorkspaces.map(path => <button key={path} type="button" onClick={() => setCwd(path)} title={path} className="max-w-56 truncate rounded-full border border-zinc-200 bg-white px-3 py-1 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{workspaceLabel(path, homeDirectory)}</button>)}
+    </div>}
+    {error && <p role="alert" className="mt-2 text-center text-[12px] text-red-600">{error}</p>}
+    {references.length > 0 && <p className="mt-2 text-center text-[12px] text-zinc-400">{references.length} 个附件会在会话创建后上传</p>}
   </div>;
 }

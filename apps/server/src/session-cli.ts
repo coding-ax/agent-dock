@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
-import type { RepositoryBundle, Session, TaskRecord } from '@agent-dock/agent-dock-shared';
+import { RuntimeError, type RepositoryBundle, type Session, type TaskRecord } from '@agent-dock/agent-dock-shared';
 import { isDaemonRunning, readDaemonStatus, resolveDaemonDir } from './daemon/daemon.js';
 import { formatSessionList, formatTranscript, sessionHeader, writeTranscript } from './session-cli-format.js';
+import { assertDelegatedControl, extendedSessionPeerIds } from './sources-router/session-peers.js';
 
 /**
  * 解析 daemon 使用的数据库路径。
@@ -42,7 +43,7 @@ export function sessionPeerIds(sessions: Session[], sourceId: string): string[] 
   for (const session of sessions) {
     if (session.source === 'side-chat' && session.sourceId === sourceId && session.id !== sourceId) peers.add(session.id);
   }
-  return [...peers];
+  return extendedSessionPeerIds(sessions, sourceId, [...peers]);
 }
 
 export function sourceSessionId(explicit?: string): string {
@@ -102,10 +103,13 @@ export async function assertPeerTarget(database: string, targetId: string, from?
   const fromId = sourceSessionId(from);
   try {
     const sessions = await repos.sessions.list();
+    const from = sessions.find(session => session.id === fromId);
+    const target = sessions.find(session => session.id === targetId);
     const allowed = sessionPeerIds(sessions, fromId);
+    if (!target) throw new RuntimeError('SESSION_NOT_FOUND', `目标会话不存在：${targetId}`, 404);
+    if (from?.source === 'delegated' || target?.source === 'delegated') assertDelegatedControl(from, target, allowed);
     if (allowSelf) allowed.push(fromId);
     if (!allowed.includes(targetId)) throw new Error(`目标 ${targetId} 不是当前会话的主副会话。可用 agent-dock session peers 查看可操作的会话。`);
-    const target = sessions.find(session => session.id === targetId)!;
     if (target.archivedAt) throw new Error(`目标会话 ${targetId} 已归档，不能操作。`);
     return fromId;
   } finally {

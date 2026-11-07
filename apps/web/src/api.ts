@@ -5,6 +5,9 @@ export type PermissionMode = (typeof permissionModes)[number];
 /** 三种模型线格式。与 apps/server/src/llm/types.ts 的 llmFormats 对应（服务端也会回传选项列表）。 */
 export const llmFormats = ['openai-chat', 'openai-responses', 'anthropic-messages'] as const;
 export type LlmFormat = (typeof llmFormats)[number];
+/** Anthropic 兼容端点的鉴权头：原生 API Key 用 x-api-key，代理/OAuth token 用 Bearer。 */
+export const llmAuthTypes = ['api-key', 'bearer'] as const;
+export type LlmAuthType = (typeof llmAuthTypes)[number];
 export type Agent = {
   id: string;
   name: string;
@@ -33,7 +36,7 @@ export type LarkAllowedUser = { openId: string; name: string };
 export type LarkBotConfig = { configured: true; appId: string; name: string; tabLabel: string; setupComplete: boolean; avatarUrl?: string; workspace?: string; webBaseUrl?: string; defaultAgentId?: string; defaultModel?: string; defaultReasoningEffort?: string; preInjectPrompt: string; listening: boolean; activeListening: boolean; groupToolsEnabled: boolean; groupToolsAllowSend: boolean; groupSessionScope: 'user' | 'chat'; pushIntervalMs: number; traceLimit?: number; hideTraceOnComplete: boolean; quietReply: boolean; allowedUsers: LarkAllowedUser[]; allowedUserNames?: string[]; allowedEmails: string[]; allowedBots: LarkAllowedUser[]; allowedBotNames?: string[]; peerBotsAllowed: boolean; highRiskAllowedUsers: LarkAllowedUser[]; highRiskAllowedUserNames?: string[]; highRiskAllowedEmails: string[]; highRiskPattern: string; gateEnabled: boolean; softGateEnabled: boolean; hardGateEnabled: boolean; hookTrustConfirmed: boolean };
 export type LarkConfig = { configured: boolean; bots: LarkBotConfig[]; listeningDisabled: boolean };
 export type LarkHookStatus = { agentId?: string; supported: boolean; installed: boolean; writable: boolean; trustRequired: boolean; hooksPath?: string; reason?: string; trustInstructions?: string };
-export type Session = { id: string; agentId: string; state: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null };
+export type Session = { id: string; agentId: string; state: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null };
 export type AutostartStatus = { supported: boolean; enabled: boolean; reason?: string; plistPath?: string; entrypoint?: string };
 export type SelfUpdateStatus = { currentVersion: string; distTag: string; latestVersion?: string; updateAvailable: boolean; canUpdate: boolean; updating: boolean; lastError?: string; checkedAt?: number; checkError?: string };
 export type ExternalSession = { sessionId: string; cwd: string; title?: string; updatedAt?: string };
@@ -41,8 +44,12 @@ export type ScheduleDelivery = 'new_session' | 'append';
 export type Schedule = { id: string; name: string; sessionId?: string | null; sessionTemplate?: string | null; delivery: ScheduleDelivery; cron?: string | null; runAt?: string | null; intervalMinutes?: number | null; timezone: string; prompt: string; enabled: boolean; nextRunAt?: string | null; lastRunAt?: string | null; lastStatus?: string | null; runCount: number; createdBySessionId?: string | null; createdAt: string; updatedAt: string };
 export type ScheduleRun = { id: string; scheduleId: string; fireAt: string; status: 'delivered' | 'skipped' | 'failed'; reason?: string | null; sessionId?: string | null; taskId?: string | null; createdAt: string };
 export type ScheduleTemplate = { agentId: string; cwd: string; model?: string; reasoningEffort?: string };
+export type UpdateScheduleInput = { name?: string; prompt?: string; delivery?: ScheduleDelivery; sessionId?: string | null; template?: ScheduleTemplate; cron?: string | null; runAt?: string | null; intervalMinutes?: number | null; timezone?: string };
 export type CreateScheduleInput = { sessionId?: string; template?: ScheduleTemplate; prompt: string; name?: string; delivery?: ScheduleDelivery; cron?: string; runAt?: string; intervalMinutes?: number; timezone?: string };
 export type ExternalSessionsResult = { agentId: string; agentName: string; supported: boolean; sessions: ExternalSession[]; nextCursor?: string };
+export type SshHost = { alias: string; hostName?: string; user?: string; port?: number; identityFile?: string; proxy?: boolean; source: string };
+export type SshHostsResult = { configPath: string; configExists: boolean; hosts: SshHost[]; error?: string };
+export type SshProbeResult = { host: string; ok: boolean; latencyMs: number; platform?: string; nodeVersion?: string; npx?: boolean; home?: string; agents: { claude: boolean; codex: boolean }; detail?: string };
 export type DockEvent = { id: string; sequence: number; type: string; timestamp: string; data: any; raw?: string };
 export type FsListEntry = { name: string; type: 'file' | 'dir'; size: number; mtime: string };
 export type FsListResult = { cwd: string; path: string; entries: FsListEntry[] };
@@ -61,6 +68,7 @@ export type LlmEndpointState = {
   format?: LlmFormat;
   baseUrl?: string;
   model?: string;
+  auth?: LlmAuthType;
   /** 只报「有没有配密钥」——服务端永不回传密钥本身。 */
   apiKeySet?: boolean;
   systemPrompt?: string;
@@ -68,8 +76,20 @@ export type LlmEndpointState = {
   temperature?: number;
   timeoutMs?: number;
   formats: LlmFormatOption[];
+  authTypes?: Array<{ value: LlmAuthType; label: string }>;
 };
 export type LlmRunResult = { format: LlmFormat; model: string; baseUrl: string; text: string; truncated?: boolean };
+/** 从本机 Agent 配置探测到的候选端点；永远不含密钥。 */
+export type DetectedLlmEndpoint = {
+  id: string;
+  source: 'claude-code' | 'codex' | 'openai';
+  label: string;
+  format: LlmFormat;
+  baseUrl: string;
+  model: string;
+  auth?: LlmAuthType;
+  keySet: boolean;
+};
 /** 本地 Web 访问门拒绝（401 凭证缺失/过期、403 会话 token 越权）。 */
 export class WebAccessDeniedError extends Error {
   constructor(public readonly status: number, message: string) { super(message); this.name = 'WebAccessDeniedError'; }
@@ -83,7 +103,9 @@ const json = async <T,>(url: string, init?: RequestInit, quietDenied = false): P
     if (!quietDenied && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('agentdock:web-access-denied', { detail: denied }));
     throw denied;
   }
-  if (!response.ok) throw new Error(data.error?.message ?? response.statusText);
+  // 带上状态码：调用方需要区分「接口不存在（服务端版本旧）」和普通失败，
+  // 不能只靠错误文案猜。
+  if (!response.ok) throw Object.assign(new Error(data.error?.message ?? response.statusText), { status: response.status });
   return data;
 };
 /**
@@ -124,9 +146,10 @@ async function readEventStream(body: ReadableStream<Uint8Array>, onEvent: (event
   } finally { reader.releaseLock(); }
 }
 
-const agentModelsUrl = (id: string, model?: string, refresh = false) => {  const query = new URLSearchParams();
+const agentModelsUrl = (id: string, model?: string, refresh = false, sshHost?: string) => {  const query = new URLSearchParams();
   if (model) query.set('model', model);
   if (refresh) query.set('refresh', '1');
+  if (sshHost) query.set('sshHost', sshHost);
   const suffix = query.toString();
   return `/api/agents/${id}/models${suffix ? `?${suffix}` : ''}`;
 };
@@ -140,11 +163,18 @@ export const api = {
   deleteAgent: (id: string) => json<{ disabled: boolean }>(`/api/agents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   /** 启用/停用。不能走 updateAgent——那条接口有意忽略 disabled，停用了就启不回来。 */
   setAgentDisabled: (id: string, disabled: boolean) => json<Agent>(`/api/agents/${encodeURIComponent(id)}/disabled`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ disabled }) }),
-  externalSessions: (agentId: string, options: { cursor?: string; cwd?: string } = {}) => { const query = new URLSearchParams(); if (options.cursor) query.set('cursor', options.cursor); if (options.cwd) query.set('cwd', options.cwd); const suffix = query.size ? `?${query.toString()}` : ''; return json<ExternalSessionsResult>(`/api/agents/${encodeURIComponent(agentId)}/external-sessions${suffix}`); },
+  externalSessions: (agentId: string, options: { cursor?: string; cwd?: string; sshHost?: string } = {}) => { const query = new URLSearchParams(); if (options.cursor) query.set('cursor', options.cursor); if (options.cwd) query.set('cwd', options.cwd); if (options.sshHost) query.set('sshHost', options.sshHost); const suffix = query.size ? `?${query.toString()}` : ''; return json<ExternalSessionsResult>(`/api/agents/${encodeURIComponent(agentId)}/external-sessions${suffix}`); },
+  sshHosts: () => json<SshHostsResult>('/api/ssh/hosts'),
+  probeSshHost: (host: string) => json<SshProbeResult>('/api/ssh/probe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ host }) }),
   llm: () => json<LlmEndpointState>('/api/llm'),
   /** apiKey 留空表示沿用已存的那把——只改模型名时不必重新粘贴密钥。 */
-  saveLlm: (body: { format: LlmFormat; baseUrl: string; model: string; apiKey?: string; systemPrompt?: string; maxTokens?: number; timeoutMs?: number }) => json<LlmEndpointState>('/api/llm', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  saveLlm: (body: { format: LlmFormat; baseUrl: string; model: string; apiKey?: string; auth?: LlmAuthType; systemPrompt?: string; maxTokens?: number; timeoutMs?: number }) => json<LlmEndpointState>('/api/llm', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   clearLlm: () => json<LlmEndpointState>('/api/llm', { method: 'DELETE' }),
+  /** 平台功能的一次性补全；prompt 由功能自己构造。 */
+  completeLlm: (prompt: string, timeoutMs?: number) => json<LlmRunResult>('/api/llm/complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, ...(timeoutMs ? { timeoutMs } : {}) }) }, true),
+  detectLlm: () => json<{ candidates: DetectedLlmEndpoint[] }>('/api/llm/detect', undefined, true),
+  /** 应用探测到的端点；密钥不经过浏览器。 */
+  applyDetectedLlm: (id: string) => json<LlmEndpointState>('/api/llm/detect/apply', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) }, true),
   testLlm: (prompt?: string) => json<LlmRunResult>('/api/llm/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(prompt ? { prompt } : {}) }),
   /**
    * 流式试跑。不能用 EventSource（它只支持 GET，而这里要带 prompt），用 fetch + 手动读流。
@@ -178,7 +208,7 @@ export const api = {
     })();
     return () => controller.abort();
   },
-  agentModels: (id: string, model?: string, refresh = false) => json<AgentModelsResult>(agentModelsUrl(id, model, refresh)), sessions: () => json<Session[]>('/api/sessions'), events: (id: string, after?: number) => json<DockEvent[]>(`/api/sessions/${id}/events?compact=thinking${after ? `&after=${after}` : ''}`), rawEvents: (id: string, before?: number) => json<DockEvent[]>(`/api/sessions/${id}/events?limit=200${before ? `&before=${before}` : ''}`), tasks: (id: string) => json<Task[]>(`/api/sessions/${id}/tasks`), sessionRecord: (id: string) => json<SessionRecord>(`/api/sessions/${id}/record`),
+  agentModels: (id: string, model?: string, refresh = false, sshHost?: string) => json<AgentModelsResult>(agentModelsUrl(id, model, refresh, sshHost)), sessions: () => json<Session[]>('/api/sessions'), events: (id: string, after?: number) => json<DockEvent[]>(`/api/sessions/${id}/events?compact=thinking${after ? `&after=${after}` : ''}`), rawEvents: (id: string, before?: number) => json<DockEvent[]>(`/api/sessions/${id}/events?limit=200${before ? `&before=${before}` : ''}`), tasks: (id: string) => json<Task[]>(`/api/sessions/${id}/tasks`), sessionRecord: (id: string) => json<SessionRecord>(`/api/sessions/${id}/record`),
   /** 轮次锚点图：只回边界与过程条数，不回事件体。面板整个生命周期只请求一次。 */
   sessionTurns: (id: string) => json<{ turns: TurnRange[] }>(`/api/sessions/${id}/turns`),
   /** 单轮事件体（已合并分片）。带上 after/before 可以免掉服务端那一次锚点扫描。 */
@@ -192,7 +222,7 @@ export const api = {
   selfUpdateStatus: (refresh = false) => json<SelfUpdateStatus>(`/api/system/update${refresh ? '?refresh=1' : ''}`, undefined, true),
   startSelfUpdate: () => json<SelfUpdateStatus>('/api/system/update', { method: 'POST' }),
   create: (body: any) => json<Session>('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-  importSession: (body: { agentId: string; externalSessionId: string; cwd?: string; mode?: 'full' | 'session'; model?: string; reasoningEffort?: string }) => json<Session>('/api/sessions/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  importSession: (body: { agentId: string; externalSessionId: string; cwd?: string; mode?: 'full' | 'session'; model?: string; reasoningEffort?: string; sshHost?: string }) => json<Session>('/api/sessions/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   send: (id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue') => json<{ accepted: true; task: Task }>(`/api/sessions/${id}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, mode }) }),
   setSessionModel: (id: string, model: string) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model }) }),
   setSessionReasoningEffort: (id: string, reasoningEffort: string) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reasoningEffort }) }),
@@ -221,7 +251,7 @@ export const api = {
   },
   autostartStatus: () => json<AutostartStatus>('/api/system/autostart', undefined, true),
   setAutostart: (enabled: boolean) => json<AutostartStatus>('/api/system/autostart', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) }),
-  systemCapabilities: () => json<{ platform: string; directoryPicker: boolean; filePicker: boolean; workingDirectory: string }>('/api/system/capabilities'),
+  systemCapabilities: () => json<{ platform: string; directoryPicker: boolean; filePicker: boolean; workingDirectory: string; homeDirectory: string }>('/api/system/capabilities'),
   skills: (cwd?: string) => json<SkillReference[]>(`/api/system/skills${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   selectDirectory: () => json<{ path: string }>('/api/system/select-directory', { method: 'POST' }),
   selectFile: () => json<{ path: string }>('/api/system/select-file', { method: 'POST' }),
@@ -230,6 +260,7 @@ export const api = {
   scheduleRuns: (id: string) => json<ScheduleRun[]>(`/api/schedules/${encodeURIComponent(id)}/runs?limit=20`),
   recentScheduleRuns: (sessionId?: string) => json<ScheduleRun[]>(`/api/schedule-runs?limit=60${sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : ''}`),
   createSchedule: (body: CreateScheduleInput) => json<Schedule>('/api/schedules', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  updateSchedule: (id: string, body: UpdateScheduleInput) => json<Schedule>(`/api/schedules/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   pauseSchedule: (id: string) => json<Schedule>(`/api/schedules/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
   resumeSchedule: (id: string) => json<Schedule>(`/api/schedules/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   runSchedule: (id: string) => json<ScheduleRun>(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }),

@@ -22,7 +22,7 @@ export function AutostartToggle({ enabled }: { enabled: boolean }) {
   const data = status.data;
   if (!data?.supported) return null;
   const checked = toggle.isPending ? Boolean(toggle.variables) : data.enabled;
-  return <div className="flex h-6 items-center gap-1">
+  return <div className="flex h-[34px] items-center gap-1 text-[12px]">
     <HoverTooltip content={data.enabled ? `登录时自动运行 agent-dock start（${data.plistPath}）` : '登录 macOS 后自动在后台启动 AgentDock'}>
       <span className="min-w-0 flex-1 truncate">开机自启</span>
     </HoverTooltip>

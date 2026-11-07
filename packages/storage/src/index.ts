@@ -80,7 +80,7 @@ export function createRepositories(filename: string, options: { nativeFallback?:
     CREATE TABLE IF NOT EXISTS agent_configs (id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS machines (id TEXT PRIMARY KEY, name TEXT NOT NULL, metadata TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, machine_id TEXT, name TEXT NOT NULL, cwd TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, state TEXT NOT NULL, cwd TEXT NOT NULL, model TEXT, reasoning_effort TEXT, system_prompt TEXT, permission_mode TEXT DEFAULT 'full-trust', source TEXT, source_id TEXT, archived_at TEXT, protocol TEXT, last_message_at TEXT, custom_title TEXT, agent_title TEXT, run_id TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, state TEXT NOT NULL, cwd TEXT NOT NULL, model TEXT, reasoning_effort TEXT, system_prompt TEXT, permission_mode TEXT DEFAULT 'full-trust', source TEXT, source_id TEXT, ssh_host TEXT, archived_at TEXT, protocol TEXT, last_message_at TEXT, custom_title TEXT, agent_title TEXT, run_id TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, prompt TEXT NOT NULL, sent_prompt TEXT, final_text TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, type TEXT NOT NULL, timestamp TEXT NOT NULL, data TEXT NOT NULL, raw TEXT);
     CREATE UNIQUE INDEX IF NOT EXISTS events_session_seq ON events(session_id, sequence);
@@ -101,6 +101,8 @@ export function createRepositories(filename: string, options: { nativeFallback?:
   if (!sessionColumns.some(column => column.name === 'permission_mode')) sqlite.exec("ALTER TABLE sessions ADD COLUMN permission_mode TEXT DEFAULT 'full-trust'");
   if (!sessionColumns.some(column => column.name === 'source')) sqlite.exec('ALTER TABLE sessions ADD COLUMN source TEXT');
   if (!sessionColumns.some(column => column.name === 'source_id')) sqlite.exec('ALTER TABLE sessions ADD COLUMN source_id TEXT');
+  // Remote (SSH) sessions keep the config alias, not credentials. NULL = local.
+  if (!sessionColumns.some(column => column.name === 'ssh_host')) sqlite.exec('ALTER TABLE sessions ADD COLUMN ssh_host TEXT');
   if (!sessionColumns.some(column => column.name === 'archived_at')) sqlite.exec('ALTER TABLE sessions ADD COLUMN archived_at TEXT');
   // 最后一次对话时间。与 updated_at 分开：updated_at 记录任何状态变化，排序会「最近动过的」压过
   // 「最近聊过的」。增量列，旧库补 ALTER，历史行保持 NULL，由调用方回退 updated_at。

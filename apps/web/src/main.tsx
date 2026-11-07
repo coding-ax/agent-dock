@@ -31,6 +31,8 @@ client.setQueryDefaults(['events'], {
   // 触发增量/全量补拉（SSE 断开期间的补拉由 useRefetchFullOnFocus 兜底）。
   staleTime: 30_000
 });
+// 跟随鼠标的聚光已移除：全站只保留克制的边框 / 底色反馈，不再有装饰性光效。
+
 createRoot(document.getElementById('root')!).render(<StrictMode><QueryClientProvider client={client}><AntdScope><App/></AntdScope></QueryClientProvider></StrictMode>);
 
 // 临时调试：?vvdebug=1 时在页面左上角显示 viewport 实测数值，用于定位移动端软键盘问题。

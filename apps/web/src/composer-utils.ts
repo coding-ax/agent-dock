@@ -241,3 +241,15 @@ export function workspaceBasename(path: string): string {
   const segments = path.split(/[\\/]/).filter(Boolean);
   return segments.at(-1) ?? path;
 }
+
+/** 用户主目录只显示「主目录」，不要把用户名当成工作区名字。 */
+export function isHomeDirectory(path: string, homeDirectory?: string): boolean {
+  if (!homeDirectory) return false;
+  const normalize = (value: string) => value.replace(/[\\/]+$/, '') || '/';
+  return normalize(path) === normalize(homeDirectory);
+}
+
+export function workspaceLabel(path: string, homeDirectory?: string): string {
+  if (!path) return '工作目录';
+  return isHomeDirectory(path, homeDirectory) ? '主目录' : workspaceBasename(path);
+}

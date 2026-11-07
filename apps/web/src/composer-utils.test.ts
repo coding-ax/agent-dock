@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, parsePromptToDraft, queuedImageThumbnailUrl, replaceSlashQuery, shouldDismissComposerPanel, slashQuery, workspaceBasename } from './composer-utils';
+import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, isHomeDirectory, parsePromptToDraft, queuedImageThumbnailUrl, replaceSlashQuery, shouldDismissComposerPanel, slashQuery, workspaceBasename, workspaceLabel } from './composer-utils';
 
 describe('composer references', () => {
   it('never emits a leading slash, which the CLI would read as a slash command', () => {
@@ -166,5 +166,22 @@ describe('workspaceBasename', () => {
   it('空串与根路径原样返回，不产生越界', () => {
     expect(workspaceBasename('')).toBe('');
     expect(workspaceBasename('/')).toBe('/');
+  });
+});
+
+describe('workspaceLabel', () => {
+  it('主目录不把用户名当工作区名', () => {
+    expect(isHomeDirectory('/Users/codeax', '/Users/codeax')).toBe(true);
+    expect(isHomeDirectory('/Users/codeax/', '/Users/codeax')).toBe(true);
+    expect(workspaceLabel('/Users/codeax', '/Users/codeax')).toBe('主目录');
+  });
+
+  it('普通目录仍然显示最后一段', () => {
+    expect(workspaceLabel('/Users/codeax/work/agent-dock', '/Users/codeax')).toBe('agent-dock');
+    expect(workspaceLabel('/Users/other', '/Users/codeax')).toBe('other');
+  });
+
+  it('没有 homeDirectory 时保持原样', () => {
+    expect(workspaceLabel('/Users/codeax')).toBe('codeax');
   });
 });

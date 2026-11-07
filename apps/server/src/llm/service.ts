@@ -12,16 +12,24 @@ import type { FastifyInstance } from 'fastify';
 import { RuntimeError, type ConfigRepository } from '@agent-dock/agent-dock-shared';
 import { LlmClient, type LlmClientOptions, type Fetch } from './client.js';
 import { llmFormatOptions } from './adapters.js';
+import { detectLlmEndpoints, publicDetectedLlmEndpoint, type DetectedLlmEndpoint } from './detect.js';
 import {
   llmEndpointInputSchema, normalizeBaseUrl,
-  type LlmEndpoint, type PublicLlmEndpoint, type StoredLlmEndpoint
+  type LlmEndpoint, type LlmAuthType, type PublicLlmEndpoint, type StoredLlmEndpoint
 } from './types.js';
 
 export const llmEndpointConfigKey = 'platform.llm';
 
+export const llmAuthOptions: ReadonlyArray<{ value: LlmAuthType; label: string }> = [
+  { value: 'api-key', label: 'x-api-key（Anthropic 原生密钥）' },
+  { value: 'bearer', label: 'Authorization: Bearer（代理 / OAuth token）' }
+];
+
 export interface LlmEndpointState extends PublicLlmEndpoint {
   /** 三种格式的选项与 Base URL 示例，直接进 UI，省得前端再抄一份。 */
   formats: typeof llmFormatOptions;
+  /** Anthropic 格式可选的鉴权头。 */
+  authTypes: typeof llmAuthOptions;
 }
 
 /** 存进库的形状校验。与入参的区别：apiKey 在这里是必填的（写库前已经合并过旧值）。 */
@@ -55,8 +63,8 @@ export class LlmEndpointService {
 
   async state(): Promise<LlmEndpointState> {
     const endpoint = await this.endpoint();
-    if (!endpoint) return { configured: false, formats: llmFormatOptions };
-    return { ...publicLlmEndpoint(endpoint), formats: llmFormatOptions };
+    if (!endpoint) return { configured: false, formats: llmFormatOptions, authTypes: llmAuthOptions };
+    return { ...publicLlmEndpoint(endpoint), formats: llmFormatOptions, authTypes: llmAuthOptions };
   }
 
   /**
@@ -124,6 +132,7 @@ export const publicLlmEndpoint = (endpoint: LlmEndpoint): PublicLlmEndpoint => (
   format: endpoint.format,
   baseUrl: endpoint.baseUrl,
   model: endpoint.model,
+  auth: endpoint.auth ?? 'api-key',
   apiKeySet: Boolean(endpoint.apiKey),
   ...(endpoint.systemPrompt === undefined ? {} : { systemPrompt: endpoint.systemPrompt }),
   ...(endpoint.maxTokens === undefined ? {} : { maxTokens: endpoint.maxTokens }),
@@ -137,6 +146,8 @@ export const defaultLlmTestPrompt = '请只回复一句话：模型端点已就�
 export interface LlmRoutesOptions {
   service?: LlmEndpointService;
   testPrompt?: string;
+  /** 测试注入；默认扫描本机 Claude Code / Codex / OpenAI 配置。 */
+  detect?: () => Promise<DetectedLlmEndpoint[]>;
 }
 
 /**
@@ -150,7 +161,33 @@ export async function registerLlmRoutes(app: FastifyInstance, options?: LlmRoute
   const service = options?.service;
   if (!service) return;
   const testPrompt = options?.testPrompt ?? defaultLlmTestPrompt;
+  const detect = options?.detect ?? detectLlmEndpoints;
   app.get('/api/llm', async () => service.state());
+  // 平台功能（自动写描述等）的一次性补全入口。与 /test 的区别是不带试跑语义，
+  // 但仍然只挂在管理面，不向会话 token 开放。
+  app.post<{ Body: { prompt?: string; timeoutMs?: number } }>('/api/llm/complete', async request => {
+    const prompt = request.body?.prompt?.trim();
+    if (!prompt) throw new RuntimeError('INVALID_PROMPT', 'Prompt 不能为空', 400);
+    if (prompt.length > 50_000) throw new RuntimeError('INVALID_PROMPT', 'Prompt 过长（最多 50000 字符）', 400);
+    const timeoutMs = Math.min(Math.max(request.body?.timeoutMs ?? 30_000, 1_000), 120_000);
+    return service.run({ prompt, timeoutMs });
+  });
+  // 只回来源与掩码后的端点信息；密钥留在服务端，用户点「使用」时才由 apply 写库。
+  app.get('/api/llm/detect', async () => ({
+    candidates: (await detect()).map(publicDetectedLlmEndpoint)
+  }));
+  app.post<{ Body: { id?: string } }>('/api/llm/detect/apply', async request => {
+    const id = request.body?.id?.trim();
+    const candidate = id ? (await detect()).find(item => item.id === id) : undefined;
+    if (!candidate) throw new RuntimeError('LLM_DETECTION_UNAVAILABLE', '没有找到这个端点，可能本机配置已变化，请重新检测。', 404);
+    return service.save({
+      format: candidate.format,
+      baseUrl: candidate.baseUrl,
+      model: candidate.model,
+      apiKey: candidate.apiKey,
+      ...(candidate.auth ? { auth: candidate.auth } : {})
+    });
+  });
   app.put('/api/llm', async request => service.save(request.body));
   app.delete('/api/llm', async () => service.clear());
   app.post<{ Body: { prompt?: string; timeoutMs?: number } }>('/api/llm/test', async request => {

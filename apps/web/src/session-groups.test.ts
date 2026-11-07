@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Session } from './api';
-import { groupSessions, recentSessions, searchSessions, sessionLabel, RECENT_SESSION_LIMIT, sameSessionTree, sessionActivityTime, workspaceLabel } from './session-groups';
+import { groupSessions, groupSessionsByTime, relativeTimeLabel, searchSessions, sessionLabel, sameSessionTree, sessionActivityTime, workspaceLabel } from './session-groups';
 
 const agent = (id: string, name = id.toUpperCase()): Agent => ({ id, name, command: id, args: [], protocol: 'acp', env: {}, permissionMode: 'full-trust', timeout: 600, capabilities: { pause: false, resume: true }, builtin: false });
 let seq = 0;
@@ -63,57 +63,60 @@ describe('groupSessions', () => {
   });
 });
 
-describe('recentSessions', () => {
-  it('截断到 N 条且保持传入的 updatedAt 倒序', () => {
-    const sessions = [1, 2, 3, 4, 5].map(index => session({ agentId: 'codex', cwd: `/repo-${index}`, id: `s${index}`, updatedAt: `2026-09-17T1${9 - index}:00:00Z` }));
-    const recent = recentSessions(sessions, 3);
-    expect(recent.map(entry => entry.session.id)).toEqual(['s1', 's2', 's3']);
+describe('groupSessionsByTime', () => {
+  const now = new Date(2026, 10, 7, 15, 0, 0); // 2026-11-07 15:00 本地时间
+  const at = (id: string, iso: string) => session({ id, agentId: 'codex', cwd: '/repo', lastMessageAt: iso });
+
+  it('按本地日历日分到五档，组内保持输入顺序', () => {
+    // 用相对 now 的日历日偏移构造，避免手写日期算错。
+    const daysAgo = (id: string, days: number) => {
+      const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days, 10);
+      return at(id, date.toISOString());
+    };
+    const groups = groupSessionsByTime([
+      daysAgo('today-a', 0), daysAgo('today-b', 0), daysAgo('yesterday', 1),
+      daysAgo('day7', 7), daysAgo('day8', 8), daysAgo('day30', 30), daysAgo('day31', 31)
+    ], now);
+    expect(groups.map(group => group.key)).toEqual(['today', 'yesterday', 'last7', 'last30', 'earlier']);
+    expect(groups.map(group => group.sessions.map(item => item.id))).toEqual([
+      ['today-a', 'today-b'], ['yesterday'], ['day7'], ['day8', 'day30'], ['day31']
+    ]);
+    expect(groups.map(group => group.label)).toEqual(['今天', '昨天', '过去 7 天', '过去 30 天', '更早']);
   });
 
-  // 上游（visibleSessions）已经排好序了，这里再排一次按活动时间倒序，正常情况下是无操作。
-  it('输入乱序时按活动时间倒序——不再原样露出', () => {
-    const sessions = [session({ agentId: 'codex', cwd: '/a', id: 'a', updatedAt: '2026-09-17T01:00:00Z' }), session({ agentId: 'codex', cwd: '/b', id: 'b', updatedAt: '2026-09-17T09:00:00Z' })];
-    expect(recentSessions(sessions).map(entry => entry.session.id)).toEqual(['b', 'a']);
+  it('空组不输出；跨天边界按本地时间而不是 24 小时', () => {
+    const yesterdayLate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59).toISOString();
+    const todayEarly = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 1).toISOString();
+    const groups = groupSessionsByTime([at('today', todayEarly), at('yesterday', yesterdayLate)], now);
+    expect(groups.map(group => group.key)).toEqual(['today', 'yesterday']);
+    expect(groupSessionsByTime([at('today', todayEarly)], now).map(group => group.key)).toEqual(['today']);
+    expect(groupSessionsByTime([], now)).toEqual([]);
   });
 
-  it('活动时间相同则保持输入顺序（稳定排序，不让列表无谓抖动）', () => {
-    const sessions = ['a', 'b', 'c'].map(id => session({ agentId: 'codex', cwd: '/repo', id, updatedAt: '2026-09-17T09:00:00Z' }));
-    expect(recentSessions(sessions).map(entry => entry.session.id)).toEqual(['a', 'b', 'c']);
+  it('缺失或非法时间按今天处理，未来时间也算今天', () => {
+    const missing = session({ id: 'missing', agentId: 'codex', cwd: '/repo', updatedAt: '' });
+    const future = at('future', new Date(now.getTime() + 3 * 86_400_000).toISOString());
+    const groups = groupSessionsByTime([missing, future], now);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.key).toBe('today');
+    expect(groups[0]!.sessions.map(item => item.id)).toEqual(['missing', 'future']);
   });
 
-  // 分组优先于时间的代价：只取父会话自己的时间，刚聊过的侧边会话就会被压在父的旧位次上，
-  // 看起来就是「最近没按最后一次对话时间排序」。整块的位置必须跟着最新成员走。
-  it('侧边会话比父会话新时，整块浮到父会话自身位次之上，嵌套不变', () => {
-    const parent = session({ agentId: 'codex', cwd: '/repo', id: 'parent', updatedAt: '2026-09-12T00:00:00Z' });
-    const other = session({ agentId: 'codex', cwd: '/repo', id: 'other', updatedAt: '2026-09-20T00:00:00Z' });
-    const child = session({ agentId: 'codex', cwd: '/other', id: 'child', source: 'side-chat', sourceId: 'parent', updatedAt: '2026-09-25T00:00:00Z' });
-    // 输入按自身时间倒序：child(09-25) > other(09-20) > parent(09-12)。
-    const recent = recentSessions([child, other, parent]);
-    expect(recent.map(entry => entry.session.id)).toEqual(['parent', 'other']);
-    expect(recent[0]!.sideChats.map(item => item.id)).toEqual(['child']);
+  it('优先用最后对话时间，其次 updatedAt', () => {
+    const staleUpdated = session({ id: 'stale', agentId: 'codex', cwd: '/repo', updatedAt: new Date(now.getTime() - 40 * 86_400_000).toISOString(), lastMessageAt: new Date(now.getTime() - 2 * 86_400_000).toISOString() });
+    expect(groupSessionsByTime([staleUpdated], now)[0]!.key).toBe('last7');
   });
+});
 
-  it('侧边会话不比父会话新时，位次仍按父会话自己算', () => {
-    const parent = session({ agentId: 'codex', cwd: '/repo', id: 'parent', updatedAt: '2026-09-24T00:00:00Z' });
-    const other = session({ agentId: 'codex', cwd: '/repo', id: 'other', updatedAt: '2026-09-20T00:00:00Z' });
-    const child = session({ agentId: 'codex', cwd: '/other', id: 'child', source: 'side-chat', sourceId: 'parent', updatedAt: '2026-09-13T00:00:00Z' });
-    const recent = recentSessions([parent, other, child]);
-    expect(recent.map(entry => entry.session.id)).toEqual(['parent', 'other']);
-  });
-
-  it('默认上限是 50', () => {
-    const sessions = Array.from({ length: 60 }, (_, index) => session({ agentId: 'codex', cwd: `/repo-${index}`, id: `s${index}` }));
-    expect(recentSessions(sessions)).toHaveLength(RECENT_SESSION_LIMIT);
-  });
-
-  it('侧边会话不单独占位，挂在父会话下面；父会话不在窗口里就不出现', () => {
-    const parent = session({ agentId: 'codex', cwd: '/repo', id: 'parent' });
-    const child = session({ agentId: 'codex', cwd: '/other', id: 'child', source: 'side-chat', sourceId: 'parent' });
-    const orphan = session({ agentId: 'codex', cwd: '/elsewhere', id: 'orphan', source: 'side-chat', sourceId: 'missing-parent' });
-    const recent = recentSessions([child, parent, orphan]);
-    // child 归到 parent 名下，不再单独占一行；orphan 的父会话不在列表里，照常平铺，不能凭空消失。
-    expect(recent.map(entry => entry.session.id)).toEqual(['parent', 'orphan']);
-    expect(recent[0]!.sideChats.map(item => item.id)).toEqual(['child']);
+describe('relativeTimeLabel', () => {
+  const now = Date.parse('2026-11-07T15:00:00Z');
+  it('按分钟 / 小时 / 天显示，未来时间归零', () => {
+    expect(relativeTimeLabel('2026-11-07T14:59:40Z', now)).toBe('刚刚');
+    expect(relativeTimeLabel('2026-11-07T14:57:00Z', now)).toBe('3 分钟');
+    expect(relativeTimeLabel('2026-11-07T13:00:00Z', now)).toBe('2 小时');
+    expect(relativeTimeLabel('2026-11-05T15:00:00Z', now)).toBe('2 天');
+    expect(relativeTimeLabel('2026-11-07T15:10:00Z', now)).toBe('刚刚');
+    expect(relativeTimeLabel('not-a-date', now)).toBe('');
   });
 });
 

@@ -636,7 +636,43 @@ describe('Lark message coordinator', () => {
     await vi.waitFor(() => expect(runtime.send).toHaveBeenCalledTimes(2));
     expect(runtime.stop).not.toHaveBeenCalled();
     expect(runtime.start).toHaveBeenCalledOnce();
-    expect(runtime.send).toHaveBeenLastCalledWith(current.id, '继续', expect.any(String));
+    expect(runtime.send).toHaveBeenNthCalledWith(1, current.id, '继续', expect.stringContaining('[AgentDock 机器人身份]'));
+    // 同一会话的第二轮不再重复身份 / 回复方式等静态注入，因此没有第三参。
+    expect(runtime.send).toHaveBeenNthCalledWith(2, current.id, '继续');
+  });
+
+  it('injects session-level context once and re-injects only when it changes', async () => {
+    const runtime = {
+      start: vi.fn(async () => session), getSession: vi.fn(async () => session), subscribe: vi.fn(() => vi.fn()),
+      send: vi.fn(async () => {}), interrupt: vi.fn(async () => {})
+    };
+    const service = {
+      addReaction: vi.fn(async () => ({})), send: vi.fn(async () => ({ messageId: 'om_card' })),
+      deleteReaction: vi.fn(async () => {}), update: vi.fn(async () => ({ messageId: 'om_card' }))
+    };
+    const coordinator = new LarkMessageCoordinator(runtime as any, service as any, { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, Math.random, 'ou_bot');
+    const message = (id: string) => ({ messageId: id, chatId: 'oc_group', chatType: 'group', messageType: 'text', content: '{"text":"@bot 继续"}', senderOpenId: 'ou_user', mentions: [{ key: '@bot', name: 'bot', openId: 'ou_bot' }] });
+
+    coordinator.handle(message('om_static_1'), { ...config, preInjectPrompt: '第一版提示' });
+    await vi.waitFor(() => expect(runtime.send).toHaveBeenCalledTimes(1));
+    expect(runtime.send.mock.calls[0]?.[2]).toContain('[AgentDock 机器人身份]');
+    expect(runtime.send.mock.calls[0]?.[2]).toContain('[AgentDock 预注入 Prompt]\n第一版提示');
+
+    // 同一会话、静态内容未变：不再重复身份、回复方式；用户自己的预注入 Prompt 仍然每轮生效。
+    coordinator.handle(message('om_static_2'), { ...config, preInjectPrompt: '第一版提示' });
+    await vi.waitFor(() => expect(runtime.send).toHaveBeenCalledTimes(2));
+    expect(runtime.send.mock.calls[1]?.[0]).toBe('ses_1');
+    expect(runtime.send.mock.calls[1]?.[1]).toBe('继续');
+    expect(runtime.send.mock.calls[1]?.[2]).not.toContain('[AgentDock 机器人身份]');
+    expect(runtime.send.mock.calls[1]?.[2]).toContain('[AgentDock 预注入 Prompt]\n第一版提示');
+
+    // 静态上下文变化（机器人名称）时整块重发一次，同时使用新的预注入 Prompt。
+    coordinator.handle(message('om_static_3'), { ...config, name: '新名字', preInjectPrompt: '第二版提示' });
+    await vi.waitFor(() => expect(runtime.send).toHaveBeenCalledTimes(3));
+    expect(runtime.send.mock.calls[2]?.[2]).toContain('[AgentDock 机器人身份]');
+    expect(runtime.send.mock.calls[2]?.[2]).toContain('机器人名称：新名字');
+    expect(runtime.send.mock.calls[2]?.[2]).toContain('[AgentDock 预注入 Prompt]\n第二版提示');
+    expect(runtime.send.mock.calls[2]?.[2]).not.toContain('第一版提示');
   });
 
   it('injects the current message routing context for group tools', async () => {
@@ -656,8 +692,17 @@ describe('Lark message coordinator', () => {
     expect(injectedPrompt).toContain('[AgentDock 飞书当前消息 · 系统上下文]');
     expect(injectedPrompt).toContain('message_id：om_group_tools');
     expect(injectedPrompt).toContain('thread_id：omt_topic');
-    expect(injectedPrompt).toContain('group send --reply-to om_group_tools --in-thread');
+    expect(injectedPrompt).toContain('--reply-to om_group_tools --in-thread');
     expect(injectedPrompt).toContain('[用户请求]\n协作处理');
+
+    // 同一会话下一轮：静态身份/回复方式不再重复，但当前消息的 message_id 必须每轮更新。
+    coordinator.handle({ messageId: 'om_group_tools_2', threadId: 'omt_topic', chatId: 'oc_group', chatType: 'group', messageType: 'text', content: '{"text":"@bot 继续协作"}', mentions: [{ key: '@bot', name: 'bot', openId: 'ou_bot' }] }, { ...config, groupToolsEnabled: true, groupToolsAllowSend: true });
+    await vi.waitFor(() => expect(runtime.send).toHaveBeenCalledTimes(2));
+    const secondPrompt = runtime.send.mock.calls[1]?.[2] as string;
+    expect(secondPrompt).not.toContain('[AgentDock 机器人身份]');
+    expect(secondPrompt).toContain('message_id：om_group_tools_2');
+    expect(secondPrompt).toContain('--reply-to om_group_tools_2 --in-thread');
+    expect(secondPrompt).toContain('[用户请求]\n继续协作');
   });
 
   it('accepts only a configured peer bot and does not resolve it through the user email API', async () => {
@@ -1032,7 +1077,8 @@ describe('Lark message coordinator', () => {
     await vi.waitFor(() => expect(runtime.send).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(service.update).toHaveBeenCalledWith(expect.objectContaining({ state: 'completed', elements: expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining('重试成功') })]) })));
     expect(service.send).toHaveBeenCalledOnce();
-    expect(runtime.send).toHaveBeenNthCalledWith(2, 'ses_1', '执行任务', expect.any(String));
+    // 重试仍复用同一会话，静态上下文已在首轮注入，不再重复追加。
+    expect(runtime.send).toHaveBeenNthCalledWith(2, 'ses_1', '执行任务');
 
     await expect(coordinator.handleAction({ action: 'retry', task_id: 'om_task' })).resolves.toEqual({ type: 'warning', content: '只有失败或已中断的任务可以重试' });
     expect(runtime.send).toHaveBeenCalledTimes(2);

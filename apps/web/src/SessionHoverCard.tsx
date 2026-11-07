@@ -37,12 +37,12 @@ export function SessionHoverCard({ session, agentName, botName, parentLabel, now
     <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
       {rows.map(row => <Fragment key={row.label}>
         <span className="whitespace-nowrap text-zinc-400">{row.label}</span>
-        <span className={`min-w-0 break-words text-zinc-100 ${row.path ? 'font-mono text-[10.5px]' : ''}`}>{row.path ? pathSegments(row.value) : row.value}</span>
+        <span className={`min-w-0 break-words text-zinc-100 ${row.path ? 'font-mono text-[12px]' : ''}`}>{row.path ? pathSegments(row.value) : row.value}</span>
       </Fragment>)}
     </div>
     <div className="my-1.5 border-t border-white/15"/>
     {/* 等宽 + 淡色：报障、去 CLI 里捞、跟人对齐都要用它，平时界面上无处可看。 */}
-    <div className="break-all font-mono text-[10.5px] text-zinc-400">{session.id}</div>
+    <div className="break-all font-mono text-[12px] text-zinc-400">{session.id}</div>
   </div>;
 }
 

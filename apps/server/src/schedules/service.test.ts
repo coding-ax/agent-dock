@@ -237,3 +237,30 @@ describe('ScheduleService', () => {
     expect(await repos.schedules.get(schedule.id)).toMatchObject({ nextRunAt: '2026-10-14T09:00:00.000Z', enabled: true });
   });
 });
+
+
+describe('schedule update', () => {
+  it('changes the agent, prompt and timing, and recomputes the next run', async () => {
+    const { service } = setup();
+    const created = await service.create({ prompt: '每天汇总', cron: '0 9 * * *', timezone: 'UTC', template: { agentId: 'claude', cwd: '/work' } });
+    const updated = await service.update(created.id, { prompt: '改成周报', template: { agentId: 'codex', cwd: '/other', model: 'gpt-x' }, cron: null, intervalMinutes: 120 });
+    expect(updated).toMatchObject({ prompt: '改成周报', cron: null, intervalMinutes: 120, enabled: true });
+    expect(JSON.parse(updated.sessionTemplate!)).toEqual({ agentId: 'codex', cwd: '/other', model: 'gpt-x' });
+    expect(updated.nextRunAt).toBe('2026-10-14T02:00:00.000Z');
+  });
+
+  it('keeps a paused schedule paused and keeps untouched fields', async () => {
+    const { service } = setup();
+    const created = await service.create({ prompt: 'p', cron: '0 9 * * *', timezone: 'UTC', template: { agentId: 'claude', cwd: '/work' } });
+    await service.pause(created.id);
+    const updated = await service.update(created.id, { name: '新名字' });
+    expect(updated).toMatchObject({ name: '新名字', enabled: false, nextRunAt: null, cron: '0 9 * * *', prompt: 'p' });
+  });
+
+  it('rejects an empty prompt and append without a session', async () => {
+    const { service } = setup();
+    const created = await service.create({ prompt: 'p', cron: '0 9 * * *', timezone: 'UTC', template: { agentId: 'claude', cwd: '/work' } });
+    await expect(service.update(created.id, { prompt: '  ' })).rejects.toThrow(/不能为空/);
+    await expect(service.update(created.id, { delivery: 'append' })).rejects.toThrow(/指定会话/);
+  });
+});

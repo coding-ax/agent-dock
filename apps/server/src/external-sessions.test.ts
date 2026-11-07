@@ -1,8 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from './app.js';
 
-const { listExternalSessions } = vi.hoisted(() => ({ listExternalSessions: vi.fn() }));
-vi.mock('@agent-dock/agent-dock-acp-client', () => ({ listExternalSessions }));
+const { listExternalSessions, wrapAgentForSsh, supportsSshAgent } = vi.hoisted(() => ({
+  listExternalSessions: vi.fn(),
+  wrapAgentForSsh: vi.fn((agent: unknown) => agent),
+  supportsSshAgent: vi.fn(() => false)
+}));
+vi.mock('@agent-dock/agent-dock-acp-client', () => ({
+  listExternalSessions,
+  wrapAgentForSsh,
+  supportsSshAgent,
+  describeAcpError: (error: unknown) => String(error),
+  loadExternalSessionTranscript: vi.fn(async () => []),
+  REMOTE_PATH_PREFIX: 'PATH="$HOME/.local/bin:$PATH"; export PATH;'
+}));
 
 const apps: any[] = [];
 afterEach(async () => {

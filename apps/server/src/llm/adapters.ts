@@ -197,9 +197,10 @@ const anthropicMessages: LlmFormatAdapter = {
   requiresMaxTokens: true,
   headers: endpoint => ({
     'content-type': 'application/json',
-    // 两处与 OpenAI 不同：鉴权走 x-api-key 而非 Bearer，且必须带版本头——
-    // 漏了会得到一个看不出原因的 400。
-    'x-api-key': endpoint.apiKey,
+    // Anthropic 原生密钥走 x-api-key；Claude Code 的 ANTHROPIC_AUTH_TOKEN 等代理
+    // 凭证走 Authorization: Bearer。两者不能同时发。
+    ...(endpoint.auth === 'bearer' ? { authorization: `Bearer ${endpoint.apiKey}` } : { 'x-api-key': endpoint.apiKey }),
+    // 必须带版本头——漏了会得到一个看不出原因的 400。
     'anthropic-version': '2023-06-01'
   }),
   body: (endpoint, request, stream) => {

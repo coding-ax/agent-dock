@@ -37,6 +37,20 @@ agent-dock update     # 更新全局包并重启后台服务
 
 启动后打开 `http://127.0.0.1:4310`。
 
+macOS 和 Windows 也可以直接下载桌面安装包：[GitHub Releases](https://github.com/coding-ax/agent-dock/releases)。Linux 使用上面的 CLI + Web UI 即可。
+
+### 桌面客户端
+
+`apps/desktop` 提供一个 Electron 壳：启动即拉起随包携带的 daemon 和 Node 运行时，关闭窗口时一并停止，不要求用户预装 Node。数据库、日志和窗口状态放在系统用户数据目录，与命令行实例隔离。
+
+```bash
+pnpm build
+pnpm --filter @agent-dock/desktop dev        # 直接使用仓库构建
+AGENTDOCK_DESKTOP_NODE_BIN=$(which node) pnpm --filter @agent-dock/desktop pack:dir
+```
+
+安装包由 `.github/workflows/desktop.yml` 在 macOS（arm64/x64）、Windows x64、Linux x64 原生 runner 上构建；推送 `desktop-v*` 标签会创建 GitHub Release。代码签名和 macOS 公证通过仓库 Secrets 开启；未配置证书时 macOS 自动回退为 ad-hoc 签名（可正常启动，但首次打开需在「系统设置 → 隐私与安全性」里放行），不会产出结构损坏的包。详见 [`apps/desktop/README.md`](apps/desktop/README.md)。
+
 默认绑定 `0.0.0.0`，同一局域网的设备可以通过本机 LAN IP 访问。这不等于暴露到公网，但边界仍然由你的防火墙和网络策略决定。只允许本机访问用 `--local-only`（或 `AGENTDOCK_LOCAL_ONLY=true`），指定网卡用 `--host`。
 
 > **服务没有 API Key、多用户账号或租户隔离。** 控制台只有一层「所有者」访问防护（见下）；对外暴露必须经反向代理补上 HTTPS、身份认证、来源限制和访问日志。
@@ -108,6 +122,10 @@ Agent 输出的 Markdown 随流式内容持续渲染。围栏代码块使用同�
 侧边栏优先显示机器人 Tab，其后是「本地」和「全部」。飞书会话标记所属 App ID，不同机器人的消息不会混进同一个 Tab。
 
 会话可以永久归档：先停掉对应 Agent 进程，再置为只读。归档会话默认隐藏，可从左下角「归档会话」打开。**没有恢复入口，这是有意的。**
+
+## SSH 远端 Agent（暂时下线）
+
+SSH 远端导入入口暂时从界面撤下，后端运行时先保留，后续会以「直接新建 / 导入远端会话」的完整形态重新开放。当前导入面板只列出本机会话。
 
 ## 飞书接入
 
@@ -542,6 +560,26 @@ AgentDock 固定 ACP 协议适配器 `codex-acp@1.10.0`，直接加载以避免�
 SQLite 原生依赖固定为 `better-sqlite3 13.0.3`（N-API）。不要回退到 `12.11.1`：使用 Node 24.20.0 头文件编译的旧版，在跨 V8 上下文的垃圾回收中可能触发 `RemoveEnvironmentCleanupHook: (env) != nullptr`，直接终止整个服务。此类原生崩溃无法通过 JavaScript 异常捕获恢复。排查时同时确认 Node、AgentDock 和实际安装的 SQLite 依赖版本；复现方式见 `docs/2026-10-19-sqlite-glibc-compat-triage.md`。
 
 需求与验证证据的对应关系见[验收计划](docs/acceptance-plan.md)。测试覆盖真实内嵌 acpx 运行时与 Mock ACP 服务、工具调用关联、实时权限、生命周期语义、异常退出、JSONL/PTY 降级、无损原始输出、SSE 回放、仓储恢复、安全默认值和自定义 Agent。
+
+## 消息源与 Router
+
+AgentDock 可以把外部消息可靠地接入为 Source Event，并按 `correlationKey` 聚合到持续跟踪的 Case；Router 判断后委派 Worker Session，结果可通过 Action 回写外部系统。P0 支持通用 HMAC webhook 与 GitHub Issues webhook，前端入口是 `/sources-router.html`。完整设计与任务清单见[消息源与 Router 计划](docs/2026-11-07-agentdock-sources-router-plan.md)，本轮实现说明见[模块文档](docs/2026-11-07-agentdock-sources-router-module.md)。
+
+快速开始：
+
+```bash
+# 配置 AGENTDOCK_ROUTER_AGENT_ID、GITHUB_WEBHOOK_SECRET、GITHUB_TOKEN
+pnpm build
+node apps/server/dist/cli.js dev up
+node apps/server/dist/cli.js dev run -- source add "GitHub Issues" --secret-ref GITHUB_WEBHOOK_SECRET --json
+node apps/server/dist/cli.js dev run -- source list --json
+# 打开 http://127.0.0.1:4399/sources-router.html
+node apps/server/dist/cli.js dev down
+```
+
+通用协议使用 `POST /api/sources/:id/events` 与 `agentdock.source.v1` Envelope，头部为 `X-AgentDock-Signature: sha256=...` 和 `X-AgentDock-Timestamp`；GitHub webhook 使用 `POST /api/sources/:id/github/webhook` 与 `X-Hub-Signature-256`。签名覆盖原始 body，事件先落库再返回 `202`，同一 `dedupeKey` 重放返回 `200 duplicate:true`。开启 Web 访问门时这两个外部入口按路径精确豁免，其余管理 API 仍需凭证。secret 不出现在 API 响应和日志中，事件列表只返回摘要；外部内容在 Router/Worker prompt 中按不可信数据处理。
+
+CLI 支持 `agent-dock source|case|router --help`，所有子命令提供 `--json`。`source test` 和 `router dry-run` 不创建 Case、Session 或 Action。Web 提供“全部暂停”开关；`AGENTDOCK_ROUTER_PAUSED=true` 时事件仍落库但不派发 Worker/Action。P1 才支持托管 Source Worker、多语言 SDK 和飞书 Source；P0 不改变现有飞书 @ 唤醒行为。
 
 ## 许可证
 

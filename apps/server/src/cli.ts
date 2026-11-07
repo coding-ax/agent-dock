@@ -24,6 +24,10 @@ import { devDown, devEnv, devRun, devUp } from './dev-sandbox.js';
 import { runPasswordClear, runPasswordSet, runPasswordStatus } from './password-cli.js';
 import { webPasswordEnabled } from './web-password.js';
 import { runScheduleAdd, runScheduleList, runSchedulePause, runScheduleRemove, runScheduleResume, runScheduleRun, runScheduleShow } from './schedule-cli.js';
+import {
+  runCaseClose, runCaseEvents, runCaseList, runCaseShow, runRouterDryRun, runRouterOpen, runRouterStatus,
+  runSourceAdd, runSourceEnable, runSourceList, runSourceLogs, runSourceShow, runSourceTest, runSourceUpdate
+} from './sources-router/cli.js';
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string };
 const interactiveOutput = () => Boolean(process.stdout.isTTY && process.env.NO_COLOR === undefined && process.env.TERM !== 'dumb');
@@ -185,7 +189,22 @@ async function main() {
     schedulePause: async (id, options) => { process.stdout.write(await runSchedulePause(id, options)); },
     scheduleResume: async (id, options) => { process.stdout.write(await runScheduleResume(id, options)); },
     scheduleRun: async (id, options) => { process.stdout.write(await runScheduleRun(id, options)); },
-    scheduleRemove: async (id, options) => { process.stdout.write(await runScheduleRemove(id, options)); }
+    scheduleRemove: async (id, options) => { process.stdout.write(await runScheduleRemove(id, options)); },
+    sourceAdd: (name, options) => { process.stdout.write(runSourceAdd(name, options)); },
+    sourceList: options => { process.stdout.write(runSourceList(options)); },
+    sourceShow: (id, options) => { process.stdout.write(runSourceShow(id, options)); },
+    sourceEnable: (id, options) => { process.stdout.write(runSourceEnable(id, true, options)); },
+    sourceDisable: (id, options) => { process.stdout.write(runSourceEnable(id, false, options)); },
+    sourceLogs: (id, options) => { process.stdout.write(runSourceLogs(id, options)); },
+    sourceTest: (id, fixture, options) => { process.stdout.write(runSourceTest(id, fixture, options)); },
+    sourceUpdate: (id, options) => { process.stdout.write(runSourceUpdate(id, options)); },
+    caseList: options => { process.stdout.write(runCaseList(options)); },
+    caseShow: (id, options) => { process.stdout.write(runCaseShow(id, options)); },
+    caseEvents: (id, options) => { process.stdout.write(runCaseEvents(id, options)); },
+    caseClose: (id, options) => { process.stdout.write(runCaseClose(id, options)); },
+    routerStatus: options => { process.stdout.write(runRouterStatus(options)); },
+    routerOpen: options => { process.stdout.write(runRouterOpen(options)); },
+    routerDryRun: (fixture, options) => { process.stdout.write(runRouterDryRun(fixture, options)); }
   });
   await program.parseAsync();
 }

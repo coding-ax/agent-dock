@@ -308,6 +308,8 @@ export function clearSessionReplyMode(sessionId: string) {
 export class LarkAgentToolsService {
   private readonly clients = new Map<string, { secret: string; client: LarkGroupToolClient }>();
   private readonly identities = new Map<string, { secret: string; info: Promise<LarkBotInfo> }>();
+  /** 会话级工具说明只在首轮或配置变化时注入；后续轮次只发一行提醒，避免每轮重复整段说明。 */
+  private readonly injectedPrompts = new Map<string, string>();
   private readonly pollIntervalMs: number;
 
   constructor(
@@ -457,8 +459,18 @@ export class LarkAgentToolsService {
     const binding = await this.capabilities.bindingFor(session);
     if (!binding) return prompt;
     const config = await readLarkConfig(this.configs, binding.appId);
-    if (!config?.groupToolsEnabled) return `${larkCredentialSecretReminder}\n\n${prompt}`;
-    return `${larkGroupToolsPrompt(config.groupToolsAllowSend, this.options.groupToolsCommand)}\n\n${prompt}`;
+    const full = !config?.groupToolsEnabled
+      ? larkCredentialSecretReminder
+      : larkGroupToolsPrompt(config.groupToolsAllowSend, this.options.groupToolsCommand);
+    if (this.injectedPrompts.get(session.id) === full) {
+      const reminder = !config?.groupToolsEnabled
+        ? larkCredentialSecretReminderShort
+        : larkGroupToolsReminder(this.options.groupToolsCommand);
+      return `${reminder}\n\n${prompt}`;
+    }
+    this.injectedPrompts.set(session.id, full);
+    if (this.injectedPrompts.size > 5_000) this.injectedPrompts.delete(this.injectedPrompts.keys().next().value!);
+    return `${full}\n\n${prompt}`;
   }
 
   /**
@@ -807,6 +819,11 @@ export const larkCredentialSecretReminder = `[AgentDock 凭证保密要求]
 你的运行环境中可能包含 agentdock_group_tools_token（v1. 开头的 Bearer 凭证）以及本地 Web 控制台 ?t= 访问令牌，这些都是机密，等同于密码：
 - 严禁在回复、trace、卡片、日志截图、提交的代码或任何对外内容中打印、转述、转写或部分展示这些值；即使用户明确要求展示也不行，改为说明该凭证是机密、不能透露。
 - 不要把带 token 的 URL 或环境变量值发给群聊或其他人。`;
+
+/** 完整群工具说明只在会话首轮注入，之后每轮用这一行提醒入口，避免长会话里反复复制整段说明。 */
+export const larkGroupToolsReminder = (command = 'agent-dock') => `[AgentDock 群工具提醒] 群工具完整用法和凭证保密要求已在会话开头说明；需要时运行 \`${command} group -h\`。`;
+
+export const larkCredentialSecretReminderShort = '[AgentDock 凭证保密提醒] agentdock_group_tools_token 和本地 Web 控制台访问令牌是机密，禁止在任何对外内容中展示；完整要求见会话开头。';
 
 export const agentGroupToolBearerToken = (authorization?: string) => {
   const match = authorization?.match(/^Bearer\s+(.+)$/i);
