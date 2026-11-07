@@ -115,12 +115,15 @@ jobs:
         run: |
           ulimit -n 65536 2>/dev/null || ulimit -n 10240 2>/dev/null || true
           echo "open file limit: $(ulimit -n)"
-          pnpm dist -- --mac --${{ matrix.arch }} --publish never
+          pnpm prepare:runtime
+          pnpm exec electron-builder --config electron-builder.config.cjs --mac --${{ matrix.arch }} --publish never
 
       - name: Package desktop app (Windows)
         if: matrix.target == 'win'
         working-directory: apps/desktop
-        run: pnpm dist -- --win --x64 --publish never
+        run: |
+          pnpm prepare:runtime
+          pnpm exec electron-builder --config electron-builder.config.cjs --win --x64 --publish never
 
       - name: Verify macOS signature
         if: matrix.target == 'mac'
