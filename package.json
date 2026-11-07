@@ -23,7 +23,7 @@
     "dev:web": "pnpm --filter @agent-dock/agent-dock-web dev",
     "server": "pnpm build && pnpm --filter @agent-dock/cli start",
     "lark:echo": "node scripts/lark-card-echo-bot.mjs",
-    "build:packages": "pnpm -r --filter './packages/**' build",
+    "build:packages": "pnpm -r --filter \"./packages/**\" build",
     "build": "pnpm build:packages && pnpm --filter @agent-dock/agent-dock-web build && pnpm --filter @agent-dock/cli build",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
