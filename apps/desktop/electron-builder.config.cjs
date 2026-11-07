@@ -7,6 +7,16 @@ const { execFileSync } = require('node:child_process');
 // file to update.
 const { version: appVersion } = require('../server/package.json');
 
+// CI passes optional signing secrets through environment variables; an
+// unconfigured GitHub secret arrives as an empty string rather than being
+// unset. electron-builder treats a present-but-empty CSC_LINK as a certificate
+// path, resolves it to the project directory and aborts with
+// "…/apps/desktop not a file". Remove the empty values before it reads them so
+// a run without signing secrets falls back to ad-hoc signing on macOS.
+for (const key of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'CSC_NAME']) {
+  if (process.env[key] === '') delete process.env[key];
+}
+
 /**
  * Real macOS signing needs a "Developer ID Application" certificate, either
  * imported through CSC_LINK (CI) or already present in the login keychain.

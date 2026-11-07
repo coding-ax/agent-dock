@@ -23,7 +23,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          # macOS 14 images are retired, and macos-latest has moved to macOS 26
+          # arm64; pin the images this repo is tested against.
+          # windows-latest points at Windows Server 2025 with Visual Studio
+          # 2026, whose VS 18 install node-gyp cannot detect yet, so
+          # better-sqlite3 fails to build; windows-2022 still has VS 2022.
+          - os: macos-15
             artifact: mac-arm64
             target: mac
             arch: arm64
@@ -31,7 +36,7 @@ jobs:
             artifact: mac-x64
             target: mac
             arch: x64
-          - os: windows-latest
+          - os: windows-2022
             artifact: win-x64
             target: win
             arch: x64
