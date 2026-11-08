@@ -168,7 +168,7 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
 }
 /* 会话顶栏固定 52px，viewport-fit=cover 下把状态栏高度加在高度和 padding 上，
    内容区保持 52px，不被刘海或灵动岛挡住。 */
-.ui-topbar {
+.ui-session-topbar {
   height: calc(52px + env(safe-area-inset-top));
   padding-top: env(safe-area-inset-top);
 }
@@ -320,14 +320,10 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
 
 /* ---------- Loading 家族（见 Loaders.tsx） ---------- */
 @keyframes ui-skeleton { from { background-position: 150% 0; } to { background-position: -150% 0; } }
-@keyframes ui-topbar { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
-.ui-topbar { background: rgb(var(--zinc-900)); }
 .ui-skeleton { background-image: linear-gradient(100deg, transparent 30%, rgb(var(--zinc-50) / .9) 50%, transparent 70%); background-size: 250% 100%; }
 @media (prefers-reduced-motion: no-preference) {
-  .ui-topbar { animation: ui-topbar 1.2s cubic-bezier(.4, 0, .2, 1) infinite; }
   .ui-skeleton { animation: ui-skeleton 1.6s linear infinite; }
 }
-@media (prefers-reduced-motion: reduce) { .ui-topbar { width: 100%; } }
 
 /* ---------- 首页标题 ---------- */
 .ui-hero-title { color: rgb(var(--zinc-900)); }

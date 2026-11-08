@@ -242,7 +242,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
 
   const act = async (action: string) => { try { setActionError(undefined); await api.action(session.id, action); } catch (error) { setActionError(error instanceof Error ? error.message : String(error)); } };
 
-  // ⋯ 菜单：会话 / 协作 / 危险操作三组。原标题栏上的每个按钮都能在这里找到。
+  // ⋯ 菜单：会话 / 协作 / 危险操作三组。原标题栏上的每个按钮都能在这里找到，
+  // 常用入口另外在标题栏常驻，避免 0.1.x 的老用户找不到它们。
   const menuGroups: SessionMenuGroup[] = [
     { items: [
       ...(!session.archivedAt ? [{
@@ -267,7 +268,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 表现为右栏内容只占左上角一块。
   return <div className={`flex h-full min-w-0 w-full ${secondary ? 'border-l border-zinc-200' : ''}`}>
     <section className="flex min-w-0 flex-1 flex-col">
-      <header className="ui-topbar flex shrink-0 items-center gap-1 border-b border-zinc-200 bg-canvas px-3 sm:px-4">
+      <header className="ui-session-topbar flex shrink-0 items-center gap-1 border-b border-zinc-200 bg-canvas px-3 sm:px-4">
         <span className="mr-1 md:hidden"><IconButton label="打开会话列表" onClick={onOpenSidebar}><Menu size={16}/></IconButton></span>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] font-semibold text-zinc-900">{sessionLabel(session, agent?.name)}</div>
@@ -283,6 +284,12 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           {!session.archivedAt && busyStates.has(session.state) && <button type="button" onClick={() => void act('interrupt')} className="mr-1 flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[12px] font-medium text-white transition-colors hover:bg-zinc-700"><Square size={10} fill="currentColor"/>停止</button>}
+          {!session.archivedAt && <IconButton label={activeSchedules ? `定时任务（${activeSchedules} 个启用中）` : '定时任务'} active={activeSchedules > 0} onClick={() => openAppDialog('schedule', { sessionId: session.id })}><AlarmClock size={15}/></IconButton>}
+          {session.systemPrompt && <IconButton label="查看系统提示词" onClick={() => openAppDialog('system-prompt', { sessionId: session.id })}><BookOpen size={15}/></IconButton>}
+          {handoverInfo
+            ? <IconButton label={`已托管：${handoverInfo.name}（打开托管群）`} onClick={() => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer')}><Bot size={15} className="text-emerald-600"/></IconButton>
+            : !session.archivedAt && session.source !== 'lark' && <IconButton label="托管给飞书机器人" onClick={() => openAppDialog('handover', { sessionId: session.id })}><Bot size={15}/></IconButton>}
+          {!handoverInfo && larkLink && <IconButton label={larkLink.exact ? '在飞书中打开该会话' : '在飞书中打开该话题（若未定位请在群内查找）'} onClick={() => window.open(larkLink.url, '_blank', 'noopener,noreferrer')}><ExternalLink size={15}/></IconButton>}
           {!secondary && onTogglePane && <PaneToggleButton open={Boolean(paneOpen)} onToggle={onTogglePane}/>}
           <SessionMenu groups={menuGroups.filter(group => group.items.length)}/>
         </div>

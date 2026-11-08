@@ -2,7 +2,6 @@ import { DialogHost } from './DialogHost';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { closeAppDialog, openAppDialog } from './dialog-store';
 import { SettingsMenu } from './SettingsMenu';
-import { TopProgressBar } from './Loaders';
 import { LarkRegistrationDialog } from './LarkRegistrationDialog';
 import { SuggestedValueInput } from './SuggestedValueInput';
 import { WebBaseUrlInput } from './WebBaseUrlInput';
@@ -669,7 +668,7 @@ export default function App() {
     return <SessionRow key={session.id} session={session} drag={drag} agent={agents.data?.find(item => item.id === session.agentId)} botName={larkConfig.data?.bots.find(bot => session.sourceId?.startsWith(`${bot.appId}:`))?.name} parentLabel={parent ? sessionLabel(parent, agents.data?.find(item => item.id === parent.agentId)?.name) : undefined} active={primarySessionId === session.id || tabs.some(tab => (tab.kind === 'session' || tab.kind === 'side-chat') && tab.sessionId === session.id)} onClick={() => selectSession(session.id)}/>;
   };
   // TooltipProvider 必须挂在根部：Radix 用它统一管理「同一时刻只显示一个提示」与交错延迟。
-  return <TooltipProvider><TopProgressBar/><div ref={shellRef} className="ui-shell relative flex h-full overflow-hidden bg-canvas font-sans text-zinc-900">
+  return <TooltipProvider><div ref={shellRef} className="ui-shell relative flex h-full overflow-hidden bg-canvas font-sans text-zinc-900">
     {sidebarOpen && <button type="button" aria-label="关闭会话列表" onClick={() => setSidebarOpen(false)} className="ui-overlay fixed inset-0 z-40 bg-zinc-950/20 md:hidden"/>}
     <aside style={{ ['--sb-w' as string]: `${clampedSidebarWidth}px` }} className={`ui-sidebar-safe fixed inset-y-0 left-0 z-50 flex shrink-0 flex-col overflow-hidden border-r border-zinc-200 bg-rail shadow-[12px_0_36px_rgba(24,24,27,.08)] transition-transform duration-300 ease-[cubic-bezier(.16,1,.3,1)] w-[286px] md:static md:z-20 md:translate-x-0 md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} ${sidebarCollapsed ? 'md:w-11' : 'md:w-[var(--sb-w)]'}`}>
       {!sidebarCollapsed && <div onPointerDown={event => { event.preventDefault(); resizeStart.current = { x: event.clientX, width: clampedSidebarWidth }; setResizingSidebar(true); }} title="拖拽调整宽度，拖到最窄可收起" className="absolute inset-y-0 right-0 z-20 hidden w-1.5 cursor-col-resize touch-none bg-transparent hover:bg-blue-400/30 md:block"/>}

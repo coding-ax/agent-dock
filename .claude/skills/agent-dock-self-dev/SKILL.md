@@ -35,10 +35,10 @@ description: 在 AgentDock 托管的会话里修改 agent-dock 自身源码并�
    - 沙箱有独立的 HOME、数据库、端口，飞书监听关闭，Web 免鉴权；Claude 的登录态照常可用，可以真正跑 Agent。
    - 沙箱里调 HTTP 直接 `curl http://127.0.0.1:4399/api/...`，不需要凭证。
 3. **界面验证**（改了前端时做）
-   在沙箱地址上用本机 Chrome 的 headless 模式加 DevTools 协议操作页面并截图：
-   `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --remote-debugging-port=<端口> --user-data-dir=<临时目录>`。
-   用仓库里的 `apps/server/node_modules/ws` 连 `http://127.0.0.1:<端口>/json` 给出的 page websocket，
-   通过 `Runtime.evaluate` 点击和填值，`Page.captureScreenshot` 截图后用 Read 查看。用完删除临时 profile。
+   先运行 `ego-browser skill`，再用 ego-browser（ego lite）打开 `http://127.0.0.1:4399/`，完成点击、填值和截图验收。
+   不得回退到 Playwright MCP、Codex Chrome 插件、内嵌 Browser，也不得启动 headless Chrome、临时 CDP profile 或临时 Playwright/Puppeteer 脚本；ego-browser 不可用时停止并说明缺项。
+   一个用户目标只创建一个 TaskSpace，记下并复用 `spaceId`；成功收尾时调用一次 `task.finish({ keep: [] })`。
+   验收结束后执行 `node apps/server/dist/cli.js dev down`，并清理测试期间产生的其他后台进程。
 
 ## 交付给用户
 
