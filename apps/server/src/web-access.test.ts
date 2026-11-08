@@ -112,6 +112,14 @@ describe('local owner detection', () => {
     expect(isLocalOwnerRequest({ address: '192.168.1.9', host: '192.168.1.9:4310' })).toBe(false);
   });
 
+  it('refuses the loopback free pass to anything forwarded by a proxy or tunnel', () => {
+    const base = { address: '127.0.0.1', host: 'localhost:4310' };
+    // Cloudflare Tunnel 会把源地址变成 127.0.0.1；X-Forwarded-For 是「经过了反代」的确凿信号。
+    expect(isLocalOwnerRequest({ ...base, forwardedFor: '203.0.113.9' })).toBe(false);
+    expect(isLocalOwnerRequest({ ...base, forwardedFor: '  ' })).toBe(true);
+    expect(isLocalOwnerRequest(base)).toBe(true);
+  });
+
   it('splits the cookie name so a session link cannot demote the console credential', () => {
     expect(webAccessCookieNameFor('master')).toBe(webAccessCookieName);
     expect(webAccessCookieNameFor('session')).toBe(webAccessSessionCookieName);

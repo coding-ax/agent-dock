@@ -31,7 +31,7 @@ describe('SelfUpdateService', () => {
     const runNpm = vi.fn(async () => '"0.4.61-beta.20261015.1"');
     let clock = 0;
     const service = new SelfUpdateService({ currentVersion: '0.4.60-beta.20261014.1', packageName: '@agent-dock/cli', cliEntrypoint: '/x/cli.js', env: daemonEnv(dir), runNpm, now: () => clock });
-    expect(await service.status()).toMatchObject({ distTag: 'beta', latestVersion: '0.4.61-beta.20261015.1', updateAvailable: true, canUpdate: true, updating: false });
+    expect(await service.status()).toMatchObject({ distTag: 'beta', latestVersion: '0.4.61-beta.20261015.1', updateAvailable: true, canUpdate: true, updating: false, runtime: 'daemon' });
     clock = 10 * 60_000;
     await service.status();
     expect(runNpm).toHaveBeenCalledTimes(1);
@@ -81,11 +81,37 @@ describe('SelfUpdateService', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ad-update-'));
     const spawnUpdate = vi.fn();
     const foreground = new SelfUpdateService({ currentVersion: '0.4.23', packageName: 'p', cliEntrypoint: '/x', env: { HOME: dir }, runNpm: async () => '"0.4.24"', spawnUpdate });
-    expect((await foreground.status()).canUpdate).toBe(false);
+    expect(await foreground.status()).toMatchObject({ canUpdate: false, runtime: 'foreground' });
     await expect(foreground.start()).rejects.toMatchObject({ code: 'UPDATE_REQUIRES_DAEMON' });
     const current = new SelfUpdateService({ currentVersion: '0.4.24', packageName: 'p', cliEntrypoint: '/x', env: daemonEnv(dir), runNpm: async () => '"0.4.24"', spawnUpdate });
     await expect(current.start()).rejects.toMatchObject({ code: 'UPDATE_NOT_AVAILABLE' });
     expect(spawnUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not touch npm or offer the npm flow in the desktop shell', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-update-'));
+    const runNpm = vi.fn(async () => '"0.4.24"');
+    const spawnUpdate = vi.fn();
+    const service = new SelfUpdateService({ currentVersion: '0.4.23', packageName: 'p', cliEntrypoint: '/x', env: { HOME: dir, AGENTDOCK_DESKTOP_INSTANCE: 'instance' }, runNpm, spawnUpdate });
+    expect(await service.status()).toMatchObject({ runtime: 'desktop', updateAvailable: false, canUpdate: false, updating: false });
+    expect(runNpm).not.toHaveBeenCalled();
+    await expect(service.start()).rejects.toMatchObject({ code: 'UPDATE_DESKTOP_MANAGED' });
+    expect(spawnUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not spawn two updaters when two starts race the registry check', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ad-update-'));
+    const lockFile = join(dir, 'update.lock');
+    let release: (() => void) | undefined;
+    const runNpm = vi.fn(() => new Promise<string>(resolve => { release = () => resolve('"0.4.24"'); }));
+    const spawnUpdate = vi.fn(() => ({ pid: process.pid, onExit: () => {} }));
+    const service = new SelfUpdateService({ currentVersion: '0.4.23', packageName: 'p', cliEntrypoint: '/x', env: daemonEnv(dir), lockFile, runNpm, spawnUpdate });
+
+    const first = service.start();
+    await expect(service.start()).rejects.toMatchObject({ code: 'UPDATE_IN_PROGRESS' });
+    release!();
+    await first;
+    expect(spawnUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('takes over a stale lock left by a dead process', async () => {

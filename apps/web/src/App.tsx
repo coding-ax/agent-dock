@@ -8,7 +8,7 @@ import { WebBaseUrlInput } from './WebBaseUrlInput';
 import { KeyboardEvent, lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { useMount, useEventListener, useUpdateEffect, useLocalStorageState, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlarmClock, AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, GripVertical, Info, LoaderCircle, Menu, MessageSquare, PanelLeftOpen, Plus, RefreshCw, Search, RotateCcw, Settings2, Trash2, Workflow, Wrench, X } from 'lucide-react';
+import { AlarmClock, AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, GripVertical, Info, LoaderCircle, Menu, MessageSquare, PanelLeftOpen, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, Trash2, Wrench, X } from 'lucide-react';
 import { Input, InputNumber, Select, Switch } from 'antd';
 import { defaultLarkTraceLimit, validateHighRiskPattern } from '@agent-dock/agent-dock-shared';
 import { api, WebAccessDeniedError, type Agent, type Session } from './api';
@@ -43,6 +43,7 @@ import { AgentConfigDialog } from './AgentConfigDialog';
 import { HandoverDialog } from './HandoverDialog';
 import { ImportSessionDialog } from './ImportSessionDialog';
 import { SystemPromptDialog } from './SystemPromptDialog';
+import { ShareAppDialog } from './ShareAppDialog';
 import { AutostartToggle } from './AutostartToggle';
 import { SelfUpdateNotice } from './SelfUpdateNotice';
 import { SessionPane } from './SessionPane';
@@ -744,7 +745,7 @@ export default function App() {
             : <div className="px-3 py-6 text-xs leading-5 text-zinc-500">当前分类暂无会话。</div>}
       </div>
       {/* 两个入口都开弹窗：归档列表早先挂在会话树最底部，点了要滚到底才看得见，看起来像点不开。 */}
-      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }}/>
+      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
       </div>
       {/* 收起态细条（仅桌面）：展开 + 快捷新建 + 两个设置入口 */}
       <div className={`hidden h-full w-full flex-col items-center gap-1 py-3 ${sidebarCollapsed ? 'md:flex' : ''}`}>
@@ -756,7 +757,7 @@ export default function App() {
           <HoverTooltip content="定时任务"><button type="button" onClick={() => openAppDialog('schedule')} aria-label="定时任务" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><AlarmClock size={15}/></button></HoverTooltip><HoverTooltip content="归档会话"><button type="button" onClick={() => openAppDialog('archived')} aria-label="归档会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Archive size={15}/></button></HoverTooltip>
           <HoverTooltip content="导入外部会话"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('import'); }} aria-label="导入外部会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><FolderOpen size={15}/></button></HoverTooltip><HoverTooltip content="Agent 设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('agent'); }} aria-label="Agent 设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Bot size={15}/></button></HoverTooltip>
           <HoverTooltip content="飞书设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('lark'); }} aria-label="飞书设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Settings2 size={15}/></button></HoverTooltip>
-          <HoverTooltip content="消息源与 Router"><a href="/sources-router.html" aria-label="消息源与 Router" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Workflow size={15}/></a></HoverTooltip>
+          <HoverTooltip content="在手机上打开"><button type="button" onClick={() => openAppDialog('share')} aria-label="在手机上打开" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Smartphone size={15}/></button></HoverTooltip>
         </span>
       </div>
     </aside>
@@ -796,6 +797,7 @@ export default function App() {
         const session = sessionId ? sortedSessions.find(item => item.id === sessionId) : undefined;
         return session?.systemPrompt ? <SystemPromptDialog session={session} onClose={closeAppDialog}/> : null;
       },
+      share: <ShareAppDialog onClose={closeAppDialog}/>,
       archived: <ArchivedSessionsDialog sessions={archivedSessions} agents={agents.data ?? []} onClose={closeAppDialog} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
       import: <ImportSessionDialog agents={agents.data ?? []} onClose={closeAppDialog} onImported={session => selectSession(session.id)}/>,
       search: <SessionSearchDialog agents={agents.data ?? []} sessions={sessions.data ?? []} onClose={closeAppDialog} onOpen={session => { closeAppDialog(); selectSession(session.id); }}/>

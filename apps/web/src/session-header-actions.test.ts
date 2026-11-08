@@ -23,4 +23,16 @@ describe('会话标题栏常用操作', () => {
   it('仍保留完整的 ⋯ 菜单', () => {
     expect(source).toContain('<SessionMenu groups={menuGroups.filter(group => group.items.length)}/>');
   });
+
+  it('把手机扫码入口固定在侧栏底部，而不是会话标题栏', () => {
+    expect(source).not.toContain('在手机上打开');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const settings = readFileSync(join(here, 'SettingsMenu.tsx'), 'utf8');
+    expect(settings).toContain('aria-label="在手机上打开"');
+    expect(settings).toContain('<Smartphone');
+    expect(settings).toContain('onShare');
+    const app = readFileSync(join(here, 'App.tsx'), 'utf8');
+    expect(app).toContain("openAppDialog('share')");
+    expect(app).toContain('<Smartphone size={15}/>');
+  });
 });

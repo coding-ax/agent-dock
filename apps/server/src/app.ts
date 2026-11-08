@@ -16,6 +16,7 @@ import { getCodexUsage } from './codex-usage.js';
 import { getClaudeUsage } from './claude-usage.js';
 import { getCursorUsage } from './cursor-usage.js';
 import { registerSystemRoutes, type SystemRoutesOptions } from './system-routes.js';
+import { registerShareLinkRoutes, type ShareLinkService } from './share-link.js';
 import { registerSelfUpdateRoutes, type SelfUpdateService } from './self-update.js';
 import { registerScheduleRoutes } from './schedules/routes.js';
 import type { ScheduleService } from './schedules/service.js';
@@ -91,7 +92,9 @@ export interface BuildAppOptions {
   /** 模型端点（平台拿模型能力的唯一来源）；不传表示这套路由不挂。 */
   llm?: LlmRoutesOptions;
   /** 本地 Web 访问凭证防护；不传（或 enabled=false）时不挂防护中间件。 */
-  webAuth?: { enabled?: boolean; secret?: string; /** 访问密码哈希文件；默认 ~/.agentdock/web-password，文件不存在即未启用密码。 */ passwordFile?: string };
+  webAuth?: { enabled?: boolean; secret?: string; /** 访问密码哈希文件；默认 ~/.agentdock/web-password，文件不存在即未启用密码。 */ passwordFile?: string; /** 会话分享令牌寿命；与启动时的 AGENTDOCK_WEB_TOKEN_TTL_DAYS 对齐。 */ sessionTokenTtlMs?: number };
+  /** 扫码链接；不传表示这套路由不挂。 */
+  shareLinks?: ShareLinkService;
   /** 界面上的检查更新 / 一键升级；不传表示不挂。 */
   selfUpdate?: SelfUpdateService;
   /** 定时任务；不传表示这套路由不挂。 */
@@ -206,9 +209,12 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       // 即便 token 本身 30 天（session）/365 天（master）有效也白搭。过期时间
       // 与 token 的 exp 对齐，不引入第二套寿命。master/session 各写各的 cookie 名，
       // 打开一张卡片链接不会把控制台的全权凭证覆盖掉。
+      // 反代（Cloudflare Tunnel 等）转发来的 https 请求要带 Secure：同一个 cookie
+      // 在公网必须是加密信道专用，局域网 http 又不能带，否则手机根本收不到。
+      const forwardedHttps = request.headers['x-forwarded-proto'] === 'https';
       const setCredentialCookie = (token: string, value: VerifiedWebToken) => {
         const maxAge = Math.max(0, Math.floor((value.expiresAt - Date.now()) / 1000));
-        reply.header('set-cookie', `${webAccessCookieNameFor(value.kind)}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`);
+        reply.header('set-cookie', `${webAccessCookieNameFor(value.kind)}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${forwardedHttps ? '; Secure' : ''}`);
       };
       let claim: VerifiedWebToken | null = null;
       // 显式点开的带凭证链接优先级最高：用户点链接的意图就是「用这个凭证」，其作用域
@@ -243,7 +249,9 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       // 打开、或那个链接已过期，就永远 401，观感正是「cookie 有效期非常短」。
       // 显式携带且验签通过的链接不在此列（见 explicitCredential），作用域按链接自己算；
       // 局域网来源的源地址不是回环，转发出去的卡片链接照旧收窄到本会话。
-      if (!explicitCredential && claim?.kind !== 'master' && isLocalOwnerRequest({ address: request.ip, host: request.headers.host, fetchSite: request.headers['sec-fetch-site'] as string | undefined })) {
+      // 带 X-Forwarded-For 的请求一定经过反代/隧道，绝不能吃本机直连的补发。
+      const forwardedFor = request.headers['x-forwarded-for'];
+      if (!explicitCredential && claim?.kind !== 'master' && isLocalOwnerRequest({ address: request.ip, host: request.headers.host, fetchSite: request.headers['sec-fetch-site'] as string | undefined, forwardedFor: Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor })) {
         const token = issueMasterToken(secret);
         const localClaim = verifyWebToken(token, secret);
         if (localClaim) {
@@ -282,7 +290,8 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       const token = issueMasterToken(secret);
       const claim = verifyWebToken(token, secret)!;
       const maxAge = Math.max(0, Math.floor((claim.expiresAt - Date.now()) / 1000));
-      reply.header('set-cookie', `${webAccessCookieName}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}`);
+      const secure = request.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+      reply.header('set-cookie', `${webAccessCookieName}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`);
       return { ok: true };
     });
   }
@@ -321,6 +330,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     return value;
   });
   await registerSystemRoutes(app, options.system);
+  if (options.shareLinks) registerShareLinkRoutes(app, options.shareLinks, runtime);
   if (options.selfUpdate) registerSelfUpdateRoutes(app, options.selfUpdate);
   if (options.schedules) registerScheduleRoutes(app, options.schedules);
   if (options.sourcesRouter) registerSourceRouterRoutes(app, options.sourcesRouter);

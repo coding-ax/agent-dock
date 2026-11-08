@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 /** App 级弹窗。开关状态放在模块里，而不是 App 的 useState： */
-export type AppDialogKind = 'lark' | 'agent' | 'schedule' | 'handover' | 'system-prompt' | 'archived' | 'import' | 'search';
+export type AppDialogKind = 'lark' | 'agent' | 'schedule' | 'handover' | 'system-prompt' | 'archived' | 'import' | 'search' | 'share';
 
 export interface AppDialogState {
   kind: AppDialogKind;

@@ -14,6 +14,7 @@ import { ScheduleService } from './schedules/service.js';
 import { createRuntimeRouterDriver } from './sources-router/driver.js';
 import { SourceRouterService } from './sources-router/service.js';
 import { defaultSessionTokenTtlMs, initWebAccess, issueMasterToken, loadOrCreateWebAccessSecret } from './web-access.js';
+import { ShareLinkService } from './share-link.js';
 
 export interface StartLocalServerOptions { env?: NodeJS.ProcessEnv; webRoot?: string; groupToolsCommand?: string; /** 当前 CLI 入口，给界面一键升级跑 `agent-dock update`；不传则不挂升级路由。 */ cliEntrypoint?: string }
 export interface LocalServer {
@@ -59,7 +60,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
   let schedules: ScheduleService | undefined;
   let sourcesRouter: SourceRouterService | undefined;
   let closed = false;
-  let webAuth: { enabled: boolean; secret?: string } = { enabled: false };
+  let webAuth: { enabled: boolean; secret?: string; sessionTokenTtlMs?: number } = { enabled: false };
   try {
     await runtime.initialize(config.agents);
     // 本地 Web 访问防护默认开启（AGENTDOCK_WEB_AUTH=off 可关）：secret 持久化，重启不换。
@@ -69,7 +70,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       const ttlDays = Number(env.AGENTDOCK_WEB_TOKEN_TTL_DAYS);
       const sessionTokenTtlMs = Number.isFinite(ttlDays) && ttlDays > 0 ? ttlDays * 24 * 60 * 60_000 : defaultSessionTokenTtlMs;
       initWebAccess(secret, sessionTokenTtlMs);
-      webAuth = { enabled: true, secret };
+      webAuth = { enabled: true, secret, sessionTokenTtlMs };
     }
     const webRoot = options.webRoot ?? fileURLToPath(new URL('../public', import.meta.url));
     const llm = new LlmEndpointService({ config: repos.config });
@@ -84,7 +85,10 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       : undefined;
     sourcesRouter = new SourceRouterService({ databaseUrl: config.databaseUrl, runtime, env, routerDriver, startRouterPoll: false });
     const autostart = options.cliEntrypoint ? new AutostartService({ entrypoint: options.cliEntrypoint, env }) : undefined;
-    app = await buildApp(runtime, { webRoot, webAuth, schedules, sourcesRouter, ...(selfUpdate ? { selfUpdate } : {}), ...(autostart ? { system: { autostart } } : {}), llm: { service: llm }, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' } });
+    // 分享链接接口始终挂载：访问防护关闭时 build() 会返回可操作的 409，
+    // 界面据此提示用户开启局域网访问，而不是显示一个 404「接口不存在」。
+    const shareLinks = new ShareLinkService({ host: config.host, port: config.port, secret: webAuth.secret ?? '', config: repos.config, env });
+    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, sourcesRouter, ...(selfUpdate ? { selfUpdate } : {}), ...(autostart ? { system: { autostart } } : {}), llm: { service: llm }, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' } });
     await app.listen(listenOptions(config));
     // 听到端口后再开始扫描：启动失败时不会先投递出去一半。
     schedules.start();

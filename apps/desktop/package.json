@@ -6,15 +6,26 @@
   "main": "src/main.cjs",
   "author": "AgentDock",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coding-ax/agent-dock.git",
+    "directory": "apps/desktop"
+  },
   "scripts": {
     "dev": "electron .",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "signing:generate": "node scripts/generate-signing-cert.mjs",
+    "smoke:update": "node scripts/mock-update-smoke.mjs",
+    "smoke:lan": "node scripts/mock-lan-smoke.mjs",
     "pack:dir": "pnpm prepare:runtime && electron-builder --config electron-builder.config.cjs --dir",
     "dist": "pnpm prepare:runtime && electron-builder --config electron-builder.config.cjs",
-    "typecheck": "node --check src/main.cjs && node --check scripts/prepare-runtime.mjs"
+    "typecheck": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/updater.cjs && node --check scripts/prepare-runtime.mjs && node --check scripts/generate-signing-cert.mjs && node --check scripts/mock-update-smoke.mjs && node --check scripts/mock-lan-smoke.mjs"
   },
   "devDependencies": {
     "electron": "45.2.3",
     "electron-builder": "26.18.0"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11"
   }
 }

@@ -4,8 +4,9 @@ import { existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setWebPassword } from './web-password.js';
-import { webAccessCookieName } from './web-access.js';
+import { verifyWebToken, webAccessCookieName } from './web-access.js';
 import { buildApp, RECORD_EVENT_LIMIT, TURN_EVENT_BYTE_LIMIT, TURN_EVENT_ROW_LIMIT } from './app.js';
+import { ShareLinkService } from './share-link.js';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
 import { larkBotsConfigKey, larkCredentialsConfigKey } from './lark/config.js';
 
@@ -826,6 +827,44 @@ describe('web access gate', () => {
     expect(foreignSchedules.statusCode).toBe(403);
     const updateTrigger = await app.inject({ method: 'POST', url: `/api/system/update?t=${token}` });
     expect(updateTrigger.statusCode).toBe(403);
+  });
+
+  it('issues app-level QR links only to the master credential', async () => {
+    const shareConfig = new Map<string, string>();
+    const shareLinks = new ShareLinkService({
+      host: '0.0.0.0', port: 4310, secret,
+      interfaces: { en0: [{ address: '192.168.1.20', family: 'IPv4', internal: false, netmask: '', mac: '', cidr: null }] } as any,
+      hostname: 'MacBook-Pro.local',
+      config: { get: async (key: string) => shareConfig.get(key), set: async (key: string, value: string) => { shareConfig.set(key, value); } } as any
+    });
+    const app = await buildApp({ getSession: vi.fn(async (id: string) => id === 'ses_share' ? { id } : undefined) } as any, { webAuth: { enabled: true, secret }, shareLinks });
+    apps.push(app);
+
+    // 本机直连按 master 处理：可以生成二维码链接。
+    const local = await app.inject({ method: 'GET', url: '/api/system/share-link?sessionId=ses_share' });
+    expect(local.statusCode).toBe(200);
+    const body = local.json();
+    expect(body.lanEnabled).toBe(true);
+    expect(body.urls.some((entry: any) => entry.kind === 'lan-v4')).toBe(true);
+    expect(body.urls.every((entry: any) => entry.url.includes('/sessions/ses_share?t='))).toBe(true);
+    // 二维码里放的是控制台级（master）令牌：扫码后可以操作整个应用，而不是只看这一个会话。
+    const qrToken = new URL(body.urls[0].url).searchParams.get('t')!;
+    expect(verifyWebToken(qrToken, secret)).toMatchObject({ kind: 'master' });
+
+    // 侧栏底部的应用级入口不传 sessionId，链接落到首页。
+    const root = await app.inject({ method: 'GET', url: '/api/system/share-link' });
+    expect(root.statusCode).toBe(200);
+    expect(root.json().urls.every((entry: any) => entry.url.includes('/?t='))).toBe(true);
+
+    // 扫码接口本身仍只接受 master 凭证；飞书卡片那种会话令牌不能升级成控制台凭证。
+    const { issueSessionToken } = await import('./web-access.js');
+    const sessionToken = issueSessionToken('ses_share', secret);
+    expect((await app.inject({ method: 'GET', url: `/api/system/share-link?sessionId=ses_share&t=${sessionToken}` })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'GET', url: '/api/system/share-link?sessionId=ses_share', ...remote })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'GET', url: '/api/system/share-link?sessionId=ses_nope' })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'PUT', url: `/api/system/share-settings?t=${sessionToken}`, payload: { publicUrl: 'https://dock.example.com' } })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'PUT', url: '/api/system/share-settings', payload: { publicUrl: 'http://dock.example.com' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PUT', url: '/api/system/share-settings', payload: { publicUrl: 'https://dock.example.com' } })).json()).toMatchObject({ publicUrl: 'https://dock.example.com' });
   });
 
   it('lets a master token through everywhere', async () => {

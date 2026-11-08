@@ -5,9 +5,8 @@ import { api, type Agent, type Session } from './api';
 import { Composer } from './Composer';
 import { PromptTemplates } from './PromptTemplates';
 import type { ComposerEditorHandle } from './ComposerEditor';
-import { buildPrompt, getModelReadiness, referenceFromUpload, uploadSessionFile, isHomeDirectory, workspaceLabel, type ComposerReference } from './composer-utils';
+import { buildPrompt, getModelReadiness, referenceFromUpload, uploadSessionFile, type ComposerReference } from './composer-utils';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
-import { sessionActivityTime } from './session-groups';
 
 /**
  * 空态草稿 Composer：还不存在 Session 时，把输入框、Agent、工作目录、模型、思考强度和
@@ -55,20 +54,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef }: {
     return list.slice(0, 30);
   }, [defaultWorkspace, sessions]);
 
-  // 最近用过的 3 个工作区（按最后一次对话时间），只做快捷选择，不触发任何请求。
   const homeDirectory = capabilities.data?.homeDirectory;
-  const recentWorkspaces = useMemo(() => {
-    const seen = new Set<string>();
-    const list: string[] = [];
-    for (const session of [...sessions].filter(item => !item.archivedAt).sort((left, right) => sessionActivityTime(right).localeCompare(sessionActivityTime(left)))) {
-      // 主目录不是「项目」，放进快捷入口只会挤掉真正的工作区；它仍可在下拉里选。
-      if (!session.cwd || seen.has(session.cwd) || isHomeDirectory(session.cwd, homeDirectory)) continue;
-      seen.add(session.cwd);
-      list.push(session.cwd);
-      if (list.length === 3) break;
-    }
-    return list;
-  }, [homeDirectory, sessions]);
 
   const models = useQuery({
     queryKey: agentModelsQueryKey(effectiveAgentId, model),
@@ -213,9 +199,6 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef }: {
     />
     </div>
     <PromptTemplates onUse={useTemplate}/>
-    {recentWorkspaces.length > 0 && <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
-      {recentWorkspaces.map(path => <button key={path} type="button" onClick={() => setCwd(path)} title={path} className="max-w-56 truncate rounded-full border border-zinc-200 bg-white px-3 py-1 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{workspaceLabel(path, homeDirectory)}</button>)}
-    </div>}
     {error && <p role="alert" className="mt-2 text-center text-[12px] text-red-600">{error}</p>}
     {references.length > 0 && <p className="mt-2 text-center text-[12px] text-zinc-400">{references.length} 个附件会在会话创建后上传</p>}
   </div>;

@@ -48,7 +48,8 @@ export function registerTerminalWebSockets(server: Server, runtime: AgentDockRun
         const presented = queryClaim
           ?? verifyWebToken(parseCookieHeader(request.headers.cookie, webAccessCookieName), secret)
           ?? verifyWebToken(parseCookieHeader(request.headers.cookie, webAccessSessionCookieName), secret);
-        const localOwner = isLocalOwnerRequest({ address: request.socket.remoteAddress, host: request.headers.host, fetchSite: request.headers['sec-fetch-site'] });
+        const forwardedFor = request.headers['x-forwarded-for'];
+        const localOwner = isLocalOwnerRequest({ address: request.socket.remoteAddress, host: request.headers.host, fetchSite: request.headers['sec-fetch-site'], forwardedFor: Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor });
         // 显式验签通过的链接按其自身作用域生效（会话链接只能进本会话终端），本机直连补发不覆盖。
         const claim = !queryClaim && localOwner && presented?.kind !== 'master' ? verifyWebToken(issueMasterToken(secret), secret) : presented;
         if (!claim) return reject(socket, 401, '{"error":{"code":"UNAUTHORIZED","message":"访问凭证缺失或已过期。"}}');

@@ -138,15 +138,38 @@ jobs:
             exit 1
           fi
           codesign --verify --deep --strict --verbose=2 "$app"
-          codesign -dv --verbose=4 "$app" 2>&1
+          info=$(codesign -dv --verbose=4 "$app" 2>&1)
+          echo "$info"
           if [ -n "$MAC_CERT_P12" ]; then
-            codesign -dv "$app" 2>&1 | grep -q 'Authority=Developer ID Application' \
-              || { echo "expected a Developer ID signature, got ad-hoc" >&2; exit 1; }
+            # The updater requires a stable signing identity across releases.
+            # A fixed self-signed certificate is enough for Squirrel.Mac (it
+            # matches the leaf certificate), so accept any certificate-backed
+            # signature here — only reject the per-build ad-hoc fallback.
+            if echo "$info" | grep -q 'Signature=adhoc'; then
+              echo "expected a certificate-backed signature, got ad-hoc; desktop auto-update requires a stable identity" >&2
+              exit 1
+            fi
+            echo "$info" | grep -q 'Authority=' \
+              || { echo "codesign reported no signing authority" >&2; exit 1; }
           fi
           if [ "$NOTARIZED" = "true" ]; then
             echo "--- Gatekeeper assessment (informational) ---"
             spctl --assess --type execute --verbose=4 "$app" || true
           fi
+
+      - name: Verify update metadata
+        shell: bash
+        run: |
+          # electron-updater needs latest-mac.yml / latest.yml next to the
+          # installers. They are generated because the builder config declares
+          # the GitHub provider, even though CI uploads with --publish never.
+          if [ "${{ matrix.target }}" = "mac" ]; then
+            test -f apps/desktop/release/latest-mac.yml
+          else
+            test -f apps/desktop/release/latest.yml
+          fi
+          ls -l apps/desktop/release/*.yml
+          ls -l apps/desktop/release/*.blockmap 2>/dev/null || true
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
@@ -157,6 +180,8 @@ jobs:
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
             apps/desktop/release/*.exe
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/*.yml
 
   release:
     name: Publish GitHub Release
@@ -179,6 +204,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: AgentDock ${{ steps.version.outputs.value }}
+          # electron-updater on stable clients only sees the release marked
+          # "latest"; beta tags must not replace it with a prerelease build.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           # Cross-link the npm release and the desktop installers so either
           # entry point leads to the other.
           body: |

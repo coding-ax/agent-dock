@@ -7,14 +7,22 @@ import { RuntimeError } from '@agent-dock/agent-dock-shared';
 import { DAEMON_CWD_ENV, DAEMON_ENV_FLAG, DAEMON_STARTED_AT_ENV, isDaemonChild, pidAlive } from './daemon/daemon.js';
 import { compareVersions, distTagForVersion, runNpmForAgentDockUpdate } from './update.js';
 
+/** 服务进程的三种生命周期：npm daemon、Electron 桌面壳、裸前台 serve。 */
+export type SelfUpdateRuntime = 'daemon' | 'desktop' | 'foreground';
+
 export interface SelfUpdateStatus {
   currentVersion: string;
   distTag: string;
   latestVersion?: string;
   updateAvailable: boolean;
-  /** 只有 daemon 模式能在界面上升级：前台 serve 重启后没人把它拉起来。 */
+  /**
+   * 只有 daemon 模式能在界面上升级：前台 serve 重启后没人把它拉起来。
+   * 桌面版由 Electron 的自动更新负责，这里恒为 false。
+   */
   canUpdate: boolean;
   updating: boolean;
+  /** 运行形态。桌面版不能走 npm 升级，前端据此切换成桌面更新入口。 */
+  runtime: SelfUpdateRuntime;
   /** 上一次界面触发的升级失败原因（安装失败时旧服务还活着，能报回来）。 */
   lastError?: string;
   checkedAt?: number;
@@ -61,6 +69,7 @@ export class SelfUpdateService {
   private cached?: { latestVersion?: string; checkError?: string; checkedAt: number };
   private checking?: Promise<void>;
   private updating = false;
+  private updateStartedAt?: number;
   private lastError?: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly lockFile: string;
@@ -74,7 +83,30 @@ export class SelfUpdateService {
 
   get distTag() { return distTagForVersion(this.options.currentVersion); }
 
+  /**
+   * 桌面壳把打包好的 CLI 当普通前台子进程 spawn，但它自己就是 supervisor。
+   * 先判 desktop：Electron 从终端继承环境时可能带上 AGENTDOCK_DAEMONIZED，
+   * 把桌面实例误认成 daemon 会放开一条完全错误（而且危险）的 npm 升级路径。
+   */
+  get runtime(): SelfUpdateRuntime {
+    if (this.env.AGENTDOCK_DESKTOP_INSTANCE?.trim()) return 'desktop';
+    return isDaemonChild(this.env) ? 'daemon' : 'foreground';
+  }
+
   async status(refresh = false): Promise<SelfUpdateStatus> {
+    const runtime = this.runtime;
+    if (runtime === 'desktop') {
+      // 桌面版的版本检查在 Electron 主进程里走 GitHub Releases；这里不碰 npm：
+      // 打包运行时不含 npm，而且 npm 上的 CLI 版本也不是桌面安装包。
+      return {
+        currentVersion: this.options.currentVersion,
+        distTag: this.distTag,
+        updateAvailable: false,
+        canUpdate: false,
+        updating: false,
+        runtime
+      };
+    }
     const age = this.cached ? this.now() - this.cached.checkedAt : Infinity;
     const ttl = this.cached?.checkError ? CHECK_ERROR_TTL_MS : CHECK_TTL_MS;
     if (refresh || age > ttl) await (this.checking ??= this.check().finally(() => { this.checking = undefined; }));
@@ -84,12 +116,19 @@ export class SelfUpdateService {
       distTag: this.distTag,
       ...(latestVersion ? { latestVersion } : {}),
       updateAvailable: Boolean(latestVersion && compareVersions(latestVersion, this.options.currentVersion) > 0),
-      canUpdate: isDaemonChild(this.env),
-      updating: this.updating || this.lockHeld(),
+      canUpdate: runtime === 'daemon',
+      updating: this.updateActive() || this.lockHeld(),
+      runtime,
       ...(this.lastError ? { lastError: this.lastError } : {}),
       ...(this.cached ? { checkedAt: this.cached.checkedAt } : {}),
       ...(this.cached?.checkError ? { checkError: this.cached.checkError } : {})
     };
+  }
+
+  /** 超过升级最长时限的「进行中」标记视为过期，避免子进程卡死时页面永远转圈。 */
+  private updateActive() {
+    if (!this.updating) return false;
+    return this.updateStartedAt !== undefined && this.now() - this.updateStartedAt < UPDATE_LOCK_MAX_AGE_MS;
   }
 
   private async check() {
@@ -129,11 +168,15 @@ export class SelfUpdateService {
   }
 
   async start(): Promise<SelfUpdateStatus> {
-    if (!isDaemonChild(this.env)) throw new RuntimeError('UPDATE_REQUIRES_DAEMON', '当前是前台运行（agent-dock serve），界面升级后无法自动拉起新版本；请在终端执行 agent-dock update', 409);
-    if (this.updating || this.lockHeld()) throw new RuntimeError('UPDATE_IN_PROGRESS', '已有升级在进行，稍等片刻', 409);
-    const status = await this.status(true);
-    if (!status.updateAvailable) throw new RuntimeError('UPDATE_NOT_AVAILABLE', status.checkError ?? `已是最新版本（${status.currentVersion}）`, 409);
+    const runtime = this.runtime;
+    if (runtime === 'desktop') throw new RuntimeError('UPDATE_DESKTOP_MANAGED', '桌面版由应用内自动更新负责，请在侧边栏的更新入口升级', 409);
+    if (runtime !== 'daemon') throw new RuntimeError('UPDATE_REQUIRES_DAEMON', '当前是前台运行（agent-dock serve），界面升级后无法自动拉起新版本；请先停止前台进程，再在终端执行 npm install -g 或改用 agent-dock start', 409);
+    if (!this.updateActive() && this.updating) { this.updating = false; this.updateStartedAt = undefined; }
+    if (this.updateActive() || this.lockHeld()) throw new RuntimeError('UPDATE_IN_PROGRESS', '已有升级在进行，稍等片刻', 409);
+    // 先占位再检查：npm view 是一个网络请求，两个并发的 POST 都能在这段时间里
+    // 通过上面的判断，最后各拉起一个升级进程。
     this.updating = true;
+    this.updateStartedAt = this.now();
     this.lastError = undefined;
     const cwd = this.env[DAEMON_CWD_ENV] ?? process.cwd();
     const logFile = join(cwd, '.agentdock', 'daemon', 'update.log');
@@ -141,17 +184,28 @@ export class SelfUpdateService {
     const env = { ...this.env };
     delete env[DAEMON_ENV_FLAG]; delete env[DAEMON_CWD_ENV]; delete env[DAEMON_STARTED_AT_ENV];
     try {
+      const status = await this.status(true);
+      if (!status.updateAvailable) throw new RuntimeError('UPDATE_NOT_AVAILABLE', status.checkError ?? `已是最新版本（${status.currentVersion}）`, 409);
       const child = (this.options.spawnUpdate ?? defaultSpawnUpdate)([this.options.cliEntrypoint, 'update', '--dist-tag', this.distTag], { cwd, env, logFile });
-      if (!child.pid || !this.acquireLock(child.pid)) throw new Error('无法启动升级进程');
+      if (!child.pid) throw new Error('无法启动升级进程');
+      if (!this.acquireLock(child.pid)) {
+        // 另一个实例抢到了锁：它的升级进程已经在跑，这个刚 spawn 出来的必须
+        // 停掉，否则两个 npm install -g 会同时写全局目录。
+        try { process.kill(child.pid, 'SIGTERM'); } catch { /* 已退出 */ }
+        throw new Error('另一个实例已经在升级');
+      }
       const lockedPid = child.pid;
       child.onExit(code => {
         this.updating = false;
+        this.updateStartedAt = undefined;
         try { if (readFileSync(this.lockFile, 'utf8').trim() === String(lockedPid)) rmSync(this.lockFile, { force: true }); } catch { /* 已被清理 */ }
         // 成功时当前进程已被重启杀掉，走不到这里；还活着说明安装或校验失败。
         if (code !== 0) this.lastError = describeUpdateFailure(tail(logFile), this.options.packageName, this.distTag);
       });
     } catch (error) {
       this.updating = false;
+      this.updateStartedAt = undefined;
+      if (error instanceof RuntimeError) throw error;
       throw new RuntimeError('UPDATE_FAILED', error instanceof Error ? error.message : String(error), 500);
     }
     return this.status();

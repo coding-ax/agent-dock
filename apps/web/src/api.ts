@@ -38,7 +38,11 @@ export type LarkConfig = { configured: boolean; bots: LarkBotConfig[]; listening
 export type LarkHookStatus = { agentId?: string; supported: boolean; installed: boolean; writable: boolean; trustRequired: boolean; hooksPath?: string; reason?: string; trustInstructions?: string };
 export type Session = { id: string; agentId: string; state: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null };
 export type AutostartStatus = { supported: boolean; enabled: boolean; reason?: string; plistPath?: string; entrypoint?: string };
-export type SelfUpdateStatus = { currentVersion: string; distTag: string; latestVersion?: string; updateAvailable: boolean; canUpdate: boolean; updating: boolean; lastError?: string; checkedAt?: number; checkError?: string };
+export type SelfUpdateStatus = { currentVersion: string; distTag: string; latestVersion?: string; updateAvailable: boolean; canUpdate: boolean; updating: boolean; runtime?: 'daemon' | 'desktop' | 'foreground'; lastError?: string; checkedAt?: number; checkError?: string };
+export type ShareLinkKind = 'hostname' | 'lan-v4' | 'lan-v6' | 'public';
+export type ShareLinkUrl = { kind: ShareLinkKind; label: string; url: string };
+export type ShareLinkResult = { sessionId?: string; expiresAt: number; urls: ShareLinkUrl[]; publicUrl?: string; publicUrlSource?: 'env' | 'config'; lanEnabled: boolean };
+export type ShareSettings = { publicUrl?: string; publicUrlSource?: 'env' | 'config'; envLocked: boolean };
 export type ExternalSession = { sessionId: string; cwd: string; title?: string; updatedAt?: string };
 export type ScheduleDelivery = 'new_session' | 'append';
 export type Schedule = { id: string; name: string; sessionId?: string | null; sessionTemplate?: string | null; delivery: ScheduleDelivery; cron?: string | null; runAt?: string | null; intervalMinutes?: number | null; timezone: string; prompt: string; enabled: boolean; nextRunAt?: string | null; lastRunAt?: string | null; lastStatus?: string | null; runCount: number; createdBySessionId?: string | null; createdAt: string; updatedAt: string };
@@ -221,6 +225,9 @@ export const api = {
   // quietDenied：会话 token 没有升级权限，查不到就不显示入口，不能把整页打成「访问被拒」。
   selfUpdateStatus: (refresh = false) => json<SelfUpdateStatus>(`/api/system/update${refresh ? '?refresh=1' : ''}`, undefined, true),
   startSelfUpdate: () => json<SelfUpdateStatus>('/api/system/update', { method: 'POST' }),
+  /** 扫码链接（控制台级）。quietDenied：普通会话令牌没有生成新令牌的权限，不能把整页打成「访问被拒」。 */
+  shareLink: (sessionId?: string) => json<ShareLinkResult>(`/api/system/share-link${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`, undefined, true),
+  saveShareSettings: (publicUrl: string) => json<ShareSettings>('/api/system/share-settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publicUrl }) }),
   create: (body: any) => json<Session>('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   importSession: (body: { agentId: string; externalSessionId: string; cwd?: string; mode?: 'full' | 'session'; model?: string; reasoningEffort?: string; sshHost?: string }) => json<Session>('/api/sessions/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   send: (id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue') => json<{ accepted: true; task: Task }>(`/api/sessions/${id}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, mode }) }),

@@ -1,2 +1,5 @@
 runtime/
 release/
+.signing/
+.smoke/
+dev-app-update.yml

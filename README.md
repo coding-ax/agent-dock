@@ -41,7 +41,7 @@ macOS 和 Windows 也可以直接下载桌面安装包：[GitHub Releases](https
 
 ### 桌面客户端
 
-`apps/desktop` 提供一个 Electron 壳：启动即拉起随包携带的 daemon 和 Node 运行时，关闭窗口时一并停止，不要求用户预装 Node。数据库、日志和窗口状态放在系统用户数据目录，与命令行实例隔离。
+`apps/desktop` 提供一个 Electron 壳：启动即拉起随包携带的 daemon 和 Node 运行时，关闭窗口时一并停止，不要求用户预装 Node。数据库、日志和窗口状态放在系统用户数据目录，与命令行实例隔离。桌面版内置应用内更新（electron-updater + GitHub Releases），侧边栏会显示新版本、下载进度，并在下载完成后重启安装；发布构建使用一张固定自签名证书签名，保证 macOS 自动更新身份一致，详见 [`apps/desktop/README.md`](apps/desktop/README.md)。
 
 ```bash
 pnpm build
@@ -52,6 +52,14 @@ AGENTDOCK_DESKTOP_NODE_BIN=$(which node) pnpm --filter @agent-dock/desktop pack:
 安装包由 `.github/workflows/desktop.yml` 在 macOS（arm64/x64）、Windows x64、Linux x64 原生 runner 上构建；推送 `desktop-v*` 标签会创建 GitHub Release。代码签名和 macOS 公证通过仓库 Secrets 开启；未配置证书时 macOS 自动回退为 ad-hoc 签名（可正常启动，但首次打开需在「系统设置 → 隐私与安全性」里放行），不会产出结构损坏的包。详见 [`apps/desktop/README.md`](apps/desktop/README.md)。
 
 默认绑定 `0.0.0.0`，同一局域网的设备可以通过本机 LAN IP 访问。这不等于暴露到公网，但边界仍然由你的防火墙和网络策略决定。只允许本机访问用 `--local-only`（或 `AGENTDOCK_LOCAL_ONLY=true`），指定网卡用 `--host`。
+
+#### 手机扫码访问
+
+侧栏底部的手机图标会生成二维码和局域网地址。链接里是**控制台级凭证**（与启动输出里的登录链接同类）：手机扫码后可自由操作整个 AgentDock，默认 365 天有效。二维码等同于登录凭证，请勿转发或截图分享。
+
+桌面客户端默认只监听 `127.0.0.1`，但 Web 访问防护始终开启（本机窗口自动授权，不会弹密码框）。在扫码弹窗里打开「局域网访问」会把本地服务改为监听局域网，手机才能通过 Wi-Fi 连接（正在运行的 Agent 任务会中断）。命令行实例只要可被手机访问，扫码弹窗会直接列出网卡地址。
+
+公网访问入口暂时隐藏，后续开发；后端仍保留 `https://` 公网基址和隧道配置能力，重新开放时必须再叠加 Cloudflare Access 等身份验证，不要把 `trycloudflare.com` 临时隧道直接暴露给公网。
 
 > **服务没有 API Key、多用户账号或租户隔离。** 控制台只有一层「所有者」访问防护（见下）；对外暴露必须经反向代理补上 HTTPS、身份认证、来源限制和访问日志。
 

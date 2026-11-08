@@ -82,6 +82,12 @@ module.exports = {
   extraMetadata: {
     version: appVersion
   },
+  // electron-updater reads this from app-update.yml at runtime. CI still uses
+  // --publish never and uploads the installers + latest*.yml to the GitHub
+  // release itself; the explicit provider makes electron-builder generate
+  // those update metadata files and the embedded config even without a
+  // repository field on this private workspace package.
+  publish: [{ provider: 'github', owner: 'coding-ax', repo: 'agent-dock' }],
   directories: {
     output: 'release',
     buildResources: 'build'

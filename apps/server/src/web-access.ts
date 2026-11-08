@@ -135,16 +135,20 @@ export function isLoopbackHostHeader(host: string | undefined): boolean {
  * 主机名（书签、Chrome 补全、旧链接）打开就永远 401，观感正是「cookie 有效期非常短」。
  * 局域网来源的源地址不是回环，转发出去的卡片链接防护不受影响。
  *
- * 三个条件缺一不可：
+ * 四个条件缺一不可：
  * - 源地址回环：连接确实来自本机协议栈；
  * - Host 头也是回环名：挡 DNS rebinding——把域名解析到 127.0.0.1 后，源地址同样是
  *   回环，只信源地址等于把控制台（含终端 pty）交给任意网页；
  * - Sec-Fetch-Site 不是跨站：该头由浏览器自己填写、页面改不了。跨站页面发起的请求
  *   可以借本机回环直连 daemon，没有这一条就多出一个 CSRF 写面。缺头视为非浏览器
- *   客户端（curl 等本地进程），本来就已可信。
+ *   客户端（curl 等本地进程），本来就已可信；
+ * - 没有 X-Forwarded-For：带这个头的请求必然经过反代/隧道，源地址再像 127.0.0.1
+ *   也是代理进程，不能算本机。Cloudflare Tunnel 默认会把 Host 换成公网域名，但
+ *   万一反代配置成保留回环 Host，这一条仍能挡住。
  */
-export function isLocalOwnerRequest(input: { address?: string; host?: string; fetchSite?: string }): boolean {
+export function isLocalOwnerRequest(input: { address?: string; host?: string; fetchSite?: string; forwardedFor?: string }): boolean {
   if (!isLoopbackAddress(input.address) || !isLoopbackHostHeader(input.host)) return false;
+  if (input.forwardedFor?.trim()) return false;
   const site = input.fetchSite?.trim().toLowerCase();
   return site === undefined || site === '' || site === 'same-origin' || site === 'none';
 }
