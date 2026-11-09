@@ -1,6 +1,6 @@
 {
   "name": "@agent-dock/cli",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -13,7 +13,7 @@
   },
   "type": "module",
   "bin": {
-    "agent-dock": "./dist/cli.js"
+    "agent-dock": "dist/cli.js"
   },
   "files": [
     "dist/cli.js",
