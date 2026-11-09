@@ -27,23 +27,27 @@ function useAnimatedText(text: string, active: boolean, replay: boolean) {
 }
 
 /** 助手正文。只有正在流式输出时挂光标，历史/最终态与收尾 drain 都不挂。 */
-export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active, replay = false, final = false, assistantLabel = 'Agent', sessionId }: {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active, replay = false, final = false, animateEnter = true, assistantLabel = 'Agent', sessionId }: {
   text: string;
   active: boolean;
   /** 首屏 payload 渲染出来的行：已经显示过的文本不重播。 */
   replay?: boolean;
   final?: boolean;
+  /** 挂载时播放入场淡入。内容只是换了个位置（执行面板 → final 行）时关掉，免得闪一下。 */
+  animateEnter?: boolean;
   assistantLabel?: string;
   sessionId: string | undefined;
 }) {
   const { revealed, caret, animateUnits } = useAnimatedText(text, active, replay);
+  // 流式输出时至少占一行：打字机从 0 字起播，空的 article 上下外边距会叠成一个，
+  // 它顶替「处理中」那一行时时间线先缩 44px、等第一个字出来再撑开 50px——就是首段回复时那一下「弹」。
   return <article
     aria-label={final ? `${assistantLabel} 最终输出` : undefined}
-    className={`assistant-output markdown ui-timeline-item ${final ? 'mb-6 mt-2' : 'my-6'} max-w-[78ch] text-[15px] leading-[1.7] text-zinc-800 ${caret ? 'ui-typewriter-caret' : ''}`}
+    className={`assistant-output markdown ${animateEnter ? 'ui-timeline-item' : ''} ${final ? 'mb-6 mt-2' : 'my-6'} ${active ? 'min-h-[1.7em]' : ''} max-w-[78ch] text-[15px] leading-[1.7] text-zinc-800 ${caret ? 'ui-typewriter-caret' : ''}`}
   >
     <MarkdownContent sessionId={sessionId} animateUnits={animateUnits}>{revealed}</MarkdownContent>
   </article>;
-}, (prev, next) => prev.text === next.text && prev.active === next.active && prev.replay === next.replay && prev.final === next.final && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId);
+}, (prev, next) => prev.text === next.text && prev.active === next.active && prev.replay === next.replay && prev.final === next.final && prev.animateEnter === next.animateEnter && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId);
 
 /** 思考过程。折叠体里同样走逐字，只在 live 时挂光标。 */
 export const ThinkingMarkdown = memo(function ThinkingMarkdown({ text, active, replay = false, sessionId }: { text: string; active: boolean; replay?: boolean; sessionId: string | undefined }) {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import CodeMirror, { EditorView } from '@uiw/react-codemirror';
 import { markdownLanguage } from '@codemirror/lang-markdown';
 import { Eye, Pencil, Sparkles } from 'lucide-react';
@@ -24,32 +24,49 @@ const extensions = [
 ];
 const setup = { lineNumbers: false, foldGutter: false, highlightActiveLine: false, autocompletion: false };
 
+/** 平台补全默认超时：推理模型写短提示词也可能超过 30 秒，且浏览器侧要留一点读响应余量。 */
+const assistTimeoutMs = 90_000;
+
 /** 预注入 Prompt 编辑器：Markdown 写入 + 同框预览，高度跟随内容而不是固定一大片空白。 */
 export default function PromptEditor({ value, onChange, aiContext }: { value: string; onChange(value: string): void; /** 提供给 AI 的机器人配置摘要；不传则不显示 AI 补全。 */ aiContext?: string }) {
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
   const [generating, setGenerating] = useState(false);
   const [assist, setAssist] = useState<{ text?: string; error?: string }>();
+  const abortRef = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   async function generate() {
     if (generating) return;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setGenerating(true);
     setAssist(undefined);
     try {
-      const result = await api.completeLlm(buildPreInjectAssistPrompt(aiContext ?? '', value), 30_000);
+      const result = await api.completeLlm(buildPreInjectAssistPrompt(aiContext ?? '', value), assistTimeoutMs, { signal: controller.signal });
       const text = result.text.trim();
       setAssist(text ? { text } : { error: '模型没有返回内容，请换个模型或稍后重试。' });
     } catch (error) {
-      setAssist({ error: error instanceof Error ? error.message : String(error) });
+      if (!controller.signal.aborted) setAssist({ error: error instanceof Error ? error.message : String(error) });
     } finally {
-      setGenerating(false);
+      if (!controller.signal.aborted) setGenerating(false);
     }
+  }
+
+  function cancel() {
+    abortRef.current?.abort();
+    abortRef.current = undefined;
+    setGenerating(false);
+    setAssist({ error: '已取消生成。' });
   }
 
   return <div className="mt-1.5 overflow-hidden rounded-md border border-zinc-300 bg-white ui-field-within">
     <div className="flex items-center gap-0.5 border-b border-zinc-200 bg-zinc-50 px-1.5 py-1">
       <ModeTab active={mode === 'edit'} onClick={() => setMode('edit')} icon={<Pencil size={11}/>}>编辑</ModeTab>
       <ModeTab active={mode === 'preview'} onClick={() => setMode('preview')} icon={<Eye size={11}/>}>预览</ModeTab>
-      {aiContext !== undefined && <button type="button" disabled={generating} onClick={() => void generate()} className="ml-0.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] text-zinc-500 hover:bg-white hover:text-zinc-800 disabled:opacity-40">{generating ? <Spinner size={11}/> : <Sparkles size={11}/>}{generating ? '生成中…' : 'AI 补全'}</button>}
+      {aiContext !== undefined && (generating
+        ? <button type="button" onClick={cancel} className="ml-0.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] text-zinc-500 hover:bg-white hover:text-zinc-800"><Spinner size={11}/>生成中… · 取消</button>
+        : <button type="button" onClick={() => void generate()} className="ml-0.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] text-zinc-500 hover:bg-white hover:text-zinc-800"><Sparkles size={11}/>AI 补全</button>)}
       <span className="ml-auto tabular-nums pr-1 text-[12px] text-zinc-400">{value.length} 字</span>
     </div>
     {mode === 'edit'

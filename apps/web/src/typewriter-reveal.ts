@@ -70,7 +70,7 @@ interface Range { start: number; end: number }
  *
  * 只改渲染文本，不改原文——下一批字到了就用新的原文重新闭合一次。
  * 处理顺序有讲究：围栏没闭合时里面的内容不是 markdown，补完围栏就返回；
- * 其余情况先补表格行，再补行内标记。
+ * 其余情况先丢掉未闭合的链接/图片语法，再补表格行，最后补行内标记。
  */
 export function closeIncompleteMarkdown(text: string): string {
   if (!text) return text;
@@ -79,7 +79,7 @@ export function closeIncompleteMarkdown(text: string): string {
     const marker = /^\s*(`{3,}|~{3,})/.exec(text.slice(fences.openStart))?.[1] ?? '```';
     return `${text}\n${marker}`;
   }
-  return closeIncompleteInline(closeIncompleteTable(text), fences.ranges);
+  return closeIncompleteInline(closeIncompleteTable(dropIncompleteLinks(text, fences.ranges)), fences.ranges);
 }
 
 export function renderRevealedText(fullText: string, target: number): string {
@@ -142,6 +142,44 @@ function closeIncompleteTable(text: string): string {
     lines.splice(end + 1, 0, `|${' --- |'.repeat(columns)}`);
   }
   return lines.join('\n');
+}
+
+/**
+ * 流式输出时链接/图片会「跳」：截在 `[标题](https://…` 时，半截语法（含整条长 URL）
+ * 被当成纯文本渲染，逐字变长还会不断折行；等 `)` 到了才突然变成一个蓝色 <a>，宽度、
+ * 换行、下划线一起变。标签还没写完的 `[标题` 同理，先露裸括号再变链接也是一次跳。
+ *
+ * 处理方式不是「补一个 )」——那样会先渲染一个指向半截 URL 的假链接（可点击、href 每帧都变），
+ * 而是整段未闭合的链接语法先不显示，等闭合的那一帧一次性出现。被截掉的部分从来没显示过，
+ * 所以不是「文字消失」，只是这个 token 晚一两帧出现，换来完全不跳。
+ *
+ * 已闭合的链接照常保留；`[1m]`、任务框 `[x]` 这类普通方括号文本有 `]` 但后面没有
+ * `(` 悬挂段，不会被截断；代码块里的方括号由 masked 屏蔽。
+ */
+function dropIncompleteLinks(text: string, closedFenceRanges: Range[]): string {
+  const masked = maskRanges(text, closedFenceRanges);
+  let from = 0;
+  for (;;) {
+    const open = masked.indexOf('[', from);
+    if (open < 0) return text;
+    // 转义的 `\[` 是普通字符，不是链接。
+    if (open > 0 && masked[open - 1] === '\\') { from = open + 1; continue; }
+    // 图片语法的 `!` 也要一起截掉，否则会留一个孤零零的感叹号。
+    const cutAt = open > 0 && masked[open - 1] === '!' ? open - 1 : open;
+    const lineEnd = masked.indexOf('\n', open);
+    const limit = lineEnd < 0 ? masked.length : lineEnd;
+    const closeBracket = masked.indexOf(']', open + 1);
+    // 标签还没写完（`[TOM Bridge`）：整段先不显示。
+    if (closeBracket < 0 || closeBracket > limit) return text.slice(0, cutAt);
+    if (masked[closeBracket + 1] === '(') {
+      const closeParen = masked.indexOf(')', closeBracket + 2);
+      // `(` 后面没有闭合 `)`：URL 还在逐字吐，整段先不显示。
+      if (closeParen < 0 || closeParen > limit) return text.slice(0, cutAt);
+      from = closeParen + 1; // 一条完整链接，跳过它继续看后面有没有别的悬挂段。
+      continue;
+    }
+    from = closeBracket + 1; // 普通 `[文字]`，不是链接。
+  }
 }
 
 /** 行内标记：切在半截会露出裸标记。 */

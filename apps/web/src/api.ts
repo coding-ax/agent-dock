@@ -175,7 +175,7 @@ export const api = {
   saveLlm: (body: { format: LlmFormat; baseUrl: string; model: string; apiKey?: string; auth?: LlmAuthType; systemPrompt?: string; maxTokens?: number; timeoutMs?: number }) => json<LlmEndpointState>('/api/llm', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   clearLlm: () => json<LlmEndpointState>('/api/llm', { method: 'DELETE' }),
   /** 平台功能的一次性补全；prompt 由功能自己构造。 */
-  completeLlm: (prompt: string, timeoutMs?: number) => json<LlmRunResult>('/api/llm/complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, ...(timeoutMs ? { timeoutMs } : {}) }) }, true),
+  completeLlm: (prompt: string, timeoutMs?: number, options: { signal?: AbortSignal } = {}) => json<LlmRunResult>('/api/llm/complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, ...(timeoutMs ? { timeoutMs } : {}) }), ...(options.signal ? { signal: options.signal } : {}) }, true),
   detectLlm: () => json<{ candidates: DetectedLlmEndpoint[] }>('/api/llm/detect', undefined, true),
   /** 应用探测到的端点；密钥不经过浏览器。 */
   applyDetectedLlm: (id: string) => json<LlmEndpointState>('/api/llm/detect/apply', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) }, true),

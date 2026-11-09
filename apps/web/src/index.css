@@ -79,6 +79,10 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
   .composer-editor-placeholder { font-size: 16px !important; line-height: 26px !important; }
 }
 .markdown { overflow-wrap: anywhere; }
+/* 用户气泡：长链接（如带一长串 query 的 DevOps URL）没有空格可断，默认会顶破 80% 宽的气泡。
+   anywhere 允许在任意字符处折行，链接完整保留、只是换行显示，绝不超出圆角边界。
+   用户气泡走 MarkdownContent，但没有挂 .markdown 类，所以要单独给这一层。 */
+.ui-user-bubble, .ui-user-bubble * { overflow-wrap: anywhere; }
 /* 横向滚动必须放在真实的 div 包裹层上：直接给 table 设 display:block + overflow-x:auto 时，
    table 内部会生成匿名 table 盒，iOS WebKit 下其固有宽度会撑破 max-width，溢出一路传到
    时间线滚动容器，表现成整页横滑而不是表格内部滚动。包裹层见 MarkdownContent 的 table 覆盖。 */
@@ -217,7 +221,10 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
 .ui-typewriter-caret > ol:last-child > li:last-child::after,
 .ui-typewriter-caret > blockquote:last-child > p:last-child::after,
 .ui-typewriter-caret > pre:last-child::after,
-.ui-typewriter-caret > .markdown-table-scroll:last-child table tr:last-child > *:last-child::after {
+.ui-typewriter-caret > .markdown-table-scroll:last-child table tr:last-child > *:last-child::after,
+/* 段末是链接时光标要跟在 <a> 后面，否则会画到链接之前的空处。 */
+.ui-typewriter-caret > p:last-child > a:last-child::after,
+.ui-typewriter-caret > li:last-child > a:last-child::after {
   content: '';
   display: inline-block;
   width: 2px;
@@ -240,7 +247,9 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
   .ui-typewriter-caret > ol:last-child > li:last-child::after,
   .ui-typewriter-caret > blockquote:last-child > p:last-child::after,
   .ui-typewriter-caret > pre:last-child::after,
-  .ui-typewriter-caret > .markdown-table-scroll:last-child table tr:last-child > *:last-child::after {
+  .ui-typewriter-caret > .markdown-table-scroll:last-child table tr:last-child > *:last-child::after,
+  .ui-typewriter-caret > p:last-child > a:last-child::after,
+  .ui-typewriter-caret > li:last-child > a:last-child::after {
     animation: none !important;
     opacity: .55;
   }

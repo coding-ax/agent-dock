@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { FocusEvent, ReactNode } from 'react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 
 /**
@@ -15,11 +15,20 @@ import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 export type TooltipSide = 'top' | 'right' | 'bottom' | 'left';
 export type TooltipAlign = 'start' | 'center' | 'end';
 
-/** 传单个元素（按钮 / 已有布局类的外层）时用它：该元素自己当锚点，不额外包 DOM。 */
-export function HoverTooltip({ content, children, side, align }: { content: ReactNode; children: ReactNode; side?: TooltipSide; align?: TooltipAlign }) {
+/**
+ * 传单个元素（按钮 / 已有布局类的外层）时用它：该元素自己当锚点，不额外包 DOM。
+ *
+ * `hoverOnly`：只让指针 hover 打开，关掉 Radix 默认的「onFocus 即打开」。
+ * 会话行是 `role="button" tabIndex={0}`，点过之后它就一直是 activeElement；切到别的窗口
+ * 再切回来，浏览器会对 activeElement 补发一次 focus，Radix 于是把又高又宽的 hover 卡片
+ * 重新弹出来，而此时指针根本不在行上。`preventDefault()` 会拦掉 Radix 的 onFocus
+ * （它用 composeEventHandlers 包了一层，自己检查 defaultPrevented），不影响元素真正获得焦点，
+ * 也不影响 onBlur / onClick 的关闭逻辑。普通图标按钮仍保留键盘聚焦可见的提示。
+ */
+export function HoverTooltip({ content, children, side, align, hoverOnly = false }: { content: ReactNode; children: ReactNode; side?: TooltipSide; align?: TooltipAlign; hoverOnly?: boolean }) {
   if (!content) return <>{children}</>;
   return <TooltipPrimitive.Root>
-    <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
+    <TooltipPrimitive.Trigger asChild {...(hoverOnly ? { onFocus: (event: FocusEvent) => event.preventDefault() } : {})}>{children}</TooltipPrimitive.Trigger>
     <TooltipPrimitive.Portal><Content content={content} side={side} align={align}/></TooltipPrimitive.Portal>
   </TooltipPrimitive.Root>;
 }
@@ -59,11 +68,19 @@ function Content({ content, side, align }: { content: ReactNode; side?: TooltipS
     align={align}
     sideOffset={8}
     collisionPadding={8}
-    className="ui-tooltip pointer-events-none z-[60] max-h-[46vh] max-w-[460px] overflow-hidden whitespace-pre-wrap break-words rounded-lg bg-zinc-900/95 px-2.5 py-2 text-[12px] leading-5 text-zinc-50 shadow-[0_10px_30px_rgba(24,24,27,.28)] ring-1 ring-white/10"
+    className="ui-tooltip pointer-events-none z-[60] max-h-[46vh] max-w-[460px] overflow-hidden whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-[12px] leading-5 text-zinc-700 shadow-[0_10px_30px_rgba(24,24,27,.14)]"
   >{content}</TooltipPrimitive.Content>;
 }
 
-/** 应用根部的 Provider。Radix 用它统一管理「同一时刻只显示一个提示」与交错延迟。 */
+/**
+ * 应用根部的 Provider。Radix 用它统一管理「同一时刻只显示一个提示」与交错延迟。
+ *
+ * `disableHoverableContent`：关掉 Radix 的「指针宽容区」。默认行为是 trigger 的
+ * pointerleave 只清掉待打开的计时器、并不关提示，提示层自己再用一段多边形判断指针是否
+ * 「朝提示方向移动」，只有离开整个多边形才关。对会话行那种大锚点 + 右侧大卡片，体感就是
+ * 「得回到对应位置再离开才消失」。关掉之后 pointerleave 立即关闭；提示层是
+ * pointer-events-none，本来也不需要移上去交互。
+ */
 export function TooltipProvider({ children }: { children: ReactNode }) {
-  return <TooltipPrimitive.Provider delayDuration={120} skipDelayDuration={300}>{children}</TooltipPrimitive.Provider>;
+  return <TooltipPrimitive.Provider delayDuration={120} skipDelayDuration={300} disableHoverableContent>{children}</TooltipPrimitive.Provider>;
 }

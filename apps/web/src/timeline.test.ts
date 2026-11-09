@@ -108,28 +108,34 @@ describe('conversation timeline', () => {
   });
 
   it('shows a just-submitted prompt immediately and replaces it with the real task without duplicates', () => {
-    const optimistic = { id: 'optimistic-1', prompt: '检查项目', createdAt: '2026-01-01T00:00:00.000Z' };
+    const optimistic = { id: 'optimistic-1', prompt: '检查项目', createdAt: '2026-01-01T00:00:00.000Z', placement: 'timeline' as const };
     const queued = { id: 'task-1', sessionId: 's1', prompt: optimistic.prompt, status: 'queued', createdAt: optimistic.createdAt, updatedAt: optimistic.createdAt };
     expect(buildTimeline([], [], [optimistic])).toMatchObject([{ id: 'optimistic-1', data: { optimistic: true } }]);
     expect(buildTimeline([], [queued], [{ ...optimistic, taskId: queued.id }])).toMatchObject([{ id: 'optimistic-1', data: { optimistic: true } }]);
     expect(buildTimeline([], [{ ...queued, status: 'running' }], [{ ...optimistic, taskId: queued.id }])).toMatchObject([{ id: 'task-event-task-1', data: { text: '检查项目' } }]);
+    expect(buildTimeline([], [{ ...queued, status: 'running' }], [{ ...optimistic, taskId: queued.id, settled: true }])).toMatchObject([{ id: 'task-event-task-1', data: { text: '检查项目' } }]);
     const realEvent = { ...event(1, 'text', { role: 'user', text: '检查项目', taskId: queued.id }), timestamp: optimistic.createdAt };
     expect(buildTimeline([realEvent], [{ ...queued, status: 'running' }], [optimistic])).toHaveLength(1);
     expect(buildTimeline([], [{ ...queued, status: 'cancelled' }], [{ ...optimistic, taskId: queued.id }])).toEqual([]);
   });
 
-  it('leaves prompts waiting behind another task to the queue panel instead of the timeline', () => {
+  it('never puts a prompt submitted into the queue panel on the timeline', () => {
+    // 过去排队消息会先在时间线里冒一下：正在跑的那一轮被挤成「上一轮」整块折叠，响应回来再展开。
     const running = { id: 'task-1', sessionId: 's1', prompt: 'first', status: 'running', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
     const queued = { id: 'task-2', sessionId: 's1', prompt: 'second', status: 'queued', createdAt: '2026-01-01T00:00:01.000Z', updatedAt: '2026-01-01T00:00:01.000Z' };
-    const optimistic = { id: 'optimistic-2', prompt: 'second', createdAt: queued.createdAt, taskId: queued.id };
-    expect(buildTimeline([], [running, queued], [optimistic], true).map(item => item.data.text)).toEqual(['first']);
+    const unsent = { id: 'optimistic-2', prompt: 'second', createdAt: queued.createdAt, placement: 'queue' as const };
+    expect(buildTimeline([], [running], [unsent]).map(item => item.data.text)).toEqual(['first']);
+    expect(buildTimeline([], [running, queued], [{ ...unsent, taskId: queued.id }]).map(item => item.data.text)).toEqual(['first']);
+    const done = { ...running, status: 'completed' };
+    expect(buildTimeline([], [done, queued], [{ ...unsent, taskId: queued.id }]).map(item => item.data.text)).toEqual(['first']);
   });
 
-  it('keeps a queued prompt out of the timeline in the gap after the previous task finishes', () => {
-    const done = { id: 'task-1', sessionId: 's1', prompt: 'first', status: 'completed', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:02.000Z' };
+  it('keeps a prompt submitted to start right away on the timeline even if the session turns busy first', () => {
+    // 打断发送 / 会话状态先到：它不该被挪进面板再挪回来。
+    const running = { id: 'task-1', sessionId: 's1', prompt: 'first', status: 'running', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
     const queued = { id: 'task-2', sessionId: 's1', prompt: 'second', status: 'queued', createdAt: '2026-01-01T00:00:01.000Z', updatedAt: '2026-01-01T00:00:01.000Z' };
-    const optimistic = { id: 'optimistic-2', prompt: 'second', createdAt: queued.createdAt, taskId: queued.id };
-    expect(buildTimeline([], [done, queued], [optimistic], true).map(item => item.data.text)).toEqual(['first']);
+    const optimistic = { id: 'optimistic-2', prompt: 'second', createdAt: queued.createdAt, placement: 'timeline' as const, taskId: queued.id };
+    expect(buildTimeline([], [running, queued], [optimistic]).map(item => item.data.text)).toEqual(['first', 'second']);
   });
 
   it('never streams the previous turn\'s final answer while the next queued prompt is starting', () => {
@@ -145,16 +151,15 @@ describe('conversation timeline', () => {
 
   it('keeps consecutive user turns separate while an optimistic message is visible', () => {
     const previous = { ...event(1, 'text', { role: 'user', text: 'first', taskId: 'task-1' }), timestamp: '2026-01-01T00:00:00.000Z' };
-    const optimistic = { id: 'optimistic-2', prompt: 'second', createdAt: '2026-01-01T00:00:01.000Z' };
+    const optimistic = { id: 'optimistic-2', prompt: 'second', createdAt: '2026-01-01T00:00:01.000Z', placement: 'timeline' as const };
     expect(buildTimeline([previous], [], [optimistic]).map(item => item.data.text)).toEqual(['first', 'second']);
   });
 
-  it('keeps the head of an idle queue as a sending bubble and leaves the rest to the queue panel', () => {
-    const first = { id: 'local-1', prompt: 'first', createdAt: '2026-01-01T00:00:00.000Z', taskId: 'task-1' };
-    const second = { id: 'local-2', prompt: 'second', createdAt: '2026-01-01T00:00:01.000Z', taskId: 'task-2' };
+  it('places each optimistic prompt where it was submitted, regardless of later session state', () => {
+    const first = { id: 'local-1', prompt: 'first', createdAt: '2026-01-01T00:00:00.000Z', taskId: 'task-1', placement: 'timeline' as const };
+    const second = { id: 'local-2', prompt: 'second', createdAt: '2026-01-01T00:00:01.000Z', taskId: 'task-2', placement: 'queue' as const };
     const tasks = [first, second].map(item => ({ id: item.taskId, sessionId: 's1', prompt: item.prompt, status: 'queued', createdAt: item.createdAt, updatedAt: item.createdAt }));
-    expect(buildTimeline([], tasks, [first, second], true)).toEqual([]);
-    expect(buildTimeline([], tasks, [first, second], false).map(item => item.data.text)).toEqual(['first']);
+    expect(buildTimeline([], tasks, [first, second]).map(item => item.data.text)).toEqual(['first']);
   });
 
   it('groups chronological activity and keeps only the post-activity terminal text as final', () => {
@@ -454,8 +459,8 @@ describe('timeline incremental cache', () => {
   });
   const user = (sequence: number, text: string, taskId = `task-${sequence}`) => at(sequence, 'text', { text, role: 'user', taskId });
   // 克隆首事件即可绕开增量缓存，得到一份独立的全量构建结果用于对比。
-  const full = (events: any[], tasks: any[] = [], optimistic: any[] = [], busy = false) =>
-    buildTimeline(events.map((item, index) => index === 0 ? { ...item, data: { ...item.data } } : item), tasks, optimistic, busy);
+  const full = (events: any[], tasks: any[] = [], optimistic: any[] = []) =>
+    buildTimeline(events.map((item, index) => index === 0 ? { ...item, data: { ...item.data } } : item), tasks, optimistic);
 
   it('appending a turn only rebuilds the tail and matches a full rebuild', () => {
     const first = [user(1, '第一轮'), at(2, 'text', { text: '回答一' }), user(3, '第二轮')];

@@ -3,7 +3,19 @@ import { busyStates } from './session-states';
 import { agentWarningPrefix, isAgentStreamErrorText, isTurnActivity, pickFinalAssistantEntry, stripAgentStreamErrorSuffix } from '@agent-dock/agent-dock-shared';
 
 export type TimelineEvent = DockEvent & { data: DockEvent['data'] & { role?: 'user' | 'assistant' } };
-export type OptimisticMessage = { id: string; prompt: string; createdAt: string; taskId?: string };
+/**
+ * 刚提交、还没在服务端开始执行的消息。
+ *
+ * placement 在提交那一刻定死：马上会执行的进时间线（带「发送中」圈），要排队的只进「等待发送」面板。
+ * 过去按「服务端返回 queued + 会话是否 busy」事后推算落点，排队消息会先插进时间线、等响应回来
+ * 再挪进面板——时间线里正在跑的那一轮被它挤成「上一轮」整块折叠，再展开，页面明显弹一下。
+ *
+ * settled：任务已开始（或已取消/结束），这条不再渲染；保留下来只为把 id 借给这个任务的用户行做
+ * React key（见 timelineRowKey），让气泡从「发送中」到真实事件始终是同一个 DOM 节点。
+ */
+export type OptimisticMessage = { id: string; prompt: string; createdAt: string; placement: 'timeline' | 'queue'; taskId?: string; settled?: boolean };
+/** 「等待发送」面板的一行：服务端已入队的任务；pending 是刚提交、服务端还没确认的消息，不能操作。 */
+export type QueuedTask = Task & { pending?: true };
 export type TimelineActivityGroup = { id: string; label: string; labelTitle: string; events: TimelineEvent[]; startedAt: string; completedAt?: string };
 export type TimelineSection =
   | { kind: 'event'; event: TimelineEvent; final: boolean }
@@ -103,24 +115,87 @@ function warningText(event: TimelineEvent) {
 }
 
 /**
- * 「等待发送」面板里该列的任务。
- *
- * 服务端对 send 一律返回 status='queued'，即使会话空闲、这条马上就会执行；上一条完成到队首切成
- * running 之间会话也会短暂落到 completed。所以不 busy 时队首算「即将开始」，只列它后面的。
- * 时间线的乐观气泡取补集，两边永远不重复、也没有两边都不显示的空档。
+ * 乐观消息对应的服务端任务：已绑定 taskId 的按 id 找；还没绑定的（send 响应还没回来，SSE 先到）
+ * 按「同文本、5 秒内创建、没被别的乐观消息占用」认领。
  */
-export function waitingQueuedTasks(tasks: Task[] | undefined, sessionBusy: boolean): Task[] {
-  const queued = (tasks ?? []).filter(task => task.status === 'queued').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  return sessionBusy ? queued : queued.slice(1);
+function matchOptimisticTask(message: OptimisticMessage, tasks: Task[], claimed: ReadonlySet<string>): Task | undefined {
+  if (message.taskId) return tasks.find(task => task.id === message.taskId);
+  return tasks.find(task => !claimed.has(task.id) && task.prompt === message.prompt
+    && Math.abs(Date.parse(task.createdAt) - Date.parse(message.createdAt)) < 5_000);
+}
+
+const claimedTaskIds = (messages: OptimisticMessage[]) => new Set(messages.flatMap(message => message.taskId ? [message.taskId] : []));
+
+/**
+ * 服务端任务信息到达（send 响应或 SSE task 事件）时更新乐观消息：绑定 taskId；任务一旦离开
+ * queued 就标记 settled，之后不再回退（2 秒一次的 tasks 轮询可能带回旧的 queued 快照）。
+ * optimisticId 给定时只认这一条（send 响应知道是哪条）；否则按 matchOptimisticTask 认领。
+ * 没有变化时原样返回同一个数组，不触发重渲染。
+ */
+export function bindOptimisticTask(messages: OptimisticMessage[], task: Task, optimisticId?: string): OptimisticMessage[] {
+  let index = optimisticId ? messages.findIndex(message => message.id === optimisticId) : messages.findIndex(message => message.taskId === task.id);
+  if (index < 0 && !optimisticId) {
+    const claimed = claimedTaskIds(messages);
+    index = messages.findIndex(message => !message.settled && matchOptimisticTask(message, [task], claimed) === task);
+  }
+  if (index < 0) return messages;
+  const message = messages[index]!;
+  const settled = Boolean(message.settled) || task.status !== 'queued';
+  if (message.taskId === task.id && Boolean(message.settled) === settled) return messages;
+  const next = [...messages];
+  next[index] = { ...message, taskId: task.id, ...(settled ? { settled: true } : {}) };
+  return next;
+}
+
+/** 乐观消息借给任务的 React key：taskId → 乐观消息 id。 */
+export function optimisticRowKeys(messages: OptimisticMessage[]): Map<string, string> {
+  return new Map(messages.flatMap(message => message.taskId ? [[message.taskId, message.id] as const] : []));
 }
 
 /**
- * 刚发出的消息会不会马上执行：打断发送，或会话空闲且没有别的排队消息。
+ * 时间线行的 React key。
+ *
+ * 同一条用户消息会依次以「乐观气泡 → tasks 补出的 task-event 行 → 服务端真实事件」三种身份出现，
+ * id 各不相同。直接拿 id 当 key，气泡会连着重挂三次、每次从透明重播入场动画（实测 150ms 内闪三下）。
+ * 绑定过任务的乐观消息把自己的 id 借给这个任务的用户行，三种身份共用同一个 key。
+ */
+export function timelineRowKey(event: TimelineEvent, rowKeys: ReadonlyMap<string, string>): string {
+  if (event.type === 'text' && event.data.role === 'user' && !event.data.optimistic && typeof event.data.taskId === 'string') return rowKeys.get(event.data.taskId) ?? event.id;
+  return event.id;
+}
+
+/**
+ * 「等待发送」面板里该列的任务，与时间线互补：每条消息任何时刻只在一边出现，也不会两边都不显示。
+ *
+ * - 服务端对 send 一律返回 status='queued'，即使会话空闲、这条马上就会执行；上一条完成到队首切成
+ *   running 之间会话也会短暂落到 completed。所以不 busy 时队首算「即将开始」，不列——
+ *   除非它是本页提交时就定在面板里的，开始执行前不挪走，免得它在面板和时间线之间来回跳。
+ * - 本页提交时定在时间线里的（带「发送中」圈的气泡）不进面板，哪怕会话已经 busy。
+ * - 定在面板里、服务端还没确认的消息先以 pending 行出现在末尾，响应回来后换成真实任务。
+ */
+export function waitingQueuedTasks(tasks: Task[] | undefined, sessionBusy: boolean, optimisticMessages: OptimisticMessage[] = EMPTY_OPTIMISTIC): QueuedTask[] {
+  const list = tasks ?? [];
+  const live = optimisticMessages.filter(message => !message.settled);
+  const claimed = claimedTaskIds(optimisticMessages);
+  const matched = live.map(message => ({ message, task: matchOptimisticTask(message, list, claimed) }));
+  const inTimeline = new Set(matched.flatMap(({ message, task }) => message.placement === 'timeline' && task ? [task.id] : []));
+  const inPanel = new Set(matched.flatMap(({ message, task }) => message.placement === 'queue' && task ? [task.id] : []));
+  const queued = list.filter(task => task.status === 'queued' && !inTimeline.has(task.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const visible = sessionBusy || !queued.length || inPanel.has(queued[0]!.id) ? queued : queued.slice(1);
+  const pending = matched.flatMap(({ message, task }): QueuedTask[] => message.placement === 'queue' && !task
+    ? [{ id: message.id, sessionId: '', prompt: message.prompt, status: 'queued', createdAt: message.createdAt, updatedAt: message.createdAt, pending: true }]
+    : []);
+  return pending.length ? [...visible, ...pending] : visible;
+}
+
+/**
+ * 刚发出的消息会不会马上执行：打断发送，或会话空闲、没有别的排队或执行中的任务。
+ * 执行中的任务也要算：它刚切成 running 时会话状态的 SSE 可能还没到。
  * 马上执行的要回到底部看输出；要排队的只进「等待发送」面板，不打断正在回看历史的人。
  */
 export function startsImmediately(sessionState: string, mode: 'queue' | 'interrupt', tasks: Task[] | undefined): boolean {
   if (mode === 'interrupt') return true;
-  return !busyStates.has(sessionState) && !(tasks ?? []).some(task => task.status === 'queued');
+  return !busyStates.has(sessionState) && !(tasks ?? []).some(task => task.status === 'queued' || task.status === 'running');
 }
 
 /** 增量构建状态：时间线本体 + 构建过程中跨事件维护的索引。 */
@@ -134,7 +209,6 @@ type TimelineCacheEntry = TimelineBuildState & {
   events: DockEvent[];
   tasks: Task[] | undefined;
   optimistic: OptimisticMessage[] | undefined;
-  sessionBusy: boolean;
 };
 
 /**
@@ -228,9 +302,9 @@ function applyTimelineEvent(state: TimelineBuildState, event: DockEvent) {
   timeline.push(current);
 }
 
-function rememberTimeline(events: DockEvent[], tasks: Task[] | undefined, optimistic: OptimisticMessage[] | undefined, sessionBusy: boolean, state: TimelineBuildState) {
+function rememberTimeline(events: DockEvent[], tasks: Task[] | undefined, optimistic: OptimisticMessage[] | undefined, state: TimelineBuildState) {
   if (!events.length) return;
-  timelineCache.set(events[0]!, { events, tasks, optimistic, sessionBusy, ...state });
+  timelineCache.set(events[0]!, { events, tasks, optimistic, ...state });
 }
 
 /**
@@ -256,9 +330,41 @@ function incrementalCheckpoint(cached: TimelineCacheEntry, events: DockEvent[]):
   return start;
 }
 
-export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = EMPTY_TASKS, optimisticMessages: OptimisticMessage[] = EMPTY_OPTIMISTIC, sessionBusy = false): TimelineEvent[] {
+/**
+ * 还没开始执行、定在时间线上的乐观消息，一律接在时间线末尾，不按时间排：
+ * - 它要等眼下这一轮跑完才开始，这期间到的事件（比如被打断那一轮的收尾输出）都属于上一轮，
+ *   排进去会让这些输出跑到新气泡下面，真实事件一到又跳回上面。
+ * - 提交时间是本机时钟。本机比服务端慢几秒，气泡就插到上一轮的回复上面。
+ * 真实用户事件是任务开始时才发的，这一轮自己的输出不可能排在它前面，所以接在末尾总是对的。
+ */
+function pendingOptimisticRows(events: DockEvent[], tasks: Task[], optimisticMessages: OptimisticMessage[]): DockEvent[] {
+  if (!optimisticMessages.length) return [];
+  const claimed = claimedTaskIds(optimisticMessages);
+  const rows: DockEvent[] = [];
+  for (const optimistic of optimisticMessages) {
+    // 定在面板里的从不进时间线；settled 的已由真实事件或 task-event 行接手。
+    if (optimistic.placement !== 'timeline' || optimistic.settled) continue;
+    const matchingTask = matchOptimisticTask(optimistic, tasks, claimed);
+    const received = events.some(event => event.type === 'text' && event.data?.role === 'user'
+      && ((optimistic.taskId && event.data.taskId === optimistic.taskId) || (event.data.text === optimistic.prompt && event.timestamp >= optimistic.createdAt)));
+    if (!received && (!matchingTask || matchingTask.status === 'queued')) {
+      rows.push({ id: optimistic.id, sequence: -1, type: 'text', timestamp: optimistic.createdAt, data: { text: optimistic.prompt, role: 'user', taskId: optimistic.id, optimistic: true } });
+    }
+  }
+  return rows;
+}
+
+const TASK_ROW_PREFIX = 'task-event-';
+
+/** 检查点之后有没有 tasks 补出来的行。增量重建只重放 events，补不回这种行。 */
+function hasTaskRowFrom(timeline: TimelineEvent[], from: number) {
+  for (let index = from; index < timeline.length; index++) if (timeline[index]!.id.startsWith(TASK_ROW_PREFIX)) return true;
+  return false;
+}
+
+export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = EMPTY_TASKS, optimisticMessages: OptimisticMessage[] = EMPTY_OPTIMISTIC): TimelineEvent[] {
   const cached = events.length ? timelineCache.get(events[0]!) : undefined;
-  if (cached && cached.tasks === tasks && cached.optimistic === optimisticMessages && cached.sessionBusy === sessionBusy && events.length >= cached.events.length) {
+  if (cached && cached.tasks === tasks && cached.optimistic === optimisticMessages && events.length >= cached.events.length) {
     const unchanged = events.length === cached.events.length
       && cached.events.every((event, index) => event === events[index]);
     if (unchanged) return cached.timeline;
@@ -268,7 +374,9 @@ export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = EMPTY_TA
       const checkpointIndex = cached.timeline.findIndex(item => item.id === checkpoint.id);
       const previous = checkpointIndex > 0 ? cached.timeline[checkpointIndex - 1] : undefined;
       // 检查点前一条如果还能和本轮第一条用户消息合并，说明截断点在合并链中间，全量更安全。
-      if (checkpointIndex >= 0 && !mergeableUserText(previous, checkpoint)) {
+      // 检查点之后有 tasks 补出来的行也走全量：比如任务刚开始、它的用户事件还没到，上一轮收尾的
+      // status 先单独占了一帧，只重放 events 会把这一行丢掉，气泡闪没一帧。
+      if (checkpointIndex >= 0 && !mergeableUserText(previous, checkpoint) && !hasTaskRowFrom(cached.timeline, checkpointIndex)) {
         const state: TimelineBuildState = {
           timeline: cached.timeline.slice(0, checkpointIndex),
           toolIndexes: new Map([...cached.toolIndexes].filter(([, position]) => position < checkpointIndex)),
@@ -276,13 +384,14 @@ export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = EMPTY_TA
             .flatMap(item => item.type === 'warning' && typeof item.data.text === 'string' ? [item.data.text.toLocaleLowerCase()] : []))
         };
         for (let index = start; index < events.length; index++) applyTimelineEvent(state, events[index]!);
-        rememberTimeline(events, tasks, optimisticMessages, sessionBusy, state);
+        // 乐观气泡在末尾、检查点之后，上面截掉了，接回去。
+        for (const row of pendingOptimisticRows(events, tasks, optimisticMessages)) applyTimelineEvent(state, row);
+        rememberTimeline(events, tasks, optimisticMessages, state);
         return state.timeline;
       }
     }
   }
 
-  const waitingIds = new Set(waitingQueuedTasks(tasks, sessionBusy).map(task => task.id));
   const state: TimelineBuildState = { timeline: [], toolIndexes: new Map(), seenWarnings: new Set() };
   const eventTaskIds = new Set(events.filter(event => event.data?.role === 'user' && event.data?.taskId).map(event => event.data.taskId));
   const legacyPrompts = new Map<string, number>();
@@ -293,22 +402,16 @@ export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = EMPTY_TA
     if (eventTaskIds.has(task.id)) continue;
     const legacyCount = legacyPrompts.get(task.prompt) ?? 0;
     if (legacyCount > 0) { legacyPrompts.set(task.prompt, legacyCount - 1); continue; }
-    taskEvents.push({ id: `task-event-${task.id}`, sequence: -1, type: 'text', timestamp: task.createdAt, data: { text: task.prompt, role: 'user', taskId: task.id } });
-  }
-  for (const optimistic of optimisticMessages) {
-    const matchingTask = tasks.find(task => optimistic.taskId
-      ? task.id === optimistic.taskId
-      : task.prompt === optimistic.prompt && Math.abs(Date.parse(task.createdAt) - Date.parse(optimistic.createdAt)) < 5_000);
-    const received = events.some(event => event.type === 'text' && event.data?.role === 'user'
-      && ((optimistic.taskId && event.data.taskId === optimistic.taskId) || (event.data.text === optimistic.prompt && event.timestamp >= optimistic.createdAt)));
-    // 在「等待发送」面板里的不重复出气泡；剩下的是发送中或即将开始的队首，都算「发送中」。
-    if (!received && !(matchingTask && waitingIds.has(matchingTask.id)) && (!matchingTask || matchingTask.status === 'queued')) {
-      taskEvents.push({ id: optimistic.id, sequence: -1, type: 'text', timestamp: optimistic.createdAt, data: { text: optimistic.prompt, role: 'user', taskId: optimistic.id, optimistic: true } });
-    }
+    // 这一行替的是任务开始时服务端发的那条用户事件，执行中的任务 updatedAt 就是开始时间。
+    // 用 createdAt 的话，上一轮跑到一半时排进来的消息会插进上一轮中间：上一轮的回复被挤到它下面，
+    // 下一帧真实事件到了又跳回去（实测弹 60px、回复闪一下）。结束了的任务 updatedAt 是结束时间，仍按创建时间。
+    const timestamp = task.status === 'running' ? task.updatedAt : task.createdAt;
+    taskEvents.push({ id: `${TASK_ROW_PREFIX}${task.id}`, sequence: -1, type: 'text', timestamp, data: { text: task.prompt, role: 'user', taskId: task.id } });
   }
   const source = sortByTimestampThenSequence([...events, ...taskEvents]);
   for (const event of source) applyTimelineEvent(state, event);
-  rememberTimeline(events, tasks, optimisticMessages, sessionBusy, state);
+  for (const row of pendingOptimisticRows(events, tasks, optimisticMessages)) applyTimelineEvent(state, row);
+  rememberTimeline(events, tasks, optimisticMessages, state);
   return state.timeline;
 }
 
@@ -336,6 +439,20 @@ export function isStreamingSection(section: TimelineSection, sessionBusy: boolea
 export function isTurnOngoing(section: TimelineSection, sessionBusy: boolean): boolean {
   if (section.kind !== 'activity' || !section.isLatestTurn || !sessionBusy) return false;
   return !terminalTaskStatuses.has(section.taskStatus);
+}
+
+/**
+ * 最新一轮是否在等第一段过程输出，需要在气泡下面先放一行「处理中」占位。
+ * - 刚发出的乐观气泡就给（会话还没 busy）：气泡和占位一起出现，任务真正开始时界面不再动一下。
+ * - 任务已切成 running、会话状态的 SSE 还没到的那一帧也给，免得占位闪没。
+ * - 这一轮的任务已经结束就不给：task completed 和会话 completed 是两条 SSE，中间不能冒出「处理中」。
+ */
+export function awaitsFirstOutput(latestUser: TimelineEvent | undefined, tasks: Task[] | undefined, sessionBusy: boolean, hasOngoingActivity: boolean): boolean {
+  if (!latestUser || hasOngoingActivity) return false;
+  if (latestUser.data.optimistic) return true;
+  const task = tasks?.find(item => item.id === latestUser.data.taskId);
+  if (task && terminalTaskStatuses.has(task.status)) return false;
+  return sessionBusy || task?.status === 'running';
 }
 const assistantDescription = (event: TimelineEvent) => event.type === 'text' && event.data.role !== 'user';
 const previewText = (value: unknown, limit = 100) => {
