@@ -2,13 +2,14 @@ import { Spinner } from './Loaders';
 import { useMemo, useRef, useState } from 'react';
 import { useLocalStorageState } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Check, ExternalLink, Search, Users, X } from 'lucide-react';
+import { Bot, ExternalLink, Search, Users, X } from 'lucide-react';
 import { Input } from 'antd';
 import { cleanChatName } from '@agent-dock/agent-dock-shared';
 import { api, type Agent, type Session } from './api';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { parseLarkSourceId } from './lark-session-link';
+import { defaultHandoverPicked, filterHandoverCandidates, toggleHandoverPicked } from './handover-members';
 
 /**
  * 「托管给机器人」：给已存在的会话建飞书群并绑定，之后用群聊继续这个会话。
@@ -30,7 +31,7 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
   const [keyword, setKeyword] = useState('');
   const [created, setCreated] = useState<{ chatId: string; name: string; url: string }>();
   const [selfOpenId, setSelfOpenId] = useLocalStorageState<string>('agentdock:handover-self-openid', { defaultValue: '' });
-  const [picked, setPicked] = useState<string[]>([]);
+  const [picked, setPicked] = useState<string[] | null>(null);
   const [searched, setSearched] = useState<{ openId: string; name: string }[]>([]);
 
   const effectiveAppId = bots.some(bot => bot.appId === appId) ? appId : bots[0]?.appId ?? '';
@@ -71,11 +72,10 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
           for (const user of result.users) map.set(user.openId, user);
           return [...map.values()];
         });
-        setPicked(current => current.length ? current : [result.users[0]!.openId]);
+        setPicked(current => current ?? [result.users[0]!.openId]);
       }
     }
   });
-  const filtered = candidates.filter(user => !keyword.trim() || user.name.toLowerCase().includes(keyword.trim().toLowerCase()));
 
   // 头像：对当前候选批量取（含创建者）。拿不到就退回首字母兜底，不阻塞选择。
   const candidateIds = candidates.map(user => user.openId).sort();
@@ -89,24 +89,19 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
     profiles.data?.users.find(user => user.openId === openId)?.avatarUrl
     ?? (owner.data?.owner?.openId === openId ? owner.data.owner.avatarUrl : undefined);
 
-  // 默认勾人：优先「上次选过的自己」，否则机器人创建者，最后才退到第一个候选。
-  const effectivePicked = useMemo(() => {
-    if (picked.length) return picked;
-    if (selfOpenId && candidates.some(user => user.openId === selfOpenId)) return [selfOpenId];
-    const ownerId = owner.data?.owner?.openId;
-    if (ownerId && candidates.some(user => user.openId === ownerId)) return [ownerId];
-    return candidates.length ? [candidates[0]!.openId] : [];
-  }, [picked, selfOpenId, candidates, owner.data]);
-  const toggle = (openId: string) => {
-    const current = effectivePicked;
-    setPicked(current.includes(openId) ? current.filter(id => id !== openId) : [...current, openId]);
-  };
+  // null 表示还没手动改过：此刻才按上次选择/创建者给一个默认值；用户一旦清空就是 []，不再回补。
+  const effectivePicked = picked ?? defaultHandoverPicked(candidates, owner.data?.owner?.openId, selfOpenId);
+  const toggle = (openId: string) => setPicked(toggleHandoverPicked(effectivePicked, openId));
+  const filtered = useMemo(() => filterHandoverCandidates(candidates, keyword, effectivePicked), [candidates, keyword, effectivePicked]);
+  const manualOpenId = manual.trim();
+  const manualValid = manualOpenId === '' || manualOpenId.startsWith('ou_');
+  const memberOpenIds = [...new Set([...effectivePicked, ...(manualValid && manualOpenId ? [manualOpenId] : [])])];
 
   const handover = useMutation({
     mutationFn: () => api.handoverSession(session.id, {
       appId: effectiveAppId,
       name,
-      memberOpenIds: [...new Set([...effectivePicked, ...(manual.trim().startsWith('ou_') ? [manual.trim()] : [])])]
+      memberOpenIds
     }),
     onSuccess: result => {
       if (effectivePicked[0]) setSelfOpenId(effectivePicked[0]);
@@ -133,36 +128,30 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
         {bots.length > 0 && <>
           <label className="block text-[12px] font-medium text-zinc-700">用哪个机器人</label>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {bots.map(item => <button key={item.appId} type="button" onClick={() => { setAppId(item.appId); setPicked([]); setKeyword(''); }} className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${item.appId === effectiveAppId ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'}`}>{item.name || item.appId}</button>)}
+            {bots.map(item => <button key={item.appId} type="button" onClick={() => { setAppId(item.appId); setPicked(null); setKeyword(''); }} className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${item.appId === effectiveAppId ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'}`}>{item.name || item.appId}</button>)}
           </div>
 
           <label className="mt-4 block text-[12px] font-medium text-zinc-700">群名称</label>
           <Input size="large" value={name} onChange={event => setName(event.target.value)} className="mt-1.5 text-[13px]"/>
 
-          <div className="mt-4 flex items-center gap-1.5 text-[12px] font-medium text-zinc-700"><Users size={12}/>邀请成员<span className="font-normal text-zinc-400">（默认机器人创建者，可搜索/更换）</span></div>
+          <div className="mt-4 flex items-center gap-1.5 text-[12px] font-medium text-zinc-700"><Users size={12}/>邀请成员<span className="font-normal text-zinc-400">（点成员胶囊勾选，可全部取消）</span></div>
           <div className="mt-1.5 flex items-center gap-1.5">
             <Input className="min-w-0 flex-1" value={keyword} onChange={event => setKeyword(event.target.value)} onPressEnter={event => { if (keyword.trim()) { event.preventDefault(); search.mutate(keyword.trim()); } }} placeholder="输入姓名后回车搜索（机器人可见范围）" prefix={<Search size={13} className="text-zinc-400"/>} suffix={(members.isFetching || search.isPending) ? <Spinner size={12} className="text-zinc-400"/> : <span/>}/>
             <button type="button" disabled={!effectiveAppId || !keyword.trim() || search.isPending} onClick={() => search.mutate(keyword.trim())} className="h-8 shrink-0 rounded-md border border-zinc-200 px-2.5 text-[12px] text-zinc-600 hover:bg-zinc-50 disabled:opacity-40">搜索</button>
           </div>
           {(search.data?.error || search.error) && <p className="mt-1.5 text-[12px] text-amber-700">{search.data?.error ?? (search.error instanceof Error ? search.error.message : '搜索失败')}</p>}
-          {effectivePicked.length > 0 && <div className="mt-2.5 flex flex-wrap items-center gap-2 rounded-lg bg-zinc-50 px-2.5 py-2">
-            <span className="text-[12px] text-zinc-400">已选</span>
-            {effectivePicked.map(openId => {
-              const user = candidates.find(item => item.openId === openId);
-              const avatar = avatarFor(openId);
-              return <span key={openId} className="flex items-center gap-1.5 text-[12px] font-medium text-zinc-700">{avatar ? <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover"/> : <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-200 text-[12px] text-zinc-600">{(user?.name ?? '?').slice(0, 1)}</span>}{user?.name ?? openId}</span>;
-            })}
-          </div>}
-          <div className="mt-2.5 border-t border-zinc-100 pt-3">
+          <div className="mt-2.5 rounded-lg border border-zinc-100 bg-zinc-50/60 p-2.5">
+            <div className="mb-2 flex items-center gap-1.5 text-[12px] text-zinc-400"><Users size={11}/>已选 {effectivePicked.length} 人{effectivePicked.length === 0 && <span className="text-zinc-400">· 仅机器人和自己可在群内，其他人可稍后邀请</span>}</div>
             <div className="max-h-40 overflow-y-auto">
               {filtered.length > 0 ? <div className="flex flex-wrap gap-1.5">{filtered.map(user => {
                 const selected = effectivePicked.includes(user.openId);
                 const avatar = avatarFor(user.openId);
-                return <button key={user.openId} type="button" onClick={() => toggle(user.openId)} className={`flex h-8 items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2.5 text-[12px] transition-colors ${selected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-zinc-200 text-zinc-600 hover:border-zinc-300'}`}>{avatar ? <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover"/> : <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-100 text-[12px] text-zinc-500">{(user.name || '?').slice(0, 1)}</span>}{user.name}{selected && <Check size={11}/>}</button>;
+                return <button key={user.openId} type="button" aria-pressed={selected} onClick={() => toggle(user.openId)} className={`flex h-8 items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2.5 text-[12px] transition-colors ${selected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'}`}>{avatar ? <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover"/> : <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-100 text-[12px] text-zinc-500">{(user.name || '?').slice(0, 1)}</span>}{user.name}{selected && <span aria-hidden="true" className="ml-0.5 text-[10px] font-semibold">✓</span>}</button>;
               })}</div> : <p className="text-[12px] text-zinc-400">{members.isError && originChatId ? '读取原群成员失败（机器人可能不在该群）；用上面的搜索按姓名找人，或在下面填 open_id。' : '没有匹配的成员：换个名字搜索，或在下面填 open_id。'}</p>}
             </div>
           </div>
-          <Input value={manual} onChange={event => setManual(event.target.value)} placeholder="补充一个 open_id（ou_ 开头，可选）" className="mt-2 font-mono text-[12px]"/>
+          <Input value={manual} status={manualValid ? undefined : 'error'} onChange={event => setManual(event.target.value)} placeholder="补充一个 open_id（ou_ 开头，可选）" className="mt-2 font-mono text-[12px]"/>
+          {!manualValid && <p className="mt-1 text-[12px] text-red-600">open_id 必须以 ou_ 开头。</p>}
 
           <p className="mt-3 text-[12px] leading-4 text-zinc-400">建群后，这个群的消息会直接进入当前会话；现有 Agent、模型、历史都保持不变。群里需要 @ 机器人来唤醒。机器人白名单内的群成员都能以完全信任权限驱动这个会话，请只拉信任的人。</p>
         </>}
@@ -177,7 +166,7 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
 
       <div className="flex shrink-0 items-center justify-end gap-2 border-t border-zinc-100 px-4 py-3">
         <button type="button" onClick={onClose} className="rounded-lg border border-zinc-300 px-3.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50">{created ? '完成' : '取消'}</button>
-        {!created && <button type="button" disabled={!effectiveAppId || !name.trim() || handover.isPending} onClick={() => handover.mutate()} className="flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400">{handover.isPending && <Spinner size={12}/>}建群并托管</button>}
+        {!created && <button type="button" disabled={!effectiveAppId || !name.trim() || !manualValid || handover.isPending} onClick={() => handover.mutate()} className="flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400">{handover.isPending && <Spinner size={12}/>}建群并托管</button>}
       </div>
     </div>
   </div>;

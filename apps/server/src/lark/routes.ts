@@ -167,8 +167,12 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
     // 群名兜底也必须清洗：会话标题对附件首发的会话等于一条路径，直接拿来当群名会建出
     // 一个叫 `/Users/xxx/a.png` 的飞书群。用户显式传的 name 不动，那是他的选择。
     const name = request.body?.name?.trim() || `${cleanChatName(session.title) || session.agentId} · AgentDock`;
+    const memberOpenIds = (request.body?.memberOpenIds ?? []).map(id => id.trim()).filter(Boolean);
+    if (memberOpenIds.some(id => !id.startsWith('ou_'))) {
+      throw new LarkServiceError('INVALID_HANDOVER_MEMBER', '邀请成员必须是 ou_ 开头的 open_id', 400);
+    }
     const bot = await resolveService(undefined, appId);
-    const chat = await bot.createChat({ name, memberOpenIds: request.body?.memberOpenIds ?? [] });
+    const chat = await bot.createChat({ name, memberOpenIds });
     await options.cardMappings.save({
       id: `${channel}:${chat.chatId}`,
       channel,

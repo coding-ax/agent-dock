@@ -6,6 +6,6 @@
  */
 
 /** 按钮 / 控件等待：14px 细线圆环。 */
-export function Spinner({ size = 14, className = '' }: { size?: number; className?: string }) {
-  return <span role="status" aria-label="加载中" className={`inline-block shrink-0 animate-spin rounded-full border-[1.5px] border-current border-r-transparent opacity-70 ${className}`} style={{ width: size, height: size }}/>;
+export function Spinner({ size = 14, className = '', label = '加载中' }: { size?: number; className?: string; label?: string }) {
+  return <span role="status" aria-label={label} className={`inline-block shrink-0 animate-spin rounded-full border-[1.5px] border-current border-r-transparent opacity-70 ${className}`} style={{ width: size, height: size }}/>;
 }

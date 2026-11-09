@@ -28,19 +28,19 @@ export function SessionHoverCard({ session, agentName, botName, parentLabel, now
     { label: '来源', value: sessionSourceLabel(session, { botName, parentLabel }) }
   ];
   return <div className="w-[320px] max-w-[76vw] leading-5">
-    {session.title && <div className="mb-1 break-words text-[12.5px] font-medium text-zinc-50">{session.title}</div>}
+    {session.title && <div className="mb-1 break-words text-[12.5px] font-medium text-zinc-900">{session.title}</div>}
     <div className="flex items-center gap-1.5">
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${status.tone}`}/>
-      <span className="min-w-0 truncate text-zinc-300">{[agentName ?? session.agentId, status.text, model].filter(Boolean).join(' · ')}</span>
+      <span className="min-w-0 truncate text-zinc-600">{[agentName ?? session.agentId, status.text, model].filter(Boolean).join(' · ')}</span>
     </div>
-    <div className="my-1.5 border-t border-white/15"/>
+    <div className="my-1.5 border-t border-zinc-200"/>
     <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
       {rows.map(row => <Fragment key={row.label}>
         <span className="whitespace-nowrap text-zinc-400">{row.label}</span>
-        <span className={`min-w-0 break-words text-zinc-100 ${row.path ? 'font-mono text-[12px]' : ''}`}>{row.path ? pathSegments(row.value) : row.value}</span>
+        <span className={`min-w-0 break-words text-zinc-700 ${row.path ? 'font-mono text-[12px]' : ''}`}>{row.path ? pathSegments(row.value) : row.value}</span>
       </Fragment>)}
     </div>
-    <div className="my-1.5 border-t border-white/15"/>
+    <div className="my-1.5 border-t border-zinc-200"/>
     {/* 等宽 + 淡色：报障、去 CLI 里捞、跟人对齐都要用它，平时界面上无处可看。 */}
     <div className="break-all font-mono text-[12px] text-zinc-400">{session.id}</div>
   </div>;

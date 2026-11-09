@@ -4,7 +4,7 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'reac
 import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type DockEvent, type Session, type Task } from './api';
-import { buildTimeline, buildTimelineSections, isStreamingSection, isTurnOngoing, startsImmediately, waitingQueuedTasks, type OptimisticMessage } from './timeline';
+import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, waitingQueuedTasks, type OptimisticMessage } from './timeline';
 import { ActivityPanel, TimelineItem } from './TimelineItems';
 import { Composer } from './Composer';
 import type { ComposerEditorHandle } from './ComposerEditor';
@@ -132,25 +132,27 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 标题栏时钟上的高亮：只算启用中的。和弹窗共用同一个缓存键，弹窗里的增删改会自动刷新这里。
   const schedules = useQuery({ queryKey: ['schedules', session.id], queryFn: () => api.schedules(session.id), enabled: !session.archivedAt, staleTime: 30_000 });
   const activeSchedules = schedules.data?.filter(item => item.enabled).length ?? 0;
-  const timeline = useMemo(() => buildTimeline(events.data, tasks.data, optimisticMessages, sessionBusy), [events.data, tasks.data, optimisticMessages, sessionBusy]); const timelineSections = useMemo(() => buildTimelineSections(timeline, tasks.data), [timeline, tasks.data]);
+  const timeline = useMemo(() => buildTimeline(events.data, tasks.data, optimisticMessages), [events.data, tasks.data, optimisticMessages]); const timelineSections = useMemo(() => buildTimelineSections(timeline, tasks.data), [timeline, tasks.data]);
+  const rowKeys = useMemo(() => optimisticRowKeys(optimisticMessages), [optimisticMessages]);
   let latestUserIndex = -1;
   for (let index = timeline.length - 1; index >= 0; index--) if (timeline[index].type === 'text' && timeline[index].data.role === 'user') { latestUserIndex = index; break; }
   // 页面挂载时刻：时间戳早于它的行是「打开页面之前就存在的历史」，刷新时不重播。
   // 为什么不按「第几批 payload」判断：刷新后的 SSE 补发也会把旧内容带回来，按批次判会把
   // 已经显示过的整段当成新内容重播一遍——那正是「每次刷新都重新跑一遍」的来源。
   const mountedAt = useRef(new Date().toISOString()).current;
-  const queuedTasks = useMemo(() => waitingQueuedTasks(tasks.data, sessionBusy), [tasks.data, sessionBusy]);
+  const queuedTasks = useMemo(() => waitingQueuedTasks(tasks.data, sessionBusy, optimisticMessages), [tasks.data, sessionBusy, optimisticMessages]);
   const hasOngoingActivity = timelineSections.some(section => isTurnOngoing(section, sessionBusy));
+  const showFirstOutputPlaceholder = awaitsFirstOutput(timeline[latestUserIndex], tasks.data, sessionBusy, hasOngoingActivity);
   const timelineScroll = useTimelineAutoScroll(session.id, timeline, sessionBusy);
   // 只对「回到底部」按钮的显隐做 120ms 去抖：滞回阈值已经消除边界翻转，
   // 这里再兜一层，避免快速抖动/极窄视口下按钮闪一下又消失。跟随逻辑本身不去抖。
   const showScrollToBottom = useDebounce(!timelineScroll.isFollowing, { wait: 120 });
 
   const send = useMutation({
-    mutationFn: ({ message, mode }: { message: string; mode: SendMode; draft: string; references: ComposerReference[]; optimisticId: string }) => api.send(session.id, message, mode),
+    mutationFn: ({ message, mode }: { message: string; mode: SendMode; placement: OptimisticMessage['placement']; draft: string; references: ComposerReference[]; optimisticId: string }) => api.send(session.id, message, mode),
     onMutate: variables => {
       setActionError(undefined);
-      setOptimisticMessages(current => [...current, { id: variables.optimisticId, prompt: variables.message, createdAt: new Date().toISOString() }]);
+      setOptimisticMessages(current => [...current, { id: variables.optimisticId, prompt: variables.message, createdAt: new Date().toISOString(), placement: variables.placement }]);
       setPrompt('');
       setComposerReferences([]);
       setSendMode('queue');
@@ -159,9 +161,14 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       const existing = qc.getQueryData<Task[]>(['tasks', session.id])?.find(task => task.id === result.task.id);
       const task = existing && existing.status !== 'queued' ? existing : result.task;
       qc.setQueryData<Task[]>(['tasks', session.id], current => [...(current ?? []).filter(item => item.id !== task.id), task]);
-      setOptimisticMessages(current => task.status === 'queued'
-        ? current.map(item => item.id === variables.optimisticId ? { ...item, taskId: task.id } : item)
-        : current.filter(item => item.id !== variables.optimisticId));
+      // 提交时以为会马上执行，服务端却说前面还有任务（别处的消息、定时任务抢先一步）：改进面板。
+      // 留在时间线里的话，前面那一轮的输出会全挂到这条气泡下面。
+      const queuedAhead = (result.task as Task & { queuedAhead?: number }).queuedAhead ?? 0;
+      const waits = variables.mode === 'queue' && task.status === 'queued' && queuedAhead > 0;
+      setOptimisticMessages(current => {
+        const bound = bindOptimisticTask(current, task, variables.optimisticId);
+        return waits ? bound.map(item => item.id === variables.optimisticId ? { ...item, placement: 'queue' } : item) : bound;
+      });
     },
     onError: (error, variables) => {
       setOptimisticMessages(current => current.filter(item => item.id !== variables.optimisticId));
@@ -209,13 +216,24 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       if (event.type === 'status' && 'title' in event.data) qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, title: event.data.title ?? undefined, titleSource: event.data.titleSource ?? undefined } : item));
       if (event.type === 'status' && Object.hasOwn(stateLabels, event.data.state)) qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, state: event.data.state, ...(typeof event.data.model === 'string' ? { model: event.data.model } : {}), ...(typeof event.data.reasoningEffort === 'string' ? { reasoningEffort: event.data.reasoningEffort } : {}) } : item));
       if (event.type === 'task' && event.data.task) {
-        qc.setQueryData<Task[]>(['tasks', session.id], current => [...(current ?? []).filter(task => task.id !== event.data.task.id), event.data.task]);
-        if (event.data.task.status !== 'queued') setOptimisticMessages(current => current.filter(item => item.taskId !== event.data.task.id));
+        const task = event.data.task as Task;
+        qc.setQueryData<Task[]>(['tasks', session.id], current => [...(current ?? []).filter(item => item.id !== task.id), task]);
+        // SSE 可能比 send 响应先到：这里同样认领、并在任务开始后把乐观消息标成 settled。
+        setOptimisticMessages(current => bindOptimisticTask(current, task));
       }
     }
   });
 
-  const submit = () => { if (modelReadiness.kind === 'blocked' || send.isPending) return; const message = buildPrompt(prompt, composerReferences, advertisedCommands.map(command => command.name)); if (message) { const mode = busyStates.has(session.state) ? sendMode : 'queue'; if (startsImmediately(session.state, mode, tasks.data)) timelineScroll.scrollToBottom(); send.mutate({ message, mode, draft: prompt, references: composerReferences, optimisticId: createOptimisticMessageId() }); } };
+  const submit = () => {
+    if (modelReadiness.kind === 'blocked' || send.isPending) return;
+    const message = buildPrompt(prompt, composerReferences, advertisedCommands.map(command => command.name));
+    if (!message) return;
+    const mode = busyStates.has(session.state) ? sendMode : 'queue';
+    // 落点在提交时就定：马上执行的进时间线并回到底部；要排队的只进「等待发送」面板，时间线不动。
+    const placement = startsImmediately(session.state, mode, tasks.data) ? 'timeline' : 'queue';
+    if (placement === 'timeline') timelineScroll.scrollToBottom();
+    send.mutate({ message, mode, placement, draft: prompt, references: composerReferences, optimisticId: createOptimisticMessageId() });
+  };
   // 飞书来源会话：sourceId 里带 chatId，可以生成 applink 直接跳回该群/私聊。
   // 话题会话没有官方 thread 级直达链接，退化为「进群」，用 exact 标记给个提示。
   const larkLink = session.source === 'lark' ? larkSessionAppLink(session.sourceId) : undefined;
@@ -298,7 +316,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
       <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
-        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineSections.map((section, index) => section.kind === 'event' ? <TimelineItem key={section.event.id} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, index === timelineSections.length - 1)} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/> : <ActivityPanel key={section.turnId} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}{sessionBusy && latestUserIndex >= 0 && !hasOngoingActivity && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
+        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineSections.map((section, index) => section.kind === 'event' ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, index === timelineSections.length - 1)} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/> : <ActivityPanel key={section.turnId} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
         </div></div>{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}</div>
       {session.archivedAt ? <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已永久归档，仅支持查看。</div> : <Composer sessionId={session.id} state={session.state} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>

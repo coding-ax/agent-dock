@@ -190,10 +190,12 @@ const ThinkingStep = memo(function ThinkingStep({ event, live, replay, sessionId
 }, (prev, next) => prev.live === next.live && prev.replay === next.replay && prev.sessionId === next.sessionId
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event));
 
-function ActivitySteps({ steps, ongoing, replay, sessionId, pending, pendingLabel }: { steps: ActivityStep[]; ongoing: boolean; replay: boolean; sessionId: string | undefined; pending?: boolean; pendingLabel?: string }) {
+function ActivitySteps({ steps, ongoing, replay, sessionId, reservePending = false, pending = false, pendingLabel }: { steps: ActivityStep[]; ongoing: boolean; replay: boolean; sessionId: string | undefined; /** 留出「处理中」这一行的位置，即便此刻不显示。 */ reservePending?: boolean; pending?: boolean; pendingLabel?: string }) {
   const last = steps.at(-1);
+  const slot = reservePending || pending;
   return <div className="relative">
-    <span aria-hidden="true" className="absolute bottom-3 left-2 top-2 w-px bg-zinc-200"/>
+    {/* 留空的「处理中」行不画竖线，竖线照旧止于最后一步。 */}
+    <span aria-hidden="true" className={`absolute left-2 top-2 w-px bg-zinc-200 ${slot && !pending ? 'bottom-11' : 'bottom-3'}`}/>
     {steps.map(step => {
       const isLast = step === last;
       if (step.kind === 'thinking') return <ThinkingStep key={step.id} event={step.event} live={ongoing && isLast} replay={replay} sessionId={sessionId}/>;
@@ -201,9 +203,11 @@ function ActivitySteps({ steps, ongoing, replay, sessionId, pending, pendingLabe
       const streaming = ongoing && isLast;
       return <div key={step.id} className="relative pl-6"><AssistantMarkdown text={step.event.data.text ?? ''} active={streaming} replay={replay || !streaming} sessionId={sessionId}/></div>;
     })}
-    {pending && <div className="ui-timeline-item relative flex min-h-8 items-center py-1 pl-6 text-[13px] text-zinc-400">
-      <span className="absolute left-0 top-1/2 grid h-4 w-4 -translate-y-1/2 place-items-center bg-canvas"><span className="h-1.5 w-1.5 rounded-full bg-zinc-400"/></span>
-      <span className="ui-shimmer-text">{pendingLabel}</span>
+    {slot && <div aria-hidden={pending ? undefined : true} className="relative min-h-8 py-1 text-[13px] text-zinc-400">
+      {pending && <div className="ui-timeline-item flex min-h-6 items-center pl-6">
+        <span className="absolute left-0 top-1/2 grid h-4 w-4 -translate-y-1/2 place-items-center bg-canvas"><span className="h-1.5 w-1.5 rounded-full bg-zinc-400"/></span>
+        <span className="ui-shimmer-text">{pendingLabel}</span>
+      </div>}
     </div>}
   </div>;
 }
@@ -221,10 +225,14 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
   const last = steps.at(-1);
   // 最后一步不是还在转的思考 / 工具 / 流式正文时（刚发出、或工具刚返回等下一步），给一行加载提示，免得界面像卡住。
   const idle = ongoing && (!last || (last.kind === 'tools' && last.events.every(isToolTerminal)));
+  // 「处理中」那一行的位置在「还没有步骤」或「最后一步是工具」期间一直留着，只切换文字显隐：
+  // 连续的工具调用会并进同一行，这一行若随每次工具起落增删，整条时间线就跟着上下跳 32px。
+  // 最后一步换成思考 / 正文时，新的一行正好顶替它的位置，高度只增不减。
+  const reservePending = ongoing && (!last || last.kind === 'tools');
 
   // 进行中：不套外壳，每一步按输出顺序平铺，正文正常展示。
   if (ongoing) return <section aria-live="polite" aria-label={`${modelLabel} 执行过程`} className="my-3">
-    <ActivitySteps steps={steps} ongoing replay={replay} sessionId={sessionId} pending={idle} pendingLabel={`处理中${elapsed ? ` · ${elapsed}` : ''}`}/>
+    <ActivitySteps steps={steps} ongoing replay={replay} sessionId={sessionId} reservePending={reservePending} pending={idle} pendingLabel={`处理中${elapsed ? ` · ${elapsed}` : ''}`}/>
   </section>;
 
   // 结束后：中间过程全部收进一行「已处理 xx」，只留最终输出；点开才看完整过程。
@@ -272,12 +280,16 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
   const user = event.data.role === 'user';
   if (user) {
     const text = markLeadingSlashCommand(stripImageReferenceLines(event.data.text ?? ''));
-    return <div className="ui-timeline-item my-6 flex justify-end"><div className="min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900"><MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>{event.data.optimistic && <div className="mt-1 text-right text-[12px] text-zinc-500">发送中…</div>}</div></div>;
+    // 「发送中」是气泡左侧的绝对定位圆环，对齐最后一行文字：不占位，确认后消失也不会让气泡跳动。
+    // 用 bottom 而不是 translate 定位，避免和 animate-spin 的 transform 冲突。
+    return <div className="ui-timeline-item my-6 flex justify-end"><div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900"><MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>{event.data.optimistic && <Spinner size={14} label="发送中" className="absolute bottom-4 right-full mr-2 text-zinc-400"/>}</div></div>;
   }
   // 挂载时已不在流式输出的正文直接给全文。轮次结束时最终回答会从执行面板搬成独立的 final 行（重新挂载），
   // tasks 刷新的空档也可能让它短暂搬回去再搬出来；否则这些早就返回过的内容会从 0 重新打一遍。
   const settled = replay || !streaming;
-  if (final) return <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} final assistantLabel={assistantLabel} sessionId={sessionId}/>;
+  // 轮次结束时搬出来的 final 行，内容刚才已经在执行面板里显示过：不重播入场动画，否则回答会先消失再淡入。
+  // 首屏历史（replay）照常和其它行一起淡入。
+  if (final) return <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} final animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>;
   return <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} assistantLabel={assistantLabel} sessionId={sessionId}/>;
 }, (prev, next) => prev.final === next.final && prev.streaming === next.streaming && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event)

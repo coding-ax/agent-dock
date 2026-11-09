@@ -1,6 +1,7 @@
 # AgentDock 消息源与 Router（P0 模块）
 
 > 2026-11-07 · 独立增量模块
+> 2026-11-09：按新设计 [`2026-11-09-agentdock-main-session-design.md`](2026-11-09-agentdock-main-session-design.md)（评审中），这个模块将逐步下线。去重、游标、GitHub 归一化和 Action 执行器会复用；Router、Case、Watch 和自动回写会删除。
 
 ## 范围
 

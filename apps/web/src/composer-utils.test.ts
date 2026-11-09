@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, isHomeDirectory, parsePromptToDraft, queuedImageThumbnailUrl, replaceSlashQuery, shouldDismissComposerPanel, slashQuery, workspaceBasename, workspaceLabel } from './composer-utils';
+import { buildPrompt, commandsFromEvents, contextStatsFromEvents, filterAgentModels, getModelReadiness, isHomeDirectory, parsePromptToDraft, queuedImageThumbnailUrl, replaceSlashQuery, shouldDismissComposerPanel, slashQuery, workspaceBasename, workspaceLabel } from './composer-utils';
 
 describe('composer references', () => {
   it('never emits a leading slash, which the CLI would read as a slash command', () => {
@@ -102,7 +102,39 @@ describe('composer references', () => {
     expect(shouldDismissComposerPanel({ insidePopover: false, onPanelTrigger: true })).toBe(false);
     expect(shouldDismissComposerPanel({ insidePopover: false, onPanelTrigger: false })).toBe(true);
   });
+});
 
+describe('filterAgentModels', () => {
+  const models = [
+    { id: 'default', name: 'Default (recommended)' },
+    { id: 'opus', name: 'workbuddy/deepseek-v4.1-flash[1m]' },
+    { id: 'fable', name: 'Fable' },
+    { id: 'auto/auto', name: 'Auto · routing group' },
+    { id: 'auto/hy3', name: 'Hy3 · routing group' },
+    { id: 'auto/glm-5.3[1m]', name: 'GLM-5.3 · routing group' },
+    { id: 'auto/glm-5.3-flash[1m]', name: 'GLM-5.3-Flash · routing group' }
+  ];
+
+  it('matches visible name, id, and routing-group ids case-insensitively', () => {
+    expect(filterAgentModels(models, 'opus').map(m => m.id)).toEqual(['opus']);
+    expect(filterAgentModels(models, 'GLM').map(m => m.id)).toEqual(['auto/glm-5.3[1m]', 'auto/glm-5.3-flash[1m]']);
+    expect(filterAgentModels(models, 'routing').map(m => m.id)).toEqual(['auto/auto', 'auto/hy3', 'auto/glm-5.3[1m]', 'auto/glm-5.3-flash[1m]']);
+    expect(filterAgentModels(models, 'auto/hy3').map(m => m.id)).toEqual(['auto/hy3']);
+  });
+
+  it('requires every term to match somewhere in name or id', () => {
+    expect(filterAgentModels(models, 'glm flash').map(m => m.id)).toEqual(['auto/glm-5.3-flash[1m]']);
+    expect(filterAgentModels(models, 'fable opus')).toEqual([]);
+  });
+
+  it('shows the full list for an empty or whitespace-only query, preserving order', () => {
+    expect(filterAgentModels(models, '')).toEqual(models);
+    expect(filterAgentModels(models, '   ')).toEqual(models);
+    expect(filterAgentModels(models, ' FABLE ')).toEqual([{ id: 'fable', name: 'Fable' }]);
+  });
+});
+
+describe('composer references (continued)', () => {
   it('parses a queued prompt back into body text and reference chips for editing', () => {
     const prompt = buildPrompt('帮我看看这张图', [
       { id: 'i', kind: 'image', label: 'screenshot.png', value: '/Users/me/.agentdock/uploads/ses1/1700-abc.png' },

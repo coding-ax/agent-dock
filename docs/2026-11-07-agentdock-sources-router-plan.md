@@ -1,6 +1,6 @@
 # AgentDock 消息源与 Router：任务清单与验收标准
 
-> 状态：草案 · 2026-11-07
+> 状态：草案 · 2026-11-07 · **2026-11-09 起暂停推进**：方向改为 Persona 式主会话，见 [`2026-11-09-agentdock-main-session-design.md`](2026-11-09-agentdock-main-session-design.md)（评审中）。新设计第 1.2 节列出了本计划的问题，第 7 节写明 P0 代码哪些保留、哪些删除。
 > 范围：Source Ingress、Case/Router、Session Orchestration、Action/Reply
 > 一句话：让外部消息可靠地进入 AgentDock，由轻量 Router 判断并分派到正确的会话，持续跟踪到闭环。
 

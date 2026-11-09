@@ -5,8 +5,8 @@
  * 为什么走 rehype 而不是改 markdown 源：这里拿到的是 HAST，`**`、表格管道符、围栏这些
  * 标记语法已经被解析掉了，剩下的才是真正会显示的字；在源文本上拆词会把标记也算进去。
  *
- * 拆出来的 span 只影响包裹，不插字符，复制 / 选中 / 无障碍都不受影响；`code` / `pre` 跳过，
- * 代码块里的空格与缩进有语义，拆了会变形。
+ * 拆出来的 span 只影响包裹，不插字符，复制 / 选中 / 无障碍都不受影响；`code` / `pre` / `a` 跳过，
+ * 前者因为空格与缩进有语义，后者为了避免流式输出时链接标签逐字淡入造成跳动。
  *
  * 代价：每个字/词一个 DOM 节点。所以只对「正在流式输出的那条且文本不长」的消息启用
  * （见 TypewriterText 的 UNIT_ANIMATION_MAX_CHARS），历史消息完全不挂。
@@ -20,7 +20,10 @@ interface HastNode {
   properties?: Record<string, unknown>;
 }
 
-const SKIP_TAGS = new Set(['code', 'pre']);
+// 链接标签不拆：流式输出时链接会在闭合的一帧突然出现，若把标签里的每个字再包成
+// ui-tw-unit，整段链接会带上一串各自淡入的 span，视觉上就是「链接一直跳动」。
+// code / pre 跳过是因为空格与缩进有语义，拆了会变形。
+const SKIP_TAGS = new Set(['code', 'pre', 'a']);
 
 /** 中日韩字符：这类语言没有空格分词，按单字切，观感才均匀。 */
 const CJK = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/;

@@ -70,6 +70,19 @@ describe('HTTP API boundary', () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it('rejects invalid handover member ids before creating another chat', async () => {
+    const repos = createRepositories(':memory:'); repositories.push(repos);
+    await repos.config.set(larkBotsConfigKey, JSON.stringify([{ appId: 'cli_bot', appSecret: 'secret_bot' }]));
+    const runtime = { getSession: vi.fn(async () => ({ id: 'ses_web', agentId: 'codex', title: 'Web' })) };
+    const fetcher = vi.fn();
+    const app = await buildApp({} as any, { lark: { env: {}, config: repos.config, cardMappings: repos.channelMappings, fetcher: fetcher as typeof fetch, listener: listenerPool(), runtime: runtime as any } }); apps.push(app);
+
+    const invalid = await app.inject({ method: 'POST', url: '/api/sessions/ses_web/handover', payload: { appId: 'cli_bot', memberOpenIds: ['ou_valid', 'not-an-open-id'] } });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.code).toBe('INVALID_HANDOVER_MEMBER');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it('mounts optional Lark status, send, and update routes', async () => {
     const lark: any = { send: vi.fn(async () => ({ messageId: 'om_sent', chatId: 'oc_chat' })), update: vi.fn(async () => ({ messageId: 'om_sent' })) };
     const app = await buildApp({} as any, { lark: { env: { LARK_APP_ID: 'cli_test', LARK_APP_SECRET: 'secret_test', LARK_AGENT_NAME: 'My Agent' }, service: lark } }); apps.push(app);

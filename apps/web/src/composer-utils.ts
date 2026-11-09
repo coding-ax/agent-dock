@@ -1,4 +1,4 @@
-import type { DockEvent } from './api';
+import type { AgentModel, DockEvent } from './api';
 
 export type ComposerReference = { id: string; kind: 'file' | 'skill' | 'image'; label: string; value: string; url?: string };
 export type ContextStats = { used?: number; size?: number; compacted?: number; percentage?: number };
@@ -32,6 +32,23 @@ export function getModelReadiness({ loaded, loading, switching, failed }: { load
 
 export function shouldDismissComposerPanel({ insidePopover, onPanelTrigger }: { insidePopover: boolean; onPanelTrigger: boolean }): boolean {
   return !insidePopover && !onPanelTrigger;
+}
+
+/**
+ * 「切换模型」面板的搜索。
+ *
+ * 模型列表是 ACP 动态发现的：name 常常是反代后的展示名（如 `workbuddy/deepseek-v4.1-flash[1m]`），
+ * id 又可能是 `opus` / `auto/glm-5.3[1m]` 这种路由组标识。用户想搜「opus」「glm」「auto」
+ * 都可能命中其中一项，所以 name 和 id 都参与匹配，大小写不敏感、按空白分词后要求全部命中。
+ * 顺序保持服务端给的顺序（当前模型仍带勾选），不做相关性重排。
+ */
+export function filterAgentModels(models: AgentModel[], query: string): AgentModel[] {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return models;
+  return models.filter(model => {
+    const haystack = `${model.name} ${model.id}`.toLowerCase();
+    return terms.every(term => haystack.includes(term));
+  });
 }
 
 /**

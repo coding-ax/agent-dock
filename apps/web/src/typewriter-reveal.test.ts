@@ -22,6 +22,32 @@ describe('closeIncompleteMarkdown', () => {
     expect(closeIncompleteMarkdown('已经结束的 **加粗** 与 `代码`。')).toBe('已经结束的 **加粗** 与 `代码`。');
   });
 
+  it('hides a half-streamed link until it closes, so it does not pop into an <a>', () => {
+    // 流式截在 [标题](https://… 时，半截语法会先当纯文本渲染，等 ) 到了突然变链接，
+    // 宽度/下划线/换行一起变，就是「链接一直跳动」。整段先不显示，闭合那一帧一次性出现。
+    const full = '文档见 [TOM Bridge](https://bits.bytedance.net/devops/a/b?x=1)';
+    expect(closeIncompleteMarkdown('文档见 [TOM Bridge](https://bits.bytedance.net/devops/a')).toBe('文档见 ');
+    expect(closeIncompleteMarkdown('文档见 [TOM Bridge](')).toBe('文档见 ');
+    expect(closeIncompleteMarkdown(full)).toBe(full);
+  });
+
+  it('does the same for images and keeps completed links in the middle of the text', () => {
+    expect(closeIncompleteMarkdown('看图 ![shot](/tmp/a.png) 说明')).toBe('看图 ![shot](/tmp/a.png) 说明');
+    expect(closeIncompleteMarkdown('看图 ![shot](/tmp/a')).toBe('看图 ');
+  });
+
+  it('keeps bracket text that is not a dangling link', () => {
+    expect(closeIncompleteMarkdown('模型 [1m] 与 [见注] 后面还有正文')).toBe('模型 [1m] 与 [见注] 后面还有正文');
+    expect(closeIncompleteMarkdown('```\n[not](a link\n```\n收尾')).toBe('```\n[not](a link\n```\n收尾');
+    expect(closeIncompleteMarkdown('转义 \\[不是链接\\] 正常')).toBe('转义 \\[不是链接\\] 正常');
+  });
+
+  it('also hides the label-while-typing phase and handles multiple links', () => {
+    expect(closeIncompleteMarkdown('文档见 [TOM Bridge')).toBe('文档见 ');
+    expect(closeIncompleteMarkdown('[一](https://a.com) 和 [二](https://b')).toBe('[一](https://a.com) 和 ');
+    expect(closeIncompleteMarkdown('[一](https://a.com) 和 [二](https://b.com)')).toBe('[一](https://a.com) 和 [二](https://b.com)');
+  });
+
   it('does not append a stray marker for an odd backtick inside a table cell', () => {
     expect(closeIncompleteMarkdown('| a |\n| --- |\n| `x |')).toBe('| a |\n| --- |\n| `x |`');
   });
@@ -32,6 +58,13 @@ describe('renderRevealedText', () => {
     const text = '开头 **加粗还没闭合';
     expect(renderRevealedText(text, text.length)).toBe('开头 **加粗还没闭合**');
     expect(renderRevealedText(text, 2)).toBe('开头');
+  });
+
+  it('reveals a link only on the frame where its closing paren arrives', () => {
+    const full = '见 [文档](https://example.com/a) 结尾';
+    const closedAt = full.indexOf(')') + 1;
+    expect(renderRevealedText(full, closedAt - 1)).toBe('见 ');
+    expect(renderRevealedText(full, closedAt)).toBe('见 [文档](https://example.com/a)');
   });
 });
 

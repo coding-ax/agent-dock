@@ -35,6 +35,22 @@ describe('rehypeTextUnits', () => {
     expect(code.children![0]!.type).toBe('text');
     expect(code.children![0]!.value).toBe('const a = 1;');
   });
+
+  it('跳过链接标签，避免流式输出时整段链接逐字淡入造成跳动', () => {
+    const tree: Node = { type: 'root', children: [{ type: 'element', tagName: 'p', children: [
+      { type: 'text', value: '见 ' },
+      { type: 'element', tagName: 'a', properties: { href: 'https://example.com' }, children: [{ type: 'text', value: 'TOM Bridge 文档' }] },
+      { type: 'text', value: ' 结尾' }
+    ] }] };
+    rehypeTextUnits()(tree);
+    const p = tree.children![0]!;
+    const children = p.children ?? [];
+    const link = children.find(child => child.tagName === 'a')!;
+    expect(link).toBeDefined();
+    expect(link.children![0]).toMatchObject({ type: 'text', value: 'TOM Bridge 文档' });
+    // 链接外的正文照常拆单元（'见 ' 变成 span，链接本身保持一个 <a>）。
+    expect(children.some(child => child.tagName === 'span')).toBe(true);
+  });
 });
 
 describe('rehypeTextUnits structure', () => {

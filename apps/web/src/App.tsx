@@ -389,7 +389,7 @@ function SessionRow({ session, agent, botName, parentLabel, active, drag, onClic
   // 往上弹会盖住侧栏顶部（第一行的卡片实测压住 AgentDock 的 logo），往下弹又会压住
   // 它下面的会话行。往右正好落进主内容区的空白，侧栏一个字都不挡。
   // `align="start"` 让卡片顶边对齐行顶边，滚动到任意位置都不会有半个卡片飘在视口外。
-  return <HoverTooltip content={hoverCard} side="right" align="start">{row}</HoverTooltip>;
+  return <HoverTooltip content={hoverCard} side="right" align="start" hoverOnly>{row}</HoverTooltip>;
 }
 
 export default function App() {
