@@ -321,6 +321,18 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     expect(normalizeAcpxEvent(chunk('Compacting the workspace is done.'))).toMatchObject({ type: 'text', data: { text: 'Compacting the workspace is done.' } });
   });
 
+  it('maps structured codex compaction updates and skips summary chunks', () => {
+    const update = (sessionUpdate: string, fields: Record<string, unknown>) => ({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate, ...fields } } });
+    expect(normalizeAcpxEvent(update('compaction_update', { compactionId: 'cmp_1', status: 'in_progress' })))
+      .toEqual({ type: 'status', data: { state: 'compaction', phase: 'start', compactionId: 'cmp_1' } });
+    expect(normalizeAcpxEvent(update('compaction_update', { compactionId: 'cmp_1', status: 'completed' })))
+      .toEqual({ type: 'status', data: { state: 'compaction', phase: 'completed', compactionId: 'cmp_1' } });
+    expect(normalizeAcpxEvent(update('compaction_update', { compactionId: 'cmp_2', status: 'failed', error: 'context window exceeded' })))
+      .toEqual({ type: 'status', data: { state: 'compaction', phase: 'failed', compactionId: 'cmp_2', detail: 'context window exceeded' } });
+    expect(normalizeAcpxEvent(update('compaction_summary_chunk', { compactionId: 'cmp_1', content: { text: 'summary' } })))
+      .toEqual({ type: 'status', data: { state: 'compaction', phase: 'summary', compactionId: 'cmp_1' } });
+  });
+
   it('maps cursor-agent stream errors to status instead of assistant text', () => {
     const chunk = (text: string) => ({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
     expect(normalizeAcpxEvent(chunk('\n\nError: RetriableError: WritableIterable is closed'))).toEqual({

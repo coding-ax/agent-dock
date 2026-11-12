@@ -72,6 +72,15 @@ export function normalizeAcpxEvent(input: unknown): NormalizedDriverEvent | unde
   if (kind === 'tool_call' || kind === 'tool_call_update' || kind === 'tool_result') { const complete = statusMap[update.status] ?? (kind === 'tool_result' ? 'completed' : 'running'); return { type: complete === 'completed' || complete === 'failed' ? 'tool_result' : 'tool_call', data: { id: update.toolCallId ?? event.toolCallId ?? event.id, name: update.title ?? event.title ?? event.name ?? 'tool', input: update.rawInput ?? event.rawInput ?? event.input, output: update.rawOutput ?? event.rawOutput ?? event.output, status: complete } }; }
   if (kind === 'permission_request' || kind === 'permission_escalation') return { type: 'permission_request', data: { id: event.requestId ?? event.id ?? update.toolCallId, toolCallId: update.toolCallId, title: update.title ?? event.toolTitle ?? 'Permission required', options: update.options ?? [], status: 'pending' } };
   if (kind === 'usage_update') return { type: 'status', data: { state: 'usage', used: event.used, size: event.size, breakdown: event.breakdown, cost: event.cost } };
+  // codex-acp 用结构化的 compaction_update 报告压缩；status 可能是 in_progress/completed/failed/cancelled。
+  // 只有 completed 代表一次真正完成的压缩，生命周期指标按它计数。
+  if (kind === 'compaction_update') {
+    const status = String(update.status ?? event.status ?? '');
+    const phase = status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : status === 'cancelled' ? 'cancelled' : 'start';
+    return { type: 'status', data: { state: 'compaction', phase, ...(update.compactionId ? { compactionId: update.compactionId } : {}), ...(status === 'failed' && update.error ? { detail: String(update.error) } : {}) } };
+  }
+  // 压缩摘要正文不是对话内容，也不该落成 raw_terminal 污染事件体积。
+  if (kind === 'compaction_summary_chunk') return { type: 'status', data: { state: 'compaction', phase: 'summary', ...(update.compactionId ? { compactionId: update.compactionId } : {}) } };
   if (kind === 'available_commands_update') return { type: 'status', data: { state: 'commands', availableCommands: event.availableCommands ?? update.availableCommands ?? [] } };
   if (kind === 'error') return { type: 'error', data: { message: event.message ?? event.error?.message ?? 'Agent error', detail: event } };
   if (kind === 'done' || kind === 'completed' || kind === 'result' || event.result?.stopReason) return { type: 'completed', data: { stopReason: event.stopReason ?? event.result?.stopReason ?? 'end_turn' } };
