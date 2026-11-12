@@ -406,6 +406,15 @@ describe('HTTP API boundary', () => {
     expect(runtime.start).toHaveBeenCalledWith({ agentId: 'mock', model: 'model-selected-in-web', reasoningEffort: 'high' }); expect(runtime.dispatch).toHaveBeenCalledWith('s1', 'hello', 'queue'); expect(runtime.setModel).toHaveBeenCalledWith('s1', 'model-b'); expect(runtime.setReasoningEffort).toHaveBeenCalledWith('s1', 'high'); expect(runtime.cancelQueued).toHaveBeenCalledWith('s1', 't1'); expect(runtime.updateQueued).toHaveBeenCalledWith('s1', 't1', 'edited'); expect(runtime.steerQueued).toHaveBeenCalledWith('s1', 't1'); expect(runtime.stop).toHaveBeenCalledOnce();
   });
 
+  it('passes clientMessageId through so replayed sends can be deduped', async () => {
+    const task = { id: 't1', sessionId: 's1', prompt: 'hello', status: 'queued', createdAt: '', updatedAt: '' };
+    const runtime: any = { dispatch: vi.fn(async () => task) };
+    const app = await buildApp(runtime); apps.push(app);
+    const response = await app.inject({ method: 'POST', url: '/api/sessions/s1/send', payload: { prompt: 'hello', clientMessageId: 'send-a' } });
+    expect(response.statusCode).toBe(202);
+    expect(runtime.dispatch).toHaveBeenCalledWith('s1', 'hello', 'queue', 'hello', undefined, undefined, 'send-a');
+  });
+
   it('exports the complete saved session record, including its initial prompt', async () => {
     const session = { id: 's1', agentId: 'mock', systemPrompt: 'initial instructions' };
     const tasks = [{ id: 't1', sessionId: 's1', prompt: 'hello', sentPrompt: '[bot context]\nhello' }];

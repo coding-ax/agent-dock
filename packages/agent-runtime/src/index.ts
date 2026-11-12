@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, RepositoryBundle, Session, SessionInterruptIntent, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
 import { agentConfigSchema, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 export type { AgentConfig };
@@ -8,6 +9,33 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SESSION_TITLE_MAX_CHARS, resolveSessionTitle } from './session-title.js';
 export { SESSION_TITLE_MAX_CHARS } from './session-title.js';
+
+/**
+ * 重复提交的去重窗口。手机断网/切网后浏览器会把未收到响应的 POST 原样重放
+ * （线上实测同一条消息 12 秒后第二次到达服务端），所以窗口要覆盖这个量级；
+ * 同时足够短，用户自己隔了一会儿再发同一句话仍然会排成新一轮。
+ */
+const DUPLICATE_SEND_WINDOW_MS = 30_000;
+/** 上一轮已被取消/失败/中断时不能复用：用户再发同一条是主动重试。 */
+const RETRIED_SEND_STATUSES = new Set(['cancelled', 'failed', 'interrupted']);
+
+type RecentSend = {
+  at: number;
+  task?: TaskRecord;
+  queuedAhead?: number;
+  /** 并发重放的两个请求共享同一次入队。 */
+  pending?: Promise<TaskRecord & { queuedAhead: number }>;
+};
+
+/**
+ * 同一会话的同一提交只算一次。带 clientMessageId 时它就是幂等键（网络重放会原样带回）；
+ * 老客户端没有这个字段，退回按 prompt 摘要去重。
+ */
+function sendDedupeKey(sessionId: string, prompt: string, clientMessageId?: string) {
+  if (clientMessageId) return `${sessionId}\u0000id\u0000${clientMessageId}`;
+  const digest = createHash('sha256').update(prompt).digest('base64url').slice(0, 32);
+  return `${sessionId}\u0000prompt\u0000${digest}`;
+}
 
 export function selectProtocol(probes: ProbeMatrix): 'acp' | 'jsonl' | 'pipe' | 'pty' {
   if (probes.acp) return 'acp';
@@ -165,6 +193,10 @@ export class AgentDockRuntime {
   private readonly lastActivity = new Map<string, number>();
   private readonly cleanupTimer?: NodeJS.Timeout;
   private cleanupRun?: Promise<void>;
+  // 同一条消息的重复提交：客户端断网/切网后会把 POST 原样重放（实测同一条 325 字节消息
+  // 12 秒后第二次到达，两次都是 202，于是跑了两轮）。key 优先用客户端生成的 clientMessageId，
+  // 老客户端没有这个字段时退回「同会话 + 同 prompt 的短窗口」。
+  private readonly recentSends = new Map<string, RecentSend>();
 
   constructor(private readonly repos: RepositoryBundle, private readonly options: RuntimeOptions = {}) {
     this.factory = options.driverFactory ?? ((agent, protocol, onEvent, onExit, sessionId, driverOptions) => {
@@ -855,10 +887,40 @@ export class AgentDockRuntime {
     }
   }
 
-  async dispatch(id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue', agentPrompt = prompt, riskPolicy?: ToolRiskPolicy, origin?: string) {
+  async dispatch(id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue', agentPrompt = prompt, riskPolicy?: ToolRiskPolicy, origin?: string, clientMessageId?: string) {
     const { session } = await this.active(id);
     if (['stopped', 'failed'].includes(session.state)) throw new RuntimeError('INVALID_STATE', `Cannot send while session is ${session.state}`, 409);
-    const task = { id: makeId('task'), sessionId: id, prompt, status: 'queued', ...(origin ? { origin } : {}), createdAt: now(), updatedAt: now() };
+    const dedupeKey = sendDedupeKey(id, prompt, clientMessageId);
+    this.pruneRecentSends();
+    const seen = this.recentSends.get(dedupeKey);
+    if (seen) {
+      // 并发重放时两个请求都在等同一轮入队结果，不能各建一个 task。
+      if (seen.pending) return seen.pending;
+      if (seen.task && !RETRIED_SEND_STATUSES.has(seen.task.status)) return { ...seen.task, queuedAhead: seen.queuedAhead ?? 0 };
+      // 上一轮已被取消/失败/中断：这次是用户主动重发，要真的再跑一遍。
+    }
+    const pending = this.enqueueTask(id, prompt, mode, agentPrompt, riskPolicy, origin).then(result => {
+      this.recentSends.set(dedupeKey, { at: Date.now(), task: result.task, queuedAhead: result.queuedAhead });
+      return { ...result.task, queuedAhead: result.queuedAhead };
+    });
+    this.recentSends.set(dedupeKey, { at: Date.now(), pending });
+    try {
+      return await pending;
+    } catch (error) {
+      // 第一次没被接受（状态不对、落库失败）就不能占着 key，重试还得能发出去。
+      this.recentSends.delete(dedupeKey);
+      throw error;
+    }
+  }
+
+  /** 只保留最近窗口内的记录；pending 的请求不能清，否则并发重放会漏。 */
+  private pruneRecentSends() {
+    const cutoff = Date.now() - DUPLICATE_SEND_WINDOW_MS;
+    for (const [key, entry] of this.recentSends) if (!entry.pending && entry.at < cutoff) this.recentSends.delete(key);
+  }
+
+  private async enqueueTask(id: string, prompt: string, mode: 'queue' | 'interrupt', agentPrompt: string, riskPolicy: ToolRiskPolicy | undefined, origin: string | undefined) {
+    const task: TaskRecord = { id: makeId('task'), sessionId: id, prompt, status: 'queued', ...(origin ? { origin } : {}), createdAt: now(), updatedAt: now() };
     const queue = this.queues.get(id) ?? [];
     const queuedAhead = queue.length + (this.activeTurns.has(id) ? 1 : 0);
     if (mode === 'interrupt') queue.unshift(task); else queue.push(task);
@@ -868,7 +930,7 @@ export class AgentDockRuntime {
     await this.saveTask(task, 'queued');
     if (mode === 'interrupt' && this.activeTurns.has(id)) await this.terminateCurrentTurn(id);
     this.scheduleQueue(id);
-    return { ...task, queuedAhead };
+    return { task, queuedAhead };
   }
 
   private scheduleQueue(id: string) {

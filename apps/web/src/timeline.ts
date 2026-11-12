@@ -17,9 +17,11 @@ export type OptimisticMessage = { id: string; prompt: string; createdAt: string;
 /** 「等待发送」面板的一行：服务端已入队的任务；pending 是刚提交、服务端还没确认的消息，不能操作。 */
 export type QueuedTask = Task & { pending?: true };
 export type TimelineActivityGroup = { id: string; label: string; labelTitle: string; events: TimelineEvent[]; startedAt: string; completedAt?: string };
+/** 终态片段携带的发送时间：来自任务 createdAt（或这一轮的用户事件），供悬停/聚焦时显示。 */
+export type TimelineSectionMeta = { terminal: boolean; sentAt?: string };
 export type TimelineSection =
-  | { kind: 'event'; event: TimelineEvent; final: boolean }
-  | { kind: 'activity'; id: string; turnId: string; groups: TimelineActivityGroup[]; hasAnswer: boolean; taskStatus: string; isLatestTurn: boolean; startedAt: string; completedAt?: string };
+  | ({ kind: 'event'; event: TimelineEvent; final: boolean } & TimelineSectionMeta)
+  | ({ kind: 'activity'; id: string; turnId: string; groups: TimelineActivityGroup[]; hasAnswer: boolean; taskStatus: string; isLatestTurn: boolean; startedAt: string; completedAt?: string } & TimelineSectionMeta);
 
 /**
  * 单个事件「渲染相关内容」的轻量签名：sequence 覆盖新增/替换，
@@ -450,6 +452,15 @@ export function isTurnOngoing(section: TimelineSection, sessionBusy: boolean): b
 }
 
 /**
+ * 片段的发送时间角标：只给终态轮次，进行中（含最后一行仍在跑）一律不给。
+ * 用户气泡靠右对齐自己的气泡，其余片段贴左边缘。
+ */
+export function sectionSendTime(section: TimelineSection): { timestamp: string; align: 'left' | 'right' } | undefined {
+  if (!section.terminal || !section.sentAt) return undefined;
+  return { timestamp: section.sentAt, align: section.kind === 'event' && section.event.data.role === 'user' ? 'right' : 'left' };
+}
+
+/**
  * 最新一轮是否在等第一段过程输出，需要在气泡下面先放一行「处理中」占位。
  * - 刚发出的乐观气泡就给（会话还没 busy）：气泡和占位一起出现，任务真正开始时界面不再动一下。
  * - 任务已切成 running、会话状态的 SSE 还没到的那一帧也给，免得占位闪没。
@@ -548,6 +559,10 @@ export function buildTimelineSections(timeline: TimelineEvent[], tasks: Task[] =
     const userMessage = turn.find(event => event.type === 'text' && event.data.role === 'user');
     const task = tasks.find(item => item.id === userMessage?.data.taskId);
     const terminal = task ? terminalTaskStatuses.has(task.status) : turnIndex < turns.length - 1;
+    // 发送时间取落库的任务创建时间；早期数据没有 task 记录时退回这一轮用户事件的到达时间。
+    // 只在终态挂出去，排队/执行中的那一轮不会拿运行时间冒充发送时间。
+    const sentAt = task?.createdAt ?? userMessage?.timestamp;
+    const meta: TimelineSectionMeta = { terminal, ...(terminal && sentAt ? { sentAt } : {}) };
     // 终态规则与 runtime、飞书卡片共用同一实现（packages/shared/src/turn-outcome.ts）：
     // 最终输出必须是最后一次活动（思考 / 工具调用）之后的最后一条 assistant 文本。
     const finalEntry = terminal ? pickFinalAssistantEntry(turn) : undefined;
@@ -586,7 +601,7 @@ export function buildTimelineSections(timeline: TimelineEvent[], tasks: Task[] =
     appendPendingThinking();
     flushActivity();
     const groups = pieces.flatMap(piece => piece.kind === 'group' ? [piece.group] : []);
-    if (!groups.length) return pieces.filter((piece): piece is Extract<Piece, { kind: 'event' }> => piece.kind === 'event');
+    if (!groups.length) return pieces.filter((piece): piece is Extract<Piece, { kind: 'event' }> => piece.kind === 'event').map(piece => ({ ...piece, ...meta }));
     const firstGroupIndex = pieces.findIndex(piece => piece.kind === 'group');
     const lastGroup = groups.at(-1)!;
     const completedAt = terminal && task?.updatedAt
@@ -603,12 +618,13 @@ export function buildTimelineSections(timeline: TimelineEvent[], tasks: Task[] =
       taskStatus,
       isLatestTurn: turnIndex === turns.length - 1,
       startedAt: userMessage?.timestamp ?? groups[0]!.startedAt,
-      ...(completedAt ? { completedAt } : {})
+      ...(completedAt ? { completedAt } : {}),
+      ...meta
     };
     const sections: TimelineSection[] = [];
     for (const [index, piece] of pieces.entries()) {
       if (index === firstGroupIndex) sections.push(activity);
-      if (piece.kind === 'event') sections.push(piece);
+      if (piece.kind === 'event') sections.push({ ...piece, ...meta });
     }
     return sections;
   });

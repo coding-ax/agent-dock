@@ -8,6 +8,7 @@ import { PromptTemplates } from './PromptTemplates';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { buildPrompt, getModelReadiness, referenceFromUpload, uploadSessionFile, type ComposerReference } from './composer-utils';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
+import { createClientMessageId } from './client-message-id';
 
 /**
  * 空态草稿 Composer：还不存在 Session 时，把输入框、Agent、工作目录、模型、思考强度和
@@ -112,6 +113,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   const sendToCompanion = (target: NonNullable<typeof companion>) => {
     const draftPrompt = prompt;
     const draftReferences = references;
+    const clientMessageId = createClientMessageId();
     setCreating(true);
     void (async () => {
       try {
@@ -122,7 +124,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
           return referenceFromUpload(result, file.type.startsWith('image/'));
         }));
         const message = buildPrompt(draftPrompt, uploaded);
-        if (message) await api.send(target.sessionId, message, 'queue');
+        if (message) await api.send(target.sessionId, message, 'queue', undefined, clientMessageId);
         void qc.invalidateQueries({ queryKey: ['sessions'] });
         void qc.invalidateQueries({ queryKey: ['tasks', target.sessionId] });
         setPrompt('');
@@ -144,6 +146,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     if (!effectiveAgentId) return;
     const draftPrompt = prompt;
     const draftReferences = references;
+    const clientMessageId = createClientMessageId();
     setCreating(true);
     void (async () => {
       let session: Session | undefined;
@@ -162,7 +165,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
           return referenceFromUpload(result, file.type.startsWith('image/'));
         }));
         const message = buildPrompt(draftPrompt, uploaded);
-        if (message) await api.send(session.id, message, 'queue');
+        if (message) await api.send(session.id, message, 'queue', undefined, clientMessageId);
         void qc.invalidateQueries({ queryKey: ['sessions'] });
         void qc.invalidateQueries({ queryKey: ['tasks', session.id] });
         setPrompt('');

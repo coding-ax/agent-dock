@@ -287,6 +287,58 @@ describe('runtime lifecycle acceptance', () => {
     await h.runtime.shutdown(); h.repos.close();
   });
 
+  it('collapses a replayed send with the same clientMessageId into one task', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'answer' } }) });
+    await h.runtime.initialize([agent]); const session = await h.runtime.start({ agentId: 'mock' });
+    // 浏览器断网/切网后会把没收到响应的 POST 原样重放：prompt 与 clientMessageId 都不变。
+    const [first, replay] = await Promise.all([
+      h.runtime.dispatch(session.id, 'same prompt', 'queue', 'same prompt', undefined, undefined, 'send-a'),
+      h.runtime.dispatch(session.id, 'same prompt', 'queue', 'same prompt', undefined, undefined, 'send-a')
+    ]);
+    expect(replay.id).toBe(first.id);
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(task => task.id === first.id)?.status).toBe('completed'));
+    expect(await h.runtime.getTasks(session.id)).toHaveLength(1);
+    expect(h.driver.send).toHaveBeenCalledOnce();
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('collapses identical prompts in a short window for clients without an id', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'answer' } }) });
+    await h.runtime.initialize([agent]); const session = await h.runtime.start({ agentId: 'mock' });
+    const first = await h.runtime.dispatch(session.id, '继续');
+    const replay = await h.runtime.dispatch(session.id, '继续');
+    expect(replay.id).toBe(first.id);
+    // 但另一句话不能被吞掉。
+    const next = await h.runtime.dispatch(session.id, '下一步');
+    expect(next.id).not.toBe(first.id);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('runs the same prompt again when the client sends a new message id', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'answer' } }) });
+    await h.runtime.initialize([agent]); const session = await h.runtime.start({ agentId: 'mock' });
+    const first = await h.runtime.dispatch(session.id, '继续', 'queue', '继续', undefined, undefined, 'send-a');
+    const second = await h.runtime.dispatch(session.id, '继续', 'queue', '继续', undefined, undefined, 'send-b');
+    expect(second.id).not.toBe(first.id);
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).every(task => task.status === 'completed')).toBe(true));
+    expect(h.driver.send).toHaveBeenCalledTimes(2);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('does not reuse a cancelled task when the user retries the same message', async () => {
+    const gate = deferred(); const h = harness();
+    h.driver.send = vi.fn(async prompt => { if (prompt === 'first') await gate.promise; h.emit({ type: 'text', data: { text: `answer:${prompt}` } }); });
+    await h.runtime.initialize([agent]); const session = await h.runtime.start({ agentId: 'mock' });
+    await h.runtime.dispatch(session.id, 'first'); await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('first'));
+    const queued = await h.runtime.dispatch(session.id, 'retry me', 'queue', 'retry me', undefined, undefined, 'send-a');
+    await h.runtime.cancelQueued(session.id, queued.id);
+    const retried = await h.runtime.dispatch(session.id, 'retry me', 'queue', 'retry me', undefined, undefined, 'send-a');
+    expect(retried.id).not.toBe(queued.id);
+    gate.resolve();
+    await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('retry me'));
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
   it('hard-stops the current driver before immediately sending the replacement prompt', async () => {
     const gate = deferred(); const h = harness();
     h.driver.send = vi.fn(async prompt => { if (prompt === 'first') await gate.promise; h.emit({ type: 'text', data: { text: `answer:${prompt}` } }); });

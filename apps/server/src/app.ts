@@ -462,16 +462,19 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     ]);
     return { session, tasks, events, eventTotal, eventsTruncated: eventTotal > events.length };
   });
-  app.post<{ Params: { id: string }; Body: { prompt: string; mode?: 'queue' | 'interrupt'; origin?: string } }>('/api/sessions/:id/send', async (request, reply) => {
+  app.post<{ Params: { id: string }; Body: { prompt: string; mode?: 'queue' | 'interrupt'; origin?: string; clientMessageId?: string } }>('/api/sessions/:id/send', async (request, reply) => {
     const prompt = request.body?.prompt?.trim();
     const mode = request.body?.mode ?? 'queue';
     if (!prompt) throw new RuntimeError('INVALID_PROMPT', 'Prompt must not be empty', 400);
     if (mode !== 'queue' && mode !== 'interrupt') throw new RuntimeError('INVALID_SEND_MODE', `Unknown send mode: ${String(mode)}`, 400);
     const origin = typeof request.body?.origin === 'string' && request.body.origin.trim() ? request.body.origin.trim() : undefined;
-    // 不传 origin 时保持原来的三参调用：既避免无谓地把 prompt 复制成 agentPrompt，
-    // 也让既有调用方/测试看到的 dispatch 形态不变。
-    const task = origin
-      ? await runtime.dispatch(request.params.id, prompt, mode, prompt, undefined, origin)
+    // 客户端每次「用户按下发送」生成一次，网络重放/超时重试会原样带回：服务端据此返回同一个 task。
+    const rawClientMessageId = request.body?.clientMessageId;
+    const clientMessageId = typeof rawClientMessageId === 'string' && rawClientMessageId.trim().length > 0 && rawClientMessageId.trim().length <= 200 ? rawClientMessageId.trim() : undefined;
+    // 不带 origin / clientMessageId 时保持原来的三参调用：既避免无谓地把 prompt 复制成
+    // agentPrompt，也让既有调用方/测试看到的 dispatch 形态不变。
+    const task = origin || clientMessageId
+      ? await runtime.dispatch(request.params.id, prompt, mode, prompt, undefined, origin, clientMessageId)
       : await runtime.dispatch(request.params.id, prompt, mode);
     return reply.code(202).send({ accepted: true, task });
   });

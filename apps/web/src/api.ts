@@ -333,7 +333,11 @@ export const api = {
   saveShareSettings: (publicUrl: string) => json<ShareSettings>('/api/system/share-settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publicUrl }) }),
   create: (body: any) => json<Session>('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   importSession: (body: { agentId: string; externalSessionId: string; cwd?: string; mode?: 'full' | 'session'; model?: string; reasoningEffort?: string; sshHost?: string }) => json<Session>('/api/sessions/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-  send: (id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue', origin?: string) => json<{ accepted: true; task: Task }>(`/api/sessions/${id}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, mode, ...(origin ? { origin } : {}) }) }),
+  /**
+   * clientMessageId 由「一次用户提交」生成，不在重试时换新：网络层把 POST 原样重放时
+   * 服务端凭它认出是同一轮，返回同一个 task，而不是再跑一轮。
+   */
+  send: (id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue', origin?: string, clientMessageId?: string) => json<{ accepted: true; task: Task }>(`/api/sessions/${id}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, mode, ...(origin ? { origin } : {}), ...(clientMessageId ? { clientMessageId } : {}) }) }),
   setSessionModel: (id: string, model: string) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model }) }),
   setSessionReasoningEffort: (id: string, reasoningEffort: string) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reasoningEffort }) }),
   // 传 null / 空串表示「恢复自动命名」，由服务端回落到 Agent 名或首条 prompt 摘要。
