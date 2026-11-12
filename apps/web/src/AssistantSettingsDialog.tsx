@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Clock, Dices, PawPrint, X } from 'lucide-react';
+import { Clock, Dices, PawPrint, Sparkles, X } from 'lucide-react';
 import { api, type AssistantQuietHours } from './api';
+import { normalizeSilentEmoji } from './silent-trigger';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { ConfirmDialog, SettingRow } from './ui-controls';
@@ -27,13 +28,19 @@ export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt }: { onCl
   const inviteDismissed = useCompanionStore(store => store.inviteDismissed);
   const [quiet, setQuiet] = useState<AssistantQuietHours | null>(null);
   const [name, setName] = useState('');
+  const [silentEmoji, setSilentEmoji] = useState('');
+  const [silentError, setSilentError] = useState<string>();
   const [error, setError] = useState<string>();
   const [saved, setSaved] = useState(false);
+  const [silentSaved, setSilentSaved] = useState(false);
   const [confirmRelease, setConfirmRelease] = useState(false);
 
   useEffect(() => {
     if (state.data?.quietHours && !quiet) setQuiet(state.data.quietHours);
   }, [state.data?.quietHours, quiet]);
+  useEffect(() => {
+    if (state.data?.silentEmoji !== undefined) setSilentEmoji(state.data.silentEmoji);
+  }, [state.data?.silentEmoji]);
   useEffect(() => { if (info.adopted) setName(info.name); }, [info.adopted, info.name]);
 
   const refresh = () => {
@@ -46,14 +53,21 @@ export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt }: { onCl
   const rename = useMutation({ mutationFn: (value: string) => api.assistantRenameCompanion(value), onSuccess: () => { refresh(); useCompanionStore.getState().celebrate(); }, onError: fail });
   const release = useMutation({ mutationFn: () => api.assistantClearMain(), onSuccess: () => { setConfirmRelease(false); refresh(); }, onError: error => { setConfirmRelease(false); fail(error); } });
   const saveQuiet = useMutation({
-    mutationFn: (value: AssistantQuietHours) => api.assistantSaveSettings(value),
+    mutationFn: (value: AssistantQuietHours) => api.assistantSaveSettings({ quietHours: value }),
     onSuccess: result => { setQuiet(result.quietHours); setSaved(true); refresh(); },
     onError: fail
+  });
+  const saveSilent = useMutation({
+    mutationFn: (value: string) => api.assistantSaveSettings({ silentEmoji: value }),
+    onSuccess: result => { setSilentEmoji(result.silentEmoji); setSilentSaved(true); setSilentError(undefined); refresh(); },
+    onError: error => setSilentError(errorText(error))
   });
 
   const main = info.mainSession;
   const attention = info.counts.needsUser + info.counts.planned + info.pendingDrafts;
   const trimmed = name.trim();
+  const normalizedSilent = normalizeSilentEmoji(silentEmoji);
+  const silentDirty = normalizedSilent !== undefined && normalizedSilent !== (state.data?.silentEmoji ?? '');
 
   return <div className="ui-overlay fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-2 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
     <div ref={panelRef} role="dialog" aria-modal="true" aria-label="小猫与督办" className="ui-dialog flex max-h-[86dvh] w-full max-w-2xl flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)]">
@@ -102,6 +116,18 @@ export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt }: { onCl
                 <button type="button" disabled={!quiet || saveQuiet.isPending || !info.adopted} onClick={() => { setSaved(false); if (quiet) saveQuiet.mutate(quiet); }} className="h-7 rounded-md bg-zinc-900 px-2.5 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">保存</button>
               </div>
               {saved && <span className="text-[11px] text-emerald-600">已保存</span>}
+            </div>
+          </SettingRow>
+
+          <SettingRow title={<span className="flex items-center gap-1.5"><Sparkles size={14}/>静默触发表情</span>} description="在时间线的消息上点这个表情，就在背后开一轮 Agent。不会新增用户气泡，也不会弹通知；只接受一个 emoji，留空关闭。">
+            <div className="flex flex-col items-end gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <input value={silentEmoji} maxLength={16} onChange={event => { setSilentEmoji(event.target.value); setSilentSaved(false); setSilentError(undefined); }} aria-label="静默触发表情" placeholder="例如 🐱" className="h-8 w-20 rounded-lg border border-zinc-300 bg-white px-2 text-center text-[16px] text-zinc-900 outline-none placeholder:text-[12px] placeholder:text-zinc-400"/>
+                <button type="button" aria-label="保存静默触发表情" disabled={saveSilent.isPending || !silentDirty} onClick={() => { if (normalizedSilent !== undefined) saveSilent.mutate(normalizedSilent); }} className="h-8 rounded-md bg-zinc-900 px-2.5 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">{saveSilent.isPending ? '保存中…' : '保存'}</button>
+              </div>
+              {silentEmoji.trim() && normalizedSilent === undefined && <span className="text-[11px] text-red-600">只支持单个 emoji</span>}
+              {silentSaved && normalizedSilent !== undefined && !silentDirty && <span className="text-[11px] text-emerald-600">已保存</span>}
+              {silentError && <span className="max-w-56 text-right text-[11px] text-red-600">{silentError}</span>}
             </div>
           </SettingRow>
 

@@ -209,6 +209,15 @@ export const ComposerEditor = forwardRef<ComposerEditorHandle, ComposerEditorPro
     void instance.create().then(created => {
       if (cancelled) { void created.destroy(); return; }
       editor.current = created;
+      // 外部 value 可能在 create() 完成前就写进来了（例如新标签带着草稿挂载）。
+      // 那次 props.value effect 会因为 ready=false 提前返回，这里补一次同步。
+      const current = latest.current.value;
+      if (created.action(getMarkdown()) !== current) {
+        suppressing.current = true;
+        created.action(replaceAll(current));
+        created.action(caretToEnd);
+        suppressing.current = false;
+      }
     });
 
     return () => {

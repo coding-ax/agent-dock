@@ -237,6 +237,35 @@ describe('AssistantService', () => {
     expect(review[3]).toContain('调查 CI');
     expect(review[5]).toBe('injected');
     expect(service.getTask(task.id)?.state).toBe('review');
+
+    // 这条督办注入回到 composePrompt 时不能再生成派活指令，否则每次验收都会再派一个侧边会话。
+    expect(await service.composePrompt(main, review[3] as string, review[5] as string)).not.toContain('<agentdock-superagent>');
+    expect(await service.composePrompt(main, `[飞书群工具说明]\n\n${review[3] as string}`)).not.toContain('<agentdock-superagent>');
+  });
+
+  it('never delegates an injected review signal when other layers prefix the prompt', async () => {
+    const { repos, service } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const larkPrefix = '[飞书群工具说明]\n\n';
+    const signalText = '以下是 daemon 汇总的督办信号。先看是否需要你处理；需要用户拍板时用 agent-dock notify --ask。\n\n- [review] 修复登录失败问题：侧边会话这一轮结束，等待验收（task_1）';
+
+    const injected = await service.composePrompt(main, `${larkPrefix}${signalText}`, 'injected');
+    expect(injected).not.toContain('<agentdock-superagent>');
+    expect(injected.endsWith(`${larkPrefix}${signalText}`)).toBe(true);
+
+    // 文本兜底：旧队列/重放漏传 origin 时，带前缀的督办文本也不能被当成用户请求。
+    const fallback = await service.composePrompt(main, `${larkPrefix}${signalText}`);
+    expect(fallback).not.toContain('<agentdock-superagent>');
+    expect(buildSuperagentDirective(`${larkPrefix}${signalText}`)).toBe('');
+
+    // 正常用户的可执行消息仍然要派活。
+    const userPrompt = '帮我检查一下这个仓库的 CI 为什么失败';
+    const user = await service.composePrompt(main, userPrompt, 'user');
+    expect(user).toContain('<agentdock-superagent>');
+    expect(user.endsWith(userPrompt)).toBe(true);
   });
 
   it('escalates after two reworks and closes on acceptance', async () => {

@@ -35,6 +35,15 @@ describe('queued task panel visibility', () => {
     expect(waitingQueuedTasks(undefined, false)).toEqual([]);
   });
 
+  it('never shows silent-origin tasks in the editable wait panel', () => {
+    const silent = { ...task('t2', 'queued', '2026-01-01T00:00:01.000Z'), origin: 'emoji', prompt: '静默触发：完整上下文' };
+    const normal = { ...task('t3', 'queued', '2026-01-01T00:00:02.000Z'), prompt: '普通排队消息' };
+    const hidden = new Set(['emoji']);
+    expect(waitingQueuedTasks([task('t1', 'running'), silent, normal], true, [], hidden).map(item => item.id)).toEqual(['t3']);
+    // 隐藏项仍占着队首位置：idle 时后面的普通消息不能顶上来冒充「即将发送」。
+    expect(waitingQueuedTasks([task('t1', 'completed'), silent, normal], false, [], hidden)).toEqual([]);
+  });
+
   it('lists a prompt submitted into the queue the moment it is sent, before the server answers', () => {
     const unsent: OptimisticMessage = { id: 'local-2', prompt: '排队的消息', createdAt: '2026-01-01T00:00:05.000Z', placement: 'queue' };
     const rows = waitingQueuedTasks([task('t1', 'running'), task('t0', 'queued', '2026-01-01T00:00:01.000Z')], true, [unsent]);

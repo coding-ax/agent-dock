@@ -1,10 +1,10 @@
 import { ExitGate } from './ExitGate';
 import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Square, Archive, X, RefreshCw, ScrollText, MoreHorizontal } from 'lucide-react';
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type DockEvent, type Session, type Task } from './api';
-import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, waitingQueuedTasks, type OptimisticMessage } from './timeline';
+import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, waitingQueuedTasks, type OptimisticMessage, type TimelineEvent } from './timeline';
 import { ActivityPanel, TimelineItem } from './TimelineItems';
 import { Composer } from './Composer';
 import type { ComposerEditorHandle } from './ComposerEditor';
@@ -27,6 +27,9 @@ import { useToast } from './Toast';
 import { CompanionHeader, CompanionHeaderNotes, CompanionWelcome, useMainSessionId } from './companion/CompanionHeader';
 import { useCompanion } from './companion/useCompanion';
 import { useCompanionStore } from './companion/companion-store';
+import { useSilentEmoji } from './SilentTrigger';
+import { buildSilentPrompt, claimSilentTrigger, releaseSilentTrigger, SILENT_TRIGGER_ORIGIN, type SilentTriggerTarget } from './silent-trigger';
+import { sessionPaneTab } from './pane-tab';
 
 /** 主会话输入框的占位：单独成组件，小猫改名时只重渲染这一小块，不拖着整条时间线。 */
 function CompanionPlaceholder() {
@@ -35,6 +38,8 @@ function CompanionPlaceholder() {
 }
 
 type SendMode = 'queue' | 'interrupt';
+/** 静默轮次不能出现在「等待发送」面板：它不是用户可编辑的消息。 */
+const HIDDEN_QUEUE_ORIGINS: ReadonlySet<string> = new Set([SILENT_TRIGGER_ORIGIN]);
 
 /**
  * 会话标题栏的副屏开关。空副屏里直接展示可打开的面板类型。
@@ -108,15 +113,23 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const composerTextarea = useRef<ComposerEditorHandle>(null);
   // 这个面板是不是主会话（小猫）。只订阅主会话 id，不随便签轮询重渲染。
   const mainSessionId = useMainSessionId();
+  const silentEmoji = useSilentEmoji();
   const isMain = session.id === mainSessionId;
   // 便签上的「问问它」：把便签带进主会话输入框，接着聚焦。
   const mainDraft = useCompanionStore(store => (isMain && !secondary ? store.mainDraft : undefined));
+  const injectedDraft = useDockStore(store => store.sessionDrafts[session.id]);
   useEffect(() => {
     if (!mainDraft) return;
     setPrompt(current => current.trim() ? `${current.trimEnd()}\n\n${mainDraft.text}` : mainDraft.text);
     useCompanionStore.getState().consumeMainDraft();
     requestAnimationFrame(() => composerTextarea.current?.focus());
   }, [mainDraft]);
+  useEffect(() => {
+    if (!injectedDraft) return;
+    setPrompt(current => current.trim() ? `${current.trimEnd()}\n\n${injectedDraft}` : injectedDraft);
+    useDockStore.getState().clearSessionDraft(session.id);
+    requestAnimationFrame(() => composerTextarea.current?.focus());
+  }, [injectedDraft, session.id]);
 
   // 增量拉取是 append-only，无法修正已缓存的过期条目；focus 之后的那次拉取改走自愈：
   // 重拉缓存里最后一轮并整段替换（见 healBoundary），不再重拉整段历史。
@@ -152,13 +165,48 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const activeSchedules = schedules.data?.filter(item => item.enabled).length ?? 0;
   const timeline = useMemo(() => buildTimeline(events.data, tasks.data, optimisticMessages), [events.data, tasks.data, optimisticMessages]); const timelineSections = useMemo(() => buildTimelineSections(timeline, tasks.data), [timeline, tasks.data]);
   const rowKeys = useMemo(() => optimisticRowKeys(optimisticMessages), [optimisticMessages]);
+  // 静默触发回调必须保持同一性：把它依赖的快速变化值放进 ref，否则流式输出每帧都会让
+  // 整条时间线的 memo 失效。真正触发时才读当时的时间线和会话。
+  const silentContext = useRef({ timeline, session, mainSessionId, silentEmoji, agentName: agent?.name });
+  silentContext.current = { timeline, session, mainSessionId, silentEmoji, agentName: agent?.name };
+  const handleSilentTrigger = useCallback(async (event: TimelineEvent, target: SilentTriggerTarget): Promise<boolean> => {
+    const context = silentContext.current;
+    const emoji = context.silentEmoji;
+    const currentSession = context.session;
+    if (!emoji) return false;
+    if (!claimSilentTrigger({ sessionId: currentSession.id, event, emoji })) return false;
+    const prompt = buildSilentPrompt(context.timeline, event, emoji);
+    try {
+      setActionError(undefined);
+      if (target === 'tab') {
+        const created = await api.create({ agentId: currentSession.agentId, cwd: currentSession.cwd });
+        // 先写草稿再开标签：SessionPane 挂载时就能把上下文填进输入框并聚焦。
+        useDockStore.getState().setSessionDraft(created.id, prompt);
+        qc.setQueryData<Session[]>(['sessions'], current => [created, ...(current ?? []).filter(item => item.id !== created.id)]);
+        const owner = useDockStore.getState().primarySessionId ?? currentSession.id;
+        useDockStore.getState().openTab(sessionPaneTab(owner, created.id, sessionLabel(created, context.agentName)), owner);
+        return true;
+      }
+      const targetSessionId = target === 'main' ? context.mainSessionId : currentSession.id;
+      if (!targetSessionId) throw new Error('还没有主会话，无法发送');
+      const result = await api.send(targetSessionId, prompt, 'queue', SILENT_TRIGGER_ORIGIN);
+      qc.setQueryData<Task[]>(['tasks', targetSessionId], current => [...(current ?? []).filter(item => item.id !== result.task.id), result.task]);
+      void qc.invalidateQueries({ queryKey: ['sessions'] });
+      return true;
+    } catch (error) {
+      // 发送没被接受就不能占着幂等 key，否则用户重试同一消息 + 表情会被误判成重复。
+      releaseSilentTrigger({ sessionId: currentSession.id, event, emoji });
+      setActionError(error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }, [qc]);
   let latestUserIndex = -1;
   for (let index = timeline.length - 1; index >= 0; index--) if (timeline[index].type === 'text' && timeline[index].data.role === 'user') { latestUserIndex = index; break; }
   // 页面挂载时刻：时间戳早于它的行是「打开页面之前就存在的历史」，刷新时不重播。
   // 为什么不按「第几批 payload」判断：刷新后的 SSE 补发也会把旧内容带回来，按批次判会把
   // 已经显示过的整段当成新内容重播一遍——那正是「每次刷新都重新跑一遍」的来源。
   const mountedAt = useRef(new Date().toISOString()).current;
-  const queuedTasks = useMemo(() => waitingQueuedTasks(tasks.data, sessionBusy, optimisticMessages), [tasks.data, sessionBusy, optimisticMessages]);
+  const queuedTasks = useMemo(() => waitingQueuedTasks(tasks.data, sessionBusy, optimisticMessages, HIDDEN_QUEUE_ORIGINS), [tasks.data, sessionBusy, optimisticMessages]);
   const hasOngoingActivity = timelineSections.some(section => isTurnOngoing(section, sessionBusy));
   const showFirstOutputPlaceholder = awaitsFirstOutput(timeline[latestUserIndex], tasks.data, sessionBusy, hasOngoingActivity);
   const timelineScroll = useTimelineAutoScroll(session.id, timeline, sessionBusy);
@@ -335,7 +383,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
       <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
-        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineSections.map((section, index) => section.kind === 'event' ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, index === timelineSections.length - 1)} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/> : <ActivityPanel key={section.turnId} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
+        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineSections.map((section, index) => section.kind === 'event' ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, index === timelineSections.length - 1)} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id} silentEmoji={silentEmoji} hasMainSession={Boolean(mainSessionId)} onSilentTrigger={handleSilentTrigger}/> : <ActivityPanel key={section.turnId} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
         </div></div>{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}</div>
       {session.archivedAt ? <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已永久归档，仅支持查看。</div> : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>

@@ -173,8 +173,12 @@ export function timelineRowKey(event: TimelineEvent, rowKeys: ReadonlyMap<string
  * - 本页提交时定在时间线里的（带「发送中」圈的气泡）不进面板，哪怕会话已经 busy。
  * - 定在面板里、服务端还没确认的消息先以 pending 行出现在末尾，响应回来后换成真实任务。
  */
-export function waitingQueuedTasks(tasks: Task[] | undefined, sessionBusy: boolean, optimisticMessages: OptimisticMessage[] = EMPTY_OPTIMISTIC): QueuedTask[] {
-  const list = tasks ?? [];
+const NO_HIDDEN_ORIGINS: ReadonlySet<string> = new Set();
+
+export function waitingQueuedTasks(tasks: Task[] | undefined, sessionBusy: boolean, optimisticMessages: OptimisticMessage[] = EMPTY_OPTIMISTIC, hiddenOrigins: ReadonlySet<string> = NO_HIDDEN_ORIGINS): QueuedTask[] {
+  // 静默轮次也走同一个 queue，但它不是用户可见的待发送消息：不能出现在「等待发送」面板里，
+  // 否则完整 prompt 会暴露并可被编辑/取消。过滤要发生在判断队首之前，隐藏项仍占着队列位置。
+  const list = (tasks ?? []).filter(task => !task.origin || !hiddenOrigins.has(task.origin));
   const live = optimisticMessages.filter(message => !message.settled);
   const claimed = claimedTaskIds(optimisticMessages);
   const matched = live.map(message => ({ message, task: matchOptimisticTask(message, list, claimed) }));

@@ -44,7 +44,11 @@ type Store = {
   /** 副屏显示状态与标签生命周期分离：隐藏时保留终端等已挂载内容。 */
   paneOpen: boolean;
   activeTabId?: string;
+  /** 一次性会话草稿：打开新标签前写入，SessionPane 挂载时取出并聚焦。 */
+  sessionDrafts: Record<string, string>;
   setSession(id?: string): void;
+  setSessionDraft(sessionId: string, text: string): void;
+  clearSessionDraft(sessionId: string): void;
   /** 开一个标签并激活它。同 id 已存在时只激活，不重复开。 */
   openTab(tab: PaneTab, ownerSessionId?: string): void;
   closeTab(id: string): void;
@@ -67,9 +71,17 @@ export const useDockStore = create<Store>(set => ({
   paneViews: {},
   paneOpen: false,
   activeTabId: undefined,
+  sessionDrafts: {},
   setSession: id => set(state => {
     const view = state.paneViews[paneKey(id)] ?? emptyPane;
     return { primarySessionId: id, paneOpen: view.paneOpen, activeTabId: view.activeTabId };
+  }),
+  setSessionDraft: (sessionId, text) => set(state => ({ sessionDrafts: { ...state.sessionDrafts, [sessionId]: text } })),
+  clearSessionDraft: sessionId => set(state => {
+    if (!(sessionId in state.sessionDrafts)) return {};
+    const sessionDrafts = { ...state.sessionDrafts };
+    delete sessionDrafts[sessionId];
+    return { sessionDrafts };
   }),
   openTab: (tab, ownerSessionId) => set(state => {
     const owner = ownerSessionId ?? tab.ownerSessionId ?? state.primarySessionId;

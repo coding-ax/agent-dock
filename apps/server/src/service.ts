@@ -58,8 +58,8 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     sessionEnvironment: session => ({ agentdock_database: config.databaseUrl, ...capabilities.environmentFor(session) }),
     createSystemPrompt: buildInitialSystemPrompt,
     // 先串飞书工具提示，再串主会话快照；两者都只影响实际发给 Agent 的文本，不改变时间线里的用户原话。
-    sessionPrompt: async (session, prompt) => assistant
-      ? assistant.composePrompt(session, await agentTools.promptForSession(session, prompt))
+    sessionPrompt: async (session, prompt, origin) => assistant
+      ? assistant.composePrompt(session, await agentTools.promptForSession(session, prompt), origin)
       : agentTools.promptForSession(session, prompt)
   });
   let app: Awaited<ReturnType<typeof buildApp>> | undefined;

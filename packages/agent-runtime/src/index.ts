@@ -61,7 +61,7 @@ export interface RuntimeOptions {
   sessionEnvironment?: (session: Session) => Record<string, string>;
   /** 创建会话时确定一次，并作为持久 ACP session 的 system prompt 保存。 */
   createSystemPrompt?: (session: Session) => string | undefined;
-  sessionPrompt?: (session: Session, prompt: string) => string | Promise<string>;
+  sessionPrompt?: (session: Session, prompt: string, origin?: string) => string | Promise<string>;
 }
 
 /** `runOnce` 的入参：借哪个 Agent、问什么、最多等多久。 */
@@ -748,7 +748,7 @@ export class AgentDockRuntime {
     session.lastMessageAt = now();
     await this.saveState(session, 'thinking');
     try {
-      const resolvedAgentPrompt = await this.options.sessionPrompt?.(session, agentPrompt) ?? agentPrompt;
+      const resolvedAgentPrompt = await this.options.sessionPrompt?.(session, agentPrompt, task.origin ?? undefined) ?? agentPrompt;
       task.sentPrompt = resolvedAgentPrompt;
       await this.repos.tasks.save(task);
       this.driverStopReasons.delete(id);

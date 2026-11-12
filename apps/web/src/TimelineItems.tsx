@@ -7,6 +7,8 @@ import { AssistantMarkdown, ThinkingMarkdown } from './TypewriterText';
 import { elapsedMilliseconds, formatElapsed, summarizeTools, toolActionLabel, toolPresentation, type ToolKind } from './tool-presentation';
 import { toolDetailView, type ToolDetailView } from './tool-detail';
 import { SupervisionNotice } from './companion/SupervisionNotice';
+import { SILENT_TRIGGER_ORIGIN, type SilentTriggerTarget } from './silent-trigger';
+import { SilentTrigger } from './SilentTrigger';
 
 /**
  * 时间线的渲染单元。原先这些组件都藏在 SessionPane 内部，只有它能用；「实际请求」轨迹面板
@@ -269,7 +271,7 @@ const PermissionCard = memo(function PermissionCard({ event }: { event: Timeline
   </div>;
 });
 
-export const TimelineItem = memo(function TimelineItem({ event, final = false, streaming = false, replay = false, assistantLabel = 'Agent', sessionId }: { event: TimelineEvent; final?: boolean; streaming?: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; assistantLabel?: string; sessionId?: string }) {
+export const TimelineItem = memo(function TimelineItem({ event, final = false, streaming = false, replay = false, assistantLabel = 'Agent', sessionId, silentEmoji = '', hasMainSession = false, onSilentTrigger }: { event: TimelineEvent; final?: boolean; streaming?: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; assistantLabel?: string; sessionId?: string; silentEmoji?: string; hasMainSession?: boolean; onSilentTrigger?(event: TimelineEvent, target: SilentTriggerTarget): boolean | Promise<boolean> }) {
   if (event.type === 'tool_call' || event.type === 'tool_result') return <ToolCard event={event}/>;
   if (event.type === 'permission_request') return <PermissionCard event={event}/>;
   if (event.type === 'warning') return <aside role="status" className="ui-timeline-item my-4 overflow-hidden rounded-xl border border-amber-200 bg-amber-50/60">
@@ -279,26 +281,38 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
     <div className="flex items-start gap-2.5 px-4 py-3"><CircleX size={15} className="mt-0.5 shrink-0 text-red-600"/><div className="min-w-0"><div className="text-[13px] font-semibold text-red-950">Agent 错误</div><div className="mt-1 text-[13px] leading-5 text-red-800"><MarkdownContent sessionId={sessionId}>{event.data.message ?? 'Agent 运行失败'}</MarkdownContent></div></div></div>
   </aside>;
   if (event.type === 'thinking') return null;
+  // 静默轮次的锚点也要落库才能保证轮次边界，但它不是用户说过的话：不渲染气泡。
+  if (event.data.origin === SILENT_TRIGGER_ORIGIN) return null;
   // daemon 注入的督办/提醒：不是用户气泡。每条信号画成一张迷你便签，点了在抽屉里定位；全文可展开。
   if (event.data.origin === 'injected') {
     const detail = typeof event.data.detail === 'string' ? event.data.detail : '';
     return <SupervisionNotice text={event.data.text} detail={detail} timestamp={event.timestamp}/>;
   }
   const user = event.data.role === 'user';
+  const silent = silentEmoji && sessionId && onSilentTrigger && !event.data.optimistic && !streaming
+    ? <SilentTrigger sessionId={sessionId} event={event} emoji={silentEmoji} hasMainSession={hasMainSession} onTarget={target => onSilentTrigger(event, target)}/>
+    : undefined;
   if (user) {
     const text = markLeadingSlashCommand(stripImageReferenceLines(event.data.text ?? ''));
     // 「发送中」是气泡左侧的绝对定位圆环，对齐最后一行文字：不占位，确认后消失也不会让气泡跳动。
     // 用 bottom 而不是 translate 定位，避免和 animate-spin 的 transform 冲突。
-    return <div className="ui-timeline-item my-6 flex justify-end"><div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900"><MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>{event.data.optimistic && <Spinner size={14} label="发送中" className="absolute bottom-4 right-full mr-2 text-zinc-400"/>}</div></div>;
+    return <div className="group/msg ui-timeline-item relative my-6 flex justify-end"><div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900"><MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>{event.data.optimistic && <Spinner size={14} label="发送中" className="absolute bottom-4 right-full mr-2 text-zinc-400"/>}</div>{silent && <div className="absolute -bottom-3 right-0">{silent}</div>}</div>;
   }
   // 挂载时已不在流式输出的正文直接给全文。轮次结束时最终回答会从执行面板搬成独立的 final 行（重新挂载），
   // tasks 刷新的空档也可能让它短暂搬回去再搬出来；否则这些早就返回过的内容会从 0 重新打一遍。
   const settled = replay || !streaming;
   // 轮次结束时搬出来的 final 行，内容刚才已经在执行面板里显示过：不重播入场动画，否则回答会先消失再淡入。
   // 首屏历史（replay）照常和其它行一起淡入。
-  if (final) return <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} final animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>;
-  return <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} assistantLabel={assistantLabel} sessionId={sessionId}/>;
+  const assistant = final
+    ? <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} final animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>
+    : <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} assistantLabel={assistantLabel} sessionId={sessionId}/>;
+  if (!silent) return assistant;
+  return <div className="group/msg relative max-w-[78ch]">
+    {assistant}
+    <div className="absolute bottom-4 right-0">{silent}</div>
+  </div>;
 }, (prev, next) => prev.final === next.final && prev.streaming === next.streaming && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId
+  && prev.silentEmoji === next.silentEmoji && prev.hasMainSession === next.hasMainSession && prev.onSilentTrigger === next.onSilentTrigger
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event)
   // error/warning/permission 卡片的 payload 变化也要刷新；text 长度已在签名内。
   && JSON.stringify(prev.event.data.status ?? '') === JSON.stringify(next.event.data.status ?? '')

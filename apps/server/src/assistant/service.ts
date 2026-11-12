@@ -13,6 +13,7 @@ import type {
 const execFileAsync = promisify(execFile);
 const MAIN_SESSION_KEY = 'assistant.main';
 const QUIET_HOURS_KEY = 'assistant.quietHours';
+const SILENT_EMOJI_KEY = 'assistant.silentEmoji';
 const COMPANION_KEY = 'assistant.companion';
 /** 没起名就认领（CLI `main set`、旧版本建的主会话）时的默认名字。 */
 export const DEFAULT_COMPANION_NAME = '小A同学';
@@ -26,6 +27,8 @@ const SIGNAL_THROTTLE_MS: Record<AssistantSignalKind, number> = {
 };
 const STALL_DEFAULT_MINUTES = 20;
 const MAX_OUTPUT = 4 * 1024;
+/** 督办注入的唯一文本标记；来源识别以 task.origin 为准，这段文本只作兜底。 */
+const INJECTED_SIGNAL_PREFIX = '以下是 daemon 汇总的督办信号';
 
 export interface AssistantLogger { info(message: string): void; warn(message: string): void }
 
@@ -216,11 +219,22 @@ export class AssistantService {
     return normalized;
   }
 
+  /** 静默触发表情；空串表示关闭。只存一个已规范化的 emoji，校验在 HTTP 入口完成。 */
+  getSilentEmoji(): string {
+    return (this.store.getSetting(SILENT_EMOJI_KEY) ?? '').trim();
+  }
+
+  setSilentEmoji(value: string): string {
+    const normalized = value.trim();
+    this.store.setSetting(SILENT_EMOJI_KEY, normalized);
+    return normalized;
+  }
+
   /**
    * 主会话每一轮开头的状态快照。只对主会话生效；没有变化时整块省略。
    * 快照是「事实」，督办信号是「提醒」：即使信号漏了，主会话下一轮也能看到状态。
    */
-  async composePrompt(session: Session, prompt: string): Promise<string> {
+  async composePrompt(session: Session, prompt: string, origin?: string): Promise<string> {
     if (!this.mainSessionIdValue || session.id !== this.mainSessionIdValue) return prompt;
     const sections = await this.snapshotSections();
     const hashes = Object.fromEntries(Object.entries(sections).map(([key, value]) => [key, hash(value)]));
@@ -236,7 +250,9 @@ export class AssistantService {
       : '';
     // 主会话最容易犯的错是「说能派活，却自己用 Bash 干」。在用户消息前加一条
     // 按意图触发的硬约束，比只在 system prompt 里写「尽量派活」可靠。
-    const directive = buildSuperagentDirective(prompt);
+    // origin 是可靠判据：文本可能被飞书工具说明、定时任务说明等层反复加前缀，
+    // 光看开头会漏掉注入来源。文本兜底仍保留在 buildSuperagentDirective 里。
+    const directive = origin === 'injected' ? '' : buildSuperagentDirective(prompt);
     const prefix = [context, directive].filter(Boolean).join('\n\n');
     return prefix ? `${prefix}\n\n${prompt}` : prompt;
   }
@@ -316,7 +332,7 @@ export class AssistantService {
     if (!signals.length || !this.mainSessionIdValue) return;
     const visible = `📋 督办 · ${signals.length} 个事项有变化`;
     const full = [
-      '以下是 daemon 汇总的督办信号。先看是否需要你处理；需要用户拍板时用 agent-dock notify --ask。',
+      `${INJECTED_SIGNAL_PREFIX}。先看是否需要你处理；需要用户拍板时用 agent-dock notify --ask。`,
       '',
       ...signals.map(signal => `- [${signal.kind}] ${signal.title}：${signal.detail}${signal.taskId ? `（${signal.taskId}）` : ''}`)
     ].join('\n');
@@ -773,7 +789,8 @@ export function buildSuperagentDirective(prompt: string): string {
   const text = prompt.trim();
   if (!text) return '';
   // 督办注入是 daemon 叫主会话去验收，不是新的用户任务；不能再派一个侧边会话。
-  if (text.startsWith('以下是 daemon 汇总的督办信号')) return '';
+  // 这里用包含而不是前缀匹配：飞书工具说明等层可能在注入文本前再加一段前缀。
+  if (text.includes(INJECTED_SIGNAL_PREFIX)) return '';
   if (/^(你好|hi|hello|在吗|早|早上好|晚上好|谢谢|多谢|好的|ok|收到)[。！？?!.\s]*$/i.test(text)) return '';
   // 问进度/状态应该直接看快照或已有事项，不要为此再开一个侧边会话。
   const statusQuery = /(进度|状态|怎么样了|到哪了|完成了吗|好了吗|结果呢|任务列表|事项列表)/;

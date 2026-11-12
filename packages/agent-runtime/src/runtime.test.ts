@@ -6,7 +6,7 @@ import { SESSION_TITLE_MAX_CHARS } from './session-title.js';
 
 const agent: AgentConfig = { id: 'mock', name: 'Mock', command: process.execPath, args: [], protocol: 'acp', cwd: '/tmp', env: {}, permissionMode: 'ask', timeout: 10, capabilities: { pause: false, resume: true }, builtin: false };
 
-function harness(options: { onSend?: (emit: (event: any) => void) => void; exitOnSend?: number; driverIdleTimeoutMs?: number; sessionEnvironment?: (session: Session) => Record<string, string>; createSystemPrompt?: (session: Session) => string; sessionPrompt?: (session: Session, prompt: string) => string | Promise<string> } = {}) {
+function harness(options: { onSend?: (emit: (event: any) => void) => void; exitOnSend?: number; driverIdleTimeoutMs?: number; sessionEnvironment?: (session: Session) => Record<string, string>; createSystemPrompt?: (session: Session) => string; sessionPrompt?: (session: Session, prompt: string, origin?: string) => string | Promise<string> } = {}) {
   const repos = createRepositories(':memory:'); let emit!: (event: any) => void; let exit!: (code: number | null) => void; const configuredAgents: AgentConfig[] = [];
   const driver: AgentDriver = { start: vi.fn(async () => {}), send: vi.fn(async () => { options.onSend?.(emit); if (options.exitOnSend) exit(options.exitOnSend); }), interrupt: vi.fn(async () => {}), resume: vi.fn(async () => {}), stop: vi.fn(async () => {}), setModel: vi.fn(async () => {}), setReasoningEffort: vi.fn(async () => {}), setPermissionMode: vi.fn() };
   const runtime = new AgentDockRuntime(repos, { probe: () => ({ protocol: 'acp', available: true, pause: false, resume: true }), driverFactory: (configuredAgent, _p, onEvent, onExit) => { configuredAgents.push(configuredAgent); emit = onEvent; exit = onExit; return driver; }, driverIdleTimeoutMs: options.driverIdleTimeoutMs, sessionEnvironment: options.sessionEnvironment, createSystemPrompt: options.createSystemPrompt, sessionPrompt: options.sessionPrompt });
@@ -195,6 +195,26 @@ describe('runtime lifecycle acceptance', () => {
     await h.runtime.dispatch(session.id, 'from web');
     await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('[group:cli_test:oc_chat:group]\nfrom web'));
     expect((await h.runtime.getTasks(session.id))[0]).toMatchObject({ prompt: 'from web', sentPrompt: '[group:cli_test:oc_chat:group]\nfrom web' });
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('passes the task origin to sessionPrompt for injected turns', async () => {
+    const origins: Array<string | undefined> = [];
+    const h = harness({
+      onSend: emit => emit({ type: 'text', data: { text: 'done' } }),
+      sessionPrompt: (_session, prompt, origin) => { origins.push(origin); return prompt; }
+    });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+
+    await h.runtime.send(session.id, '普通消息');
+    await h.runtime.dispatch(session.id, '📋 督办', 'queue', '以下是 daemon 汇总的督办信号', undefined, 'injected');
+    await vi.waitFor(async () => {
+      const tasks = await h.runtime.getTasks(session.id);
+      expect(tasks.find(task => task.prompt === '📋 督办')?.status).toBe('completed');
+    });
+
+    expect(origins).toEqual([undefined, 'injected']);
     await h.runtime.shutdown(); h.repos.close();
   });
 

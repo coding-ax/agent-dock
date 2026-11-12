@@ -95,7 +95,7 @@ export type AssistantReview = {
   checks: Array<{ criterion: string; met: boolean; evidence?: string }>; note?: string; createdAt: string;
 };
 export type AssistantState = {
-  mainSessionId: string | null; mainSession: Session | null; companion?: AssistantCompanion | null; quietHours: AssistantQuietHours;
+  mainSessionId: string | null; mainSession: Session | null; companion?: AssistantCompanion | null; quietHours: AssistantQuietHours; silentEmoji: string;
   tasks: AssistantTask[]; watches: AssistantWatch[]; drafts: AssistantDraft[];
 };
 /** `events` 只是一页（最近若干条）；总行数与是否被截断由 eventTotal / eventsTruncated 明说。 */
@@ -269,7 +269,7 @@ export const api = {
   saveShareSettings: (publicUrl: string) => json<ShareSettings>('/api/system/share-settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publicUrl }) }),
   create: (body: any) => json<Session>('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   importSession: (body: { agentId: string; externalSessionId: string; cwd?: string; mode?: 'full' | 'session'; model?: string; reasoningEffort?: string; sshHost?: string }) => json<Session>('/api/sessions/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-  send: (id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue') => json<{ accepted: true; task: Task }>(`/api/sessions/${id}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, mode }) }),
+  send: (id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue', origin?: string) => json<{ accepted: true; task: Task }>(`/api/sessions/${id}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, mode, ...(origin ? { origin } : {}) }) }),
   setSessionModel: (id: string, model: string) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model }) }),
   setSessionReasoningEffort: (id: string, reasoningEffort: string) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reasoningEffort }) }),
   // 传 null / 空串表示「恢复自动命名」，由服务端回落到 Agent 名或首条 prompt 摘要。
@@ -312,7 +312,7 @@ export const api = {
   assistantRenameCompanion: (name: string) => json<{ companion: AssistantCompanion }>('/api/assistant/companion', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }),
   assistantTask: (id: string) => json<{ task: AssistantTask; reviews?: AssistantReview[] }>(`/api/assistant/tasks/${encodeURIComponent(id)}`, undefined, true),
   assistantClearMain: () => json<{ ok: boolean }>('/api/assistant/main', { method: 'DELETE' }),
-  assistantSaveSettings: (quietHours: AssistantQuietHours) => json<{ quietHours: AssistantQuietHours }>('/api/assistant/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ quietHours }) }),
+  assistantSaveSettings: (body: { quietHours?: AssistantQuietHours; silentEmoji?: string | null }) => json<{ quietHours: AssistantQuietHours; silentEmoji: string }>('/api/assistant/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   assistantStartTask: (body: { title: string; notes?: string; doneWhen: string[]; expectMinutes?: number; agentId?: string; cwd?: string; model?: string; plan?: boolean }) => json<{ task: AssistantTask }>('/api/assistant/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   assistantStartPlanned: (id: string) => json<{ task: AssistantTask }>(`/api/assistant/tasks/${encodeURIComponent(id)}/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
   assistantReviewTask: (id: string, body: { verdict: 'accepted' | 'rework' | 'needs_user' | 'cancelled'; checks?: Array<{ criterion: string; met: boolean; evidence?: string }>; note?: string }) => json<{ task: AssistantTask }>(`/api/assistant/tasks/${encodeURIComponent(id)}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
