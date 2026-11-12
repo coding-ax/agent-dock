@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
 import { now, type RepositoryBundle } from '@agent-dock/agent-dock-shared';
-import { AssistantService, buildMainSystemPrompt, buildSuperagentDirective } from './service.js';
+import { AssistantService, buildMainSystemPrompt, buildSuperagentDirective, classifyMainTurn } from './service.js';
 import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER } from './lifecycle.js';
 
 const repositories: RepositoryBundle[] = [];
@@ -53,16 +53,17 @@ describe('AssistantService', () => {
     const main = await mainSession(repos);
     await service.setMainSession(main.id);
 
-    const first = await service.composePrompt(main, 'hello');
+    const first = await service.composePrompt(main, '你好');
     expect(first).toContain('<agentdock-context>');
     expect(first).toContain('现在：');
-    expect(first.endsWith('hello')).toBe(true);
+    expect(first.endsWith('你好')).toBe(true);
+    expect(first).not.toContain('<agentdock-superagent>');
 
-    const second = await service.composePrompt(main, 'hello');
-    expect(second).toBe('hello');
+    const second = await service.composePrompt(main, '你好');
+    expect(second).toBe('你好');
 
     service.planTask({ title: '修登录超时', doneWhen: ['测试通过'], agentId: 'claude' });
-    const third = await service.composePrompt(main, 'hello');
+    const third = await service.composePrompt(main, '你好');
     expect(third).toContain('事项：');
     expect(third).toContain('修登录超时');
   });
@@ -82,8 +83,8 @@ describe('AssistantService', () => {
     expect(action).toContain('agent-dock task start');
     expect(action.endsWith('随便看看这个仓库在干嘛，给我讲讲')).toBe(true);
 
-    expect(buildMainSystemPrompt()).toContain('而不是自己用 Bash/Read 去做');
-    expect(buildMainSystemPrompt()).toContain('给我看看');
+    expect(buildMainSystemPrompt()).toContain('第一个工具调用必须是 `agent-dock task start`');
+    expect(buildMainSystemPrompt()).toContain('直接派一个范围明确、可验收的侧边会话');
     expect(buildSuperagentDirective('你好')).toBe('');
     expect(buildSuperagentDirective('以下是 daemon 汇总的督办信号。先看是否需要你处理')).toBe('');
     expect(buildSuperagentDirective('现在任务进度怎么样了？')).toBe('');
@@ -93,16 +94,43 @@ describe('AssistantService', () => {
     expect(buildSuperagentDirective(`${HANDOFF_BRIEFING_MARKER}，不是用户消息`)).toBe('');
     expect(buildSuperagentDirective('帮我查一下 CI')).toContain('2-3 行');
     expect(buildSuperagentDirective('帮我查一下 CI')).toContain('侧边会话 ID');
+    expect(buildSuperagentDirective('帮我查一下 CI')).toContain('硬规则（不是建议');
+    expect(buildSuperagentDirective('帮我查一下 CI')).toContain('你是 AgentDock 的灵魂');
   });
 
   it('limits the main session to delegation, review, reporting and decisions', () => {
     const prompt = buildMainSystemPrompt();
     expect(prompt).toContain('只做四件事：派活、验收、汇报、拍板');
+    expect(prompt).toContain('AgentDock 的灵魂');
+    expect(prompt).toContain('硬规则，不是建议：不要自己干活');
     expect(prompt).toContain('回复限定 2-3 行');
     expect(prompt).toContain('任务 ID 与侧边会话 ID');
     expect(prompt).toContain('--done-when');
     expect(prompt).toContain('例外（直接回答，不派活）：打招呼/闲聊');
     expect(prompt).toContain('问进度/状态直接看快照和已有事项，不派活');
+    expect(prompt).toContain('第一个工具调用必须是 `agent-dock task start`');
+    expect(prompt).toContain('禁止调用 Bash、Read、Grep、Glob、数据库客户端、浏览器');
+    expect(prompt).toContain('工作区里的 AGENTS.md');
+    expect(prompt).toContain('唯一例外：用户在本轮明确说');
+  });
+
+  it('teaches the main session the orchestration commands, examples and delegation criteria', () => {
+    const prompt = buildMainSystemPrompt();
+    for (const command of [
+      'agent-dock task start', 'agent-dock task plan', 'agent-dock task list',
+      'agent-dock task show', 'agent-dock task review', 'agent-dock task cancel',
+      'agent-dock session show', 'agent-dock session send',
+      'agent-dock watch add', 'agent-dock notify', 'agent-dock draft create',
+      'agent-dock status --json'
+    ]) {
+      expect(prompt).toContain(command);
+    }
+    expect(prompt).toContain('什么情况该派活 / 不该派活');
+    expect(prompt).toContain('拿不准时默认派活');
+    expect(prompt).toContain('【常用示例】');
+    expect(prompt).toContain('--check "验收标准=met:证据"');
+    expect(prompt).toContain('--mode queue');
+    expect(prompt).toContain('--mode interrupt');
   });
 
   it('keeps greetings and progress checks out of delegation', async () => {
@@ -115,6 +143,55 @@ describe('AssistantService', () => {
       expect(buildSuperagentDirective(prompt)).toBe('');
       expect(await service.composePrompt(main, prompt)).not.toContain('<agentdock-superagent>');
     }
+  });
+
+  it('defaults ordinary executable requests to delegation, including the real-session misses', () => {
+    const prompts = [
+      '小A同学主会话也是可以建立机器人的，要做两件事：\n1. 还是要支持托管给机器人\n2. 然后如果因为换代变成了新的小猫，那这里还可以加一个按钮\n请你处理一下',
+      '你是Agent-dock的主会话啊\n然后这个事件条数老的也太快了，很浪费啊',
+      '我们的prompt是有问题的，第二代小猫出现了严重的干活倾向，需要做调整，请你用 agent-dock cli 的能力分派便签去干活，处理上述轮次的所有问题',
+      '把登录页的按钮改成小猫头像',
+      '帮我查一下 CI 为什么失败',
+      '你不要自己做，去派活处理这个 bug',
+      '随便看看这个仓库在干嘛，给我讲讲'
+    ];
+    for (const prompt of prompts) {
+      expect(classifyMainTurn(prompt)).toBe('delegate');
+      expect(buildSuperagentDirective(prompt)).toContain('第一个工具调用必须是 `agent-dock task start`');
+      expect(buildSuperagentDirective(prompt)).toContain('工作区 AGENTS.md');
+    }
+  });
+
+  it('does not delegate chat, status checks, explicit self-work, or system turns', () => {
+    expect(classifyMainTurn('你好，在吗？')).toBe('chat');
+    expect(classifyMainTurn('谢谢，辛苦了')).toBe('chat');
+    expect(classifyMainTurn('今天天气不错，哈哈')).toBe('chat');
+    expect(classifyMainTurn('你觉得 A 和 B 哪个好？')).toBe('chat');
+    expect(classifyMainTurn('现在任务进度怎么样了？')).toBe('status');
+    expect(classifyMainTurn('还在跑吗')).toBe('status');
+    expect(classifyMainTurn('这个你自己做吧，不用派活')).toBe('chat');
+    expect(classifyMainTurn(`${MAINTENANCE_MARKER}（amaint_1），不是用户消息`)).toBe('system');
+    expect(classifyMainTurn(`${HANDOFF_BRIEFING_MARKER}，不是用户消息`)).toBe('system');
+    expect(classifyMainTurn(buildMainSystemPrompt())).toBe('system');
+
+    for (const prompt of ['你好，在吗？', '谢谢，辛苦了', '今天天气不错，哈哈', '现在任务进度怎么样了？', '这个你自己做吧，不用派活']) {
+      expect(buildSuperagentDirective(prompt)).toBe('');
+    }
+  });
+
+  it('puts the directive immediately before the user message', async () => {
+    const { repos, service } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const prompt = '帮我把登录页的按钮改成小猫头像';
+    const composed = await service.composePrompt(main, prompt);
+    const contextEnd = composed.indexOf('</agentdock-context>');
+    const directiveStart = composed.indexOf('<agentdock-superagent>');
+    expect(contextEnd).toBeGreaterThanOrEqual(0);
+    expect(directiveStart).toBeGreaterThan(contextEnd);
+    expect(composed.endsWith(`</agentdock-superagent>\n\n${prompt}`)).toBe(true);
   });
 
   it('requires criterion-by-criterion evidence and rework when any evidence is missing', () => {
