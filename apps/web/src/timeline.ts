@@ -17,11 +17,18 @@ export type OptimisticMessage = { id: string; prompt: string; createdAt: string;
 /** 「等待发送」面板的一行：服务端已入队的任务；pending 是刚提交、服务端还没确认的消息，不能操作。 */
 export type QueuedTask = Task & { pending?: true };
 export type TimelineActivityGroup = { id: string; label: string; labelTitle: string; events: TimelineEvent[]; startedAt: string; completedAt?: string };
-/** 终态片段携带的发送时间：来自任务 createdAt（或这一轮的用户事件），供悬停/聚焦时显示。 */
-export type TimelineSectionMeta = { terminal: boolean; sentAt?: string };
+/** 同一轮的片段共享 turnId 和发送时间，渲染时据此合并成一个悬停区域。 */
+export type TimelineSectionMeta = { terminal: boolean; sentAt?: string; turnId: string };
 export type TimelineSection =
   | ({ kind: 'event'; event: TimelineEvent; final: boolean } & TimelineSectionMeta)
-  | ({ kind: 'activity'; id: string; turnId: string; groups: TimelineActivityGroup[]; hasAnswer: boolean; taskStatus: string; isLatestTurn: boolean; startedAt: string; completedAt?: string } & TimelineSectionMeta);
+  | ({ kind: 'activity'; id: string; groups: TimelineActivityGroup[]; hasAnswer: boolean; taskStatus: string; isLatestTurn: boolean; startedAt: string; completedAt?: string } & TimelineSectionMeta);
+
+export type TimelineTurn = {
+  turnId: string;
+  sections: TimelineSection[];
+  terminal: boolean;
+  sentAt?: string;
+};
 
 /**
  * 单个事件「渲染相关内容」的轻量签名：sequence 覆盖新增/替换，
@@ -451,13 +458,30 @@ export function isTurnOngoing(section: TimelineSection, sessionBusy: boolean): b
   return !terminalTaskStatuses.has(section.taskStatus);
 }
 
+/** 把同轮片段按 turnId 合并；一轮只留一个时间角标，不再每个片段各挂一个。 */
+export function groupTimelineSections(sections: TimelineSection[]): TimelineTurn[] {
+  const turns: TimelineTurn[] = [];
+  for (const section of sections) {
+    const previous = turns.at(-1);
+    if (previous?.turnId === section.turnId) {
+      previous.sections.push(section);
+      previous.terminal &&= section.terminal;
+      continue;
+    }
+    turns.push({ turnId: section.turnId, sections: [section], terminal: section.terminal, ...(section.sentAt ? { sentAt: section.sentAt } : {}) });
+  }
+  return turns;
+}
+
 /**
- * 片段的发送时间角标：只给终态轮次，进行中（含最后一行仍在跑）一律不给。
- * 用户气泡靠右对齐自己的气泡，其余片段贴左边缘。
+ * 一轮的发送时间角标：只给终态轮次，进行中（含最后一行仍在跑）一律不给。
+ * 时间挂在整轮下方；只有纯用户消息轮才靠右，正常有回复的轮次统一贴左。
  */
-export function sectionSendTime(section: TimelineSection): { timestamp: string; align: 'left' | 'right' } | undefined {
-  if (!section.terminal || !section.sentAt) return undefined;
-  return { timestamp: section.sentAt, align: section.kind === 'event' && section.event.data.role === 'user' ? 'right' : 'left' };
+export function turnSendTime(turn: TimelineTurn): { timestamp: string; align: 'left' | 'right' } | undefined {
+  if (!turn.terminal || !turn.sentAt) return undefined;
+  const onlyUserMessage = turn.sections.length === 1 && turn.sections[0]!.kind === 'event'
+    && turn.sections[0]!.event.data.role === 'user';
+  return { timestamp: turn.sentAt, align: onlyUserMessage ? 'right' : 'left' };
 }
 
 /**
@@ -562,7 +586,8 @@ export function buildTimelineSections(timeline: TimelineEvent[], tasks: Task[] =
     // 发送时间取落库的任务创建时间；早期数据没有 task 记录时退回这一轮用户事件的到达时间。
     // 只在终态挂出去，排队/执行中的那一轮不会拿运行时间冒充发送时间。
     const sentAt = task?.createdAt ?? userMessage?.timestamp;
-    const meta: TimelineSectionMeta = { terminal, ...(terminal && sentAt ? { sentAt } : {}) };
+    const turnId = `turn-${userMessage?.data.taskId ?? userMessage?.id ?? turn[0]!.id}`;
+    const meta: TimelineSectionMeta = { terminal, turnId, ...(terminal && sentAt ? { sentAt } : {}) };
     // 终态规则与 runtime、飞书卡片共用同一实现（packages/shared/src/turn-outcome.ts）：
     // 最终输出必须是最后一次活动（思考 / 工具调用）之后的最后一条 assistant 文本。
     const finalEntry = terminal ? pickFinalAssistantEntry(turn) : undefined;
@@ -613,7 +638,6 @@ export function buildTimelineSections(timeline: TimelineEvent[], tasks: Task[] =
       kind: 'activity',
       // turnId 必须在 turn 整个生命周期稳定：进行中插入 assistant text 会重切组、
       // 改变 groups[0] 的首事件 id，拿它当 React key 会让执行面板整块重挂（折叠态丢失+闪屏）。
-      turnId: `turn-${userMessage?.id ?? groups[0]!.id}`,
       id: `activity-${groups[0]!.id}`, groups, hasAnswer,
       taskStatus,
       isLatestTurn: turnIndex === turns.length - 1,

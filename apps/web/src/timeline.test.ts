@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildActivitySteps, thinkingTitle, buildTimeline, buildTimelineSections, eventRenderSignature, isStreamingSection, isTurnOngoing, sectionSendTime, toolDisplayName, type TimelineEvent } from './timeline';
+import { buildActivitySteps, thinkingTitle, buildTimeline, buildTimelineSections, eventRenderSignature, groupTimelineSections, isStreamingSection, isTurnOngoing, toolDisplayName, turnSendTime, type TimelineEvent } from './timeline';
 
 const event = (sequence: number, type: string, data: any) => ({ id: `e${sequence}`, sequence, type, timestamp: '', data });
 
@@ -432,7 +432,8 @@ describe('turn identity stability (闪屏修复)', () => {
     expect(after?.kind).toBe('activity');
     if (before?.kind === 'activity' && after?.kind === 'activity') {
       expect(before.turnId).toBe(after.turnId);
-      expect(after.turnId).toBe('turn-u1');
+      // 有 taskId 时用任务身份，乐观气泡换成服务端事件后也不会重挂整轮。
+      expect(after.turnId).toBe('turn-task-1');
       // 中间 assistant text 重切了组：组结构不同，但 turn 身份稳定，React 不重挂
       expect(before.groups.length).toBe(1);
       expect(after.groups.length).toBe(2);
@@ -560,21 +561,31 @@ describe('send time on terminal segments', () => {
     return buildTimelineSections(buildTimeline([prompt, thinking, answer], tasks), tasks);
   };
 
-  it('marks every segment of a finished turn with the task creation time', () => {
+  it('groups every segment of a finished turn into one timestamped turn', () => {
     const sections = turn('completed');
     expect(sections.length).toBeGreaterThan(1);
     expect(sections.every(section => section.terminal)).toBe(true);
     expect(sections.map(section => section.sentAt)).toEqual(sections.map(() => '2026-11-12T13:50:05.120Z'));
-    // 用户气泡贴右，过程面板与最终回答贴左。
-    expect(sectionSendTime(sections[0]!)).toEqual({ timestamp: '2026-11-12T13:50:05.120Z', align: 'right' });
-    expect(sections.slice(1).map(sectionSendTime)).toEqual(sections.slice(1).map(() => ({ timestamp: '2026-11-12T13:50:05.120Z', align: 'left' })));
+    const turns = groupTimelineSections(sections);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]!.sections).toHaveLength(sections.length);
+    expect(turnSendTime(turns[0]!)).toEqual({ timestamp: '2026-11-12T13:50:05.120Z', align: 'left' });
   });
 
   it('shows nothing while the turn is still running', () => {
     const sections = turn('running');
     expect(sections.every(section => section.terminal)).toBe(false);
     expect(sections.every(section => section.sentAt === undefined)).toBe(true);
-    expect(sections.map(sectionSendTime)).toEqual(sections.map(() => undefined));
+    expect(turnSendTime(groupTimelineSections(sections)[0]!)).toBeUndefined();
+  });
+
+  it('keeps consecutive turns separate', () => {
+    const first = { ...event(1, 'text', { role: 'user', text: '第一轮' }), timestamp: '2026-11-12T13:50:06.000Z' };
+    const answer = { ...event(2, 'text', { role: 'assistant', text: '答' }), timestamp: '2026-11-12T13:50:08.000Z' };
+    const next = { ...event(3, 'text', { role: 'user', text: '第二轮' }), timestamp: '2026-11-12T13:51:00.000Z' };
+    const turns = groupTimelineSections(buildTimelineSections(buildTimeline([first, answer, next]), []));
+    expect(turns).toHaveLength(2);
+    expect(turns.map(turn => turn.sections.length)).toEqual([2, 1]);
   });
 
   it('treats failed and interrupted turns as terminal', () => {
@@ -586,9 +597,9 @@ describe('send time on terminal segments', () => {
     const answer = { ...event(2, 'text', { role: 'assistant', text: '答' }), timestamp: '2026-11-12T13:50:08.000Z' };
     const next = { ...event(3, 'text', { role: 'user', text: '第二轮' }), timestamp: '2026-11-12T13:51:00.000Z' };
     const sections = buildTimelineSections(buildTimeline([first, answer, next]), []);
-    const sent = sectionSendTime(sections[0]!);
-    expect(sent).toEqual({ timestamp: '2026-11-12T13:50:06.000Z', align: 'right' });
+    const turns = groupTimelineSections(sections);
+    expect(turnSendTime(turns[0]!)).toEqual({ timestamp: '2026-11-12T13:50:06.000Z', align: 'left' });
     // 最后一行（还在跑的那一轮）没有发送时间。
-    expect(sectionSendTime(sections.at(-1)!)).toBeUndefined();
+    expect(turnSendTime(turns.at(-1)!)).toBeUndefined();
   });
 });

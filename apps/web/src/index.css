@@ -83,12 +83,12 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
    anywhere 允许在任意字符处折行，链接完整保留、只是换行显示，绝不超出圆角边界。
    用户气泡走 MarkdownContent，但没有挂 .markdown 类，所以要单独给这一层。 */
 .ui-user-bubble, .ui-user-bubble * { overflow-wrap: anywhere; }
-/* 终态片段的发送时间：绝对定位在片段下方，不参与布局，出现/消失都不会让时间线跳动。
-   桌面端悬停片段、或用键盘把焦点移到片段内（含时间本身）时出现；触摸屏没有 hover，
+/* 终态轮次的发送时间：绝对定位在整轮下方，不参与布局，出现/消失都不会让时间线跳动。
+   桌面端悬停轮内任意位置、或用键盘聚焦轮容器/轮内控件时出现；触摸屏没有 hover，
    直接常驻成一行 11px 小字，不把信息锁在悬停里。 */
 .ui-send-time { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
-  /* 只压 opacity、不加 visibility:hidden：隐藏状态仍要能被 Tab 到，否则纯键盘用户永远看不到时间。 */
+  /* 时间本身不再进 Tab 序列，键盘停靠点由整轮容器承载。只压 opacity、不加 visibility:hidden。 */
   .ui-send-time { opacity: 0; pointer-events: none; transition: opacity 120ms ease-out; }
   .ui-send-time-row:hover .ui-send-time,
   .ui-send-time-row:focus-within .ui-send-time,
