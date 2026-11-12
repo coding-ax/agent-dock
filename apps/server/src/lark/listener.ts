@@ -11,7 +11,7 @@ import { parseLarkMessageContent, type LarkMessageResource } from './message-con
 import { boundLarkCardElements, createLarkCardService, larkIdentityPermissionHelp, LarkServiceError, type LarkCardActionButton, type LarkCardService } from './service.js';
 import { clearSessionReplyMode, getSessionReplyMode, type AgentReplyMode } from './agent-tools.js';
 import { larkHandoverChannel } from './handover-binding.js';
-import { isAgentStreamErrorText, isAgentWarningText, pickFinalAssistantEntry, stripAgentStreamErrorSuffix, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
+import { isAgentStreamErrorText, isAgentWarningText, isCarriedOverToolCall, pickFinalAssistantEntry, stripAgentStreamErrorSuffix, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 
 type ListenerLog = {
   info(details: unknown, message?: string): void;
@@ -446,6 +446,8 @@ function compactTrace(events: AgentEvent[]): TraceEntry[] {
   const tools = new Map<string, TraceEntry>();
   for (const event of events) {
     if (event.type === 'task' || event.type === 'completed' || event.type === 'status') continue;
+    // 更早轮次起在后台的进程在本轮推的进度：不属于这一轮，也别让它按首次出现占位、把回答切成两段。
+    if (isCarriedOverToolCall(event)) continue;
     let data = event.data && typeof event.data === 'object' ? event.data as Record<string, any> : { value: event.data };
     if (event.type === 'text' && data.role === 'user') continue;
     // Agent 自己的告警（技能描述被裁剪之类）与正文共用 assistant text 通道。卡片是给人看的

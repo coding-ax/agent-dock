@@ -28,14 +28,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.66.0",
-    "@agentclientprotocol/codex-acp": "1.10.0",
-    "@agentclientprotocol/sdk": "1.4.0",
     "@agent-dock/agent-dock-shared": "workspace:*",
+    "@agentclientprotocol/claude-agent-acp": "0.106.0",
+    "@agentclientprotocol/codex-acp": "2.6.0",
+    "@agentclientprotocol/sdk": "1.4.0",
     "acpx": "0.20.0"
   },
   "devDependencies": {
-    "typescript": "5.8.3",
-    "vitest": "3.2.4"
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
   }
 }

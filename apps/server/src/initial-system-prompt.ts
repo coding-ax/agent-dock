@@ -12,7 +12,7 @@ import type { Session } from '@agent-dock/agent-dock-shared';
 export function buildRuntimeGuidance(sessionId: string): string {
   return `[AgentDock]
 你运行在 AgentDock 托管的会话中，当前会话 ID：${sessionId}。
-- 本轮结束、被中断或超时后，子代理和后台进程（&、nohup、tmux 等）可能被一并终止：长任务在工具调用内同步等到结果，不要派给 subAgent，也不要「先启动、稍后再看」。
+- 本轮结束、被中断或超时后，Claude 内置 subAgent 和后台进程（&、nohup、tmux 等）可能被一并终止：长任务在工具调用内同步等到结果，不要派给内置 subAgent，也不要「先启动、稍后再看」；AgentDock 侧边会话用 \`agent-dock task start\`，不受此限。
 - 定时 / 周期执行 / 「X 点提醒我」用 \`agent-dock schedule\`，不要用 CronCreate、ScheduleWakeup、/loop、crontab 或 sleep 轮询。
 - 与主会话 / 侧边会话通信用 \`agent-dock session\`，不要用 Claude 的 ListAgents / SendMessage。
 - 用到以上能力前，先运行 \`agent-dock schedule -h\` 或 \`agent-dock session -h\` 读用法。`;

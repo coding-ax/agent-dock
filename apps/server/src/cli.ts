@@ -25,6 +25,12 @@ import { runPasswordClear, runPasswordSet, runPasswordStatus } from './password-
 import { webPasswordEnabled } from './web-password.js';
 import { runScheduleAdd, runScheduleList, runSchedulePause, runScheduleRemove, runScheduleResume, runScheduleRun, runScheduleShow } from './schedule-cli.js';
 import {
+  runDraftCreate, runDraftDiscard, runDraftList, runDraftSend, runMainClear, runMainGet, runMainSet,
+  runNotify, runSettingsGet, runSettingsQuietHours, runTaskCancel, runTaskList, runTaskPlan,
+  runTaskReport, runTaskReview, runTaskShow, runTaskStart, runWatchAdd, runWatchControl,
+  runWatchList, runWatchRemove, runWatchShow
+} from './assistant/cli.js';
+import {
   runCaseClose, runCaseEvents, runCaseList, runCaseShow, runRouterDryRun, runRouterOpen, runRouterStatus,
   runSourceAdd, runSourceEnable, runSourceList, runSourceLogs, runSourceShow, runSourceTest, runSourceUpdate
 } from './sources-router/cli.js';
@@ -204,7 +210,31 @@ async function main() {
     caseClose: (id, options) => { process.stdout.write(runCaseClose(id, options)); },
     routerStatus: options => { process.stdout.write(runRouterStatus(options)); },
     routerOpen: options => { process.stdout.write(runRouterOpen(options)); },
-    routerDryRun: (fixture, options) => { process.stdout.write(runRouterDryRun(fixture, options)); }
+    routerDryRun: (fixture, options) => { process.stdout.write(runRouterDryRun(fixture, options)); },
+    taskStart: async (taskId, options) => { process.stdout.write(await runTaskStart(taskId, options)); },
+    taskPlan: async options => { process.stdout.write(await runTaskPlan(options)); },
+    taskList: async options => { process.stdout.write(await runTaskList(options)); },
+    taskShow: async (id, options) => { process.stdout.write(await runTaskShow(id, options)); },
+    taskReview: async (id, options) => { process.stdout.write(await runTaskReview(id, options)); },
+    taskReport: async options => { process.stdout.write(await runTaskReport(options)); },
+    taskCancel: async (id, options) => { process.stdout.write(await runTaskCancel(id, options)); },
+    watchAdd: async options => { process.stdout.write(await runWatchAdd(options)); },
+    watchList: async options => { process.stdout.write(await runWatchList(options)); },
+    watchShow: async (id, options) => { process.stdout.write(await runWatchShow(id, options)); },
+    watchPause: async (id, options) => { process.stdout.write(await runWatchControl(id, 'pause', options)); },
+    watchResume: async (id, options) => { process.stdout.write(await runWatchControl(id, 'resume', options)); },
+    watchRun: async (id, options) => { process.stdout.write(await runWatchControl(id, 'run', options)); },
+    watchRemove: async (id, options) => { process.stdout.write(await runWatchRemove(id, options)); },
+    notify: async (text, options) => { process.stdout.write(await runNotify(text, options)); },
+    mainGet: async options => { process.stdout.write(await runMainGet(options)); },
+    mainSet: async (sessionId, options) => { process.stdout.write(await runMainSet(sessionId, options)); },
+    mainClear: async options => { process.stdout.write(await runMainClear(options)); },
+    settingsGet: async options => { process.stdout.write(await runSettingsGet(options)); },
+    settingsQuietHours: async options => { process.stdout.write(await runSettingsQuietHours(options)); },
+    draftCreate: async options => { process.stdout.write(await runDraftCreate(options)); },
+    draftList: async options => { process.stdout.write(await runDraftList(options)); },
+    draftSend: async (id, options) => { process.stdout.write(await runDraftSend(id, options)); },
+    draftDiscard: async (id, options) => { process.stdout.write(await runDraftDiscard(id, options)); }
   });
   await program.parseAsync();
 }

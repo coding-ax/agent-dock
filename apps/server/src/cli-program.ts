@@ -4,6 +4,11 @@ import type {
   CaseCloseCliOptions, CaseListCliOptions, SourceAddCliOptions, SourceRouterCliOptions,
   SourceTestCliOptions, SourceUpdateCliOptions
 } from './sources-router/cli.js';
+import type {
+  AssistantCliOptions, DraftCreateCliOptions, MainCliOptions, NotifyCliOptions,
+  SettingsCliOptions, TaskReportCliOptions, TaskReviewCliOptions, TaskStartCliOptions,
+  WatchAddCliOptions
+} from './assistant/cli.js';
 
 export interface CliOptions {
   host?: string;
@@ -127,7 +132,33 @@ export interface CliHandlers {
   routerStatus?(options: SourceRouterCliOptions): void | Promise<void>;
   routerOpen?(options: SourceRouterCliOptions): void | Promise<void>;
   routerDryRun?(fixture: string | undefined, options: SourceRouterCliOptions & { source?: string }): void | Promise<void>;
+  taskStart?(taskId: string | undefined, options: TaskStartCliOptions): void | Promise<void>;
+  taskPlan?(options: TaskStartCliOptions): void | Promise<void>;
+  taskList?(options: AssistantCliOptions): void | Promise<void>;
+  taskShow?(id: string, options: AssistantCliOptions): void | Promise<void>;
+  taskReview?(id: string, options: TaskReviewCliOptions): void | Promise<void>;
+  taskReport?(options: TaskReportCliOptions): void | Promise<void>;
+  taskCancel?(id: string, options: AssistantCliOptions & { reason?: string }): void | Promise<void>;
+  watchAdd?(options: WatchAddCliOptions): void | Promise<void>;
+  watchList?(options: AssistantCliOptions): void | Promise<void>;
+  watchShow?(id: string, options: AssistantCliOptions): void | Promise<void>;
+  watchPause?(id: string, options: AssistantCliOptions): void | Promise<void>;
+  watchResume?(id: string, options: AssistantCliOptions): void | Promise<void>;
+  watchRun?(id: string, options: AssistantCliOptions): void | Promise<void>;
+  watchRemove?(id: string, options: AssistantCliOptions): void | Promise<void>;
+  notify?(text: string, options: NotifyCliOptions): void | Promise<void>;
+  mainGet?(options: AssistantCliOptions): void | Promise<void>;
+  mainSet?(sessionId: string | undefined, options: MainCliOptions): void | Promise<void>;
+  mainClear?(options: AssistantCliOptions): void | Promise<void>;
+  settingsGet?(options: AssistantCliOptions): void | Promise<void>;
+  settingsQuietHours?(options: SettingsCliOptions): void | Promise<void>;
+  draftCreate?(options: DraftCreateCliOptions): void | Promise<void>;
+  draftList?(options: AssistantCliOptions): void | Promise<void>;
+  draftSend?(id: string, options: AssistantCliOptions): void | Promise<void>;
+  draftDiscard?(id: string, options: AssistantCliOptions): void | Promise<void>;
 }
+
+const collect = (value: string, previous: string[] = []) => [...previous, value];
 
 const addCardOptions = (command: Command) => command
   .option('--state <state>', 'Card state: queued, running, completed, failed, or interrupted', 'completed')
@@ -302,6 +333,131 @@ Notes:
   Only message linked sessions, and only when the user asks or the task really needs it.
   Claude ListAgents/SendMessage cannot reach AgentDock sessions; use these commands instead.
   Reads go straight to the local database (no network or token needed).`);
+
+  const task = program.command('task').description('主会话事项：派活、计划、验收、返工（只有主会话能调用，report 除外）');
+  const addTaskOptions = (command: Command) => command
+    .option('--title <title>', '事项标题')
+    .option('--notes <text>', '派活说明')
+    .option('--notes-file <file>', '从文件读说明；- 表示 stdin')
+    .option('--done-when <criterion>', '验收标准，可重复', collect, [])
+    .option('--expect-minutes <n>', '预计时长（分钟）')
+    .option('--agent <id>', '侧边会话 Agent；不传继承主会话')
+    .option('--cwd <dir>', '侧边会话工作目录（任意绝对路径）；不传继承主会话')
+    .option('--model <model>', '侧边会话模型；不传继承主会话')
+    .option('--reasoning-effort <effort>', '侧边会话思考深度；不传继承主会话')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON');
+  addTaskOptions(task.command('start')
+    .description('新建并启动一个事项；传 task-id 时启动已登记的计划卡')
+    .argument('[task-id]', '计划卡 ID'))
+    .action((taskId, options) => handlers.taskStart?.(taskId, options));
+  addTaskOptions(task.command('plan')
+    .description('登记一张计划卡，等用户确认后再开工'))
+    .action(options => handlers.taskPlan?.(options));
+  task.command('list')
+    .description('列出事项')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.taskList?.(options));
+  task.command('show')
+    .description('查看一个事项')
+    .argument('<task-id>')
+    .option('--json', '输出 JSON')
+    .action((id, options) => handlers.taskShow?.(id, options));
+  task.command('review')
+    .description('验收一个事项')
+    .argument('<task-id>')
+    .requiredOption('--verdict <verdict>', 'accepted / rework / needs_user / cancelled')
+    .option('--check <check>', "逐条验收，格式 '<标准>=met:<证据>' 或 '<标准>=unmet:<原因>'，可重复", collect, [])
+    .option('--note <text>', '备注')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action((id, options) => handlers.taskReview?.(id, options));
+  task.command('report')
+    .description('侧边会话汇报：done / question / blocked')
+    .requiredOption('--kind <kind>', 'done / question / blocked')
+    .requiredOption('--text <text>', '汇报内容')
+    .option('--evidence <text>', '证据')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.taskReport?.(options));
+  task.command('cancel')
+    .description('取消一个事项')
+    .argument('<task-id>')
+    .option('--reason <text>', '取消原因')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action((id, options) => handlers.taskCancel?.(id, options));
+
+  const watch = program.command('watch').description('自定义检查脚本：daemon 定期执行，条件满足才叫醒主会话');
+  watch.command('add')
+    .description('登记一个 watch')
+    .requiredOption('--name <name>', '名称')
+    .requiredOption('--command <command>', '检查脚本；exit 0 表示条件满足')
+    .option('--every <interval>', '执行间隔，如 60s / 5m / 1h', '60s')
+    .option('--timeout <duration>', '单次超时，默认 30s', '30s')
+    .option('--repeat', '满足后继续执行；默认一次性')
+    .option('--cooldown <duration>', '重复模式下触发后的冷却，默认 30m', '30m')
+    .option('--cwd <dir>', '脚本工作目录')
+    .option('--expires <iso>', '过期时间')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.watchAdd?.(options));
+  watch.command('list').description('列出 watch').option('--json', '输出 JSON').action(options => handlers.watchList?.(options));
+  watch.command('show').description('查看一个 watch').argument('<watch-id>').option('--json', '输出 JSON').action((id, options) => handlers.watchShow?.(id, options));
+  watch.command('pause').description('暂停 watch').argument('<watch-id>').option('--json', '输出 JSON').action((id, options) => handlers.watchPause?.(id, options));
+  watch.command('resume').description('恢复 watch').argument('<watch-id>').option('--json', '输出 JSON').action((id, options) => handlers.watchResume?.(id, options));
+  watch.command('run').description('立即执行一次').argument('<watch-id>').option('--json', '输出 JSON').action((id, options) => handlers.watchRun?.(id, options));
+  watch.command('remove').description('删除 watch').argument('<watch-id>').option('--json', '输出 JSON').action((id, options) => handlers.watchRemove?.(id, options));
+
+  program.command('notify')
+    .description('让主会话主动通知用户；免打扰默认关闭')
+    .argument('<text>', '通知内容')
+    .option('--ask', '需要用户拍板')
+    .option('--urgent', '绕过免打扰')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action((text, options) => handlers.notify?.(text, options));
+
+  const main = program.command('main').description('查看或指定主会话');
+  main.command('show').description('查看当前主会话').option('--json', '输出 JSON').action(options => handlers.mainGet?.(options));
+  main.command('set')
+    .description('把现有会话设为主会话；不传 session-id 时新建')
+    .argument('[session-id]', '现有会话 ID')
+    .option('--agent <id>', '新建时使用的 Agent')
+    .option('--cwd <dir>', '新建时的工作目录')
+    .option('--model <model>', '新建时的模型')
+    .option('--reasoning-effort <effort>', '新建时的 reasoning effort')
+    .option('--name <name>', '小猫的名字（主会话在界面上的形象），默认「团子」')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action((sessionId, options) => handlers.mainSet?.(sessionId, options));
+  main.command('clear').description('清除主会话设置').option('--json', '输出 JSON').action(options => handlers.mainClear?.(options));
+
+  const settings = program.command('settings').description('主会话设置');
+  settings.command('show').description('查看设置').option('--json', '输出 JSON').action(options => handlers.settingsGet?.(options));
+  settings.command('quiet-hours')
+    .description('设置免打扰时段（默认关闭）')
+    .option('--enabled', '开启免打扰')
+    .option('--off', '关闭免打扰')
+    .option('--start <HH:MM>', '开始时间')
+    .option('--end <HH:MM>', '结束时间')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.settingsQuietHours?.(options));
+
+  const draft = program.command('draft').description('对外回复草稿：确认后才发送');
+  draft.command('create')
+    .description('创建草稿')
+    .requiredOption('--channel <channel>', 'github_comment / lark_reply')
+    .requiredOption('--target <target>', '如 github:owner/repo#12')
+    .option('--body-file <file>', '正文文件；- 表示 stdin')
+    .option('--task <task-id>', '关联事项')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.draftCreate?.(options));
+  draft.command('list').description('列出草稿').option('--json', '输出 JSON').action(options => handlers.draftList?.(options));
+  draft.command('send').description('发送草稿').argument('<draft-id>').option('--json', '输出 JSON').action((id, options) => handlers.draftSend?.(id, options));
+  draft.command('discard').description('丢弃草稿').argument('<draft-id>').option('--json', '输出 JSON').action((id, options) => handlers.draftDiscard?.(id, options));
 
   const dev = program.command('dev').description('Isolated sandbox daemon for developing AgentDock itself (separate HOME, database and port; never touches the running instance)');
   dev.command('up')

@@ -28,9 +28,14 @@ describe('wrapAgentForSsh', () => {
     expect(wrapped.args).toContain('gcp');
     const remote = wrapped.args.at(-1)!;
     expect(remote).toContain('cd \'/home/codeax/my project\'');
-    expect(remote).toContain('npx -y \'@agentclientprotocol/codex-acp@1.10.0\'');
+    expect(remote).toContain('npx -y \'@agentclientprotocol/codex-acp@2.6.0\'');
     expect(remote).toContain('CODEX_CONFIG');
     expect(remote).toContain('"model":"gpt-5"');
+  });
+
+  it('pins the Claude remote adapter to the bundled version', () => {
+    const wrapped = wrapAgentForSsh(agent({ id: 'claude', name: 'Claude Code', command: '/usr/bin/claude', args: [] }), 'gcp', '/home/codeax', { localCwd: '/tmp' });
+    expect(wrapped.args.at(-1)).toContain("npx -y '@agentclientprotocol/claude-agent-acp@0.106.0'");
   });
 
   it('forwards provider credentials but not local AgentDock plumbing', () => {

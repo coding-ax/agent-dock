@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Database, FilePenLine, FlaskConical, GitBranch, Globe2, MessageSquare, Search, Square, Terminal, Users, Wrench } from 'lucide-react';
+import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Database, FilePenLine, FlaskConical, GitBranch, Globe2, MessageSquare, Search, Square, StickyNote, Terminal, Users, Wrench } from 'lucide-react';
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Spinner } from './Loaders';
 import { buildActivitySteps, thinkingTitle, eventRenderSignature, groupRenderSignature, type ActivityStep, type TimelineActivityGroup, type TimelineEvent } from './timeline';
@@ -6,6 +6,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { AssistantMarkdown, ThinkingMarkdown } from './TypewriterText';
 import { elapsedMilliseconds, formatElapsed, summarizeTools, toolActionLabel, toolPresentation, type ToolKind } from './tool-presentation';
 import { toolDetailView, type ToolDetailView } from './tool-detail';
+import { SupervisionNotice } from './companion/SupervisionNotice';
 
 /**
  * 时间线的渲染单元。原先这些组件都藏在 SessionPane 内部，只有它能用；「实际请求」轨迹面板
@@ -22,6 +23,7 @@ function ToolKindIcon({ kind, size = 16 }: { kind: ToolKind; size?: number }) {
   if (kind === 'test') return <FlaskConical size={size}/>;
   if (kind === 'database') return <Database size={size}/>;
   if (kind === 'agent') return <Users size={size}/>;
+  if (kind === 'note') return <StickyNote size={size}/>;
   if (kind === 'terminal') return <Terminal size={size}/>;
   return <Wrench size={size}/>;
 }
@@ -277,6 +279,11 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
     <div className="flex items-start gap-2.5 px-4 py-3"><CircleX size={15} className="mt-0.5 shrink-0 text-red-600"/><div className="min-w-0"><div className="text-[13px] font-semibold text-red-950">Agent 错误</div><div className="mt-1 text-[13px] leading-5 text-red-800"><MarkdownContent sessionId={sessionId}>{event.data.message ?? 'Agent 运行失败'}</MarkdownContent></div></div></div>
   </aside>;
   if (event.type === 'thinking') return null;
+  // daemon 注入的督办/提醒：不是用户气泡。每条信号画成一张迷你便签，点了在抽屉里定位；全文可展开。
+  if (event.data.origin === 'injected') {
+    const detail = typeof event.data.detail === 'string' ? event.data.detail : '';
+    return <SupervisionNotice text={event.data.text} detail={detail} timestamp={event.timestamp}/>;
+  }
   const user = event.data.role === 'user';
   if (user) {
     const text = markLeadingSlashCommand(stripImageReferenceLines(event.data.text ?? ''));

@@ -36,9 +36,9 @@
     "@agent-dock/agent-dock-shared": "workspace:*",
     "@agent-dock/agent-dock-storage": "workspace:*",
     "@larksuiteoapi/node-sdk": "^1.71.1",
-    "@types/node": "22.15.30",
-    "tsx": "4.20.3",
-    "typescript": "5.8.3",
-    "vitest": "3.2.4"
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
   }
 }

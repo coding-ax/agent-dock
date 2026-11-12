@@ -284,48 +284,7 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
   gap: 8px;
 }
 
-/* ---------- 空状态线条小猫（DockMascot） ---------- */
-.ui-cat { --mx: 0; --my: 0; position: relative; color: rgb(var(--zinc-800)); }
-.ui-cat-stage { display: block; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }
-.ui-cat-head { transform: translate(calc(var(--mx) * 3px), calc(var(--my) * 2px)) rotate(calc(var(--mx) * 4deg)); transform-box: view-box; transform-origin: 48px 58px; transition: transform .12s linear; }
-.ui-cat-pupil { transform: translate(calc(var(--mx) * 2.4px), calc(var(--my) * 2.4px)); transition: transform .12s linear; }
-.ui-cat-typing .ui-cat-pupil { transform: translate(0, 2.8px); }
-.ui-cat-eye { transform-box: fill-box; transform-origin: center; transition: transform .12s ease-out, opacity .15s ease; }
-.ui-cat-blinking .ui-cat-eye { transform: scaleY(.1); transition-duration: 60ms; }
-.ui-cat-sleepy .ui-cat-eye { transform: scaleY(.45); }
-.ui-cat-happy { opacity: 0; transition: opacity .15s ease; }
-.ui-cat-stage:hover .ui-cat-happy { opacity: 1; }
-.ui-cat-stage:hover .ui-cat-eye { opacity: 0; }
-.ui-cat-ear { transform-box: fill-box; transform-origin: bottom center; transition: transform .18s ease-out; }
-.ui-cat-stage:hover .ui-cat-ear-l { transform: rotate(-3deg); }
-.ui-cat-stage:hover .ui-cat-ear-r { transform: rotate(3deg); }
-.ui-cat-whiskers { transform-box: fill-box; transition: transform .18s ease-out; }
-.ui-cat-stage:hover .ui-cat-whiskers-l { transform: rotate(-4deg); }
-.ui-cat-stage:hover .ui-cat-whiskers-r { transform: rotate(4deg); }
-.ui-cat-tail { transform-box: fill-box; transform-origin: 0% 100%; }
-/* -a / -b 用两组内容相同、名字不同的 keyframes：交替挂类时 animation-name 变化才会重播动画，
-   这样不必再读 offsetWidth 强制同步布局。 */
-.ui-cat-twitching-a .ui-cat-ear-l { animation: ui-cat-twitch-l .3s ease-in-out; }
-.ui-cat-twitching-a .ui-cat-ear-r { animation: ui-cat-twitch-r .3s ease-in-out; }
-.ui-cat-twitching-b .ui-cat-ear-l { animation: ui-cat-twitch-l-alt .3s ease-in-out; }
-.ui-cat-twitching-b .ui-cat-ear-r { animation: ui-cat-twitch-r-alt .3s ease-in-out; }
-@keyframes ui-cat-tail { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(8deg); } }
-@keyframes ui-cat-twitch-l { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(-10deg); } 65% { transform: rotate(5deg); } }
-@keyframes ui-cat-twitch-r { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(10deg); } 65% { transform: rotate(-5deg); } }
-@keyframes ui-cat-twitch-l-alt { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(-10deg); } 65% { transform: rotate(5deg); } }
-@keyframes ui-cat-twitch-r-alt { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(10deg); } 65% { transform: rotate(-5deg); } }
-@keyframes ui-cat-ear-wiggle { 0%, 100% { transform: rotate(0); } 40% { transform: rotate(-4deg); } }
-@keyframes ui-cat-ear-wiggle-alt { 0%, 100% { transform: rotate(0); } 40% { transform: rotate(-4deg); } }
-@media (prefers-reduced-motion: no-preference) {
-  .ui-cat-tail { animation: ui-cat-tail 3s ease-in-out infinite; }
-  .ui-cat-ear-wiggle-a .ui-cat-ear-l { animation: ui-cat-ear-wiggle .16s ease-out; }
-  .ui-cat-ear-wiggle-a .ui-cat-ear-r { animation: ui-cat-ear-wiggle .16s ease-out reverse; }
-  .ui-cat-ear-wiggle-b .ui-cat-ear-l { animation: ui-cat-ear-wiggle-alt .16s ease-out; }
-  .ui-cat-ear-wiggle-b .ui-cat-ear-r { animation: ui-cat-ear-wiggle-alt .16s ease-out reverse; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ui-cat-head, .ui-cat-pupil, .ui-cat-eye, .ui-cat-ear, .ui-cat-whiskers, .ui-cat-tail { transform: none !important; animation: none !important; transition: none !important; }
-}
+/* 线条小猫（DockMascot / Kitten）的样式在 companion/companion.css，随组件按需加载。 */
 
 /* ---------- Loading 家族（见 Loaders.tsx） ---------- */
 @keyframes ui-skeleton { from { background-position: 150% 0; } to { background-position: -150% 0; } }

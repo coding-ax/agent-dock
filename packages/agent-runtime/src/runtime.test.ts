@@ -465,6 +465,66 @@ describe('runtime lifecycle acceptance', () => {
     await h.runtime.shutdown(); h.repos.close();
   });
 
+  it('后台进程的进度推送落在回答之后，不判失败、最终输出完整', async () => {
+    // 线上实测（Codex 起 dev server）：后台进程的 toolCallId 每秒推一条 running，插在回答的
+    // chunk 之间、落在回答之后。老规则把它当成「答完又去干活」，整轮判失败、finalText 为空。
+    const heartbeat = () => ({ type: 'tool_call', data: { id: 'server', name: 'tool call', status: 'running' } });
+    const h = harness({ onSend: emit => {
+      emit({ type: 'tool_call', data: { id: 'server', name: 'node dist/cli.js --port 4400', status: 'running' } });
+      emit({ type: 'tool_call', data: { id: 'grep', name: 'rg tier', status: 'running' } });
+      emit(heartbeat());
+      emit({ type: 'tool_result', data: { id: 'grep', name: 'rg tier', output: 'ok', status: 'completed' } });
+      emit({ type: 'text', data: { text: '现在的情况：' } });
+      emit(heartbeat());
+      emit({ type: 'text', data: { text: '只做到了不触发。' } });
+      emit(heartbeat());
+    } });
+    await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' });
+    await h.runtime.send(s.id, 'work');
+    const task = (await h.runtime.getTasks(s.id))[0];
+    expect(task?.status).toBe('completed');
+    expect(task?.finalText).toBe('现在的情况：只做到了不触发。');
+    expect((await h.runtime.getEvents(s.id)).some(e => e.type === 'error')).toBe(false);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('上一轮起在后台的调用在本轮推进度：打上 carriedOver，不算本轮的活动', async () => {
+    let turn = 0;
+    const heartbeat = () => ({ type: 'tool_call', data: { id: 'server', name: 'tool call', status: 'running' } });
+    const h = harness({ onSend: emit => {
+      turn += 1;
+      if (turn === 1) {
+        emit({ type: 'text', data: { text: '我把预览服务起在后台。' } });
+        emit({ type: 'tool_call', data: { id: 'server', name: 'node dist/cli.js --port 4400', status: 'running' } });
+        emit({ type: 'text', data: { text: '已在 4400 端口启动。' } });
+        return;
+      }
+      // 第二轮 Agent 没碰它，它的推送却落在回答中间和回答之后。
+      emit({ type: 'text', data: { text: '噪声目前' } });
+      emit(heartbeat());
+      emit({ type: 'text', data: { text: '没有过滤。' } });
+      emit(heartbeat());
+    } });
+    await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' });
+    await h.runtime.send(s.id, 'first');
+    const afterFirst = (await h.runtime.getEvents(s.id)).length;
+    await h.runtime.send(s.id, 'second');
+    const [, second] = await h.runtime.getTasks(s.id);
+    expect(second?.status).toBe('completed');
+    expect(second?.finalText).toBe('噪声目前没有过滤。');
+    const secondTurn = (await h.runtime.getEvents(s.id)).slice(afterFirst);
+    expect(secondTurn.some(e => e.type === 'error')).toBe(false);
+    const carried = secondTurn.filter(e => e.type === 'tool_call');
+    expect(carried).toHaveLength(2);
+    expect(carried.every(e => (e.data as any).carriedOver === true)).toBe(true);
+    // 本轮没有跑任何工具，会话状态不该被后台推送拨成 running_tool。
+    expect(secondTurn.some(e => e.type === 'status' && (e.data as any).state === 'running_tool')).toBe(false);
+    // 发起它的那一轮不打标。
+    const firstTurnCall = (await h.runtime.getEvents(s.id)).slice(0, afterFirst).find(e => e.type === 'tool_call');
+    expect((firstTurnCall?.data as any).carriedOver).toBeUndefined();
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
   it('Agent 说完就停在未返回的工具调用上时仍判失败', async () => {
     const h = harness({ onSend: emit => {
       emit({ type: 'text', data: { text: '我先跑个命令。' } });

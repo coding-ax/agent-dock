@@ -11,9 +11,9 @@ import type { ComposerEditorHandle } from './ComposerEditor';
 import { AgentIcon } from './AgentIcon';
 import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, parsePromptToDraft, queuedImageThumbnailUrl, type ComposerReference } from './composer-utils';
 import { useTimelineAutoScroll } from './useTimelineAutoScroll';
-import { useRefetchFullOnFocus } from './useRefetchFullOnFocus';
+import { useHealOnFocus } from './useHealOnFocus';
 import { useBufferedEventStream } from './useBufferedEventStream';
-import { mergeEventBatch } from './event-buffer';
+import { healBoundary, mergeEventBatch, replaceEventTail } from './event-buffer';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { stateLabels, stateTone, busyStates } from './session-states';
 import { ConfirmDialog, IconButton } from './ui-controls';
@@ -24,6 +24,15 @@ import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
 import { useDockStore, type PaneKind } from './store';
 import { createOptimisticMessageId } from './optimistic-message-id';
 import { useToast } from './Toast';
+import { CompanionHeader, CompanionHeaderNotes, CompanionWelcome, useMainSessionId } from './companion/CompanionHeader';
+import { useCompanion } from './companion/useCompanion';
+import { useCompanionStore } from './companion/companion-store';
+
+/** 主会话输入框的占位：单独成组件，小猫改名时只重渲染这一小块，不拖着整条时间线。 */
+function CompanionPlaceholder() {
+  const { name } = useCompanion();
+  return <><span className="hidden sm:inline">跟{name}说说要做什么，Enter 发送；它会拆成便签派出去</span><span className="sm:hidden">跟{name}说说要做什么</span></>;
+}
 
 type SendMode = 'queue' | 'interrupt';
 
@@ -97,24 +106,33 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
   const [actionError, setActionError] = useState<string>(); const [archiveConfirm, setArchiveConfirm] = useState(false);
   const composerTextarea = useRef<ComposerEditorHandle>(null);
+  // 这个面板是不是主会话（小猫）。只订阅主会话 id，不随便签轮询重渲染。
+  const mainSessionId = useMainSessionId();
+  const isMain = session.id === mainSessionId;
+  // 便签上的「问问它」：把便签带进主会话输入框，接着聚焦。
+  const mainDraft = useCompanionStore(store => (isMain && !secondary ? store.mainDraft : undefined));
+  useEffect(() => {
+    if (!mainDraft) return;
+    setPrompt(current => current.trim() ? `${current.trimEnd()}\n\n${mainDraft.text}` : mainDraft.text);
+    useCompanionStore.getState().consumeMainDraft();
+    requestAnimationFrame(() => composerTextarea.current?.focus());
+  }, [mainDraft]);
 
-  // 增量拉取是 append-only，无法修正已缓存的过期条目；focus 时退回一次全量拉取以自愈。
-  // 每个 pane 各自持有一个布尔 ref，两个 pane 都会独立触发全量 refetch。
-  const refetchFull = useRefetchFullOnFocus();
+  // 增量拉取是 append-only，无法修正已缓存的过期条目；focus 之后的那次拉取改走自愈：
+  // 重拉缓存里最后一轮并整段替换（见 healBoundary），不再重拉整段历史。
+  // 每个 pane 各自持有一个布尔 ref，两个 pane 都会独立触发自愈。
+  const healNextFetch = useHealOnFocus();
   const events = useQuery({
     queryKey: ['events', session.id],
     queryFn: async ({ queryKey }) => {
       const sessionId = queryKey[1] as string;
-      const full = refetchFull.current;
-      refetchFull.current = false;
-      const cached = full ? [] : qc.getQueryData<DockEvent[]>(queryKey) ?? [];
-      const after = cached.reduce((max, event) => Math.max(max, event.sequence), 0);
+      const heal = healNextFetch.current;
+      healNextFetch.current = false;
+      const cached = qc.getQueryData<DockEvent[]>(queryKey) ?? [];
+      const after = heal ? healBoundary(cached) : cached.reduce((max, event) => Math.max(max, event.sequence), 0);
       const fresh = await api.events(sessionId, after || undefined);
       const live = qc.getQueryData<DockEvent[]>(queryKey) ?? cached;
-      if (full || !after) {
-        const newest = fresh.reduce((max, event) => Math.max(max, event.sequence), 0);
-        return mergeEventBatch(fresh, live.filter(event => event.sequence > newest));
-      }
+      if (heal || !after) return replaceEventTail(live, after, fresh);
       return mergeEventBatch(live, fresh);
     },
     enabled: true
@@ -242,7 +260,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const handoverInfo = handover.data?.handover ?? undefined;
 
   // 导入会话从外部 Agent 同步新轮次：用户在 Codex 等原客户端里续聊后，一键把 AgentDock 还没有的轮次补进来。
-  // 其他会话的本地同步由 SSE + 聚焦全量重拉兼顾，不再放按钮。
+  // 其他会话的本地同步由 SSE + 聚焦自愈重拉兼顾，不再放按钮。
   const syncToast = useToast();
   const externalName = agent?.name ?? session.agentId;
   const syncExternal = useMutation({
@@ -251,8 +269,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       const summary = result.added ? `已从 ${externalName} 同步 ${result.added} 轮新消息` : `${externalName} 里没有新消息`;
       // 两边交替聊时夹在中间的外部轮次放不进时间线中间，只提示数量。
       syncToast.show(result.skipped ? `${summary}；另有 ${result.skipped} 轮是在本会话消息之间发的，无法插入时间线，需要完整历史请重新导入` : summary, 'info');
-      // 新轮次已经经 SSE 推过来；再全量重拉一次兜底，避免流断过时漏条。
-      refetchFull.current = true;
+      // 新轮次已经经 SSE 推过来；再自愈重拉一次兜底（新轮次都在末尾，从最后一轮重拉即可覆盖），避免流断过时漏条。
+      healNextFetch.current = true;
       await Promise.all([events.refetch(), tasks.refetch(), qc.invalidateQueries({ queryKey: ['sessions'] })]);
     },
     onError: error => syncToast.show(error.message)
@@ -288,7 +306,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     <section className="flex min-w-0 flex-1 flex-col">
       <header className="ui-session-topbar flex shrink-0 items-center gap-1 border-b border-zinc-200 bg-canvas px-3 sm:px-4">
         <span className="mr-1 md:hidden"><IconButton label="打开会话列表" onClick={onOpenSidebar}><Menu size={16}/></IconButton></span>
-        <div className="min-w-0 flex-1">
+        {isMain ? <CompanionHeader agentId={session.agentId} agentName={agent?.name}/> : <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] font-semibold text-zinc-900">{sessionLabel(session, agent?.name)}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500">
             <AgentIcon agentId={session.agentId} agentName={agent?.name} size={13}/>
@@ -299,8 +317,9 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             <span title={session.cwd} className="min-w-0 truncate">{workspaceLabel(session.cwd)}</span>
             {session.sshHost && <span title={`通过 SSH 在 ${session.sshHost} 上运行`} className="shrink-0 rounded border border-sky-200 bg-sky-50 px-1 py-px text-[12px] font-medium leading-4 text-sky-700">SSH · {session.sshHost}</span>}
           </div>
-        </div>
+        </div>}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          {isMain && <CompanionHeaderNotes/>}
           {!session.archivedAt && busyStates.has(session.state) && <button type="button" onClick={() => void act('interrupt')} className="mr-1 flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[12px] font-medium text-white transition-colors hover:bg-zinc-700"><Square size={10} fill="currentColor"/>停止</button>}
           {!session.archivedAt && <IconButton label={activeSchedules ? `定时任务（${activeSchedules} 个启用中）` : '定时任务'} active={activeSchedules > 0} onClick={() => openAppDialog('schedule', { sessionId: session.id })}><AlarmClock size={15}/></IconButton>}
           {session.systemPrompt && <IconButton label="查看系统提示词" onClick={() => openAppDialog('system-prompt', { sessionId: session.id })}><BookOpen size={15}/></IconButton>}
@@ -316,9 +335,9 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
       <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
-        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineSections.map((section, index) => section.kind === 'event' ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, index === timelineSections.length - 1)} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/> : <ActivityPanel key={section.turnId} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
+        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineSections.map((section, index) => section.kind === 'event' ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, index === timelineSections.length - 1)} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/> : <ActivityPanel key={section.turnId} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
         </div></div>{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}</div>
-      {session.archivedAt ? <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已永久归档，仅支持查看。</div> : <Composer sessionId={session.id} state={session.state} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
+      {session.archivedAt ? <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已永久归档，仅支持查看。</div> : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>
       </div>
     </section>

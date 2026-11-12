@@ -11,16 +11,16 @@ const createSourceSchema = z.object({
   name: z.string().min(1),
   kind: z.enum(['webhook', 'poll', 'stream', 'worker']).optional(),
   enabled: z.boolean().optional(),
-  config: z.record(z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
   secretRefs: z.array(z.string()).optional(),
-  secrets: z.record(z.string()).optional()
+  secrets: z.record(z.string(), z.string()).optional()
 }).strict();
 
 const updateSourceSchema = z.object({
   name: z.string().min(1).optional(),
-  config: z.record(z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
   secretRefs: z.array(z.string()).optional(),
-  secrets: z.record(z.string()).optional()
+  secrets: z.record(z.string(), z.string()).optional()
 }).strict();
 
 function asHeaders(request: FastifyRequest): Record<string, string | string[] | undefined> {

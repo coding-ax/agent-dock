@@ -8,6 +8,8 @@ import { randomBytes } from 'node:crypto';
 import { RuntimeError, type AgentConfig, type Session } from '@agent-dock/agent-dock-shared';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { registerLarkRoutes, type LarkRoutesOptions } from './lark/routes.js';
+import { registerLarkAvatarRoutes } from './lark-avatar/routes.js';
+import type { LarkAvatarService } from './lark-avatar/service.js';
 import { discoverAgentModels } from './agent-models.js';
 import { describeAcpError, listExternalSessions, loadExternalSessionTranscript, supportsSshAgent, wrapAgentForSsh } from '@agent-dock/agent-dock-acp-client';
 import { listSshHosts, probeSshHost, isValidSshHost } from './ssh/hosts.js';
@@ -20,12 +22,15 @@ import { registerShareLinkRoutes, type ShareLinkService } from './share-link.js'
 import { registerSelfUpdateRoutes, type SelfUpdateService } from './self-update.js';
 import { registerScheduleRoutes } from './schedules/routes.js';
 import type { ScheduleService } from './schedules/service.js';
+import { registerAssistantRoutes } from './assistant/routes.js';
+import type { AssistantService } from './assistant/service.js';
 import { isSourceIngressRequest } from './sources-router/constants.js';
 import { registerSourceRouterRoutes } from './sources-router/routes.js';
 import type { SourceRouterService } from './sources-router/service.js';
 import { registerTerminalWebSockets } from './terminal-ws.js';
 import { registerFsRoutes } from './fs-routes.js';
 import { registerLlmRoutes, type LlmRoutesOptions } from './llm/service.js';
+import { registerJsonCompression } from './json-compression.js';
 import { LoginRateLimiter, readWebPasswordHash, verifyWebPassword, webPasswordPath } from './web-password.js';
 import { isLocalOwnerRequest, issueMasterToken, parseCookieHeader, sessionTokenAllows, verifyWebToken, webAccessCookieName, webAccessCookieNameFor, webAccessSessionCookieName, type VerifiedWebToken } from './web-access.js';
 
@@ -99,8 +104,12 @@ export interface BuildAppOptions {
   selfUpdate?: SelfUpdateService;
   /** 定时任务；不传表示这套路由不挂。 */
   schedules?: ScheduleService;
-  /** 消息源与 Router；不传表示这套路由不挂。 */
+  /** 主会话、事项、watch、草稿与督办；不传表示这套路由不挂。 */
+  assistant?: AssistantService;
+  /** 消息源与 Router；M0 起不再传入，保留类型到 M2 删除。 */
   sourcesRouter?: SourceRouterService;
+  /** AI 飞书替身；不传表示这套路由不挂。 */
+  larkAvatar?: LarkAvatarService;
 }
 
 // 上传路由接受任意 content-type（浏览器会为 .md/.heic/.zip 等发出五花八门的类型），
@@ -175,6 +184,8 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test', bodyLimit: 52 * 1024 * 1024 });
   const streams = new Set<import('node:http').ServerResponse>();
   await app.register(cors, { origin: true });
+  // 大 JSON（重会话的整段时间线）按 Accept-Encoding 压缩，远程经隧道打开时差的全是传输。
+  registerJsonCompression(app);
   // 可交互终端走 WebSocket（upgrade 不经 Fastify onRequest，鉴权在 registerTerminalWebSockets 内手工完成）。
   const terminalManager = registerTerminalWebSockets(app.server, runtime, { webAuth: options.webAuth });
   // 兜底 parser：任何未显式注册的类型都按原始 Buffer 交给路由。
@@ -298,7 +309,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof RuntimeError) return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
-    reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: error.message } });
+    reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : String(error) } });
   });
 
   app.get('/health', async () => ({ ok: true }));
@@ -333,7 +344,9 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   if (options.shareLinks) registerShareLinkRoutes(app, options.shareLinks, runtime);
   if (options.selfUpdate) registerSelfUpdateRoutes(app, options.selfUpdate);
   if (options.schedules) registerScheduleRoutes(app, options.schedules);
+  if (options.assistant) registerAssistantRoutes(app, options.assistant);
   if (options.sourcesRouter) registerSourceRouterRoutes(app, options.sourcesRouter);
+  if (options.larkAvatar) registerLarkAvatarRoutes(app, options.larkAvatar);
   await registerLarkRoutes(app, { ...options.lark, runtime: options.lark?.runtime ?? runtime });
   app.get('/api/agents', async request => {
     // 停用的内置 agent 只在配置面板展示，面板入口仅 master token 可用（会话令牌拿到的列表不含停用项）。

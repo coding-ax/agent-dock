@@ -117,6 +117,8 @@ export function createRepositories(filename: string, options: { nativeFallback?:
   // 本轮最终输出。runtime 每轮结尾本来就为了判成败算出了这段文本，落库后轨迹面板不必
   // 为了显示「每轮最终输出」去扫该轮事件（重会话上一轮就是全量扫描）。
   if (!taskColumns.some(column => column.name === 'final_text')) sqlite.exec('ALTER TABLE tasks ADD COLUMN final_text TEXT');
+  // 任务来源。`injected` 是 daemon 注入的督办消息；旧库补 ALTER，历史行为 NULL。
+  if (!taskColumns.some(column => column.name === 'origin')) sqlite.exec('ALTER TABLE tasks ADD COLUMN origin TEXT');
   // feat/schedules 开发期的 beta 包建过 session_id NOT NULL 的旧表：空表直接重建放开约束，有数据则整表搬迁。
   const scheduleSessionColumn = (sqlite.pragma('table_info(schedules)') as Array<{ name: string; notnull: number }>).find(column => column.name === 'session_id');
   if (scheduleSessionColumn?.notnull) sqlite.transaction(() => {

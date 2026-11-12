@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeEventBatch } from './event-buffer';
+import { healBoundary, mergeEventBatch, replaceEventTail } from './event-buffer';
 import type { DockEvent } from './api';
 
 const event = (sequence: number, data: any = {}, type = 'text'): DockEvent =>
@@ -85,5 +85,36 @@ describe('SSE event batch merge', () => {
     expect(merged).toHaveLength(100_000);
     expect(merged[0].sequence).toBe(1);
     expect(merged[99_999].sequence).toBe(100_000);
+  });
+});
+
+describe('focus self-heal tail', () => {
+  const user = (sequence: number) => event(sequence, { role: 'user', text: 'q' });
+
+  it('从缓存里最后一轮的提问锚点之前开始重拉', () => {
+    expect(healBoundary([user(1), event(2), user(10), event(11), event(12)])).toBe(9);
+    // 没有锚点（或缓存为空）时退回整段重拉。
+    expect(healBoundary([event(3), event(4)])).toBe(0);
+    expect(healBoundary([])).toBe(0);
+  });
+
+  it('只替换重拉的那一段：更早的轮次原样保留，拉取期间 SSE 新到的事件接在后面', () => {
+    const live = [
+      user(1), event(2, { text: '上一轮回答' }),
+      user(10), event(11, { text: '思' }, 'thinking'), event(12, { text: '考' }, 'thinking'), event(13, { id: 't', status: 'running' }, 'tool_call'),
+      event(30, { text: 'SSE 刚推来的' })
+    ];
+    // 服务端合并过的思考（sequence 取最后一片）+ 后台断开期间错过的工具终态。
+    const fresh = [user(10), event(12, { text: '思考' }, 'thinking'), event(13, { id: 't', status: 'running' }, 'tool_call'), event(20, { id: 't', status: 'completed' }, 'tool_result')];
+    const merged = replaceEventTail(live, 9, fresh);
+    expect(merged.map(item => item.sequence)).toEqual([1, 2, 10, 12, 13, 20, 30]);
+    // 逐 token 的片段被整段替换，不会和合并后的思考各留一份。
+    expect(merged.filter(item => item.type === 'thinking').map(item => item.data.text)).toEqual(['思考']);
+    expect(merged.find(item => item.sequence === 2)).toBe(live[1]);
+  });
+
+  it('after 为 0 时等同整段替换', () => {
+    const merged = replaceEventTail([event(1, { text: 'stale' }), event(5)], 0, [event(1, { text: 'fresh' }), event(2)]);
+    expect(merged.map(item => [item.sequence, item.data.text])).toEqual([[1, 'fresh'], [2, undefined], [5, undefined]]);
   });
 });

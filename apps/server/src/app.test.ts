@@ -897,6 +897,42 @@ describe('web access gate', () => {
   });
 });
 
+describe('keep awake routes', () => {
+  const status = { supported: true, enabled: false, keepDisplay: false };
+  const make = async () => {
+    const keepAwake = {
+      status: vi.fn(() => status),
+      set: vi.fn(async (input: { enabled?: boolean; keepDisplay?: boolean }) => ({ ...status, enabled: input.enabled ?? status.enabled, keepDisplay: input.keepDisplay ?? status.keepDisplay }))
+    };
+    const app = await buildApp({} as any, { system: { platform: 'darwin', keepAwake: keepAwake as any } });
+    return { app, keepAwake };
+  };
+
+  it('reports and toggles the sleep assertion', async () => {
+    const { app, keepAwake } = await make();
+    expect((await app.inject({ method: 'GET', url: '/api/system/keep-awake' })).json()).toEqual(status);
+    expect((await app.inject({ method: 'PUT', url: '/api/system/keep-awake', payload: { enabled: true } })).json()).toMatchObject({ enabled: true });
+    expect((await app.inject({ method: 'PUT', url: '/api/system/keep-awake', payload: { keepDisplay: true } })).json()).toMatchObject({ keepDisplay: true });
+    expect(keepAwake.set.mock.calls.map(call => call[0])).toEqual([{ enabled: true }, { keepDisplay: true }]);
+    await app.close();
+  });
+
+  it('validates the body, surfaces failures and degrades without a service', async () => {
+    const { app, keepAwake } = await make();
+    expect((await app.inject({ method: 'PUT', url: '/api/system/keep-awake', payload: { enabled: 'yes' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PUT', url: '/api/system/keep-awake', payload: {} })).statusCode).toBe(400);
+    keepAwake.set.mockRejectedValueOnce(new Error('caffeinate 失败'));
+    const failed = await app.inject({ method: 'PUT', url: '/api/system/keep-awake', payload: { enabled: true } });
+    expect(failed.statusCode).toBe(409);
+    expect(failed.json().error).toMatchObject({ code: 'KEEP_AWAKE_FAILED', message: 'caffeinate 失败' });
+    await app.close();
+    const bare = await buildApp({} as any, { system: { platform: 'darwin' } });
+    expect((await bare.inject({ method: 'GET', url: '/api/system/keep-awake' })).json()).toMatchObject({ supported: false, enabled: false });
+    expect((await bare.inject({ method: 'PUT', url: '/api/system/keep-awake', payload: { enabled: true } })).statusCode).toBe(501);
+    await bare.close();
+  });
+});
+
 describe('autostart routes', () => {
   const status = { supported: true, enabled: false, plistPath: '/p.plist' };
   const make = async () => {

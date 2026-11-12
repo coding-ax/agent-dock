@@ -1,9 +1,9 @@
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { access, stat } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, existsSync } from 'node:fs';
 import { delimiter, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -68,5 +68,10 @@ if (process.env.agentdock_codex_model) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Codex CODEX_CONFIG 必须是有效的 JSON 对象。');
   process.env.CODEX_CONFIG = JSON.stringify({ ...config, model: process.env.agentdock_codex_model });
 }
-const adapter = createRequire(import.meta.url).resolve('@agentclientprotocol/codex-acp');
+// 发布包加载同目录的 vendor 产物；源码调试（packages/acp-client/agents）没有
+// ../vendor，回退到 workspace 内的 node_modules。
+const vendoredCodexAcp = fileURLToPath(new URL('../vendor/codex-acp.mjs', import.meta.url));
+const adapter = existsSync(vendoredCodexAcp)
+  ? vendoredCodexAcp
+  : createRequire(import.meta.url).resolve('@agentclientprotocol/codex-acp');
 await import(pathToFileURL(adapter).href);

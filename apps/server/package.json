@@ -18,6 +18,7 @@
   "files": [
     "dist/cli.js",
     "dist/cli.js.map",
+    "dist/lark.proto",
     "dist/agents",
     "dist/assets",
     "dist/vendor",
@@ -35,30 +36,31 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.66.0",
-    "@agentclientprotocol/codex-acp": "1.10.0",
     "@agentclientprotocol/sdk": "1.4.0",
-    "@fastify/cors": "10.1.0",
+    "@fastify/cors": "11.4.1",
     "@larksuiteoapi/node-sdk": "^1.71.1",
-    "@openclaw/fs-safe": "0.26.9",
+    "@openclaw/fs-safe": "0.28.0",
     "acpx": "0.20.0",
     "better-sqlite3": "13.0.3",
-    "commander": "15.0.0",
-    "croner": "10.0.1",
-    "drizzle-orm": "0.44.2",
-    "fastify": "5.4.0",
+    "commander": "15.1.0",
+    "croner": "11.0.0",
+    "drizzle-orm": "0.45.4",
+    "fastify": "5.12.8",
     "node-pty": "1.2.0-beta.15",
-    "pino": "9.7.0",
-    "safe-regex2": "5.1.1",
-    "ws": "^8.21.1",
-    "zod": "3.25.67"
+    "pino": "10.4.0",
+    "protobufjs": "8.8.1",
+    "safe-regex2": "5.1.2",
+    "ws": "^8.22.2",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@types/ws": "^8.18.1",
-    "esbuild": "0.25.12",
-    "tsx": "4.20.3",
-    "typescript": "5.8.3",
-    "vitest": "3.2.4"
+    "@agentclientprotocol/claude-agent-acp": "0.106.0",
+    "@agentclientprotocol/codex-acp": "2.6.0",
+    "@types/ws": "^8.18.2",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
   },
   "engines": {
     "node": ">=22.13.0"

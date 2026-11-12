@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DAEMON_CWD_ENV, DAEMON_ENV_FLAG, DAEMON_STARTED_AT_ENV } from './daemon/daemon.js';
 
 /**
  * `agent-dock dev`：用当前源码的构建产物起一个完全隔离的 daemon，给「Agent 迭代 AgentDock 自己」做验证。
@@ -12,6 +13,8 @@ import { fileURLToPath } from 'node:url';
  *   指到沙箱上；
  * - 独立工作目录与数据库：不碰正在用的 agentdock.db；
  * - 独立端口，关掉飞书监听：不和正式实例抢同一个机器人的消息。
+ * 另外 PATH 最前面垫一个 bin/agent-dock，指向同一份构建：沙箱里跑的 Agent（主会话派活、侧边会话汇报）
+ * 调 agent-dock 时用的是正在验证的代码，而不是全局装的旧版本。
  * 状态放在 仓库/.agentdock/dev/，已在 .gitignore 里；不同仓库各自一份。
  */
 
@@ -50,13 +53,31 @@ export function sandboxPaths(repo: string, port: number): DevSandbox {
 }
 
 /** 沙箱里运行 CLI 的环境：独立 HOME，去掉会把命令引回正式实例的变量。 */
+const shimDir = (sandbox: DevSandbox) => join(sandbox.root, 'bin');
+
 export function sandboxEnv(sandbox: DevSandbox, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base, HOME: sandbox.home, AGENTDOCK_DISABLE_LARK_LISTENER: 'true', AGENTDOCK_WEB_AUTH: 'off', agentdock_database: sandbox.database };
+  env.PATH = [shimDir(sandbox), base.PATH].filter(Boolean).join(delimiter);
   // 这些是正式实例注入给当前 Agent 的：带进沙箱会让 session/group 类命令打到正式实例上。
   for (const key of ['agentdock_session_id', 'agentdock_group_tools_url', 'agentdock_group_tools_token']) delete env[key];
+  // Agent 跑在正式 daemon 的子进程树里，会继承它的 daemon 标记；带进去后沙箱的 `daemon start` 会把自己当成 daemon 本体，
+  // 直接在前台起服务（dev up 卡住、日志写不出来）。
+  for (const key of [DAEMON_ENV_FLAG, DAEMON_CWD_ENV, DAEMON_STARTED_AT_ENV]) delete env[key];
   // 不覆盖 CLAUDE_CONFIG_DIR / CODEX_HOME：macOS 上 Claude 的登录态在钥匙串里，临时 HOME 下仍能取到；
   // 显式改 CLAUDE_CONFIG_DIR 会让它换一个钥匙串条目去查。
   return env;
+}
+
+const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+
+/** 沙箱专用的 agent-dock 命令：daemon 会把 PATH 传给它拉起的 Agent。Windows 上不垫（没有 sh）。 */
+function writeCliShim(sandbox: DevSandbox, node = process.execPath) {
+  if (process.platform === 'win32') return;
+  const dir = shimDir(sandbox);
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, 'agent-dock');
+  writeFileSync(file, `#!/bin/sh\nexec ${shellQuote(node)} ${shellQuote(sandbox.entrypoint)} "$@"\n`);
+  chmodSync(file, 0o755);
 }
 
 function readSandbox(repo: string): DevSandbox | undefined {
@@ -86,6 +107,7 @@ export async function devUp(options: DevOptions = {}): Promise<string> {
   if (!existsSync(sandbox.entrypoint)) throw new Error(`没有构建产物：${sandbox.entrypoint}。先在仓库根目录运行 pnpm build。`);
   for (const dir of [sandbox.home, sandbox.work]) mkdirSync(dir, { recursive: true });
   writeFileSync(join(sandbox.root, SANDBOX_FILE), `${JSON.stringify(sandbox, null, 2)}\n`);
+  writeCliShim(sandbox);
   const run = options.run ?? defaultRun;
   const env = sandboxEnv(sandbox);
   // 已在跑就重启，确保用的是最新一次 build。沙箱自己的 restart 不会触发自杀保护：目标库不是正式库。

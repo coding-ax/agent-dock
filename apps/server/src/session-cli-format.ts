@@ -1,4 +1,4 @@
-import type { AgentEvent, Session, TaskRecord } from '@agent-dock/agent-dock-shared';
+import { isCarriedOverToolCall, type AgentEvent, type Session, type TaskRecord } from '@agent-dock/agent-dock-shared';
 
 /**
  * 把会话事件流渲染成给「人/侧边会话里的 agent」读的纯文本转录，边迭代边写进 `write`。
@@ -36,6 +36,8 @@ export function writeTranscript(events: Iterable<AgentEvent>, write: (chunk: str
     pending = undefined;
   };
   for (const event of events) {
+    // 更早轮次起在后台的进程每秒一条进度推送：每条都会多一行「工具调用」，还会把回答切成好几段。
+    if (isCarriedOverToolCall(event)) continue;
     const data = (event.data ?? {}) as Record<string, unknown>;
     if (event.type === 'text') {
       const text = typeof data.text === 'string' ? data.text : '';

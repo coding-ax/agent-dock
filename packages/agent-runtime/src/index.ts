@@ -154,6 +154,9 @@ export class AgentDockRuntime {
   // taskId → 本轮提问锚点的序号。runTask 写锚点时就记下来，判终态时不必再扫一遍该会话的锚点。
   // 只是几个数字，随手留着比重新扫一次 145 万行便宜得多。
   private readonly turnAnchors = new Map<string, number>();
+  // sessionId → 还没收口的工具调用 → 发起它的 taskId。只为认出「更早轮次起在后台、这一轮还在
+  // 推进度」的调用；收到终态即删，所以这里只留那几个没收口的。
+  private readonly openToolCalls = new Map<string, Map<string, string | undefined>>();
   private readonly permissions = new Map<string, PermissionRequestData>();
   private readonly driverEventChains = new Map<string, Promise<void>>();
   private readonly driverEventErrors = new Map<string, unknown>();
@@ -179,6 +182,27 @@ export class AgentDockRuntime {
   }
 
   private touch(sessionId: string) { this.lastActivity.set(sessionId, Date.now()); }
+  /**
+   * 记下工具调用由哪一轮发起，返回它是否属于更早的轮次。
+   *
+   * Agent 起在后台的进程（Codex 起的 dev server、watch）会在后续每一轮里持续推
+   * tool_call_update，状态一直是 running，直到进程退出。那不是这一轮的活动：按这一轮算，
+   * 它就成了「这一轮没收口的工具调用」，有完整回答的轮次会被判失败。
+   */
+  private trackToolCall(sessionId: string, id: unknown, terminal: boolean): boolean {
+    if (typeof id !== 'string' || !id) return false;
+    const taskId = this.activeTasks.get(sessionId)?.id;
+    let open = this.openToolCalls.get(sessionId);
+    const origin = open?.has(id) ? open.get(id) : taskId;
+    if (terminal) {
+      open?.delete(id);
+      if (open && !open.size) this.openToolCalls.delete(sessionId);
+    } else if (!open?.has(id)) {
+      if (!open) this.openToolCalls.set(sessionId, open = new Map());
+      open.set(id, taskId);
+    }
+    return Boolean(taskId && origin && origin !== taskId);
+  }
   private permissionKey(sessionId: string, permissionId: string) { return `${sessionId}:${permissionId}`; }
   private enqueueDriverEvent(session: Session, event: NormalizedDriverEvent) {
     const previous = this.driverEventChains.get(session.id) ?? Promise.resolve();
@@ -464,6 +488,7 @@ export class AgentDockRuntime {
     session.state = state; session.updatedAt = now(); session.error = error;
     await this.repos.sessions.save(session);
     await this.emit(session.id, 'status', { state, ...(error ? { error } : {}) });
+    this.emitter.emit('status', { sessionId: session.id, state, ...(error ? { error } : {}) });
   }
 
   // A task-level failure (e.g. no final output, a capped turn, or a transient
@@ -478,6 +503,7 @@ export class AgentDockRuntime {
     session.state = 'idle'; session.updatedAt = now(); session.error = error;
     await this.repos.sessions.save(session);
     await this.emit(session.id, 'status', { state: 'idle', error });
+    this.emitter.emit('status', { sessionId: session.id, state: 'idle', error });
   }
 
   /** 导入会话的 resume 参数：只有 source='import' 的会话才需要（重）恢复外部 ACP 会话。 */
@@ -559,6 +585,16 @@ export class AgentDockRuntime {
     return () => this.emitter.off(name, listener);
   }
 
+  /**
+   * 订阅所有会话的状态变化。督办器靠它即时发现「等权限 / 轮次结束 / 失败」，
+   * 不必轮询整个会话列表；30 秒扫描只做补漏和时间条件。
+   */
+  onStatus(listener: (event: { sessionId: string; state: Session['state']; error?: string }) => void) {
+    const name = 'status';
+    this.emitter.on(name, listener);
+    return () => this.emitter.off(name, listener);
+  }
+
   private async consume(session: Session, event: NormalizedDriverEvent) {
     this.touch(session.id);
     // Driver completion closes its stream; Runtime emits the single canonical
@@ -578,9 +614,11 @@ export class AgentDockRuntime {
     let data = event.data;
     if (event.type === 'tool_call' || event.type === 'tool_result') {
       const completed = data.status === 'completed' || data.status === 'failed';
-      data = { ...data, startedAt: data.startedAt ?? now(), ...(completed ? { completedAt: data.completedAt ?? now() } : {}) };
+      const carriedOver = this.trackToolCall(session.id, data.id, completed);
+      data = { ...data, startedAt: data.startedAt ?? now(), ...(completed ? { completedAt: data.completedAt ?? now() } : {}), ...(carriedOver ? { carriedOver: true } : {}) };
       await this.repos.artifacts.saveToolCall(session.id, data);
-      await this.saveState(session, completed ? 'thinking' : 'running_tool');
+      // 更早轮次的后台进程推进度，不代表这一轮在跑工具：不拨会话状态，免得每条进度都切一次 running_tool。
+      if (!carriedOver) await this.saveState(session, completed ? 'thinking' : 'running_tool');
     } else if (event.type === 'thinking' && session.state !== 'thinking') await this.saveState(session, 'thinking');
     else if (event.type === 'permission_request') {
       data = { ...data, status: data.status ?? 'pending' };
@@ -610,7 +648,8 @@ export class AgentDockRuntime {
       : (this.options.probe ?? probeAgent)(configured, this.options.acpxCommand);
     if (!capability.available) throw new RuntimeError('AGENT_UNAVAILABLE', capability.detail ?? 'Agent unavailable', 503);
     const session: Session = { id: makeId('ses'), agentId: agent.id, state: 'created', cwd: configured.cwd!, model: configured.model, reasoningEffort: configured.reasoningEffort, permissionMode: configured.permissionMode, source: input.source, sourceId: input.sourceId, ...(input.sshHost ? { sshHost: input.sshHost } : {}), protocol: capability.protocol, runId: makeId('run'), createdAt: now(), updatedAt: now(), systemPrompt: configured.systemPrompt };
-    if (this.options.createSystemPrompt) session.systemPrompt = this.options.createSystemPrompt(session);
+    // 显式传入的 systemPrompt 优先：主会话/侧边会话要写自己的提示词，不能被默认种子覆盖。
+    if (!input.systemPrompt && this.options.createSystemPrompt) session.systemPrompt = this.options.createSystemPrompt(session);
     await this.repos.artifacts.ensureLocalProject(session.cwd);
     await this.repos.sessions.save(session);
     // 导入历史必须先于任何状态事件落库：时间线按 sequence 排序，先写历史才能让「过去」
@@ -703,7 +742,7 @@ export class AgentDockRuntime {
     await this.saveTask(task, 'running');
     // 这一条就是轮次锚点：它是本会话唯一可靠的「这一轮从哪开始」的标记，
     // 判终态、面板切轮、按轮取事件全靠它，所以序号要留一份在手上。
-    const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id });
+    const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' ? { detail: agentPrompt } : {}) });
     this.turnAnchors.set(task.id, anchor.sequence);
     // 用户这一轮提问就是一次对话事件，蹭下面的 saveState 一起落盘，不额外多写一次库。
     session.lastMessageAt = now();
@@ -810,10 +849,10 @@ export class AgentDockRuntime {
     }
   }
 
-  async dispatch(id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue', agentPrompt = prompt, riskPolicy?: ToolRiskPolicy) {
+  async dispatch(id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue', agentPrompt = prompt, riskPolicy?: ToolRiskPolicy, origin?: string) {
     const { session } = await this.active(id);
     if (['stopped', 'failed'].includes(session.state)) throw new RuntimeError('INVALID_STATE', `Cannot send while session is ${session.state}`, 409);
-    const task = { id: makeId('task'), sessionId: id, prompt, status: 'queued', createdAt: now(), updatedAt: now() };
+    const task = { id: makeId('task'), sessionId: id, prompt, status: 'queued', ...(origin ? { origin } : {}), createdAt: now(), updatedAt: now() };
     const queue = this.queues.get(id) ?? [];
     const queuedAhead = queue.length + (this.activeTurns.has(id) ? 1 : 0);
     if (mode === 'interrupt') queue.unshift(task); else queue.push(task);
@@ -894,7 +933,7 @@ export class AgentDockRuntime {
     return task!;
   }
 
-  async updateQueued(id: string, taskId: string, prompt: string) {
+  async updateQueued(id: string, taskId: string, prompt: string, agentPrompt?: string) {
     const normalized = prompt.trim();
     if (!normalized) throw new RuntimeError('INVALID_PROMPT', 'Prompt must not be empty', 400);
     const queue = this.queues.get(id) ?? [];
@@ -902,8 +941,13 @@ export class AgentDockRuntime {
     if (!task) throw new RuntimeError('QUEUED_TASK_NOT_FOUND', `Unknown queued task: ${taskId}`, 404);
     task.prompt = normalized;
     task.updatedAt = now();
-    // 若存在单独的 agentPrompt（如群聊场景），同步更新；否则保持与 prompt 一致。
-    if (this.queuedAgentPrompts.has(taskId)) this.queuedAgentPrompts.set(taskId, normalized);
+    // 注入消息合并时可见短句和完整内容要分开传；未传 agentPrompt 时沿用旧行为。
+    if (agentPrompt !== undefined) {
+      const normalizedAgentPrompt = agentPrompt.trim();
+      if (!normalizedAgentPrompt) throw new RuntimeError('INVALID_PROMPT', 'Agent prompt must not be empty', 400);
+      if (normalizedAgentPrompt !== normalized) this.queuedAgentPrompts.set(taskId, normalizedAgentPrompt);
+      else this.queuedAgentPrompts.delete(taskId);
+    } else if (this.queuedAgentPrompts.has(taskId)) this.queuedAgentPrompts.set(taskId, normalized);
     await this.saveTask(task, 'queued');
     return task;
   }
@@ -992,6 +1036,8 @@ export class AgentDockRuntime {
     await driver.stop({ discardSession: true });
     await this.waitForTurn(id);
     if (this.drivers.get(id) === driver) this.drivers.delete(id);
+    // 换 driver 之后，旧进程起的后台调用不会再推进度；留着只会让新进程的同名 id 被认成跨轮调用。
+    this.openToolCalls.delete(id);
     await this.saveState(session, 'interrupted');
     this.hardInterrupts.delete(id);
   }
@@ -1032,6 +1078,7 @@ export class AgentDockRuntime {
     this.driverStopReasons.delete(sessionId);
     this.driverEventChains.delete(sessionId);
     this.driverEventErrors.delete(sessionId);
+    this.openToolCalls.delete(sessionId);
     this.queues.delete(sessionId);
     this.queuedAgentPrompts.delete(sessionId);
     this.queuedRiskPolicies.delete(sessionId);
@@ -1072,7 +1119,7 @@ export class AgentDockRuntime {
     await Promise.allSettled(drivers.map(driver => driver.stop()));
     await Promise.allSettled(this.queueRuns.values());
     await Promise.allSettled(this.driverEventChains.values());
-    this.sequences.clear(); this.permissions.clear(); this.lastActivity.clear(); this.activeTurns.clear(); this.activeTasks.clear(); this.interruptedTurns.clear(); this.hardInterrupts.clear(); this.driverEventChains.clear(); this.driverEventErrors.clear();
+    this.sequences.clear(); this.permissions.clear(); this.lastActivity.clear(); this.activeTurns.clear(); this.activeTasks.clear(); this.interruptedTurns.clear(); this.hardInterrupts.clear(); this.driverEventChains.clear(); this.driverEventErrors.clear(); this.openToolCalls.clear();
     for (const waiters of this.turnWaiters.values()) for (const resolve of waiters) resolve();
     this.turnWaiters.clear(); this.queues.clear(); this.queuedAgentPrompts.clear(); this.queuedRiskPolicies.clear(); this.queueRuns.clear(); this.emitter.removeAllListeners();
   }

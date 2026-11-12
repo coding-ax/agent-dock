@@ -34,6 +34,19 @@ it('uses local PATH Codex by default, without a bundled Codex dependency', async
   expect(listAcpxBuiltinAgents().find(agent => agent.id === 'codex')?.argv).toEqual([process.execPath, launcher]);
 });
 
+it('loads the adjacent vendored adapter before falling back to node_modules', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'codex-vendor-')); dirs.push(cwd);
+  await mkdir(join(cwd, 'dist/agents'), { recursive: true }); await mkdir(join(cwd, 'dist/vendor'), { recursive: true });
+  await copyFile(launcher, join(cwd, 'dist/agents/codex-acp.mjs'));
+  await writeFile(join(cwd, 'dist/vendor/codex-acp.mjs'), 'console.log(JSON.stringify({ vendor: true }))\n');
+  const bin = join(cwd, 'bin'); await mkdir(bin);
+  const local = join(bin, process.platform === 'win32' ? 'codex.exe' : 'codex');
+  await writeFile(local, '', { mode: 0o755 });
+  const env = { ...process.env, PATH: bin, CODEX_PATH: '' };
+  const result = await run(process.execPath, [join(cwd, 'dist/agents/codex-acp.mjs')], { env });
+  expect(JSON.parse(result.stdout)).toEqual({ vendor: true });
+});
+
 it('reports missing local Codex rather than falling back to a bundled copy', async () => {
   const { cwd, file } = await fixture('console.log("must not start")');
   // An executable directory named codex is not a CLI binary.

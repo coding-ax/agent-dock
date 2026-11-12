@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react';
 import { useEventListener } from 'ahooks';
 import { useQuery } from '@tanstack/react-query';
-import { AlarmClock, Archive, Bot, FolderOpen, Settings, Settings2, Smartphone } from 'lucide-react';
+import { AlarmClock, Archive, Bot, FolderOpen, PawPrint, Settings, Settings2, Smartphone } from 'lucide-react';
 import { api } from './api';
 import { AutostartToggle } from './AutostartToggle';
+import { KeepAwakeToggle } from './KeepAwakeToggle';
 import { isDesktopUpdatePhase, useDesktopUpdate } from './desktop-update';
 import { SelfUpdateNotice } from './SelfUpdateNotice';
 import { HoverTooltip } from './HoverTooltip';
@@ -13,19 +14,21 @@ import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
 const itemClass = 'flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-100 hover:text-zinc-900';
 
 /**
- * 侧栏底部唯一的入口：把定时任务、归档、导入、Agent / 飞书设置、主题、开机自启、版本都收进一个向上弹出的菜单，
+ * 侧栏底部唯一的入口：把定时任务、归档、导入、Agent / 飞书设置、主题、开机自启、永不休眠、版本都收进一个向上弹出的菜单，
  * 侧栏主体只剩会话列表。
  *
  * 弹层只用 hidden 切换、不条件渲染：SelfUpdateNotice 里有「升级中轮询版本号、完成后刷新页面」的状态，卸载就丢了。
  */
-export function SettingsMenu({ webDenied, archivedCount, onSchedule, onArchived, onImport, onAgentConfig, onLark, onShare }: {
+export function SettingsMenu({ webDenied, archivedCount, onSchedule, onArchived, onImport, onAgentConfig, onAssistant, onLark, onLarkAvatar, onShare }: {
   webDenied: boolean;
   archivedCount: number;
   onSchedule(): void;
   onArchived(): void;
   onImport(): void;
   onAgentConfig(): void;
+  onAssistant(): void;
   onLark(): void;
+  onLarkAvatar(): void;
   onShare(): void;
 }) {
   const [open, setOpen] = useState(false);
@@ -46,10 +49,12 @@ export function SettingsMenu({ webDenied, archivedCount, onSchedule, onArchived,
       <button type="button" role="menuitem" onClick={pick(onImport)} className={itemClass}><FolderOpen size={16}/><span>导入外部会话</span></button>
       <div className="my-1 border-t border-zinc-200/70"/>
       <button type="button" role="menuitem" onClick={pick(onAgentConfig)} className={itemClass}><Bot size={16}/><span>Agent 设置</span></button>
+      <button type="button" role="menuitem" onClick={pick(onAssistant)} className={itemClass}><PawPrint size={16}/><span>小猫与督办</span></button>
       <button type="button" role="menuitem" onClick={pick(onLark)} className={itemClass}><Settings2 size={16}/><span>飞书设置</span></button>
+      <button type="button" role="menuitem" onClick={pick(onLarkAvatar)} className={itemClass}><Bot size={16}/><span>AI 飞书替身</span></button>
       <div className="my-1 border-t border-zinc-200/70"/>
       <div className="px-2.5 py-1"><div className="mb-1.5 text-[12px] text-zinc-500">外观</div><ThemeSegmented/></div>
-      <div className="px-2.5 py-1 text-[12px] text-zinc-600"><AutostartToggle enabled={!webDenied}/></div>
+      <div className="px-2.5 py-1 text-[12px] text-zinc-600"><AutostartToggle enabled={!webDenied}/><KeepAwakeToggle enabled={!webDenied}/></div>
       <div className="mt-1 border-t border-zinc-200/70 px-2.5 pb-1 pt-2 text-[12px] text-zinc-400"><SelfUpdateNotice enabled={!webDenied}/></div>
     </div>
     <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)} className={`flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium transition-colors duration-150 ${open ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'}`}>

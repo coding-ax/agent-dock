@@ -19,7 +19,7 @@ export const envelopeSchema = z.object({
   object: objectSchema,
   actor: actorSchema,
   correlationKey: z.string().min(1).optional(),
-  payload: z.record(z.unknown()).default({}),
+  payload: z.record(z.string(), z.unknown()).default({}),
   raw: z.string().optional(),
   causationId: z.string().nullable().optional(),
   traceId: z.string().min(1)

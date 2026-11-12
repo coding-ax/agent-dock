@@ -12,13 +12,15 @@ import { assertDelegatedControl, extendedSessionPeerIds } from './sources-router
  * CLI 可能从会话 cwd（任意目录）被 agent 调起，不能用 './.agentdock' 相对猜路径：
  * 1. 显式 --database / AGENTDOCK_DATABASE_URL 最优先；
  * 2. 否则按 daemon 的同款解析：存活的本地 daemon → last-daemon-dir 指针 → cwd，
- *    daemon 目录是 <root>/.agentdock/daemon，数据库是同级 <root>/.agentdock/agentdock.db。
+ *    daemon 状态文件里记着它实际用的库（--database 启动的，例如 dev 沙箱，库不在默认位置）；
+ *    没有记录时按默认布局：daemon 目录是 <root>/.agentdock/daemon，数据库是同级 <root>/.agentdock/agentdock.db。
  */
 export function resolveDatabasePath(explicit?: string, cwd = process.cwd()): string {
   if (explicit) return resolve(cwd, explicit);
   if (process.env.AGENTDOCK_DATABASE_URL) return resolve(cwd, process.env.AGENTDOCK_DATABASE_URL);
   const daemonDir = resolveDaemonDir(cwd);
-  return join(daemonDir, '..', 'agentdock.db');
+  const recorded = readDaemonStatus(daemonDir)?.database;
+  return recorded ? resolve(daemonDir, recorded) : join(daemonDir, '..', 'agentdock.db');
 }
 
 export interface SessionCliOptions {
@@ -79,7 +81,7 @@ export function requireDaemon(daemonDir?: string) {
 }
 
 /** 用 daemon 状态里的本地地址与访问凭证调用 HTTP API，返回 JSON；非 2xx 时把服务端错误信息抛出来。 */
-export async function callDaemon<T = Record<string, unknown>>(state: { webConsoleUrl?: string; address?: string }, path: string, method: 'GET' | 'POST' | 'DELETE', body?: object): Promise<T> {
+export async function callDaemon<T = Record<string, unknown>>(state: { webConsoleUrl?: string; address?: string }, path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', body?: object): Promise<T> {
   const entry = state.webConsoleUrl ?? state.address;
   if (!entry) throw new Error('daemon 未提供本地 API 地址。请运行 agent-dock status 检查状态。');
   const base = new URL(entry);

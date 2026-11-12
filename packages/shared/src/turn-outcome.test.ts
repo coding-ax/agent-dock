@@ -222,3 +222,54 @@ describe('unresolvedToolCallsAfterAnswer', () => {
     expect(unresolvedToolCallsAfterAnswer([text('答完了'), toolCall('x'), toolCall('x', 'running'), toolResult('x')])).toEqual([]);
   });
 });
+
+describe('后台进程的进度推送', () => {
+  // 线上实测（Codex 起 dev server）：后台进程的 toolCallId 每秒推一条 running，直到进程退出。
+  // runtime 喂的是原始事件，这些推送插在回答的 chunk 之间、落在回答之后。
+  const heartbeat = (id: string) => ({ type: 'tool_call', data: { id, status: 'running', name: 'tool call' } });
+
+  it('同一调用的后续推送不算新活动：回答完整、不判卡住', () => {
+    const events = [
+      text('我先把预览服务起起来。'), toolCall('server'), heartbeat('server'),
+      toolCall('grep'), heartbeat('server'), toolResult('grep'),
+      text('结论：'), heartbeat('server'), text('目前没有做噪声过滤。'), heartbeat('server')
+    ];
+    // 老规则：答案后面那条推送让严格规则落空，退化又被「答案后有未收口调用」挡住，最终输出为空、整轮判失败。
+    expect(pickFinalAssistantText(events)).toBe('结论：目前没有做噪声过滤。');
+    expect(unresolvedToolCallsAfterAnswer(events)).toEqual([]);
+    // 进程确实还在跑：不分位置的判断仍然看得到它。
+    expect(hasUnresolvedToolCalls(events)).toBe(true);
+  });
+
+  it('后续推送只更新状态，终态不被迟到的旧快照推翻', () => {
+    const events = [text('跑一下'), toolCall('x'), text('答完了'), toolResult('x'), heartbeat('x')];
+    expect(pickFinalAssistantText(events)).toBe('答完了');
+    expect(unresolvedToolCallsAfterAnswer(events)).toEqual([]);
+    // 答案之后才发起、之后又收口的调用，同样不算卡住。
+    expect(unresolvedToolCallsAfterAnswer([text('答完了'), toolCall('y'), heartbeat('y'), toolResult('y')])).toEqual([]);
+  });
+
+  it('答案之后才发起、一直没收口的调用仍然挡住退化', () => {
+    // 「我先看一下文件」+ 调用 + 它自己的进度推送：推送不改变「说到一半去干活」的判断。
+    const events = [text('我先看一下文件'), toolCall('a'), heartbeat('a'), heartbeat('a')];
+    expect(pickFinalAssistantEntry(events)).toBeUndefined();
+    expect(unresolvedToolCallsAfterAnswer(events)).toEqual(['a']);
+  });
+
+  it('更早轮次带过来的调用（carriedOver）不属于本轮', () => {
+    const carried = (status = 'running') => ({ type: 'tool_call', data: { id: 'server', status, name: 'tool call', carriedOver: true } });
+    // 第一条推送落在回答中间、最后一条落在回答之后：既不切断回答，也不算本轮没收口。
+    const events = [text('现在的情况：'), carried(), text('只做到了不触发。'), carried()];
+    expect(pickFinalAssistantText(events)).toBe('现在的情况：只做到了不触发。');
+    expect(unresolvedToolCallsAfterAnswer(events)).toEqual([]);
+    expect(hasUnresolvedToolCalls(events)).toBe(false);
+    // 本轮自己发起的调用照常计算。
+    expect(unresolvedToolCallsAfterAnswer([text('我先跑个命令'), carried(), toolCall('mine')])).toEqual(['mine']);
+  });
+
+  it('不改调用方传进来的工具事件', () => {
+    const first = toolCall('x');
+    pickFinalAssistantText([text('跑一下'), first, toolResult('x'), text('好了')]);
+    expect(first.data.status).toBe('running');
+  });
+});

@@ -22,7 +22,7 @@
     "typecheck": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/updater.cjs && node --check scripts/prepare-runtime.mjs && node --check scripts/generate-signing-cert.mjs && node --check scripts/mock-update-smoke.mjs && node --check scripts/mock-lan-smoke.mjs"
   },
   "devDependencies": {
-    "electron": "45.2.3",
+    "electron": "45.3.0",
     "electron-builder": "26.18.0"
   },
   "dependencies": {

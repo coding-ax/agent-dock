@@ -875,7 +875,7 @@ export class LarkCardService {
     const form = new FormData();
     form.append('image_type', 'message');
     const mime = imageMimeFromFilename(filename);
-    form.append('image', new Blob([bytes], { type: mime }), filename);
+    form.append('image', new Blob([new Uint8Array(bytes)], { type: mime }), filename);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
     try {

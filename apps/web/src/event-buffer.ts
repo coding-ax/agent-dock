@@ -48,3 +48,34 @@ export function mergeEventBatch(current: DockEvent[], incoming: DockEvent[]): Do
   }
   return next;
 }
+
+/**
+ * 窗口重新获得焦点后的「自愈」拉取从哪里开始：缓存里最后一轮的提问锚点之前。
+ *
+ * 自愈要防的是：标签页在后台、SSE 断开，正在跑的那一轮错过了更新。会缺东西的只有切走时
+ * 还没结束的那一轮；更早的轮次早已收尾，缓存里的就是终态。以前这里退回整段历史重拉，
+ * 重会话一次就是几十 MB（实测 27.9 MB），经隧道远程打开时每次切回窗口都要等十几秒到一分多钟。
+ *
+ * 边界取在锚点（role=user 的 text）之前：服务端合并 thinking 时遇到任何非 thinking 事件
+ * 都会断开，合并出来的思考片段不会跨过提问锚点，从这里切开不会把一段思考切成两半。
+ * 缓存里没有锚点时返回 0，即整段重拉。
+ */
+export function healBoundary(events: DockEvent[]): number {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]!;
+    if (event.type === 'text' && event.data?.role === 'user') return Math.max(0, event.sequence - 1);
+  }
+  return 0;
+}
+
+/**
+ * 用重拉回来的一段（sequence > after）整体替换缓存里的同一段；拉取期间 SSE 新写进来、
+ * 比这段还新的事件接在后面。after 为 0 就是整段替换。
+ *
+ * 替换而不是合并：同一段里缓存的可能是 SSE 推来的逐 token 片段，重拉回来的是服务端合并过的
+ * 整段思考，两者 sequence 对不上，合并会把同一段文字留两份。
+ */
+export function replaceEventTail(live: DockEvent[], after: number, fresh: DockEvent[]): DockEvent[] {
+  const newest = fresh.reduce((max, event) => Math.max(max, event.sequence), after);
+  return mergeEventBatch([...live.filter(event => event.sequence <= after), ...fresh], live.filter(event => event.sequence > newest));
+}

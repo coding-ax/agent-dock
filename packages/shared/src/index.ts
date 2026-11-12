@@ -36,7 +36,7 @@ export const agentConfigSchema = z.object({
   reasoningEffort: z.string().optional(),
   version: z.string().optional(),
   cwd: z.string().optional(),
-  env: z.record(z.string()).default({}),
+  env: z.record(z.string(), z.string()).default({}),
   systemPrompt: z.string().optional(),
   permissionMode: z.enum(permissionModes).default('full-trust'),
   timeout: z.number().positive().default(600),
@@ -55,6 +55,11 @@ export interface ToolCallData {
   status: 'pending' | 'running' | 'completed' | 'failed';
   startedAt: string;
   completedAt?: string;
+  /**
+   * 这条调用由更早的轮次发起，只是在当前轮次里还在推进度（典型是 Agent 起在后台的 dev server）。
+   * runtime 落库时打标，终态规则据此把它排除在当前轮次之外，见 shared/turn-outcome.ts。
+   */
+  carriedOver?: boolean;
 }
 
 export interface PermissionRequestData {
@@ -196,7 +201,7 @@ export interface SessionRepository {
   /** 会话名的唯一写入口。按列定向更新，未传的档位保持原值。 */
   saveTitles(id: string, patch: { customTitle?: string | null; agentTitle?: string | null; updatedAt?: string }): Promise<void>;
 }
-export interface TaskRecord { id: string; sessionId: string; prompt: string; /** 实际提交给 ACP Agent 的本轮文本；旧任务或未执行任务为空。 */ sentPrompt?: string | null; /** 本轮最终输出（该轮最后一条 assistant 文本）；未跑完判定流程的轮次为空。 */ finalText?: string | null; status: string; createdAt: string; updatedAt: string }
+export interface TaskRecord { id: string; sessionId: string; prompt: string; /** 实际提交给 ACP Agent 的本轮文本；旧任务或未执行任务为空。 */ sentPrompt?: string | null; /** 本轮最终输出（该轮最后一条 assistant 文本）；未跑完判定流程的轮次为空。 */ finalText?: string | null; status: string; /** 任务来源；`injected` 表示 daemon 注入的督办消息，网页不渲染成用户气泡。 */ origin?: string | null; createdAt: string; updatedAt: string }
 export interface TaskRepository { save(task: TaskRecord): Promise<void>; listBySession(sessionId: string): Promise<TaskRecord[]>; firstPromptBySessions(sessionIds: string[]): Promise<Record<string, string>> }
 /**
  * 一轮的边界与体积。`segments` 是这一轮锚点之后的事件条数（原始行数，未压缩）——

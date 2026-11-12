@@ -1,6 +1,6 @@
 import type { DockEvent, Task } from './api';
 import { busyStates } from './session-states';
-import { agentWarningPrefix, isAgentStreamErrorText, isTurnActivity, pickFinalAssistantEntry, stripAgentStreamErrorSuffix } from '@agent-dock/agent-dock-shared';
+import { agentWarningPrefix, isAgentStreamErrorText, isCarriedOverToolCall, isTurnActivity, pickFinalAssistantEntry, stripAgentStreamErrorSuffix } from '@agent-dock/agent-dock-shared';
 
 export type TimelineEvent = DockEvent & { data: DockEvent['data'] & { role?: 'user' | 'assistant' } };
 /**
@@ -242,6 +242,10 @@ function mergeableUserText(previous: TimelineEvent | undefined, current: DockEve
 function applyTimelineEvent(state: TimelineBuildState, event: DockEvent) {
   const { timeline, toolIndexes, seenWarnings } = state;
   if (event.type === 'status' || event.type === 'task' || event.type === 'completed' || event.type === 'raw_terminal') return;
+  // 更早轮次起在后台的进程（dev server 之类）在本轮推的进度：这一轮 Agent 没碰它。
+  // 放进来只会多出一条无标题、永远「执行中」的 tool call；落在回答中间时还会按首次出现占位，
+  // 把回答切成两段，最终输出只剩后半句。原始日志面板里照样看得到。
+  if (isCarriedOverToolCall(event)) return;
   const current = { ...event, data: { ...event.data } } as TimelineEvent;
   const warning = warningText(current);
   if (warning) {
@@ -406,7 +410,7 @@ export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = EMPTY_TA
     // 用 createdAt 的话，上一轮跑到一半时排进来的消息会插进上一轮中间：上一轮的回复被挤到它下面，
     // 下一帧真实事件到了又跳回去（实测弹 60px、回复闪一下）。结束了的任务 updatedAt 是结束时间，仍按创建时间。
     const timestamp = task.status === 'running' ? task.updatedAt : task.createdAt;
-    taskEvents.push({ id: `${TASK_ROW_PREFIX}${task.id}`, sequence: -1, type: 'text', timestamp, data: { text: task.prompt, role: 'user', taskId: task.id } });
+    taskEvents.push({ id: `${TASK_ROW_PREFIX}${task.id}`, sequence: -1, type: 'text', timestamp, data: { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' && task.sentPrompt ? { detail: task.sentPrompt } : {}) } });
   }
   const source = sortByTimestampThenSequence([...events, ...taskEvents]);
   for (const event of source) applyTimelineEvent(state, event);

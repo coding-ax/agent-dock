@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,15 @@ const localRequire = createRequire(import.meta.url);
 // external，在全局扁平化 node_modules 下可正常 require），业务代码通过 src/lark/sdk.ts 加载它。
 // 不能直接打进 ESM 主 bundle：SDK 产物混用 require 与顶层 await，会触发模块格式冲突。
 const larkSdkEntry = join(dirname(localRequire.resolve('@larksuiteoapi/node-sdk/package.json')), 'lib', 'index.js');
+// claude-agent-acp 从 0.103 起只导出 "." 和 "./package.json"，不能再 deep import
+// dist/*。构建入口统一从 package.json 的 bin 字段解析，避免依赖内部目录结构。
+function packageBin(packageName, binName) {
+  const packageJsonPath = localRequire.resolve(`${packageName}/package.json`);
+  const { bin } = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  const relative = typeof bin === 'string' ? bin : bin?.[binName];
+  if (!relative) throw new Error(`${packageName} 未声明 ${binName} 入口`);
+  return resolve(dirname(packageJsonPath), relative);
+}
 const aliases = new Map([
   ['acpx/runtime', fileURLToPath(import.meta.resolve('acpx/runtime'))],
   ['@agent-dock/agent-dock-acp-client', 'packages/acp-client/src/index.ts'],
@@ -62,6 +71,24 @@ await build({
   target: 'node22',
   packages: 'external'
 });
+
+// 内置 ACP 适配器（Claude / Codex）随包分发。两者及其纯 JS 依赖都能完整打进单个 ESM，
+// 因此不必再把 @agentclientprotocol/* 以及它们携带的平台二进制（各数百 MB）作为
+// 生产依赖安装。packages/acp-client/agents/*.mjs 优先加载相邻的 ../vendor 文件，
+// 本地源码调试（未构建 dist）时才回退到 node_modules。
+for (const [name, entry] of [
+  ['claude-agent-acp', packageBin('@agentclientprotocol/claude-agent-acp', 'claude-agent-acp')],
+  ['codex-acp', localRequire.resolve('@agentclientprotocol/codex-acp')]
+]) {
+  await build({
+    entryPoints: [entry],
+    outfile: resolve(vendorDir, `${name}.mjs`),
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: 'node22'
+  });
+}
 // 老 glibc 基线编译的原生兜底产物（见 packages/storage/src/native.ts）：由
 // scripts/build-sqlite-prebuild.mjs 用 debian:10 容器生成并入库，构建时原样搬进 dist。
 const nativeVendor = resolve(serverRoot, 'vendor/native');
@@ -74,3 +101,4 @@ const assetsDir = resolve(serverRoot, 'dist/assets');
 mkdirSync(assetsDir, { recursive: true });
 cpSync(resolve(serverRoot, 'src/lark/assets/agentdock-bouncing-ball.webp'), resolve(assetsDir, 'agentdock-bouncing-ball.webp'));
 cpSync(resolve(serverRoot, 'src/lark/assets/SVG-SPINNERS-LICENSE.txt'), resolve(assetsDir, 'SVG-SPINNERS-LICENSE.txt'));
+cpSync(resolve(serverRoot, 'src/lark-avatar/protocol/lark.proto'), resolve(serverRoot, 'dist/lark.proto'));

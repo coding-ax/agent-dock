@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
 import type { Session } from '@agent-dock/agent-dock-shared';
 import { writeState } from './daemon/daemon.js';
-import { runSessionCancel, runSessionInterrupt, runSessionPeers, runSessionSend, sessionPeerIds } from './session-cli.js';
+import { resolveDatabasePath, runSessionCancel, runSessionInterrupt, runSessionPeers, runSessionSend, sessionPeerIds } from './session-cli.js';
 
 const now = '2026-09-23T00:00:00.000Z';
 const session = (id: string, source?: string, sourceId?: string): Session => ({
@@ -26,6 +26,26 @@ describe('session peers', () => {
   it('ignores orphaned and self-referential side chats', () => {
     expect(sessionPeerIds([session('orphan', 'side-chat', 'missing')], 'orphan')).toEqual([]);
     expect(sessionPeerIds([session('self', 'side-chat', 'self')], 'self')).toEqual([]);
+  });
+});
+
+describe('database resolution', () => {
+  it('follows the database the daemon recorded, so --database daemons (dev sandbox) are found', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentdock-db-resolve-'));
+    const saved = process.env.AGENTDOCK_DATABASE_URL;
+    delete process.env.AGENTDOCK_DATABASE_URL;
+    try {
+      const daemonDir = join(root, '.agentdock', 'daemon');
+      writeState(daemonDir, { pid: process.pid, ready: true, startedAt: now, cwd: root, database: '/elsewhere/sandbox.db' });
+      expect(resolveDatabasePath(undefined, root)).toBe('/elsewhere/sandbox.db');
+      // 旧状态文件没有 database 字段：退回默认布局。
+      writeState(daemonDir, { pid: process.pid, ready: true, startedAt: now, cwd: root });
+      expect(resolveDatabasePath(undefined, root)).toBe(join(root, '.agentdock', 'agentdock.db'));
+      expect(resolveDatabasePath('custom.db', root)).toBe(join(root, 'custom.db'));
+    } finally {
+      if (saved === undefined) delete process.env.AGENTDOCK_DATABASE_URL; else process.env.AGENTDOCK_DATABASE_URL = saved;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

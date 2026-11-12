@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { selfRestartBlockReason } from './daemon/self-guard.js';
@@ -47,9 +47,17 @@ describe('dev sandbox', () => {
   it('isolates HOME and strips the session variables that would route commands back to the live daemon', () => {
     const sandbox = sandboxPaths('/repo', 4399);
     const env = sandboxEnv(sandbox, { HOME: '/home/u', PATH: '/bin', agentdock_session_id: 'ses_1', agentdock_group_tools_token: 't', agentdock_database: '/home/u/.agentdock/agentdock.db' });
-    expect(env).toMatchObject({ HOME: '/repo/.agentdock/dev/home', PATH: '/bin', AGENTDOCK_DISABLE_LARK_LISTENER: 'true', agentdock_database: '/repo/.agentdock/dev/agentdock.db' });
+    expect(env).toMatchObject({ HOME: '/repo/.agentdock/dev/home', PATH: '/repo/.agentdock/dev/bin:/bin', AGENTDOCK_DISABLE_LARK_LISTENER: 'true', agentdock_database: '/repo/.agentdock/dev/agentdock.db' });
     expect(env).not.toHaveProperty('agentdock_session_id');
     expect(env).not.toHaveProperty('agentdock_group_tools_token');
+  });
+
+  it('drops the daemon markers inherited from the live daemon so the sandbox daemonizes itself', () => {
+    const sandbox = sandboxPaths('/repo', 4399);
+    const env = sandboxEnv(sandbox, { HOME: '/home/u', AGENTDOCK_DAEMONIZED: '1', AGENTDOCK_DAEMON_CWD: '/home/u', AGENTDOCK_DAEMON_STARTED_AT: '2026-11-11T01:49:30.735Z' });
+    expect(env).not.toHaveProperty('AGENTDOCK_DAEMONIZED');
+    expect(env).not.toHaveProperty('AGENTDOCK_DAEMON_CWD');
+    expect(env).not.toHaveProperty('AGENTDOCK_DAEMON_STARTED_AT');
   });
 
   it('starts from the repo build with its own database and port, runs commands there, and cleans up', async () => {
@@ -62,6 +70,11 @@ describe('dev sandbox', () => {
       const start = calls.at(-1)!;
       expect(start.args).toEqual([join(repo, 'apps/server/dist/cli.js'), 'daemon', 'start', '--port', '4555', '--local-only', '--database', join(repo, '.agentdock/dev/agentdock.db')]);
       expect(start.env.HOME).toBe(join(repo, '.agentdock/dev/home'));
+      // 沙箱里的 Agent 调 agent-dock 也要落到这份构建上。
+      const shim = join(repo, '.agentdock/dev/bin/agent-dock');
+      expect(start.env.PATH?.split(':')[0]).toBe(join(repo, '.agentdock/dev/bin'));
+      expect(readFileSync(shim, 'utf8')).toContain(`'${join(repo, 'apps/server/dist/cli.js')}' "$@"`);
+      expect(statSync(shim).mode & 0o111).toBeTruthy();
       expect(devRun(['schedule', 'list'], { repo, run })).toBe(0);
       expect(calls.at(-1)!.args.slice(1)).toEqual(['schedule', 'list']);
       expect(devDown({ repo, run })).toContain('清理');

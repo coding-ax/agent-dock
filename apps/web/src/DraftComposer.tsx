@@ -1,5 +1,6 @@
 import { DockMascot } from './DockMascot';
-import { useMemo, useRef, useState, type RefObject } from 'react';
+import { useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { PawPrint } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type Session } from './api';
 import { Composer } from './Composer';
@@ -15,11 +16,17 @@ import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './m
  * 附件为什么不能当场传：/api/sessions/:id/uploads 需要 sessionId。草稿态先建一枚本地引用
  * chip 占位（图片用 objectURL 预览），create 成功后再逐件上传、换成真实路径再拼 prompt。
  */
-export function DraftComposer({ agents, sessions, onCreated, editorRef }: {
+export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, collapsed = false, companion }: {
   agents: Agent[];
   editorRef?: RefObject<ComposerEditorHandle | null>;
   sessions: Session[];
   onCreated(session: Session): void;
+  /** 替换默认的小猫 + 标题（首页舞台用）。 */
+  hero?: ReactNode;
+  /** 收起输入框（认领小猫时把注意力让给认领卡片）。 */
+  collapsed?: boolean;
+  /** 交给小猫：消息直接发进主会话，不新建会话；Agent / 目录 / 模型选择换成一枚锁定的小猫标签。 */
+  companion?: { sessionId: string; agentId: string; name: string; onSent(): void };
 }) {
   const qc = useQueryClient();
   const [prompt, setPrompt] = useState('');
@@ -102,9 +109,39 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef }: {
     requestAnimationFrame(() => editorRef?.current?.focus());
   };
 
+  const sendToCompanion = (target: NonNullable<typeof companion>) => {
+    const draftPrompt = prompt;
+    const draftReferences = references;
+    setCreating(true);
+    void (async () => {
+      try {
+        const uploaded = await Promise.all(draftReferences.map(async reference => {
+          const file = stashed.current.get(reference.id);
+          if (!file) return reference;
+          const result = await uploadSessionFile(target.sessionId, file);
+          return referenceFromUpload(result, file.type.startsWith('image/'));
+        }));
+        const message = buildPrompt(draftPrompt, uploaded);
+        if (message) await api.send(target.sessionId, message, 'queue');
+        void qc.invalidateQueries({ queryKey: ['sessions'] });
+        void qc.invalidateQueries({ queryKey: ['tasks', target.sessionId] });
+        setPrompt('');
+        setReferences([]);
+        clearAttachments();
+        target.onSent();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setCreating(false);
+      }
+    })();
+  };
+
   const submit = () => {
-    if (creating || !effectiveAgentId) return;
+    if (creating) return;
     setError(undefined);
+    if (companion) { sendToCompanion(companion); return; }
+    if (!effectiveAgentId) return;
     const draftPrompt = prompt;
     const draftReferences = references;
     setCreating(true);
@@ -147,13 +184,19 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef }: {
 
   // my-auto：内容比视口矮时垂直居中；比视口高时自动退化为 0，滚动容器不会把顶部的吉祥物裁掉。
   return <div className="relative my-auto w-full max-w-[720px]">
-    <div className="flex flex-col items-center text-center">
+    {hero ?? <div className="flex flex-col items-center text-center">
       <DockMascot size={88}/>
       <h1 className="ui-empty-state ui-hero-title mt-4 text-[22px] font-semibold tracking-[-.02em]">有什么要做的？</h1>
-    </div>
+    </div>}
+    <div className="ui-collapse" data-collapsed={collapsed || undefined} aria-hidden={collapsed || undefined} inert={collapsed}><div>
     <div className="mt-6">
     <Composer
       draft
+      {...(companion ? {
+        placeholder: <><span className="hidden sm:inline">跟{companion.name}说说要做什么，Enter 发送；它会派侧边会话去办</span><span className="sm:hidden">跟{companion.name}说说要做什么</span></>,
+        sendLabel: `交给${companion.name}`,
+        lockedTarget: <span title={`消息会发进主会话，由${companion.name}安排`} className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-zinc-100 px-2.5 text-[12px] font-medium text-zinc-700"><PawPrint size={12}/>{companion.name} · 主会话</span>
+      } : {})}
       editorRef={editorRef}
       sessionId=""
       state="idle"
@@ -174,7 +217,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef }: {
       switchingReasoningEffort={false}
       refreshingModels={models.isFetching || refreshModels.isPending}
       agents={agents}
-      currentAgentId={effectiveAgentId}
+      currentAgentId={companion?.agentId ?? effectiveAgentId}
       onAgentChange={id => { setAgentId(id); setModel(''); setReasoningEffort(''); }}
       workspace={cwd}
       onWorkspaceChange={setCwd}
@@ -198,8 +241,9 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef }: {
       onRefreshModels={() => refreshModels.mutate()}
     />
     </div>
-    <PromptTemplates onUse={useTemplate}/>
+    {!companion && <PromptTemplates onUse={useTemplate}/>}
     {error && <p role="alert" className="mt-2 text-center text-[12px] text-red-600">{error}</p>}
-    {references.length > 0 && <p className="mt-2 text-center text-[12px] text-zinc-400">{references.length} 个附件会在会话创建后上传</p>}
+    {references.length > 0 && <p className="mt-2 text-center text-[12px] text-zinc-400">{references.length} 个附件会在{companion ? '发送' : '会话创建'}后上传</p>}
+    </div></div>
   </div>;
 }

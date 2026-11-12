@@ -94,6 +94,10 @@ agent-dock autostart disable
 - plist 里固定了启用时的 Node 路径和 `PATH`（让开机后的服务仍找得到 `codex`、`claude` 等 CLI）。升级或切换 Node 版本、`PATH` 里的工具位置变了之后，重新执行一次 `agent-dock autostart enable` 即可刷新。
 - 建议在全局安装的 `@agent-dock/cli` 下启用；从源码目录启用会指向该目录的构建产物。
 
+### 运行期间永不休眠（macOS）
+
+Web 控制台左下角的设置菜单里，「开机自启」下方有「永不休眠」开关。它只会在 macOS 且系统提供 `caffeinate` 时出现；开启后由 daemon 运行 `caffeinate -imsu -w <daemon-pid>`，阻止空闲睡眠、磁盘睡眠和系统睡眠，daemon 退出时随之释放，不会留下孤儿进程。「屏幕常亮」子开关额外加 `-d`，阻止显示器休眠。选择会持久化，daemon 重启后按上次的状态恢复。
+
 ### 前台与后台
 
 不带子命令的 `agent-dock` 在前台直接启动服务；只有显式的 `start` 才转入后台。两者互不干扰，可以同时用。
@@ -183,6 +187,18 @@ SSH 远端导入入口暂时从界面撤下，后端运行时先保留，后续�
 macOS 上工作区旁的「选择」按钮会打开系统原生目录选择器，其他平台该接口返回 501。
 
 配置以明文 JSON 存在本地 SQLite 的 `configs` 表。`GET /api/lark/config` 返回全部面板，但**永远不返回 App Secret**。
+
+### AI 飞书替身（用户身份触发式 Agent）
+
+「AI 飞书替身」移植 [LarkAgentX](https://github.com/cv-cat/LarkAgentX) 的飞书网页端协议，不使用 App ID / App Secret / OAuth 用户令牌：
+
+1. 在左下角「AI 飞书替身」里选择飞书或 Lark，直接用手机扫码登录网页端。扫码失败时可展开「高级」导入包含 `session` 的完整 Cookie。
+2. 登录成功后服务端用本人身份建立常驻 WebSocket，接收 `cmd=6` 新消息、按 `cmd=6000` 补拉 sid、处理逐条转发 `cmd=134`，并定时心跳和自动重连；同时每 30 秒补拉最近群聊，避免只依赖 WebSocket 推送而漏消息。
+3. 只有账号本人发送 `/ai 你的问题`（前缀可在「设置」里改）才会触发；其他人即使发送相同前缀也只作为上下文，不会启动 Agent。服务端只从当前触发会话拉取最近 10 条有效文本（可在「设置」里调整）作为上下文，图片、卡片等非文本消息不会进入 Prompt，以你自己的身份发起 Agent 轮次。Agent、模型、推理强度和工作目录都可以在替身设置里选择，修改后后续触发会使用新的会话配置。监听范围默认是全部会话，也可以搜索群名或 Chat ID 后直接勾选指定会话。
+4. 本地收件箱全局最多保留最近 200 条消息，超出后自动删除最旧记录。图片不会下载原图，只在消息记录中保存占位摘要。
+5. Agent 运行期间产生的所有 `AgentText` 会直接通过网页端网关的 `messages.PutMessageRequest` protobuf 请求发回当前聊天。回复位置可在「设置 → 回复方式」里配置：话题内的消息可选回复原话题或主会话；主会话消息可选直接发送、引用回复或开话题回复；私聊选择开话题时自动回退为引用。还可以配置回复署名、Agent 单轮超时，以及上下文边界（会话 + 话题 / 仅会话），这些选项与 larkAgentX 的回复设置对齐。聊天头像和发送者头像从 `chats.PullChatsByIdsRequest` / `chatters.PullChattersByIdsRequest` 读取并在界面展示；群头像地址不可达时自动回退到最近发送者头像。
+
+Cookie、ticket、网页端 `appKey` 和设备信息持久化在本地 SQLite，daemon 重启后自动重连；`GET /api/lark-avatar/config` 和状态接口不会下发 Cookie、ticket 或 appKey。顶部和「设置 → 账号与连接」都可以暂停或恢复监听：暂停会停止 WebSocket 和定时补拉、忽略迟到消息，但保留登录凭证；恢复后会重新连接。点击「断开账号」才会清除本地凭证。手动 composer 和发送失败重试仍走草稿接口，但 `/ai` 触发的 Agent 输出不经过人工确认。协议实现位于 `apps/server/src/lark-avatar/protocol/`。
 
 **改配置何时生效**：改默认 Agent、模型、推理强度或工作区时，当前任务不受影响，该机器人下一条消息会停掉旧 Session 按新配置重建（旧记录保留）。只改 Prompt、协作开关、Trace 或卡片策略时继续复用当前 Session，从下一条消息起生效，不需要重启。
 
@@ -530,7 +546,7 @@ Codex 默认从 PATH 中发现本机 Codex CLI；macOS 上还会比较 `/Applica
 
 Codex 的 `permissionMode: full-trust` 会显式切换到 ACP `agent-full-access` 模式，对应底层 `approvalPolicy: never`、`approvalsReviewer: user` 和 `sandboxPolicy: dangerFullAccess`。创建、恢复和发送前均同步模式；ACPX 重连时也会重放所选模式。设置失败则停止发送，不静默使用默认的 `auto_review`。非全信任配置使用适配器的 `read-only`（Ask for approval）模式，并保留 AgentDock 原有权限决策；该模式名称不等同于文件系统完全只读。
 
-AgentDock 固定 ACP 协议适配器 `codex-acp@1.10.0`，直接加载以避免启动时通过 npx 下载。运行时的 `CODEX_PATH` 仅注入 launcher 子进程环境，不写入 ACPX session 的 `env`；结构性持久化键名仍须使用 snake_case；0.20.0 的 `session_options.env` 允许原样保存大写和混合大小写环境变量名。
+AgentDock 固定 ACP 协议适配器 `codex-acp@2.6.0`，直接加载以避免启动时通过 npx 下载。运行时的 `CODEX_PATH` 仅注入 launcher 子进程环境，不写入 ACPX session 的 `env`；结构性持久化键名仍须使用 snake_case；0.20.0 的 `session_options.env` 允许原样保存大写和混合大小写环境变量名。
 
 可以通过 `AGENTDOCK_AGENTS_JSON` 添加自定义 ACP 服务，同样只在命令可用时纳入：
 

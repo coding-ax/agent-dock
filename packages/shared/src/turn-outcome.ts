@@ -15,6 +15,11 @@
  *   取不到再退化到末条文本——答案存在就不该报「未返回最终输出」。
  * - 卡住的工具调用（`unresolvedToolCallsAfterAnswer`）：只有落在最终输出**之后**的才算
  *   失败原因；之前没收口的说明 Agent 已越过它继续作答。
+ *
+ * 「顺序」里工具调用的位置是它**首次出现**的位置：同一个 toolCallId 的后续推送只更新状态，
+ * 不算 Agent 又动了一次手。Web 时间线和飞书 compact 本来就这么合并；runtime 喂的是原始事件，
+ * 不在这里对齐的话，后台进程（Agent 起的 dev server）每秒一条的进度推送会落在回答后面，
+ * 把已经答完的轮次判成「说到一半去干活」——整轮标红、最终输出被丢掉。
  */
 export interface TurnOutcomeEntry {
   type: string;
@@ -28,6 +33,21 @@ const isTerminalToolStatus = (status: string) => status === 'completed' || statu
 const isPendingToolStatus = (status: string) => status === 'running' || status === 'pending' || status === 'started' || status === 'in_progress';
 
 const isAssistantText = (entry: TurnOutcomeEntry) => entry.type === 'text' && entry.data?.role !== 'user';
+
+const isToolEntry = (entry: TurnOutcomeEntry) => entry.type === 'tool_call' || entry.type === 'tool_result';
+
+const toolCallIdOf = (entry: TurnOutcomeEntry) => String(entry.data?.id ?? '');
+
+const toolStatusOf = (entry: TurnOutcomeEntry) => String(entry.data?.status ?? (entry.type === 'tool_result' ? 'completed' : 'running')).toLowerCase();
+
+/**
+ * 更早的轮次发起、当前轮次里还在推进度的调用（runtime 落库时打 `carriedOver`）。
+ * 它既不是这一轮的活动，也不是这一轮没收口的调用：Agent 这一轮根本没碰它。
+ *
+ * 展示层（Web 时间线、飞书卡片、CLI 转录）也要整条跳过：它们按「首次出现」给工具占位，
+ * 这条推送落在回答中间时会把回答切成两段，最终输出只剩后半句。
+ */
+export const isCarriedOverToolCall = (entry: TurnOutcomeEntry) => isToolEntry(entry) && entry.data?.carriedOver === true;
 
 /**
  * 计入「本轮发生过活动」的事件类型。严格规则里它们之后必须再出现 assistant text 才能算
@@ -47,11 +67,10 @@ export function isTurnActivity(entry: TurnOutcomeEntry): boolean {
 function toolCallStatuses(entries: TurnOutcomeEntry[]): Map<string, string> {
   const calls = new Map<string, string>();
   for (const entry of entries) {
-    if (entry.type !== 'tool_call' && entry.type !== 'tool_result') continue;
-    const data = (entry.data ?? {}) as Record<string, unknown>;
-    const id = String(data.id ?? '');
+    if (!isToolEntry(entry) || isCarriedOverToolCall(entry)) continue;
+    const id = toolCallIdOf(entry);
     if (!id) continue;
-    const status = String(data.status ?? (entry.type === 'tool_result' ? 'completed' : 'running')).toLowerCase();
+    const status = toolStatusOf(entry);
     const previous = calls.get(id);
     if (previous && isTerminalToolStatus(previous) && !isTerminalToolStatus(status)) continue;
     calls.set(id, status);
@@ -171,10 +190,30 @@ export function stripAgentStreamErrorSuffix(text: string): string {
  * 分隔只认活动（思考 / 工具调用）与用户消息——状态、raw_terminal、error 这些
  * 事件可能落在同一条回答的两个 chunk 之间，让它们参与分隔等于把回答截断。
  * 合并时新建 data，不改调用方传进来的事件对象（可能正被别的缓存持有）。
+ *
+ * 工具调用同理按 toolCallId 收成一格，留在首次出现的位置，后续推送只更新这一格的状态
+ * （终态不被迟到的旧快照推翻）。后台进程的进度推送会插进回答的两个 chunk 之间，
+ * 按「又一次活动」处理会把回答切成两半，严格规则只取得到后半段。
+ * 更早轮次带过来的调用（`carriedOver`）整个跳过，不占位置也不参与分隔。
  */
 function foldAssistantText(entries: TurnOutcomeEntry[]): FoldedEntry[] {
   const folded: FoldedEntry[] = [];
+  const tools = new Map<string, FoldedEntry>();
   for (const entry of entries) {
+    if (isToolEntry(entry)) {
+      if (isCarriedOverToolCall(entry)) continue;
+      const id = toolCallIdOf(entry);
+      const status = toolStatusOf(entry);
+      const existing = id ? tools.get(id) : undefined;
+      if (existing) {
+        if (!isTerminalToolStatus(String(existing.data.status)) || isTerminalToolStatus(status)) existing.data = { ...existing.data, status };
+        continue;
+      }
+      const slot: FoldedEntry = { type: entry.type, data: { ...entry.data, status }, origin: entry };
+      if (id) tools.set(id, slot);
+      folded.push(slot);
+      continue;
+    }
     if (isTurnActivity(entry) || !isAssistantText(entry)) {
       // 活动与用户消息原样留下当分隔符；其余类型（status / raw_terminal / error …）直接丢掉。
       if (isTurnActivity(entry) || entry.data?.role === 'user') folded.push(entry);

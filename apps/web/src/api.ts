@@ -36,8 +36,18 @@ export type LarkAllowedUser = { openId: string; name: string };
 export type LarkBotConfig = { configured: true; appId: string; name: string; tabLabel: string; setupComplete: boolean; avatarUrl?: string; workspace?: string; webBaseUrl?: string; defaultAgentId?: string; defaultModel?: string; defaultReasoningEffort?: string; preInjectPrompt: string; listening: boolean; activeListening: boolean; groupToolsEnabled: boolean; groupToolsAllowSend: boolean; groupSessionScope: 'user' | 'chat'; pushIntervalMs: number; traceLimit?: number; hideTraceOnComplete: boolean; quietReply: boolean; allowedUsers: LarkAllowedUser[]; allowedUserNames?: string[]; allowedEmails: string[]; allowedBots: LarkAllowedUser[]; allowedBotNames?: string[]; peerBotsAllowed: boolean; highRiskAllowedUsers: LarkAllowedUser[]; highRiskAllowedUserNames?: string[]; highRiskAllowedEmails: string[]; highRiskPattern: string; gateEnabled: boolean; softGateEnabled: boolean; hardGateEnabled: boolean; hookTrustConfirmed: boolean };
 export type LarkConfig = { configured: boolean; bots: LarkBotConfig[]; listeningDisabled: boolean };
 export type LarkHookStatus = { agentId?: string; supported: boolean; installed: boolean; writable: boolean; trustRequired: boolean; hooksPath?: string; reason?: string; trustInstructions?: string };
+export type LarkAvatarRegion = 'feishu' | 'lark';
+export type LarkAvatarAccount = { userId: string; name: string; avatarUrl?: string; email?: string };
+export type LarkAvatarStatus = { configured: boolean; connected: boolean; listening: boolean; state: 'disconnected' | 'connecting' | 'connected' | 'expired'; account?: LarkAvatarAccount; region: LarkAvatarRegion; listenChats: string[]; lastError?: string; lastSyncedAt?: string; syncIntervalSeconds: number; counts: { inbox: number; action: number; pendingDrafts: number } };
+export type LarkAvatarConfigRecord = { id: string; config: { region: LarkAvatarRegion; triggerPrefix: string; contextMessages: number; contextScope: 'anchor' | 'chat'; replyInTopic: boolean; replyMode: 'direct' | 'quote' | 'thread'; emojiReactions: boolean; replySignature: string; agentTimeoutSeconds: number; listening: boolean; listenChats: string[]; allowedSenders: string[]; agentId: string; model: string; reasoningEffort: string; workspace: string }; account?: LarkAvatarAccount; state: 'disconnected' | 'connecting' | 'connected' | 'expired'; lastError?: string; createdAt: string; updatedAt: string };
+export type LarkAvatarChatSummary = { id: string; name: string; type: 'p2p' | 'group' | 'topic' | 'unknown'; avatarUrl?: string; memberCount?: number; lastMessageAt?: string };
+export type LarkAvatarLoginState = 'idle' | 'starting' | 'waiting' | 'scanned' | 'success' | 'failed' | 'expired';
+export type LarkAvatarLoginSnapshot = { state: LarkAvatarLoginState; message: string; region: LarkAvatarRegion; qrContent?: string; attempt: number; expiresAt?: string };
+export type LarkAvatarInboxItem = { id: string; threadKey: string; chatId: string; chatType: string; chatName?: string; chatAvatarUrl?: string; senderId?: string; senderName?: string; senderAvatarUrl?: string; title: string; summary?: string; tier: 'action' | 'fyi' | 'noise'; state: 'new' | 'handled'; occurredAt: string; receivedAt: string };
+export type LarkAvatarDraft = { id: string; itemId?: string; threadKey?: string; target: string; replyRootId?: string; replyQuote?: boolean; replyThreadChat?: boolean; body: string; state: 'pending' | 'sent' | 'failed' | 'discarded'; sentMessageId?: string; attempts: number; lastError?: string; createdAt: string; updatedAt: string; sentAt?: string };
 export type Session = { id: string; agentId: string; state: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null };
 export type AutostartStatus = { supported: boolean; enabled: boolean; reason?: string; plistPath?: string; entrypoint?: string };
+export type KeepAwakeStatus = { supported: boolean; enabled: boolean; keepDisplay: boolean; reason?: string };
 export type SelfUpdateStatus = { currentVersion: string; distTag: string; latestVersion?: string; updateAvailable: boolean; canUpdate: boolean; updating: boolean; runtime?: 'daemon' | 'desktop' | 'foreground'; lastError?: string; checkedAt?: number; checkError?: string };
 export type ShareLinkKind = 'hostname' | 'lan-v4' | 'lan-v6' | 'public';
 export type ShareLinkUrl = { kind: ShareLinkKind; label: string; url: string };
@@ -58,7 +68,36 @@ export type DockEvent = { id: string; sequence: number; type: string; timestamp:
 export type FsListEntry = { name: string; type: 'file' | 'dir'; size: number; mtime: string };
 export type FsListResult = { cwd: string; path: string; entries: FsListEntry[] };
 export type FsReadResult = { cwd: string; path: string; size: number; content: string };
-export type Task = { id: string; sessionId: string; prompt: string; sentPrompt?: string | null; finalText?: string | null; status: string; createdAt: string; updatedAt: string };
+export type Task = { id: string; sessionId: string; prompt: string; sentPrompt?: string | null; finalText?: string | null; status: string; origin?: string | null; createdAt: string; updatedAt: string };
+export type AssistantTaskState = 'running' | 'review' | 'needs_user' | 'closed';
+export type AssistantTask = {
+  id: string; title: string; notes: string; doneWhen: string[]; expectMinutes?: number;
+  state: AssistantTaskState; round: number; sessionId?: string; agentId?: string; cwd?: string;
+  model?: string; reasoningEffort?: string;
+  plan: boolean; outcome?: 'accepted' | 'cancelled'; createdAt: string; updatedAt: string; closedAt?: string;
+};
+export type AssistantWatch = {
+  id: string; ownerSessionId: string; name: string; command: string; cwd?: string;
+  intervalSeconds: number; timeoutSeconds: number; mode: 'once' | 'repeat'; cooldownSeconds: number;
+  state: 'active' | 'paused' | 'fired' | 'expired'; lastRunAt?: string; lastExitCode?: number;
+  lastOutput?: string; failCount: number; fireCount: number; expiresAt?: string; createdAt: string; updatedAt: string;
+};
+export type AssistantDraft = {
+  id: string; taskId?: string; channel: 'github_comment' | 'lark_reply'; target: string; body: string;
+  state: 'pending' | 'sent' | 'failed' | 'discarded'; idempotencyKey: string; attempts: number;
+  lastError?: string; createdBy?: string; createdAt: string; sentAt?: string;
+};
+export type AssistantQuietHours = { enabled: boolean; start: string; end: string };
+/** 主会话在界面上的形象：认领回家的小猫。旧服务端没有这个字段。 */
+export type AssistantCompanion = { name: string; adoptedAt: string };
+export type AssistantReview = {
+  id: string; taskId: string; verdict: 'accepted' | 'rework' | 'needs_user' | 'cancelled';
+  checks: Array<{ criterion: string; met: boolean; evidence?: string }>; note?: string; createdAt: string;
+};
+export type AssistantState = {
+  mainSessionId: string | null; mainSession: Session | null; companion?: AssistantCompanion | null; quietHours: AssistantQuietHours;
+  tasks: AssistantTask[]; watches: AssistantWatch[]; drafts: AssistantDraft[];
+};
 /** `events` 只是一页（最近若干条）；总行数与是否被截断由 eventTotal / eventsTruncated 明说。 */
 export type SessionRecord = { session: Session; tasks: Task[]; events: DockEvent[]; eventTotal?: number; eventsTruncated?: boolean };
 /** 一轮事件的边界：startSequence 是这一轮的提问锚点，endSequence 是下一轮锚点（末轮为最大序号 + 1）。 */
@@ -244,6 +283,47 @@ export const api = {
   deleteLarkConfig: (appId: string) => json<LarkConfig>(`/api/lark/config/${encodeURIComponent(appId)}`, { method: 'DELETE' }),
   larkHookStatus: (appId: string) => json<LarkHookStatus>(`/api/lark/hooks/status?appId=${encodeURIComponent(appId)}`),
   installLarkHook: (appId: string, highRiskPattern: string) => json<LarkHookStatus>('/api/lark/hooks/install', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appId, highRiskPattern }) }),
+  larkAvatarStatus: () => json<LarkAvatarStatus>('/api/lark-avatar/status'),
+  larkAvatarConfig: () => json<LarkAvatarConfigRecord | null>('/api/lark-avatar/config'),
+  larkAvatarChats: () => json<LarkAvatarChatSummary[]>('/api/lark-avatar/chats'),
+  saveLarkAvatarConfig: (body: { region?: LarkAvatarRegion; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string }) => json<LarkAvatarConfigRecord>('/api/lark-avatar/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  startLarkAvatarLogin: (region: LarkAvatarRegion) => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/qr', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ region }) }),
+  larkAvatarLoginStatus: () => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/status'),
+  pollLarkAvatarLogin: () => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/poll', { method: 'POST' }),
+  cancelLarkAvatarLogin: () => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login', { method: 'DELETE' }),
+  importLarkAvatarCookie: (body: { cookie: string; region: LarkAvatarRegion }) => json<{ connected: boolean; account?: LarkAvatarAccount }>('/api/lark-avatar/login/cookie', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  disconnectLarkAvatar: () => json<{ ok: boolean }>('/api/lark-avatar/disconnect', { method: 'POST' }),
+  pollLarkAvatar: () => json<{ created: number; dispatched: number }>('/api/lark-avatar/poll', { method: 'POST' }),
+  setLarkAvatarListening: (enabled: boolean) => json<{ ok: boolean; listening: boolean }>('/api/lark-avatar/listening', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) }),
+  larkAvatarInbox: (query: { state?: string; tier?: string } = {}) => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value) search.set(key, value);
+    return json<LarkAvatarInboxItem[]>(`/api/lark-avatar/inbox?${search}`);
+  },
+  larkAvatarDrafts: (state?: string) => json<LarkAvatarDraft[]>(`/api/lark-avatar/drafts${state ? `?state=${encodeURIComponent(state)}` : ''}`),
+  draftLarkAvatarInboxItem: (id: string, regenerate = false) => json<LarkAvatarDraft>(`/api/lark-avatar/inbox/${encodeURIComponent(id)}/draft`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ regenerate }) }),
+  createLarkAvatarDraft: (body: { itemId?: string; target?: string; body?: string; threadKey?: string; replyRootId?: string }) => json<LarkAvatarDraft>('/api/lark-avatar/drafts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  updateLarkAvatarDraft: (id: string, body: string) => json<LarkAvatarDraft>(`/api/lark-avatar/drafts/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body }) }),
+  sendLarkAvatarDraft: (id: string, body?: string) => json<LarkAvatarDraft>(`/api/lark-avatar/drafts/${encodeURIComponent(id)}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body === undefined ? {} : { body }) }),
+  discardLarkAvatarDraft: (id: string) => json<LarkAvatarDraft>(`/api/lark-avatar/drafts/${encodeURIComponent(id)}/discard`, { method: 'POST' }),
+  // quietDenied：飞书卡片打开的会话级令牌没有主会话权限，查不到就不显示小猫，不能把整页打成「访问被拒」。
+  assistantState: () => json<AssistantState>('/api/assistant/state', undefined, true),
+  assistantSetMain: (body: { sessionId?: string; agentId?: string; cwd?: string; model?: string; reasoningEffort?: string; name?: string }) => json<{ session: Session; companion?: AssistantCompanion | null }>('/api/assistant/main', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantRenameCompanion: (name: string) => json<{ companion: AssistantCompanion }>('/api/assistant/companion', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }),
+  assistantTask: (id: string) => json<{ task: AssistantTask; reviews?: AssistantReview[] }>(`/api/assistant/tasks/${encodeURIComponent(id)}`, undefined, true),
+  assistantClearMain: () => json<{ ok: boolean }>('/api/assistant/main', { method: 'DELETE' }),
+  assistantSaveSettings: (quietHours: AssistantQuietHours) => json<{ quietHours: AssistantQuietHours }>('/api/assistant/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ quietHours }) }),
+  assistantStartTask: (body: { title: string; notes?: string; doneWhen: string[]; expectMinutes?: number; agentId?: string; cwd?: string; model?: string; plan?: boolean }) => json<{ task: AssistantTask }>('/api/assistant/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantStartPlanned: (id: string) => json<{ task: AssistantTask }>(`/api/assistant/tasks/${encodeURIComponent(id)}/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+  assistantReviewTask: (id: string, body: { verdict: 'accepted' | 'rework' | 'needs_user' | 'cancelled'; checks?: Array<{ criterion: string; met: boolean; evidence?: string }>; note?: string }) => json<{ task: AssistantTask }>(`/api/assistant/tasks/${encodeURIComponent(id)}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantCancelTask: (id: string, reason?: string) => json<{ task: AssistantTask }>(`/api/assistant/tasks/${encodeURIComponent(id)}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason }) }),
+  assistantAddWatch: (body: { name: string; command: string; cwd?: string; every?: string; timeout?: string; mode?: 'once' | 'repeat'; cooldown?: string; expires?: string }) => json<{ watch: AssistantWatch }>('/api/assistant/watches', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantWatchAction: (id: string, action: 'pause' | 'resume' | 'run') => json<{ watch: AssistantWatch }>(`/api/assistant/watches/${encodeURIComponent(id)}/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+  assistantRemoveWatch: (id: string) => json<{ deleted: boolean; id: string }>(`/api/assistant/watches/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  assistantCreateDraft: (body: { channel: 'github_comment' | 'lark_reply'; target: string; body: string; taskId?: string }) => json<{ draft: AssistantDraft }>('/api/assistant/drafts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantSendDraft: (id: string) => json<{ draft: AssistantDraft }>(`/api/assistant/drafts/${encodeURIComponent(id)}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+  assistantDiscardDraft: (id: string) => json<{ draft: AssistantDraft }>(`/api/assistant/drafts/${encodeURIComponent(id)}/discard`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+  assistantNotify: (body: { text: string; ask?: boolean; urgent?: boolean }) => json<{ id: string; delayed: boolean; sent?: boolean }>('/api/assistant/notify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   // 登录接口不走 json()：密码错误是普通失败，不能触发全局「访问被拒」事件。
   authStatus: async (): Promise<{ passwordEnabled: boolean }> => {
     const response = await fetch('/api/auth/status');
@@ -258,6 +338,8 @@ export const api = {
   },
   autostartStatus: () => json<AutostartStatus>('/api/system/autostart', undefined, true),
   setAutostart: (enabled: boolean) => json<AutostartStatus>('/api/system/autostart', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) }),
+  keepAwakeStatus: () => json<KeepAwakeStatus>('/api/system/keep-awake', undefined, true),
+  setKeepAwake: (body: { enabled?: boolean; keepDisplay?: boolean }) => json<KeepAwakeStatus>('/api/system/keep-awake', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   systemCapabilities: () => json<{ platform: string; directoryPicker: boolean; filePicker: boolean; workingDirectory: string; homeDirectory: string }>('/api/system/capabilities'),
   skills: (cwd?: string) => json<SkillReference[]>(`/api/system/skills${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   selectDirectory: () => json<{ path: string }>('/api/system/select-directory', { method: 'POST' }),

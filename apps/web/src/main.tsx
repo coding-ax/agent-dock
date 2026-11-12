@@ -28,7 +28,7 @@ client.setQueryDefaults(['events'], {
   // 高频切换会话时避免重复拉取：默认 staleTime=0 意味着每次切回都重新请求（网络往返 +
   // 重建几十 MB 的时间线）。活跃会话的事件由 SSE 持续 setQueryData 写进缓存，不需要靠
   // refetch 保持最新；给一个 30s 窗口，反复来回切时直接命中缓存，只有离开超过 30s 才会
-  // 触发增量/全量补拉（SSE 断开期间的补拉由 useRefetchFullOnFocus 兜底）。
+  // 触发增量/全量补拉（SSE 断开期间的补拉由 useHealOnFocus 兜底）。
   staleTime: 30_000
 });
 // 跟随鼠标的聚光已移除：全站只保留克制的边框 / 底色反馈，不再有装饰性光效。

@@ -250,6 +250,29 @@ describe('conversation timeline', () => {
     expect(activity.groups.map((group: any) => group.label)).toEqual(['pwd']);
   });
 
+  it('上一轮起在后台的进程推送落在回答中间：不进时间线，也不把回答切成两段', () => {
+    // runtime 给这类推送打 carriedOver。以前它按首次出现占位，回答被切成「现在的情况：」
+    // 和后半句，最终输出只剩后半句，阶段里还多一条永远执行中的无标题 tool call。
+    const tasks = [{ id: 'task-2', sessionId: 's1', prompt: '现在怎么处理噪声', status: 'completed', createdAt: '', updatedAt: '' }];
+    const carried = (sequence: number) => event(sequence, 'tool_call', { id: 'bg-server', name: 'tool call', status: 'in_progress', carriedOver: true });
+    const timeline = buildTimeline([
+      event(1, 'text', { text: '现在怎么处理噪声', role: 'user', taskId: 'task-2' }),
+      event(2, 'tool_result', { id: 'grep-1', name: 'rg', status: 'completed', output: '' }),
+      event(3, 'text', { text: '现在的情况：', role: 'assistant' }),
+      carried(4),
+      event(5, 'text', { text: '只做到了不触发，', role: 'assistant' }),
+      carried(6),
+      event(7, 'text', { text: '还没做噪声处理。', role: 'assistant' }),
+      carried(8)
+    ]);
+    expect(timeline.some(item => item.data.id === 'bg-server')).toBe(false);
+    const sections = buildTimelineSections(timeline, tasks);
+    expect(sections.find(section => section.kind === 'event' && section.final)).toMatchObject({ event: { data: { text: '现在的情况：只做到了不触发，还没做噪声处理。' } } });
+    const activity: any = sections.find(section => section.kind === 'activity');
+    expect(activity).toMatchObject({ hasAnswer: true, taskStatus: 'completed' });
+    expect(activity.groups.flatMap((group: any) => group.events).map((item: any) => item.data.id)).toEqual(['grep-1']);
+  });
+
   it('uses plain one-line text for activity labels instead of leaking Markdown syntax', () => {
     const tasks = [{ id: 'task-1', sessionId: 's1', prompt: '检查', status: 'running', createdAt: '', updatedAt: '' }];
     const timeline = buildTimeline([

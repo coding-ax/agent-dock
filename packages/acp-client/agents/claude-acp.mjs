@@ -1,7 +1,7 @@
 import { access, readFile } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
@@ -41,12 +41,34 @@ const settingsEnv = Object.assign(
   await settingsEnvironment(join(process.cwd(), '.claude', 'settings.local.json'))
 );
 const env = { ...settingsEnv, ...process.env };
-const installedClaude = await findClaudeExecutable(env.PATH);
+const installedClaude = env.CLAUDE_CODE_EXECUTABLE || await findClaudeExecutable(env.PATH);
 if (installedClaude) env.CLAUDE_CODE_EXECUTABLE = installedClaude;
-const bundledClaudeAcp = fileURLToPath(import.meta.resolve('@agentclientprotocol/claude-agent-acp/dist/index.js'));
-const command = process.env.AGENTDOCK_CLAUDE_ACP_COMMAND || process.execPath;
-const args = process.env.AGENTDOCK_CLAUDE_ACP_ARGS_JSON
-  ? JSON.parse(process.env.AGENTDOCK_CLAUDE_ACP_ARGS_JSON)
+const customCommand = process.env.AGENTDOCK_CLAUDE_ACP_COMMAND;
+const customArgs = process.env.AGENTDOCK_CLAUDE_ACP_ARGS_JSON;
+// 发布包不再携带 @anthropic-ai/claude-agent-sdk 的平台二进制，必须复用本机 CLI。
+// 自定义 ACP 命令的调用方自行负责运行时，不做这个检查。
+if (!installedClaude && !customCommand && !customArgs) {
+  process.stderr.write('未找到本机 Claude Code。请先安装 claude CLI 并加入 PATH，或设置 CLAUDE_CODE_EXECUTABLE 后重试。\n');
+  process.exit(1);
+}
+// 发布包里加载同目录的 vendor 产物；源码调试（packages/acp-client/agents）没有
+// ../vendor，回退到 workspace 内的 node_modules。claude-agent-acp 0.103+ 不再
+// 允许 deep import dist/*，所以从 package.json 的 bin 字段解析 CLI 入口。
+let bundledClaudeAcp;
+if (!customArgs) {
+  const vendoredClaudeAcp = fileURLToPath(new URL('../vendor/claude-agent-acp.mjs', import.meta.url));
+  if (existsSync(vendoredClaudeAcp)) bundledClaudeAcp = vendoredClaudeAcp;
+  else {
+    const packageJsonPath = fileURLToPath(import.meta.resolve('@agentclientprotocol/claude-agent-acp/package.json'));
+    const { bin } = JSON.parse(await readFile(packageJsonPath, 'utf8'));
+    const relative = typeof bin === 'string' ? bin : bin?.['claude-agent-acp'];
+    if (!relative) throw new Error('@agentclientprotocol/claude-agent-acp 未声明 CLI 入口。');
+    bundledClaudeAcp = resolve(dirname(packageJsonPath), relative);
+  }
+}
+const command = customCommand || process.execPath;
+const args = customArgs
+  ? JSON.parse(customArgs)
   : [bundledClaudeAcp];
 const child = spawn(command, args, { cwd: process.cwd(), env, stdio: 'inherit' });
 

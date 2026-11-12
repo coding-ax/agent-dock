@@ -13,8 +13,8 @@ import type { AgentConfig } from '@agent-dock/agent-dock-shared';
  */
 
 const REMOTE_ADAPTERS: Record<string, string> = {
-  claude: '@agentclientprotocol/claude-agent-acp@0.66.0',
-  codex: '@agentclientprotocol/codex-acp@1.10.0'
+  claude: '@agentclientprotocol/claude-agent-acp@0.106.0',
+  codex: '@agentclientprotocol/codex-acp@2.6.0'
 };
 
 export function supportsSshAgent(agent: Pick<AgentConfig, 'id'>): boolean {

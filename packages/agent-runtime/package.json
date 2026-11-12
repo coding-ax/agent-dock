@@ -25,12 +25,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent-dock/agent-dock-shared": "workspace:*",
     "@agent-dock/agent-dock-acp-client": "workspace:*",
+    "@agent-dock/agent-dock-shared": "workspace:*",
     "@agent-dock/agent-dock-transports": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "5.8.3",
-    "vitest": "3.2.4"
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
   }
 }

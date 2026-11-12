@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -15,14 +15,68 @@ describe('Claude ACP launcher', () => {
     expect(claude?.argv[1]).toMatch(/claude-acp\.mjs$/);
   });
 
-  it('uses the exact installed Claude ACP binary without runtime npx resolution', async () => {
+  it('ships the exact Claude ACP adapter as a vendor artifact with a source fallback', async () => {
     const packageJson = JSON.parse(await readFile(resolve(process.cwd(), 'packages/acp-client/package.json'), 'utf8'));
     const standalonePackageJson = JSON.parse(await readFile(resolve(process.cwd(), 'apps/server/package.json'), 'utf8'));
     const launcher = await readFile(resolve(process.cwd(), 'packages/acp-client/agents/claude-acp.mjs'), 'utf8');
-    expect(packageJson.dependencies['@agentclientprotocol/claude-agent-acp']).toBe('0.66.0');
-    expect(standalonePackageJson.dependencies['@agentclientprotocol/claude-agent-acp']).toBe('0.66.0');
-    expect(launcher).toContain("import.meta.resolve('@agentclientprotocol/claude-agent-acp/dist/index.js')");
+    expect(packageJson.dependencies['@agentclientprotocol/claude-agent-acp']).toBe('0.106.0');
+    expect(standalonePackageJson.devDependencies['@agentclientprotocol/claude-agent-acp']).toBe('0.106.0');
+    expect(standalonePackageJson.dependencies['@agentclientprotocol/claude-agent-acp']).toBeUndefined();
+    expect(launcher).toContain("'../vendor/claude-agent-acp.mjs'");
+    expect(launcher).toContain("import.meta.resolve('@agentclientprotocol/claude-agent-acp/package.json')");
+    expect(launcher).toContain("bin?.['claude-agent-acp']");
     expect(launcher).not.toMatch(/\bnpx\b/);
+  });
+
+  it('loads the adjacent vendored adapter before falling back to node_modules', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentdock-claude-vendor-')); dirs.push(root);
+    const agents = join(root, 'dist', 'agents'); const vendor = join(root, 'dist', 'vendor');
+    await mkdir(agents, { recursive: true }); await mkdir(vendor, { recursive: true });
+    await copyFile(resolve(process.cwd(), 'packages/acp-client/agents/claude-acp.mjs'), join(agents, 'claude-acp.mjs'));
+    await writeFile(join(vendor, 'claude-agent-acp.mjs'), 'console.log(JSON.stringify({ vendor: true, executable: process.env.CLAUDE_CODE_EXECUTABLE }))\n');
+    const claude = join(root, 'claude'); await writeFile(claude, '', { mode: 0o755 });
+    const result = spawnSync(process.execPath, [join(agents, 'claude-acp.mjs')], {
+      cwd: root,
+      env: { ...process.env, CLAUDE_CONFIG_DIR: join(root, 'config'), CLAUDE_CODE_EXECUTABLE: claude },
+      encoding: 'utf8'
+    });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ vendor: true, executable: claude });
+  });
+
+  it('falls back to the installed adapter bin when no vendor artifact exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentdock-claude-fallback-')); dirs.push(root);
+    const agents = join(root, 'agents'); await mkdir(agents);
+    await copyFile(resolve(process.cwd(), 'packages/acp-client/agents/claude-acp.mjs'), join(agents, 'claude-acp.mjs'));
+    const installed = join(root, 'node_modules', '@agentclientprotocol', 'claude-agent-acp');
+    await mkdir(join(installed, 'dist'), { recursive: true });
+    await writeFile(join(installed, 'package.json'), JSON.stringify({
+      name: '@agentclientprotocol/claude-agent-acp',
+      type: 'module',
+      exports: { './package.json': './package.json' },
+      bin: { 'claude-agent-acp': 'dist/index.js' }
+    }));
+    await writeFile(join(installed, 'dist', 'index.js'), 'console.log(JSON.stringify({ fallback: true }))\n');
+    const claude = join(root, 'claude'); await writeFile(claude, '', { mode: 0o755 });
+    const result = spawnSync(process.execPath, [join(agents, 'claude-acp.mjs')], {
+      cwd: root,
+      env: { ...process.env, CLAUDE_CONFIG_DIR: join(root, 'config'), CLAUDE_CODE_EXECUTABLE: claude },
+      encoding: 'utf8'
+    });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ fallback: true });
+  });
+
+  it('reports missing local Claude Code instead of relying on a removed bundled binary', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentdock-claude-missing-')); dirs.push(root);
+    const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE_|AGENTDOCK_CLAUDE_ACP_)/.test(key)));
+    const result = spawnSync(process.execPath, [resolve(process.cwd(), 'packages/acp-client/agents/claude-acp.mjs')], {
+      cwd: root,
+      env: { ...inherited, PATH: '', CLAUDE_CONFIG_DIR: join(root, 'config') },
+      encoding: 'utf8'
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('未找到本机 Claude Code');
   });
 
   it('loads Claude settings env without overriding explicit process variables and reuses the installed CLI', async () => {

@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 import type { AutostartService } from './daemon/autostart.js';
+import type { KeepAwakeService } from './daemon/keep-awake.js';
 import { discoverSkills } from './skill-catalog.js';
 
 const execFileAsync = promisify(execFile);
@@ -14,6 +15,8 @@ export interface SystemRoutesOptions {
   discoverSkills?: typeof discoverSkills;
   /** 开机自启（macOS launchd）；未提供时接口返回 supported:false。 */
   autostart?: AutostartService;
+  /** 运行时永不休眠（macOS caffeinate）；未提供时接口返回 supported:false。 */
+  keepAwake?: KeepAwakeService;
 }
 
 async function selectMacDirectory() {
@@ -43,6 +46,24 @@ export async function registerSystemRoutes(app: FastifyInstance, options: System
     if (!options.autostart) return reply.code(501).send({ error: { code: 'AUTOSTART_UNSUPPORTED', message: '当前运行方式不支持开机自启' } });
     try { return enabled ? await options.autostart.enable() : await options.autostart.disable(); }
     catch (error) { return reply.code(409).send({ error: { code: 'AUTOSTART_FAILED', message: error instanceof Error ? error.message : String(error) } }); }
+  });
+  app.get('/api/system/keep-awake', async () => options.keepAwake?.status() ?? { supported: false, enabled: false, keepDisplay: false, reason: '当前运行方式不支持' });
+  app.put<{ Body: { enabled?: unknown; keepDisplay?: unknown } }>('/api/system/keep-awake', async (request, reply) => {
+    const body = request.body ?? {};
+    const { enabled, keepDisplay } = body;
+    const isBoolean = (value: unknown) => value === undefined || typeof value === 'boolean';
+    if (!isBoolean(enabled) || !isBoolean(keepDisplay) || (enabled === undefined && keepDisplay === undefined)) {
+      return reply.code(400).send({ error: { code: 'INVALID_KEEP_AWAKE_REQUEST', message: 'enabled / keepDisplay must be booleans' } });
+    }
+    if (!options.keepAwake) return reply.code(501).send({ error: { code: 'KEEP_AWAKE_UNSUPPORTED', message: '当前运行方式不支持永不休眠' } });
+    try {
+      return await options.keepAwake.set({
+        ...(typeof enabled === 'boolean' ? { enabled } : {}),
+        ...(typeof keepDisplay === 'boolean' ? { keepDisplay } : {})
+      });
+    } catch (error) {
+      return reply.code(409).send({ error: { code: 'KEEP_AWAKE_FAILED', message: error instanceof Error ? error.message : String(error) } });
+    }
   });
   app.get<{ Querystring: { cwd?: string } }>('/api/system/skills', async request => (options.discoverSkills ?? discoverSkills)(request.query.cwd));
   app.post('/api/system/select-directory', async (_request, reply) => {

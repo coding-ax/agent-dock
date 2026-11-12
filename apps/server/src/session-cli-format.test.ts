@@ -37,6 +37,18 @@ describe('session-cli transcript formatting', () => {
     expect(formatTranscript([event({ type: 'text', data: { text: '   ', role: 'assistant' } })])).toBe('');
   });
 
+  it('上一轮起在后台的进程推送不写进转录，也不把回答切成几段', () => {
+    const carried = (sequence: number) => event({ sequence, type: 'tool_call', data: { id: 'bg-server', name: 'tool call', status: 'in_progress', carriedOver: true } });
+    const text = formatTranscript([
+      event({ sequence: 1, type: 'text', data: { text: '现在怎么处理噪声', role: 'user' } }),
+      carried(2),
+      event({ sequence: 3, type: 'text', data: { text: '现在的情况：', role: 'assistant' } }),
+      carried(4),
+      event({ sequence: 5, type: 'text', data: { text: '还没做噪声处理。', role: 'assistant' } })
+    ]);
+    expect(text.trimEnd()).toBe('### 用户\n现在怎么处理噪声\n\n### 助手\n现在的情况：还没做噪声处理。');
+  });
+
   // 流式路径是 `agent-dock session show` 的默认路径（转录可百万行，不能先拼成字符串）。
   // 它必须和字符串形式逐字节一致——尤其是块之间那个空行和末尾的换行，否则 piping/重定向
   // 出来的转录会悄悄变样。这里不靠肉眼：同一条事件流两种走法直接比。

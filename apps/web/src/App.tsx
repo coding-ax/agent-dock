@@ -3,15 +3,16 @@ import type { ComposerEditorHandle } from './ComposerEditor';
 import { closeAppDialog, openAppDialog } from './dialog-store';
 import { SettingsMenu } from './SettingsMenu';
 import { LarkRegistrationDialog } from './LarkRegistrationDialog';
+import { LarkAvatarPanel } from './LarkAvatarPanel';
 import { SuggestedValueInput } from './SuggestedValueInput';
 import { WebBaseUrlInput } from './WebBaseUrlInput';
 import { KeyboardEvent, lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { useMount, useEventListener, useUpdateEffect, useLocalStorageState, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlarmClock, AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, GripVertical, Info, LoaderCircle, Menu, MessageSquare, PanelLeftOpen, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, Trash2, Wrench, X } from 'lucide-react';
+import { AlarmClock, AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, GripVertical, Info, LoaderCircle, Menu, MessageSquare, PanelLeftOpen, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, StickyNote, Trash2, Wrench, X } from 'lucide-react';
 import { Input, InputNumber, Select, Switch } from 'antd';
 import { defaultLarkTraceLimit, validateHighRiskPattern } from '@agent-dock/agent-dock-shared';
-import { api, WebAccessDeniedError, type Agent, type Session } from './api';
+import { api, WebAccessDeniedError, type Agent, type AssistantTask, type Session } from './api';
 import { canSaveHardGate, canToggleHardGate, resolveReasoningEffort, withSavedOption } from './lark-config-form';
 import { useDockStore, type PaneTabKind } from './store';
 import { PaneHost } from './PaneHost';
@@ -35,11 +36,11 @@ import { groupSessions, groupSessionsByTime, relativeTimeLabel, sameSessionTree,
 import { sessionPaneTab } from './pane-tab';
 import { useDocumentTitle } from './useDocumentTitle';
 import { EMPTY_ITEM_ORDER, applyOrder, moveInList, normalizeItemOrder, type SidebarItemOrder } from './sidebar-order';
-import { DraftComposer } from './DraftComposer';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { SessionSearchDialog } from './SessionSearchDialog';
 import { WebAccessDeniedPanel, shouldCancelOnAccessDenied } from './WebAccessDeniedPanel';
 import { AgentConfigDialog } from './AgentConfigDialog';
+import { AssistantSettingsDialog } from './AssistantSettingsDialog';
 import { HandoverDialog } from './HandoverDialog';
 import { ImportSessionDialog } from './ImportSessionDialog';
 import { SystemPromptDialog } from './SystemPromptDialog';
@@ -54,6 +55,12 @@ import { busyStates, stateLabels, stateTextTone, stateTone } from './session-sta
 import { ConfirmDialog, IconButton, SettingRow } from './ui-controls';
 import { HoverTooltip, HoverTooltipText, TooltipProvider } from './HoverTooltip';
 import { SessionHoverCard } from './SessionHoverCard';
+import { CompanionLayer } from './companion/CompanionLayer';
+import { CompanionCard, CompanionStripButton } from './companion/CompanionCard';
+import { HomeStage } from './companion/HomeStage';
+import { CompanionNavProvider, useAssistantState, type CompanionNav } from './companion/useCompanion';
+import { useCompanionStore } from './companion/companion-store';
+import { withViewTransition } from './companion/effects';
 
 const PromptEditor = lazy(() => import('./PromptEditor'));
 
@@ -348,6 +355,10 @@ function LarkConfigModal({ agents, onClose }: { agents: Agent[]; onClose(): void
   /></>;
 }
 
+function LarkAvatarDialog({ onClose }: { onClose(): void }) {
+  return <div className="ui-overlay fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-2 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}><div role="dialog" aria-modal="true" aria-label="AI 飞书替身" className="ui-dialog flex h-[min(860px,calc(100dvh-2rem))] w-full max-w-[1120px] flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-xl"><div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3"><h2 className="text-[16px] font-semibold text-zinc-900">AI 飞书替身</h2><button type="button" aria-label="关闭 AI 飞书替身" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100"><X size={15}/></button></div><div className="min-h-0 flex-1 overflow-hidden"><LarkAvatarPanel /></div></div></div>;
+}
+
 type ItemDrag = { dragging: boolean; over: boolean; props: HTMLAttributes<HTMLDivElement> & { draggable?: boolean } };
 
 /** 会话状态指示：忙碌中转圈（对齐 Codex 的运行态），其余用静态点。尺寸交给调用方定，
@@ -360,7 +371,7 @@ function SessionStateIndicator({ session, size = 12 }: { session: Session; size?
   return <span aria-label={stateLabels[session.state]} className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>;
 }
 
-function SessionRow({ session, agent, botName, parentLabel, active, drag, onClick }: { session: Session; agent?: Agent; botName?: string; /** 侧边会话的父会话显示名，供 hover 卡片点出来处。 */ parentLabel?: string; active: boolean; /** 传入即表示这一行可拖拽：项目树里用于排序，时间列表里只用于拖到副屏。 */ drag?: ItemDrag; onClick(): void }) {
+function SessionRow({ session, agent, botName, parentLabel, active, drag, noteOf, onClick }: { session: Session; agent?: Agent; botName?: string; /** 侧边会话的父会话显示名，供 hover 卡片点出来处。 */ parentLabel?: string; active: boolean; /** 传入即表示这一行可拖拽：项目树里用于排序，时间列表里只用于拖到副屏。 */ drag?: ItemDrag; /** 小猫（主会话）派出的侧边会话：行首换成便签图标，悬停提示是谁派的。 */ noteOf?: string; onClick(): void }) {
   // 定时任务新建的会话也是 side-chat，不加标记就和手动开的侧边会话混在一起。
   const scheduled = isScheduledSession(session);
   const sideChat = Boolean(sideChatParentId(session));
@@ -379,6 +390,7 @@ function SessionRow({ session, agent, botName, parentLabel, active, drag, onClic
   const row = <div onClick={onClick} role="button" tabIndex={0} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(); } }} {...(drag?.props ?? {})} className={`group relative flex h-[34px] w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left transition-colors ${active ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-700 hover:bg-zinc-100/60'} ${drag?.dragging ? 'opacity-40' : ''} ${drag?.over ? 'ring-1 ring-zinc-300' : ''}`}>
     {scheduled
       ? <AlarmClock size={12} aria-label="定时任务会话" className="shrink-0 text-zinc-400"/>
+      : noteOf ? <StickyNote size={12} aria-label={`${noteOf}派出的便签`} className="shrink-0 text-amber-600/80"/>
       : sideChat ? <MessageSquare size={12} aria-label="侧边会话" className="shrink-0 text-zinc-400"/> : null}
     <SessionTitleEditor session={session} label={primary} nameClassName="min-w-0 flex-1 truncate text-[14px]" editButtonVisible={!attention}/>
     {/* 铅笔是绝对定位（right-2），不参与 flex 排版：悬停时它出现在时间的位置，
@@ -416,7 +428,7 @@ export default function App() {
   // 浏览器就不会重算并夹取 offsetTop，与这里的 translateY 互相打架。
   // 因此根容器不能带 style prop——React 不管辖内联样式，重渲染才不会覆盖上面的赋值。
   const shellRef = useVisualViewportShell<HTMLDivElement>();
-  const agents = useQuery({ queryKey: ['agents'], queryFn: () => api.agents(), enabled: !webDenied }); const sessions = useQuery({ queryKey: ['sessions'], queryFn: api.sessions, enabled: !webDenied, refetchInterval: webDenied ? false : 2_000, refetchIntervalInBackground: true }); const larkConfig = useQuery({ queryKey: ['lark-config'], queryFn: api.larkConfig, enabled: !webDenied, refetchInterval: webDenied ? false : 5_000 }); const systemCapabilities = useQuery({ queryKey: ['system-capabilities'], queryFn: api.systemCapabilities, enabled: !webDenied });
+  const agents = useQuery({ queryKey: ['agents'], queryFn: () => api.agents(), enabled: !webDenied }); const sessions = useQuery({ queryKey: ['sessions'], queryFn: api.sessions, enabled: !webDenied, refetchInterval: webDenied ? false : 2_000, refetchIntervalInBackground: true }); const larkConfig = useQuery({ queryKey: ['lark-config'], queryFn: api.larkConfig, enabled: !webDenied, refetchInterval: webDenied ? false : 5_000 }); const systemCapabilities = useQuery({ queryKey: ['system-capabilities'], queryFn: api.systemCapabilities, enabled: !webDenied }); const assistantState = useAssistantState(!webDenied);
   // 地址栏 → store：首次挂载读一次；浏览器前进/后退再读一次。
   const applyUrlToStore = () => {
     const match = window.location.pathname.match(/^\/sessions\/([^/]+)$/);
@@ -435,9 +447,10 @@ export default function App() {
   // 默认按「最后一次对话时间」倒序。updatedAt 会被状态切换（工具、授权、归档）刷新，
   // 用它排会把「最近动过的」压过「最近聊过的」，所以改用 lastMessageAt，旧数据回退 updatedAt。
   const sortedSessions = useMemo(() => [...(sessions.data ?? [])].sort((left, right) => sessionActivityTime(right).localeCompare(sessionActivityTime(left))), [sessions.data]);
-  const visibleSessions = useMemo(() => sortedSessions.filter(session => !session.archivedAt && (sessionFilter === 'all' || sessionFilter === 'local' ? sessionFilter === 'all' || session.source !== 'lark' : session.source === 'lark' && session.sourceId?.startsWith(`${sessionFilter}:`))), [sortedSessions, sessionFilter]);
+  const visibleSessions = useMemo(() => sortedSessions.filter(session => session.id !== assistantState.data?.mainSessionId && !session.archivedAt && (sessionFilter === 'all' || sessionFilter === 'local' ? sessionFilter === 'all' || session.source !== 'lark' : session.source === 'lark' && session.sourceId?.startsWith(`${sessionFilter}:`))), [sortedSessions, sessionFilter, assistantState.data?.mainSessionId]);
   const archivedSessions = useMemo(() => sortedSessions.filter(session => session.archivedAt), [sortedSessions]);
   const workspaceGroups = useMemo(() => groupSessions(visibleSessions, agents.data ?? []), [visibleSessions, agents.data]);
+  const mainSessionId = assistantState.data?.mainSessionId ?? undefined;
   // 工作区 / Agent / 会话 三层的手动排序覆盖，持久化。
   const [itemOrder, setItemOrder] = useLocalStorageState<SidebarItemOrder>('agentdock:sidebar-item-order', { defaultValue: EMPTY_ITEM_ORDER });
   // 手动排序覆盖：没排过的层保持 groupSessions 给的时间默认序，排过的按保存顺序，新项浮到最前。
@@ -460,6 +473,8 @@ export default function App() {
   // 输入框可能本帧才挂载，放到下一帧再聚焦。
   const draftTextareaRef = useRef<ComposerEditorHandle | null>(null);
   const startNewConversation = useMemoizedFn(() => {
+    // 「新建对话」就是新对话：首页的发送目标不能还停在「交给小猫」。
+    useCompanionStore.getState().setHomeTarget('new');
     setSession(undefined); setSidebarCollapsed(false); setSidebarOpen(false); setPaneMenuAnchor(undefined);
     requestAnimationFrame(() => draftTextareaRef.current?.focus());
   });
@@ -602,6 +617,31 @@ export default function App() {
     onError: () => setCreatingPair(undefined)
   });
 
+  // ---- 小猫（主会话）的导航：侧栏卡片、右缘、首页、便签都通过它跳转 ----
+  const goAdopt = useMemoizedFn(() => {
+    useCompanionStore.getState().requestAdoption();
+    setSession(undefined); setSidebarOpen(false); setPaneMenuAnchor(undefined);
+  });
+  const openMain = useMemoizedFn((sessionId?: string) => {
+    const id = sessionId ?? mainSessionId;
+    if (!id) { goAdopt(); return; }
+    useCompanionStore.getState().closeDrawer();
+    if (primarySessionId === id) { setSidebarOpen(false); return; }
+    // 首页 / 侧栏的小猫形变到主会话标题栏的头像位。
+    withViewTransition(() => selectSession(id));
+  });
+  const openTask = useMemoizedFn((task: AssistantTask, where: 'auto' | 'primary' | 'pane' = 'auto') => {
+    if (!task.sessionId) { useCompanionStore.getState().openDrawer({ highlight: task.id }); return; }
+    const target = sortedSessions.find(item => item.id === task.sessionId);
+    // 正在看主会话时，便签对应的侧边会话放进副屏并排看；否则直接切过去。
+    const inPane = where === 'pane' || (where === 'auto' && Boolean(primarySessionId) && primarySessionId === mainSessionId);
+    if (inPane && primarySessionId && target && task.sessionId !== primarySessionId) { openSessionInPane(task.sessionId); return; }
+    selectSession(task.sessionId);
+  });
+  const openAssistantSettings = useMemoizedFn(() => { setSidebarOpen(false); openAppDialog('assistant'); });
+  const companionNav = useMemo<CompanionNav>(() => ({ openMain, openTask, goAdopt, openSettings: openAssistantSettings }), [openMain, openTask, goAdopt, openAssistantSettings]);
+  const companionView = !primarySession ? 'home' : primarySession.id === mainSessionId ? 'main' : 'session';
+
   if (webDenied) return <WebAccessDeniedPanel denied={webDenied}/>;
   /**
    * 工作区 / Agent / 会话三层共用的拖拽。scope 隔离层级：只有同一层的元素能互相落点，
@@ -666,10 +706,11 @@ export default function App() {
     // 侧边会话的父标题在这儿查好再传下去，卡片自己不去翻会话列表（它只是展示层）。
     // 父会话被归档或不在当前筛选里就查不到，卡片会降级成不带出处。
     const parent = session.sourceId ? sortedSessions.find(item => item.id === session.sourceId) : undefined;
-    return <SessionRow key={session.id} session={session} drag={drag} agent={agents.data?.find(item => item.id === session.agentId)} botName={larkConfig.data?.bots.find(bot => session.sourceId?.startsWith(`${bot.appId}:`))?.name} parentLabel={parent ? sessionLabel(parent, agents.data?.find(item => item.id === parent.agentId)?.name) : undefined} active={primarySessionId === session.id || tabs.some(tab => (tab.kind === 'session' || tab.kind === 'side-chat') && tab.sessionId === session.id)} onClick={() => selectSession(session.id)}/>;
+    const noteOf = mainSessionId && session.sourceId === mainSessionId && sideChatParentId(session) ? assistantState.data?.companion?.name ?? '小猫' : undefined;
+    return <SessionRow key={session.id} session={session} drag={drag} noteOf={noteOf} agent={agents.data?.find(item => item.id === session.agentId)} botName={larkConfig.data?.bots.find(bot => session.sourceId?.startsWith(`${bot.appId}:`))?.name} parentLabel={parent ? sessionLabel(parent, agents.data?.find(item => item.id === parent.agentId)?.name) : undefined} active={primarySessionId === session.id || tabs.some(tab => (tab.kind === 'session' || tab.kind === 'side-chat') && tab.sessionId === session.id)} onClick={() => selectSession(session.id)}/>;
   };
   // TooltipProvider 必须挂在根部：Radix 用它统一管理「同一时刻只显示一个提示」与交错延迟。
-  return <TooltipProvider><div ref={shellRef} className="ui-shell relative flex h-full overflow-hidden bg-canvas font-sans text-zinc-900">
+  return <TooltipProvider><CompanionNavProvider value={companionNav}><div ref={shellRef} className="ui-shell relative flex h-full overflow-hidden bg-canvas font-sans text-zinc-900">
     {sidebarOpen && <button type="button" aria-label="关闭会话列表" onClick={() => setSidebarOpen(false)} className="ui-overlay fixed inset-0 z-40 bg-zinc-950/20 md:hidden"/>}
     <aside style={{ ['--sb-w' as string]: `${clampedSidebarWidth}px` }} className={`ui-sidebar-safe fixed inset-y-0 left-0 z-50 flex shrink-0 flex-col overflow-hidden border-r border-zinc-200 bg-rail shadow-[12px_0_36px_rgba(24,24,27,.08)] transition-transform duration-300 ease-[cubic-bezier(.16,1,.3,1)] w-[286px] md:static md:z-20 md:translate-x-0 md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} ${sidebarCollapsed ? 'md:w-11' : 'md:w-[var(--sb-w)]'}`}>
       {!sidebarCollapsed && <div onPointerDown={event => { event.preventDefault(); resizeStart.current = { x: event.clientX, width: clampedSidebarWidth }; setResizingSidebar(true); }} title="拖拽调整宽度，拖到最窄可收起" className="absolute inset-y-0 right-0 z-20 hidden w-1.5 cursor-col-resize touch-none bg-transparent hover:bg-blue-400/30 md:block"/>}
@@ -682,7 +723,9 @@ export default function App() {
           <SessionFilterSelect compact value={sessionFilter} bots={larkConfig.data?.bots ?? []} agents={agents.data ?? []} onChange={setSessionFilter}/>
         </div>
       </div>
-      <div className="mt-4 flex min-w-[268px] items-center justify-between pl-3.5 pr-2">
+      {/* 小猫（主会话）常驻在会话列表上方：点它进主会话，右边的按钮划出便签。 */}
+      <div className="mt-3 min-w-[268px] px-2"><CompanionCard active={Boolean(mainSessionId) && primarySessionId === mainSessionId}/></div>
+      <div className="mt-3 flex min-w-[268px] items-center justify-between pl-3.5 pr-2">
         <span className="text-[12px] font-medium text-zinc-500">会话列表</span>
         <div className="flex items-center gap-1">
           {sidebarGroupingMode === 'project' && manualOrder && <button type="button" title="恢复默认排序（按最近对话时间）" onClick={() => setItemOrder(EMPTY_ITEM_ORDER)} className="grid h-6 w-6 place-items-center rounded text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700"><RotateCcw size={12}/></button>}
@@ -745,13 +788,14 @@ export default function App() {
             : <div className="px-3 py-6 text-xs leading-5 text-zinc-500">当前分类暂无会话。</div>}
       </div>
       {/* 两个入口都开弹窗：归档列表早先挂在会话树最底部，点了要滚到底才看得见，看起来像点不开。 */}
-      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
+      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onAssistant={openAssistantSettings} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
       </div>
       {/* 收起态细条（仅桌面）：展开 + 快捷新建 + 两个设置入口 */}
       <div className={`hidden h-full w-full flex-col items-center gap-1 py-3 ${sidebarCollapsed ? 'md:flex' : ''}`}>
         <HoverTooltip content="展开会话列表"><button type="button" onClick={() => setSidebarCollapsed(false)} aria-label="展开会话列表" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-600 hover:bg-white hover:text-zinc-900"><PanelLeftOpen size={16}/></button></HoverTooltip>
         <HoverTooltip content="新建对话"><button type="button" onClick={startNewConversation} aria-label="新建对话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-600 hover:bg-white hover:text-zinc-900"><Plus size={16}/></button></HoverTooltip>
         <HoverTooltip content="搜索会话（⌘K）"><button type="button" onClick={openSearch} aria-label="搜索会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-600 hover:bg-white hover:text-zinc-900"><Search size={16}/></button></HoverTooltip>
+        <CompanionStripButton/>
 
         <span className="mt-auto flex flex-col items-center gap-1">
           <HoverTooltip content="定时任务"><button type="button" onClick={() => openAppDialog('schedule')} aria-label="定时任务" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><AlarmClock size={15}/></button></HoverTooltip><HoverTooltip content="归档会话"><button type="button" onClick={() => openAppDialog('archived')} aria-label="归档会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Archive size={15}/></button></HoverTooltip>
@@ -780,14 +824,16 @@ export default function App() {
         {dragItem?.sessionId && !paneOpen && <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const dropped = dragItem?.sessionId; setDragItem(undefined); setDragOverItem(undefined); if (dropped) openSessionInPane(dropped); }} className="fixed inset-y-0 right-0 z-40 flex w-20 items-center justify-center border-l-2 border-dashed border-zinc-400 bg-zinc-900/5">
           <span className="text-[12px] font-medium text-zinc-600 [writing-mode:vertical-rl]">放到这里，在副屏打开</span>
         </div>}
-      </> : <div className="ui-page relative flex flex-1 justify-center overflow-y-auto px-4 sm:px-8"><span className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] md:hidden"><IconButton label="打开会话列表" onClick={() => setSidebarOpen(true)}><Menu size={17}/></IconButton></span><DraftComposer editorRef={draftTextareaRef} agents={agents.data ?? []} sessions={sessions.data ?? []} onCreated={session => selectSession(session.id)}/></div>}
+      </> : <div className="ui-page relative flex flex-1 justify-center overflow-y-auto px-4 sm:px-8"><span className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] md:hidden"><IconButton label="打开会话列表" onClick={() => setSidebarOpen(true)}><Menu size={17}/></IconButton></span><HomeStage editorRef={draftTextareaRef} agents={agents.data ?? []} sessions={sessions.data ?? []} onCreated={session => selectSession(session.id)}/></div>}
     </main>
     {paneMenuAnchor && <PaneTypeMenu anchor={paneMenuAnchor} shortcuts={shortcuts} onPick={openPaneKind} onClose={() => setPaneMenuAnchor(undefined)}/>}
     {actionError && <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2 text-[12px] text-red-700 shadow-[0_12px_32px_rgba(24,24,27,.12)]"><button type="button" onClick={() => setActionError(undefined)} className="mr-2 font-medium underline">关闭</button>{actionError}</div>}
     {/* 弹窗开关在 dialog-store 里：打开它们不会重渲染整棵会话树。 */}
     <DialogHost dialogs={{
       lark: <LarkConfigModal agents={agents.data ?? []} onClose={closeAppDialog}/>,
+      'lark-avatar': <LarkAvatarDialog onClose={closeAppDialog}/>,
       agent: <AgentConfigDialog onClose={closeAppDialog}/>,
+      assistant: <AssistantSettingsDialog onClose={closeAppDialog} onOpenMain={() => { closeAppDialog(); openMain(); }} onAdopt={() => { closeAppDialog(); goAdopt(); }}/>,
       schedule: sessionId => <ScheduleDialog {...(sessionId ? { session: sortedSessions.find(item => item.id === sessionId) } : {})} sessions={sortedSessions} onClose={closeAppDialog} onOpenSession={selectSession}/>,
       handover: sessionId => {
         const session = sessionId ? sortedSessions.find(item => item.id === sessionId) : undefined;
@@ -803,5 +849,6 @@ export default function App() {
       search: <SessionSearchDialog agents={agents.data ?? []} sessions={sessions.data ?? []} onClose={closeAppDialog} onOpen={session => { closeAppDialog(); selectSession(session.id); }}/>
     }}/>
     {agentPicker && <AgentPickerMenu cwd={agentPicker.cwd} top={agentPicker.top} left={agentPicker.left} agents={agents.data ?? []} creatingPair={creatingPair} onSelect={agentId => quickCreate.mutate({ agentId, cwd: agentPicker.cwd })} onClose={() => setAgentPicker(null)}/>}
-  </div></TooltipProvider>;
+    <CompanionLayer view={companionView}/>
+  </div></CompanionNavProvider></TooltipProvider>;
 }

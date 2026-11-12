@@ -2030,6 +2030,22 @@ describe('Lark trace rendering', () => {
     expect(JSON.stringify(elements)).toContain(description);
     expect(JSON.stringify(elements)).toContain("<font color='trace_running'>●</font>");
   });
+
+  it('上一轮起在后台的进程推送落在回答中间：卡片仍给完整回答，不多出一条执行中的调用', () => {
+    const carried = (sequence: number) => agentEvent(sequence, 'tool_call', { id: 'bg-server', name: 'tool call', status: 'in_progress', carriedOver: true });
+    const elements = renderLarkCardElements([
+      agentEvent(1, 'tool_call', { id: 'grep-1', name: 'Terminal', input: { command: 'rg noise' }, status: 'completed' }),
+      agentEvent(2, 'text', { text: '现在的情况：' }),
+      carried(3),
+      agentEvent(4, 'text', { text: '只做到了不触发，' }),
+      carried(5),
+      agentEvent(6, 'text', { text: '还没做噪声处理。' }),
+      carried(7)
+    ], config, true);
+    expect(elements.find(element => element.element_id === 'final_output')).toMatchObject({ content: '现在的情况：只做到了不触发，还没做噪声处理。' });
+    expect(elements.filter(element => String(element.element_id ?? '').startsWith('trace_group_'))).toHaveLength(1);
+    expect(JSON.stringify(elements)).not.toContain("<font color='trace_running'>●</font>");
+  });
 });
 
 describe('Lark turn event scoping', () => {
