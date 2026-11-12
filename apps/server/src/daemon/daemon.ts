@@ -21,6 +21,11 @@ import type { AccessUrl } from '../access-urls.js';
 export const DAEMON_ENV_FLAG = 'AGENTDOCK_DAEMONIZED';
 export const DAEMON_CWD_ENV = 'AGENTDOCK_DAEMON_CWD';
 export const DAEMON_STARTED_AT_ENV = 'AGENTDOCK_DAEMON_STARTED_AT';
+/**
+ * 当前进程属于哪个 daemon。daemon 拉起的所有子进程（Agent、终端、定时任务）
+ * 都继承它，CLI 因此不会再按 cwd 猜到一个恰好也在本机运行的沙箱实例。
+ */
+export const DAEMON_DIR_ENV = 'AGENTDOCK_DAEMON_DIR';
 
 export const PID_FILE = 'agentdock.pid';
 export const STATE_FILE = 'agentdock.state.json';
@@ -95,6 +100,8 @@ export function writeLastDaemonDir(dir: string, home = process.env.HOME ?? homed
  * 3. The current working directory's daemon directory on the very first run.
  */
 export function resolveDaemonDir(cwd = process.cwd(), home = process.env.HOME ?? homedir()): string {
+  const pinnedDir = process.env[DAEMON_DIR_ENV]?.trim();
+  if (pinnedDir && existsSync(pinnedDir)) return pinnedDir;
   const localDir = defaultDaemonDir(cwd);
   if (isDaemonRunning(localDir)) return localDir;
   const lastDir = readLastDaemonDir(home);
@@ -221,7 +228,8 @@ export interface DaemonizeResult {
  */
 export function daemonize(options: DaemonizeOptions = {}): DaemonizeResult {
   const cwd = options.cwd ?? process.cwd();
-  const logFile = daemonPaths(cwd ? join(cwd, '.agentdock', 'daemon') : defaultDaemonDir()).logFile;
+  const daemonDir = cwd ? join(cwd, '.agentdock', 'daemon') : defaultDaemonDir();
+  const logFile = daemonPaths(daemonDir).logFile;
   const startOffset = fileSizeOrZero(logFile);
   const fd = openLogFd(logFile);
 
@@ -235,7 +243,8 @@ export function daemonize(options: DaemonizeOptions = {}): DaemonizeResult {
       ...(options.env ?? process.env),
       [DAEMON_ENV_FLAG]: '1',
       [DAEMON_CWD_ENV]: cwd,
-      [DAEMON_STARTED_AT_ENV]: options.startedAt ?? new Date().toISOString()
+      [DAEMON_STARTED_AT_ENV]: options.startedAt ?? new Date().toISOString(),
+      [DAEMON_DIR_ENV]: daemonDir
     }
   });
   child.unref();

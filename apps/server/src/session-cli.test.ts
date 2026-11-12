@@ -33,7 +33,9 @@ describe('database resolution', () => {
   it('follows the database the daemon recorded, so --database daemons (dev sandbox) are found', () => {
     const root = mkdtempSync(join(tmpdir(), 'agentdock-db-resolve-'));
     const saved = process.env.AGENTDOCK_DATABASE_URL;
+    const savedDaemonDir = process.env.AGENTDOCK_DAEMON_DIR;
     delete process.env.AGENTDOCK_DATABASE_URL;
+    delete process.env.AGENTDOCK_DAEMON_DIR;
     try {
       const daemonDir = join(root, '.agentdock', 'daemon');
       writeState(daemonDir, { pid: process.pid, ready: true, startedAt: now, cwd: root, database: '/elsewhere/sandbox.db' });
@@ -44,6 +46,7 @@ describe('database resolution', () => {
       expect(resolveDatabasePath('custom.db', root)).toBe(join(root, 'custom.db'));
     } finally {
       if (saved === undefined) delete process.env.AGENTDOCK_DATABASE_URL; else process.env.AGENTDOCK_DATABASE_URL = saved;
+      if (savedDaemonDir === undefined) delete process.env.AGENTDOCK_DAEMON_DIR; else process.env.AGENTDOCK_DAEMON_DIR = savedDaemonDir;
       rmSync(root, { recursive: true, force: true });
     }
   });

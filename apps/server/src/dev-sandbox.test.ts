@@ -54,10 +54,11 @@ describe('dev sandbox', () => {
 
   it('drops the daemon markers inherited from the live daemon so the sandbox daemonizes itself', () => {
     const sandbox = sandboxPaths('/repo', 4399);
-    const env = sandboxEnv(sandbox, { HOME: '/home/u', AGENTDOCK_DAEMONIZED: '1', AGENTDOCK_DAEMON_CWD: '/home/u', AGENTDOCK_DAEMON_STARTED_AT: '2026-11-11T01:49:30.735Z' });
+    const env = sandboxEnv(sandbox, { HOME: '/home/u', AGENTDOCK_DAEMONIZED: '1', AGENTDOCK_DAEMON_CWD: '/home/u', AGENTDOCK_DAEMON_STARTED_AT: '2026-11-11T01:49:30.735Z', AGENTDOCK_DAEMON_DIR: '/home/u/.agentdock/daemon' });
     expect(env).not.toHaveProperty('AGENTDOCK_DAEMONIZED');
     expect(env).not.toHaveProperty('AGENTDOCK_DAEMON_CWD');
     expect(env).not.toHaveProperty('AGENTDOCK_DAEMON_STARTED_AT');
+    expect(env).not.toHaveProperty('AGENTDOCK_DAEMON_DIR');
   });
 
   it('starts from the repo build with its own database and port, runs commands there, and cleans up', async () => {

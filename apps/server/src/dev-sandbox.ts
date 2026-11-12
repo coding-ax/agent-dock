@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { createServer } from 'node:net';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DAEMON_CWD_ENV, DAEMON_ENV_FLAG, DAEMON_STARTED_AT_ENV } from './daemon/daemon.js';
+import { DAEMON_CWD_ENV, DAEMON_DIR_ENV, DAEMON_ENV_FLAG, DAEMON_STARTED_AT_ENV } from './daemon/daemon.js';
 
 /**
  * `agent-dock dev`：用当前源码的构建产物起一个完全隔离的 daemon，给「Agent 迭代 AgentDock 自己」做验证。
@@ -62,7 +62,7 @@ export function sandboxEnv(sandbox: DevSandbox, base: NodeJS.ProcessEnv = proces
   for (const key of ['agentdock_session_id', 'agentdock_group_tools_url', 'agentdock_group_tools_token']) delete env[key];
   // Agent 跑在正式 daemon 的子进程树里，会继承它的 daemon 标记；带进去后沙箱的 `daemon start` 会把自己当成 daemon 本体，
   // 直接在前台起服务（dev up 卡住、日志写不出来）。
-  for (const key of [DAEMON_ENV_FLAG, DAEMON_CWD_ENV, DAEMON_STARTED_AT_ENV]) delete env[key];
+  for (const key of [DAEMON_ENV_FLAG, DAEMON_CWD_ENV, DAEMON_STARTED_AT_ENV, DAEMON_DIR_ENV]) delete env[key];
   // 不覆盖 CLAUDE_CONFIG_DIR / CODEX_HOME：macOS 上 Claude 的登录态在钥匙串里，临时 HOME 下仍能取到；
   // 显式改 CLAUDE_CONFIG_DIR 会让它换一个钥匙串条目去查。
   return env;

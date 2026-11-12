@@ -22,6 +22,8 @@ describe('AgentDock daemon session', () => {
     tmp = mkdtempSync(join(tmpdir(), 'agentdock-daemon-'));
     cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tmp);
     vi.stubEnv('HOME', tmp);
+    // 测试进程本身可能跑在 AgentDock 终端里，不能被继承的固定 daemon 目录带偏。
+    vi.stubEnv('AGENTDOCK_DAEMON_DIR', '');
   });
 
   afterEach(() => {
@@ -93,6 +95,17 @@ describe('AgentDock daemon session', () => {
     const { writeLastDaemonDir, resolveDaemonDir } = await import('./daemon.js');
     writeLastDaemonDir(join(tmp, 'deleted-root', '.agentdock', 'daemon'), tmp);
     expect(resolveDaemonDir(otherCwd, tmp)).toBe(defaultDaemonDir(otherCwd));
+  });
+
+  it('uses the daemon pinned by the parent process instead of a live daemon under cwd', async () => {
+    // 正式 daemon 的 Agent 可能把仓库当 cwd，而仓库里恰好跑着 dev 沙箱。
+    const repo = join(tmp, 'repo');
+    const pinned = join(tmp, 'home', '.agentdock', 'daemon');
+    mkdirSync(defaultDaemonDir(repo), { recursive: true });
+    mkdirSync(pinned, { recursive: true });
+    const { resolveDaemonDir } = await import('./daemon.js');
+    vi.stubEnv('AGENTDOCK_DAEMON_DIR', pinned);
+    expect(resolveDaemonDir(repo, tmp)).toBe(pinned);
   });
 
   it('daemonStatus reports an alive daemon using a real child process', async () => {
