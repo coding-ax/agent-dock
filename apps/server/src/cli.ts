@@ -9,6 +9,7 @@ import { createCliProgram, environmentFromCli, type CliOptions } from './cli-pro
 import { packagedNativeFallback } from './native-compat.js';
 import { startLocalServer } from './service.js';
 import { runLarkSend, runLarkUpdate } from './lark/cli.js';
+import { runLarkMessageListen, runLarkMessageRead, runLarkMessageSend } from './lark/message-cli.js';
 import { acpxPassThroughArgs, runAcpx } from './acpx.js';
 import { AgentGroupToolCliError, runGroupBots, runGroupMembers, runGroupMessage, runGroupMessages, runGroupPeers, runGroupReplyMode, runGroupSelf, runGroupSend, runGroupWait } from './lark/agent-tools-cli.js';
 import { agentDockGroupToolsCommand } from './lark/agent-tools.js';
@@ -163,6 +164,9 @@ async function main() {
     },
     larkSend: async (markdown, options) => { output(await runLarkSend(markdown, options)); },
     larkUpdate: async (markdown, options) => { output(await runLarkUpdate(markdown, options)); },
+    larkMessageSend: async (text, options) => { process.stdout.write(await runLarkMessageSend(text, options)); },
+    larkMessageRead: async options => { process.stdout.write(await runLarkMessageRead(options)); },
+    larkMessageListen: async options => { await runLarkMessageListen(options); },
     groupSelf: async () => { output(await runGroupSelf()); },
     groupPeers: async () => { output(await runGroupPeers()); },
     groupMembers: async () => { output(await runGroupMembers()); },

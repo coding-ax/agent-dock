@@ -295,6 +295,36 @@ agent-dock lark update '**所有检查均已通过。**' \
 
 **按钮语义**：默认 `running` 显示「中断」，`failed` / `interrupted` 显示「重试」，`completed` 不显示按钮。传 `--read-only`（HTTP 里是 `readOnly: true`）后任何状态都不渲染按钮——如果调用平台自己有任务继续 / 排队 / 重试语义，终态卡片应该用只读模式，避免出现跨系统的重复控制入口。
 
+### 通用飞书消息命令
+
+`agent-dock lark send/update` 只负责 AgentDock 卡片。普通飞书 IM 消息使用独立的 `agent-dock lark message` 命名空间，直接以 AgentDock 里已配置的机器人身份调用飞书 OpenAPI，**不需要启动 AgentDock 服务，也不会创建或唤醒 AgentDock 会话**。
+
+机器人按以下顺序选择：`--app <appId>` 精确选择；`--bot <名称或 appId>` 按名称选择；都不传时使用第一条已保存的机器人配置；没有保存配置时回退到 `LARK_APP_ID` / `LARK_APP_SECRET`。错误信息会列出可选机器人，不会输出 app secret。
+
+```bash
+# 文本消息；正文也可以从 stdin 传入
+agent-dock lark message send --chat oc_xxx --text "构建完成"
+echo "部署完成" | agent-dock lark message send --chat oc_xxx --json
+
+# 富文本 post（空行分段）
+agent-dock lark message send --chat oc_xxx --format post $'第一段\n\n第二段'
+
+# 选择另一个已配置机器人
+agent-dock lark message send --chat oc_xxx --bot "告警机器人" --text "磁盘使用率 90%"
+
+# 读取最近消息（默认最新在前，--before 支持 ISO 时间或 Unix 时间戳）
+agent-dock lark message read --chat oc_xxx --limit 20
+agent-dock lark message read --chat oc_xxx --before 2026-11-12T10:00:00Z --json
+agent-dock lark message read --chat oc_xxx --page-token <token> --json
+
+# 长连接监听，stdout 每行一个 JSON 事件
+agent-dock lark message listen --chat oc_xxx
+agent-dock lark message listen --bot "告警机器人" --once
+agent-dock lark message listen --chat oc_xxx --timeout 30 --json
+```
+
+`listen` 只输出消息事件，不自动创建会话、不触发回复；连接与断线重连由现有飞书长连接监听器负责。`SIGINT` / `SIGTERM` 会关闭 WebSocket 并移除信号处理器，`--once` 在第一条匹配消息后退出，`--timeout <秒>` 到时优雅退出。
+
 ### 环境变量
 
 | 变量 | 是否必需 | 用途 |

@@ -41,6 +41,7 @@ export interface LarkMessageEvent {
   messageId: string;
   chatId: string;
   chatType: string;
+  createTime?: string;
   rootId?: string;
   parentId?: string;
   threadId?: string;
@@ -2069,7 +2070,16 @@ export interface LarkLongConnectionListenerOptions {
   configRepository?: ConfigRepository;
   env?: NodeJS.ProcessEnv;
   fetcher?: typeof globalThis.fetch;
+  /** 覆盖飞书 OpenAPI 域名（Lark 国际版或私有网关）。 */
+  baseUrl?: string;
   peerBotAuthorized?: (appId: string, chatId: string, senderOpenId: string) => Promise<boolean>;
+  /** SDK 内部日志出口；CLI 监听时转到 stderr，避免污染 stdout 的 JSONL 事件流。 */
+  sdkLogger?: Record<'error' | 'warn' | 'info' | 'debug' | 'trace', (...args: unknown[]) => void>;
+  /**
+   * 收到原始飞书消息事件后的旁路回调。CLI 的 `lark message listen` 用它在不创建
+   * AgentDock 会话的前提下消费消息；coordinator 仍按原逻辑处理，回调不影响其行为。
+   */
+  onMessage?: (event: LarkMessageEvent, config: StoredLarkConfig) => void | Promise<void>;
   /**
    * 监听在后台耗尽重连次数（或遇到不可恢复错误）后回调。
    * 注意：正常 stop() 不触发。由上层（pool）决定是否冷却后重建，listener 自身不自愈。
@@ -2106,7 +2116,11 @@ export class LarkLongConnectionListener implements LarkListener {
     }
     this.stop();
 
-    const service = createLarkCardService(this.options.env ?? process.env, this.options.fetcher ?? globalThis.fetch, { appId: config.appId, appSecret: config.appSecret });
+    const service = createLarkCardService(this.options.env ?? process.env, this.options.fetcher ?? globalThis.fetch, {
+      appId: config.appId,
+      appSecret: config.appSecret,
+      ...(this.options.baseUrl ? { baseUrl: this.options.baseUrl } : {})
+    });
     let botOpenId: string;
     try { botOpenId = await service.getBotOpenId(); }
     catch (error) { throw new LarkServiceError('LARK_LISTENER_START_FAILED', `Failed to resolve Lark bot identity: ${error instanceof Error ? error.message : String(error)}`, 502); }
@@ -2122,16 +2136,20 @@ export class LarkLongConnectionListener implements LarkListener {
     ) : undefined;
     try { await coordinator?.startReconciliation(config); }
     catch (error) { this.log.warn({ error, appId: config.appId }, '飞书卡片终态对账启动失败，继续建立消息监听'); }
-    const dispatcher = new EventDispatcher({ loggerLevel: LoggerLevel.warn }).register({
+    const dispatcher = new EventDispatcher({
+      loggerLevel: LoggerLevel.warn,
+      ...(this.options.sdkLogger ? { logger: this.options.sdkLogger } : {})
+    }).register({
       'im.message.receive_v1': event => {
         const message = event.message;
         // mentions 原样打出：@ 相关问题（唤不醒、通知丢失）的第一现场就是这里的原始结构。
         // 注意 at 的 user_id 若为空或填了 app_id，飞书不会生成 mentions 条目（消息仍显示蓝字）。
         this.log.info({ messageId: message.message_id, chatId: message.chat_id, chatType: message.chat_type, senderType: event.sender?.sender_type, mentions: message.mentions ?? [] }, '收到飞书消息事件');
-        coordinator?.handle({
+        const messageEvent: LarkMessageEvent = {
           messageId: message.message_id,
           chatId: message.chat_id,
           chatType: message.chat_type,
+          ...(event.create_time ?? message.create_time ? { createTime: String(event.create_time ?? message.create_time) } : {}),
           ...(message.root_id ? { rootId: message.root_id } : {}),
           ...(message.parent_id ? { parentId: message.parent_id } : {}),
           ...(message.thread_id ? { threadId: message.thread_id } : {}),
@@ -2151,7 +2169,14 @@ export class LarkLongConnectionListener implements LarkListener {
               ...(mention.mentioned_type ? { mentionedType: mention.mentioned_type } : {})
             };
           })
-        }, this.config ?? config).catch(error => {
+        };
+        const handlerConfig = this.config ?? config;
+        if (this.options.onMessage) {
+          void Promise.resolve(this.options.onMessage(messageEvent, handlerConfig)).catch(error => {
+            this.log.error({ error, messageId: message.message_id, chatId: message.chat_id }, '处理飞书消息旁路回调失败');
+          });
+        }
+        coordinator?.handle(messageEvent, handlerConfig).catch(error => {
           this.log.error({ error, messageId: message.message_id, chatId: message.chat_id }, '处理飞书消息事件失败');
         });
       },
@@ -2166,6 +2191,7 @@ export class LarkLongConnectionListener implements LarkListener {
       appId: config.appId,
       appSecret: config.appSecret,
       loggerLevel: LoggerLevel.warn,
+      ...(this.options.sdkLogger ? { logger: this.options.sdkLogger } : {}),
       autoReconnect: true,
       // 握手超时：避免 TCP 已建立但 WebSocket 升级无响应时，重连循环的 connect() 永远挂起。
       handshakeTimeoutMs: 15_000,

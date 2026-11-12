@@ -9,6 +9,9 @@ import type {
   SettingsCliOptions, TaskReportCliOptions, TaskReviewCliOptions, TaskStartCliOptions,
   WatchAddCliOptions
 } from './assistant/cli.js';
+import type {
+  LarkMessageListenCliOptions, LarkMessageReadCliOptions, LarkMessageSendCliOptions
+} from './lark/message-cli.js';
 
 export interface CliOptions {
   host?: string;
@@ -88,6 +91,9 @@ export interface CliHandlers {
   autostart?(action: 'enable' | 'disable' | 'status', options: { json?: boolean }): void | Promise<void>;
   larkSend?(markdown: string | undefined, options: LarkCliOptions): void | Promise<void>;
   larkUpdate?(markdown: string | undefined, options: LarkCliOptions): void | Promise<void>;
+  larkMessageSend?(text: string | undefined, options: LarkMessageSendCliOptions): void | Promise<void>;
+  larkMessageRead?(options: LarkMessageReadCliOptions): void | Promise<void>;
+  larkMessageListen?(options: LarkMessageListenCliOptions): void | Promise<void>;
   groupSelf?(): void | Promise<void>;
   groupPeers?(): void | Promise<void>;
   groupMembers?(): void | Promise<void>;
@@ -207,7 +213,7 @@ export function createCliProgram(version: string, handlers: CliHandlers = {}) {
 
   program.action(options => handlers.serve?.(options));
 
-  const lark = program.command('lark').description('Send and update AgentDock Lark cards');
+  const lark = program.command('lark').description('Send AgentDock cards, or send/read/listen to Lark messages');
   addCardOptions(lark.command('send')
     .description('Send a new AgentDock card')
     .argument('[markdown]', 'Final Markdown or fallback card content')
@@ -220,6 +226,63 @@ export function createCliProgram(version: string, handlers: CliHandlers = {}) {
     .argument('[markdown]', 'Final Markdown or fallback card content')
     .requiredOption('--message-id <id>', 'Lark card message ID to update'))
     .action((markdown, options) => handlers.larkUpdate?.(markdown, options));
+
+  const larkMessage = lark.command('message')
+    .description('Generic Lark IM messages using a configured bot (does not create AgentDock sessions)');
+  larkMessage.command('send')
+    .description('Send a text or post message as a configured bot')
+    .argument('[text]', 'Message text; omit to read from stdin')
+    .option('--chat <chatId>', 'Group chat ID (oc_xxx); defaults to LARK_CHAT_ID')
+    .option('--text <text>', 'Message text (alternative to the positional argument)')
+    .option('--format <format>', 'Message format: text or post', 'text')
+    .option('--idempotency-key <key>', 'Stable retry key (up to 50 characters)')
+    .option('--app <appId>', 'Select a saved bot by app ID')
+    .option('--bot <name>', 'Select a saved bot by name or app ID')
+    .option('--base-url <url>', 'Lark OpenAPI base URL; defaults to LARK_OPEN_API_BASE_URL')
+    .option('--json', 'Print one JSON object')
+    .action((text, options) => handlers.larkMessageSend?.(text, options))
+    .addHelpText('after', `
+Examples:
+  $ agent-dock lark message send --chat oc_xxx --text "构建完成"
+  $ echo "部署完成" | agent-dock lark message send --chat oc_xxx
+  $ agent-dock lark message send --chat oc_xxx --bot "发布机器人" --format post "第一段\\n\\n第二段"
+  $ agent-dock lark message send --chat oc_xxx --text "hi" --json`);
+  larkMessage.command('read')
+    .description('Read recent messages from a group chat (newest first)')
+    .option('--chat <chatId>', 'Group chat ID (oc_xxx); defaults to LARK_CHAT_ID')
+    .option('--limit <count>', 'Maximum messages to return (1-200)', '20')
+    .option('--before <time>', 'Only messages before this time (ISO 8601 or Unix timestamp)')
+    .option('--page-token <token>', 'Continue from a page token returned by a previous read')
+    .option('--app <appId>', 'Select a saved bot by app ID')
+    .option('--bot <name>', 'Select a saved bot by name or app ID')
+    .option('--base-url <url>', 'Lark OpenAPI base URL; defaults to LARK_OPEN_API_BASE_URL')
+    .option('--json', 'Print one JSON object with full message metadata')
+    .action(options => handlers.larkMessageRead?.(options))
+    .addHelpText('after', `
+Examples:
+  $ agent-dock lark message read --chat oc_xxx --limit 10
+  $ agent-dock lark message read --chat oc_xxx --before 2026-11-12T10:00:00Z --json
+  $ agent-dock lark message read --chat oc_xxx --page-token <token> --json`);
+  larkMessage.command('listen')
+    .description('Stream new group messages as JSONL until interrupted')
+    .option('--chat <chatId>', 'Only emit messages from this group chat (oc_xxx)')
+    .option('--app <appId>', 'Select a saved bot by app ID')
+    .option('--bot <name>', 'Select a saved bot by name or app ID')
+    .option('--timeout <seconds>', 'Exit gracefully after this many seconds')
+    .option('--once', 'Exit after the first matching message')
+    .option('--json', 'Explicitly request JSONL events (the default)')
+    .option('--base-url <url>', 'Lark OpenAPI base URL; defaults to LARK_OPEN_API_BASE_URL')
+    .action(options => handlers.larkMessageListen?.(options))
+    .addHelpText('after', `
+Each line on stdout is one JSON event, for example:
+  {"type":"message","appId":"cli_xxx","bot":"发布机器人","message":{"messageId":"om_xxx","chatId":"oc_xxx","text":"hi",...}}
+
+Use --chat to filter, --once for a single message, and SIGINT/SIGTERM to stop. Reconnects are handled by the Lark SDK.
+
+Examples:
+  $ agent-dock lark message listen --chat oc_xxx
+  $ agent-dock lark message listen --bot "发布机器人" --once
+  $ agent-dock lark message listen --chat oc_xxx --timeout 30 --json`);
 
   const group = program.command('group').description('Collaborate with Agents in the current Lark group');
   group.command('self')
@@ -643,6 +706,9 @@ Examples:
   $ agent-dock acpx agents list --json
   $ agent-dock lark send "**任务已完成**"
   $ agent-dock lark update "**最新结果**" --message-id om_xxx
+  $ agent-dock lark message send --chat oc_xxx --text "构建完成"
+  $ agent-dock lark message read --chat oc_xxx --limit 20
+  $ agent-dock lark message listen --chat oc_xxx
   $ agent-dock group peers
   $ agent-dock group members
   $ agent-dock group send "请检查接口" --to cli_peer

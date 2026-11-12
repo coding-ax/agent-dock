@@ -76,6 +76,25 @@ describe('AgentDock CLI', () => {
     expect(larkSend).toHaveBeenCalledWith('group update', expect.objectContaining({ chatId: 'oc_group' }));
   });
 
+  it('parses generic Lark message send/read/listen without changing card commands', async () => {
+    const larkSend = vi.fn(); const larkMessageSend = vi.fn(); const larkMessageRead = vi.fn(); const larkMessageListen = vi.fn();
+    const program = createCliProgram('0.0.6', { larkSend, larkMessageSend, larkMessageRead, larkMessageListen });
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'send', 'card body', '--chat-id', 'oc_card']);
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'message', 'send', 'hello', '--chat', 'oc_1', '--bot', '发布机器人', '--format', 'post', '--json']);
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'message', 'read', '--chat', 'oc_1', '--limit', '8', '--before', '1700000000', '--page-token', 'pt_1', '--app', 'cli_a', '--json']);
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'message', 'listen', '--chat', 'oc_1', '--timeout', '30', '--once', '--json']);
+    expect(larkSend).toHaveBeenCalledWith('card body', expect.objectContaining({ chatId: 'oc_card' }));
+    expect(larkMessageSend).toHaveBeenCalledWith('hello', expect.objectContaining({ chat: 'oc_1', bot: '发布机器人', format: 'post', json: true }));
+    expect(larkMessageRead).toHaveBeenCalledWith(expect.objectContaining({ chat: 'oc_1', limit: '8', before: '1700000000', pageToken: 'pt_1', app: 'cli_a', json: true }));
+    expect(larkMessageListen).toHaveBeenCalledWith(expect.objectContaining({ chat: 'oc_1', timeout: '30', once: true, json: true }));
+  });
+
+  it('parses --text as an alternative to the positional message body', async () => {
+    const larkMessageSend = vi.fn();
+    await createCliProgram('0.0.6', { larkMessageSend }).parseAsync(['node', 'agent-dock', 'lark', 'message', 'send', '--chat', 'oc_1', '--text', 'from flag']);
+    expect(larkMessageSend).toHaveBeenCalledWith(undefined, expect.objectContaining({ chat: 'oc_1', text: 'from flag' }));
+  });
+
   it('parses Agent group discovery, incremental reads, sends, and waits', async () => {
     const groupPeers = vi.fn(); const groupMembers = vi.fn(); const groupMessages = vi.fn(); const groupSend = vi.fn(); const groupWait = vi.fn();
     await createCliProgram('0.0.6', { groupPeers }).parseAsync(['node', 'agent-dock', 'group', 'peers']);
