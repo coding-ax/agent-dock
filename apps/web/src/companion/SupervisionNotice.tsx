@@ -1,6 +1,7 @@
 import { useMemo, useState, type CSSProperties } from 'react';
-import { ChevronDown, ClipboardList } from 'lucide-react';
+import { Bot, ChevronDown, ClipboardList } from 'lucide-react';
 import { noteTilt, noteTone, parseSupervisionDetail, supervisionKindTone } from './companion-model';
+import { supervisionSystemRoundCopy } from './supervision-notice-copy';
 import { useCompanion } from './useCompanion';
 import { useCompanionStore } from './companion-store';
 
@@ -12,11 +13,22 @@ const kindLabel: Record<string, string> = { review: '待验收', needs_you: '需
  */
 export function SupervisionNotice({ text, detail, timestamp }: { text?: string; detail: string; timestamp?: string }) {
   const items = useMemo(() => parseSupervisionDetail(detail), [detail]);
+  const system = supervisionSystemRoundCopy();
   const { tasks } = useCompanion();
   const [open, setOpen] = useState(false);
   const time = timestamp ? new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
   return <div className="ui-timeline-item ui-supervision">
-    <div className="flex items-center gap-2 text-[12.5px] text-zinc-600">
+    <div className="ui-supervision-system" role="note" aria-label={`${system.title}（${system.badge}）`}>
+      <span className="ui-supervision-system-icon"><Bot size={15}/></span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="min-w-0 break-words text-[13px] font-semibold leading-5 text-zinc-800">{system.title}</span>
+          <span className="ui-supervision-system-badge">{system.badge}</span>
+        </div>
+        <p className="mt-0.5 text-[11.5px] leading-4 text-zinc-500">{system.description}</p>
+      </div>
+    </div>
+    <div className="mt-3 flex items-center gap-2 text-[12.5px] text-zinc-600">
       <ClipboardList size={14} className="shrink-0 text-zinc-500"/>
       <span className="font-semibold text-zinc-700">督办</span>
       <span className="min-w-0 truncate">{items.length ? `${items.length} 条新动静，小猫正在处理` : (text ?? '').replace(/^📋\s*/, '')}</span>

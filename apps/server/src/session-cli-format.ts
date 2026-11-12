@@ -41,7 +41,8 @@ export function writeTranscript(events: Iterable<AgentEvent>, write: (chunk: str
     const data = (event.data ?? {}) as Record<string, unknown>;
     if (event.type === 'text') {
       const text = typeof data.text === 'string' ? data.text : '';
-      const speaker = data.role === 'user' ? '用户' : '助手';
+      // 督办锚点底层也是 role=user，但它不是用户说的话：显式标成 daemon 自动开的轮次。
+      const speaker = data.origin === 'injected' ? '系统 · 自动轮次' : data.role === 'user' ? '用户' : '助手';
       if (!pending || pending.speaker !== speaker) { flush(); pending = { speaker, parts: [] }; }
       pending.parts.push(text);
     } else {
@@ -83,7 +84,9 @@ export function formatSessionList(sessions: SessionSummary[]): string {
 }
 
 export function sessionHeader(session: Session, tasks: TaskRecord[]): string {
-  const taskLines = tasks.map(task => `- 任务 ${task.id} [${task.status}] ${task.prompt.replaceAll('\n', ' ').slice(0, 200)}`);
+  const taskLines = tasks.map(task =>
+    `- 任务 ${task.id} [${task.status}]${task.origin === 'injected' ? ' [系统注入]' : ''} ${task.prompt.replaceAll('\n', ' ').slice(0, 200)}`
+  );
   return [
     `会话：${session.id}`,
     `Agent：${session.agentId}${session.model ? `（模型 ${session.model}）` : ''}`,

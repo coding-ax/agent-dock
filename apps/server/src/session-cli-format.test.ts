@@ -21,6 +21,16 @@ describe('session-cli transcript formatting', () => {
     expect(text).toContain('### 助手\nhi there');
   });
 
+  it('labels injected supervision turns as a system round, not a user message', () => {
+    const text = formatTranscript([
+      event({ sequence: 1, type: 'text', data: { text: '📋 督办 · 1 个事项有变化', role: 'user', origin: 'injected' } }),
+      event({ sequence: 2, type: 'text', data: { text: '我先看下事项状态。', role: 'assistant' } })
+    ]);
+    expect(text).toContain('### 系统 · 自动轮次\n📋 督办 · 1 个事项有变化');
+    expect(text).toContain('### 助手\n我先看下事项状态。');
+    expect(text).not.toContain('### 用户');
+  });
+
   it('omits token-level thinking noise but keeps tool/status one-liners and errors', () => {
     const text = formatTranscript([
       event({ sequence: 1, type: 'thinking', data: { text: 'x'.repeat(1000) } }),
@@ -92,10 +102,15 @@ describe('session-cli transcript formatting', () => {
   it('renders a session header with model and tasks', () => {
     const header = sessionHeader(
       { id: 'ses_1', agentId: 'claude', state: 'completed', cwd: '/tmp/a', model: 'opus', runId: 'run_1', createdAt: '2026-09-17T00:00:00Z', updatedAt: '2026-09-17T00:01:00Z' },
-      [{ id: 'task_1', sessionId: 'ses_1', prompt: 'fix the bug', status: 'completed', createdAt: '', updatedAt: '' }]
+      [
+        { id: 'task_1', sessionId: 'ses_1', prompt: 'fix the bug', status: 'completed', createdAt: '', updatedAt: '' },
+        { id: 'task_2', sessionId: 'ses_1', prompt: '📋 督办 · 1 个事项有变化', status: 'completed', origin: 'injected', createdAt: '', updatedAt: '' }
+      ]
     );
     expect(header).toContain('会话：ses_1');
     expect(header).toContain('模型 opus');
     expect(header).toContain('- 任务 task_1 [completed] fix the bug');
+    expect(header).toContain('- 任务 task_2 [completed] [系统注入] 📋 督办 · 1 个事项有变化');
+    expect(header).not.toContain('- 任务 task_1 [completed] [系统注入]');
   });
 });
