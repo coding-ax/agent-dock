@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bot, ExternalLink, Search, Users, X } from 'lucide-react';
 import { Input } from 'antd';
 import { cleanChatName } from '@agent-dock/agent-dock-shared';
-import { api, type Agent, type Session } from './api';
+import { api, type Agent, type HandoverBotProfile, type Session } from './api';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { parseLarkSourceId } from './lark-session-link';
@@ -23,13 +23,18 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
   useModalFocusTrap({ panel: panelRef, initial: panelRef, dismissible: true, onDismiss: onClose });
   const config = useQuery({ queryKey: ['lark-config'], queryFn: api.larkConfig });
   const bots = config.data?.bots ?? [];
+  // 主会话托管：后端用 assistant_lineage 判断这个会话是不是当前小猫，并带回头像/名字。
+  const handoverQuery = useQuery({ queryKey: ['session-handover', session.id], queryFn: () => api.sessionHandover(session.id), staleTime: 30_000 });
+  const kitten = handoverQuery.data?.kitten ?? undefined;
   const [appId, setAppId] = useState('');
   // 默认群名来自会话标题，必须先清洗：附件首发的会话标题就是一条本地路径，直接拿去建群
-  // 会出现一个叫 `/Users/xxx/a.png` 的飞书群。洗空了再退回 Agent 名。
-  const [name, setName] = useState(`${cleanChatName(session.title) || agent?.name || session.agentId} · AgentDock`);
+  // 会出现一个叫 `/Users/xxx/a.png` 的飞书群。主会话则用当前小猫的名字。
+  const [name, setName] = useState<string>();
+  const defaultName = kitten ? `${kitten.name} · AgentDock` : `${cleanChatName(session.title) || agent?.name || session.agentId} · AgentDock`;
+  const nameValue = name ?? defaultName;
   const [manual, setManual] = useState('');
   const [keyword, setKeyword] = useState('');
-  const [created, setCreated] = useState<{ chatId: string; name: string; url: string }>();
+  const [created, setCreated] = useState<{ chatId: string; name: string; url: string; botProfile?: HandoverBotProfile | null }>();
   const [selfOpenId, setSelfOpenId] = useLocalStorageState<string>('agentdock:handover-self-openid', { defaultValue: '' });
   const [picked, setPicked] = useState<string[] | null>(null);
   const [searched, setSearched] = useState<{ openId: string; name: string }[]>([]);
@@ -100,7 +105,7 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
   const handover = useMutation({
     mutationFn: () => api.handoverSession(session.id, {
       appId: effectiveAppId,
-      name,
+      name: nameValue,
       memberOpenIds
     }),
     onSuccess: result => {
@@ -122,6 +127,13 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <DeferredMount placeholder={<DeferredSkeleton/>}>
+        {kitten && <div data-testid="handover-kitten" className="mb-3 flex items-center gap-2.5 rounded-lg border border-amber-100 bg-amber-50/60 px-2.5 py-2">
+          <img src={kitten.avatarUrl} alt={`${kitten.name}的头像`} className="h-9 w-9 shrink-0 rounded-full object-cover"/>
+          <div className="min-w-0 text-[12px] leading-4">
+            <div className="font-medium text-zinc-800">当前小猫：{kitten.name} · 第 {kitten.generation} 代</div>
+            <div className="text-zinc-500">建群后会尝试把飞书机器人名称和头像同步成这只小猫；不支持时会提示你手动处理。</div>
+          </div>
+        </div>}
         {config.isLoading && <div className="flex items-center gap-2 text-[12px] text-zinc-400"><Spinner size={13}/>正在读取机器人配置…</div>}
         {!config.isLoading && !bots.length && <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-800">还没有配置任何飞书机器人。先到「飞书设置」添加一个，再回来托管。</div>}
 
@@ -132,7 +144,7 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
           </div>
 
           <label className="mt-4 block text-[12px] font-medium text-zinc-700">群名称</label>
-          <Input size="large" value={name} onChange={event => setName(event.target.value)} className="mt-1.5 text-[13px]"/>
+          <Input size="large" value={nameValue} onChange={event => setName(event.target.value)} className="mt-1.5 text-[13px]"/>
 
           <div className="mt-4 flex items-center gap-1.5 text-[12px] font-medium text-zinc-700"><Users size={12}/>邀请成员<span className="font-normal text-zinc-400">（点成员胶囊勾选，可全部取消）</span></div>
           <div className="mt-1.5 flex items-center gap-1.5">
@@ -160,13 +172,14 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
         {created && <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[12px] leading-5 text-emerald-800">
           已建群并绑定：<span className="font-medium">{created.name}</span>
           <a href={created.url} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-1 font-medium text-emerald-700 underline"><ExternalLink size={11}/>打开群聊</a>
+          {created.botProfile && <p className={`mt-1.5 border-t pt-1.5 ${created.botProfile.ok ? 'border-emerald-200 text-emerald-700' : 'border-amber-200 text-amber-800'}`}>{created.botProfile.message}</p>}
         </div>}
         </DeferredMount>
       </div>
 
       <div className="flex shrink-0 items-center justify-end gap-2 border-t border-zinc-100 px-4 py-3">
         <button type="button" onClick={onClose} className="rounded-lg border border-zinc-300 px-3.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50">{created ? '完成' : '取消'}</button>
-        {!created && <button type="button" disabled={!effectiveAppId || !name.trim() || !manualValid || handover.isPending} onClick={() => handover.mutate()} className="flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400">{handover.isPending && <Spinner size={12}/>}建群并托管</button>}
+        {!created && <button type="button" disabled={!effectiveAppId || !nameValue.trim() || !manualValid || handover.isPending} onClick={() => handover.mutate()} className="flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400">{handover.isPending && <Spinner size={12}/>}建群并托管</button>}
       </div>
     </div>
   </div>;

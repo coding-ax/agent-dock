@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { RuntimeError, type AgentConfig, type Session } from '@agent-dock/agent-dock-shared';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { registerLarkRoutes, type LarkRoutesOptions } from './lark/routes.js';
+import { larkKittenAvatarPath } from './lark/kitten-handover.js';
 import { registerLarkAvatarRoutes } from './lark-avatar/routes.js';
 import type { LarkAvatarService } from './lark-avatar/service.js';
 import { discoverAgentModels } from './agent-models.js';
@@ -252,6 +253,8 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       // 鉴权（agent-tools 内部 fail-closed 401），agent 进程没有浏览器 cookie，
       // 不能被 Web 访问门拦掉。
       if (url.pathname.startsWith('/api/lark/agent-tools/')) return;
+      // 小猫头像是公开静态图（不含业务数据）：前端 <img> 和飞书拉图都可能没有 cookie。
+      if (url.pathname === larkKittenAvatarPath) return;
       claim ??= verifyWebToken(parseCookieHeader(request.headers.cookie, webAccessCookieName), secret)
         ?? verifyWebToken(parseCookieHeader(request.headers.cookie, webAccessSessionCookieName), secret);
       // 本机直连（回环源地址 + 回环 Host 头 + 非跨站发起，见 isLocalOwnerRequest）视为机器
@@ -347,7 +350,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   if (options.assistant) registerAssistantRoutes(app, options.assistant);
   if (options.sourcesRouter) registerSourceRouterRoutes(app, options.sourcesRouter);
   if (options.larkAvatar) registerLarkAvatarRoutes(app, options.larkAvatar);
-  await registerLarkRoutes(app, { ...options.lark, runtime: options.lark?.runtime ?? runtime });
+  await registerLarkRoutes(app, { ...options.lark, assistant: options.lark?.assistant ?? options.assistant, runtime: options.lark?.runtime ?? runtime });
   app.get('/api/agents', async request => {
     // 停用的内置 agent 只在配置面板展示，面板入口仅 master token 可用（会话令牌拿到的列表不含停用项）。
     const url = new URL(request.url, 'http://agent-dock.local');

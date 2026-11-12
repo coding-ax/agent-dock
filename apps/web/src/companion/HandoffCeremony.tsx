@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, CircleAlert, CircleCheck, Dices, Eye, LoaderCircle, PawPrint, RotateCcw, Send, X } from 'lucide-react';
+import { ArrowRight, CircleAlert, CircleCheck, Dices, Eye, LoaderCircle, PawPrint, RefreshCw, RotateCcw, Send, X } from 'lucide-react';
 import { api, type HandoffView, type LifecycleReason } from '../api';
 import { useModalFocusTrap } from '../useModalFocusTrap';
 import { Kitten } from './Kitten';
@@ -40,6 +40,7 @@ function CeremonyDialog({ initialId }: { initialId?: string }) {
   const [handoffId, setHandoffId] = useState<string | undefined>(initialId ?? info.lifecycle?.handoff?.id);
   const [name, setName] = useState(info.name);
   const [error, setError] = useState<string>();
+  const [syncNotice, setSyncNotice] = useState<{ ok: boolean; message: string }>();
   const overview = useLifecycleOverview();
   const detail = useQuery({
     queryKey: ['assistant-handoff', handoffId],
@@ -88,6 +89,12 @@ function CeremonyDialog({ initialId }: { initialId?: string }) {
     onSuccess: view => refresh(view.handoff),
     onError: value => setError(errorText(value))
   });
+  // 换代完成后把飞书机器人名称/头像同步成新猫；不支持时后端会带原因回来，这里原样展示。
+  const syncBot = useMutation({
+    mutationFn: () => api.handoverSyncBot(handoff!.fromSessionId),
+    onSuccess: result => setSyncNotice({ ok: result.ok, message: result.message }),
+    onError: value => setSyncNotice({ ok: false, message: errorText(value) })
+  });
 
   const reasons: LifecycleReason[] = handoff?.reasons?.length ? handoff.reasons : (overview.data?.reasons ?? []).filter(reason => reason.level === 'handoff');
   const oldStage = handoff?.fromCat?.lifeStage ?? info.stage ?? 'adult';
@@ -116,6 +123,9 @@ function CeremonyDialog({ initialId }: { initialId?: string }) {
         />}
         {phase !== 'invite' && handoff && <ProgressBody handoff={handoff} phase={phase}/>}
         {error && <div className="mt-3 flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[12px] leading-5 text-red-700"><CircleAlert size={14} className="mt-0.5 shrink-0"/>{error}</div>}
+        {syncNotice && <div className={`mt-3 flex items-start gap-1.5 rounded-lg border px-2.5 py-2 text-[12px] leading-5 ${syncNotice.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+          {syncNotice.ok ? <CircleCheck size={14} className="mt-0.5 shrink-0"/> : <CircleAlert size={14} className="mt-0.5 shrink-0"/>}{syncNotice.message}
+        </div>}
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-zinc-100 px-4 py-3">
         {phase === 'invite' && <>
@@ -128,6 +138,7 @@ function CeremonyDialog({ initialId }: { initialId?: string }) {
         {phase !== 'invite' && !isCeremonyFinal(handoff?.state) && <span className="flex items-center gap-1.5 text-[12px] text-zinc-500"><LoaderCircle size={13} className="animate-spin"/>仪式进行中，可以先收起，结束后小猫会冒泡告诉你</span>}
         {phase === 'done' && handoff && <>
           <button type="button" onClick={() => { close(); nav.openSession(handoff.fromSessionId); }} className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-[13px] text-zinc-600 hover:bg-zinc-100"><Eye size={14}/>前任的会话（只读）</button>
+          <button type="button" disabled={syncBot.isPending} onClick={() => syncBot.mutate()} className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-[13px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-40"><RefreshCw size={14} className={syncBot.isPending ? 'animate-spin' : ''}/>{syncBot.isPending ? '同步中…' : '同步飞书机器人'}</button>
           {handoff.outcome === 'partial' && !handoff.briefingTaskId && <button type="button" disabled={resend.isPending} onClick={() => resend.mutate()} className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-[13px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-40"><Send size={14}/>重发交接说明</button>}
           <button type="button" onClick={() => { close(); nav.openMain(handoff.toSessionId ?? undefined); }} className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-full bg-zinc-900 px-4 text-[13px] font-medium text-white hover:bg-zinc-700">去见{handoff.successorName ?? '新猫'}<ArrowRight size={14}/></button>
         </>}

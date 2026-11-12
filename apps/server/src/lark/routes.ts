@@ -8,6 +8,11 @@ import { LarkLongConnectionListenerPool, larkHandoverChannel, type LarkListenerP
 import { installLarkHook, larkHookStatus } from './security-hooks.js';
 import { registerLarkAgentToolRoutes } from './agent-tools-routes.js';
 import type { LarkAgentToolsService } from './agent-tools.js';
+import type { AssistantService } from '../assistant/service.js';
+import {
+  handoverGroupName, handoverKittenProfile, larkKittenAvatarPath, larkKittenCdnBaseEnv, larkKittenAvatarPublicUrl,
+  readKittenAvatar, syncKittenBotProfile, type KittenBotSyncResult
+} from './kitten-handover.js';
 import { abortable } from '../abortable.js';
 
 // 飞书一键创建应用的预设权限、事件和回调。
@@ -85,6 +90,8 @@ export interface LarkRoutesOptions {
   service?: LarkCardService;
   config?: ConfigRepository;
   agents?: AgentRepository;
+  /** 主会话血缘：判断托管会话是不是当前小猫，并在交接后同步机器人资料。 */
+  assistant?: AssistantService;
   cardMappings?: ChannelMappingRepository;
   fetcher?: typeof globalThis.fetch;
   listener?: LarkListenerPool;
@@ -99,6 +106,8 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
   const env = options.env ?? process.env;
   const fetcher = options.fetcher ?? globalThis.fetch;
   let service = options.service;
+  const lineage = () => options.assistant?.lifecycle.lineage() ?? [];
+  const kittenFor = (sessionId: string) => handoverKittenProfile(lineage(), sessionId);
   const listeningDisabled = options.listeningDisabled === true;
   const listener = options.listener ?? new LarkLongConnectionListenerPool(app.log, {
     runtime: options.runtime,
@@ -147,7 +156,7 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
 
   // 「托管给机器人」：建一个飞书群（机器人做群主），并把群与某个 AgentDock 会话绑定。
   // 之后该群的消息由 listener 路由到这个会话，实现「用群聊继续这个会话」。
-  app.post<{ Params: { id: string }; Body: { appId?: string; name?: string; memberOpenIds?: string[] } }>('/api/sessions/:id/handover', larkErrors(async request => {
+  app.post<{ Params: { id: string }; Body: { appId?: string; name?: string; memberOpenIds?: string[]; syncBotProfile?: boolean } }>('/api/sessions/:id/handover', larkErrors(async request => {
     const sessionId = request.params.id;
     const session = await options.runtime?.getSession(sessionId);
     if (!session) throw new LarkServiceError('SESSION_NOT_FOUND', `Unknown session: ${sessionId}`, 404);
@@ -164,9 +173,11 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
       const existing = (await options.cardMappings.list(larkHandoverChannel(id))).find(item => item.sessionId === sessionId);
       if (existing) throw new LarkServiceError('SESSION_ALREADY_HANDED_OVER', '该会话已托管到飞书群，请直接打开已有的托管群', 409);
     }
+    // 主会话托管时用当前小猫的名字（血缘里在岗那只）；普通会话仍走会话标题。
     // 群名兜底也必须清洗：会话标题对附件首发的会话等于一条路径，直接拿来当群名会建出
     // 一个叫 `/Users/xxx/a.png` 的飞书群。用户显式传的 name 不动，那是他的选择。
-    const name = request.body?.name?.trim() || `${cleanChatName(session.title) || session.agentId} · AgentDock`;
+    const kitten = kittenFor(sessionId);
+    const name = request.body?.name?.trim() || handoverGroupName({ kitten, title: session.title, agentId: session.agentId });
     const memberOpenIds = (request.body?.memberOpenIds ?? []).map(id => id.trim()).filter(Boolean);
     if (memberOpenIds.some(id => !id.startsWith('ou_'))) {
       throw new LarkServiceError('INVALID_HANDOVER_MEMBER', '邀请成员必须是 ou_ 开头的 open_id', 400);
@@ -181,21 +192,80 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
       extra: JSON.stringify({ appId, chatId: chat.chatId, sessionId, name }),
       createdAt: new Date().toISOString()
     });
-    return { sessionId, appId, chatId: chat.chatId, name, url: `https://applink.feishu.cn/client/chat/open?openChatId=${chat.chatId}` };
+    // 机器人资料是应用级的：主会话托管时顺手同步成这一代小猫。失败不影响建群，
+    // 但要把「需要手动去飞书后台改」的原因带回前端。
+    let botProfile: KittenBotSyncResult | null = null;
+    if (kitten && request.body?.syncBotProfile !== false) {
+      const stored = await readLarkConfig(options.config, appId);
+      const avatarUrl = larkKittenAvatarPublicUrl({ cdnBaseUrl: env[larkKittenCdnBaseEnv], webBaseUrl: stored?.webBaseUrl });
+      botProfile = await syncKittenBotProfile({ lineage: lineage(), sessionId, bot, ...(avatarUrl ? { avatarUrl } : {}) });
+    }
+    return { sessionId, appId, chatId: chat.chatId, name, kitten, botProfile, url: `https://applink.feishu.cn/client/chat/open?openChatId=${chat.chatId}` };
   }));
 
   // 查这个会话是否已经托管给某个机器人（返回绑定群，供前端显示「已托管」而不是再建一个）。
   app.get<{ Params: { id: string } }>('/api/sessions/:id/handover', larkErrors(async request => {
     const sessionId = request.params.id;
-    if (!options.cardMappings || !options.config) return { handover: null };
+    const kitten = kittenFor(sessionId) ?? null;
+    if (!options.cardMappings || !options.config) return { handover: null, kitten };
     const configs = await readLarkConfigs(options.config);
     for (const config of configs) {
       const mapping = (await options.cardMappings.list(larkHandoverChannel(config.appId))).find(item => item.sessionId === sessionId);
       if (!mapping) continue;
       const extra = (() => { try { return JSON.parse(mapping.extra ?? '{}') as { name?: string; appId?: string }; } catch { return {}; } })();
-      return { handover: { appId: config.appId, botName: config.name ?? config.appId, chatId: mapping.externalId, name: extra.name ?? '托管群', url: `https://applink.feishu.cn/client/chat/open?openChatId=${mapping.externalId}` } };
+      return { handover: { appId: config.appId, botName: config.name ?? config.appId, chatId: mapping.externalId, name: extra.name ?? '托管群', url: `https://applink.feishu.cn/client/chat/open?openChatId=${mapping.externalId}` }, kitten };
     }
-    return { handover: null };
+    return { handover: null, kitten };
+  }));
+
+  // 小猫头像：给前端和飞书一个稳定 URL。飞书拉图时不带 AgentDock cookie，
+  // 因此这个路径在 web-access 里单独放行；它只包含一张公开的静态图。
+  app.get(larkKittenAvatarPath, async (_request, reply) => {
+    try {
+      const body = await readKittenAvatar();
+      return reply.type('image/png').header('Cache-Control', 'public, max-age=86400, immutable').send(body);
+    } catch {
+      return reply.code(404).send({ error: { code: 'KITTEN_AVATAR_MISSING', message: '小猫头像文件缺失' } });
+    }
+  });
+
+  // 交接完成（generation + 1）后，把飞书机器人名称/头像同步成当前在岗的小猫。
+  // 只接受小猫血缘里的会话；普通会话返回 NOT_MAIN_SESSION，而不是静默改别人的机器人。
+  app.post<{ Body: { sessionId?: string } }>('/api/lark/handover/sync-bot', larkErrors(async request => {
+    const cats = lineage();
+    const sessionId = request.body?.sessionId?.trim() || options.assistant?.mainSessionId;
+    if (!sessionId) throw new LarkServiceError('NO_MAIN_SESSION', '还没有主会话，无法同步飞书机器人。', 400);
+    const cat = cats.find(item => item.sessionId === sessionId);
+    if (!cat) {
+      return {
+        ok: false, supported: false, updated: false, reason: 'NOT_MAIN_SESSION',
+        message: '这个会话不是小猫主会话（没有 assistant_lineage 记录），不会自动修改飞书机器人。请在飞书开放平台后台手动设置机器人名称和头像。'
+      } satisfies KittenBotSyncResult;
+    }
+    const active = cats.find(item => item.familyId === cat.familyId && item.state === 'active');
+    if (!active) {
+      return {
+        ok: false, supported: false, updated: false, reason: 'NO_ACTIVE_CAT',
+        message: '这个主会话当前没有在岗的小猫（可能已解除认领），无法判断要同步哪一代。请在飞书开放平台后台手动设置机器人名称和头像。'
+      } satisfies KittenBotSyncResult;
+    }
+    if (!options.config || !options.cardMappings) throw new LarkServiceError('LARK_HANDOVER_UNAVAILABLE', 'channel mapping storage unavailable', 503);
+    // 交接后群绑定仍在旧会话上：先找精确绑定，再在同一 family 的旧会话里找。
+    const familySessionIds = new Set(cats.filter(item => item.familyId === cat.familyId).map(item => item.sessionId));
+    let binding: { appId: string; chatId: string } | undefined;
+    for (const config of await readLarkConfigs(options.config)) {
+      const mappings = await options.cardMappings.list(larkHandoverChannel(config.appId));
+      const exact = mappings.find(item => item.sessionId === sessionId);
+      if (exact?.externalId.startsWith('oc_')) { binding = { appId: config.appId, chatId: exact.externalId }; break; }
+      const sibling = mappings.find(item => familySessionIds.has(item.sessionId) && item.externalId.startsWith('oc_'));
+      if (sibling && !binding) binding = { appId: config.appId, chatId: sibling.externalId };
+    }
+    if (!binding) throw new LarkServiceError('HANDOVER_NOT_FOUND', '这个主会话还没有托管到飞书群，没有可同步的机器人。', 404);
+    const stored = await readLarkConfig(options.config, binding.appId);
+    const bot = await resolveService(undefined, binding.appId);
+    const avatarUrl = larkKittenAvatarPublicUrl({ cdnBaseUrl: env[larkKittenCdnBaseEnv], webBaseUrl: stored?.webBaseUrl });
+    const result = await syncKittenBotProfile({ lineage: cats, sessionId, bot, ...(avatarUrl ? { avatarUrl } : {}) });
+    return { ...result, appId: binding.appId, chatId: binding.chatId };
   }));
 
   // 批量取用户头像+姓名，给「托管」弹窗的成员胶囊做头像展示。

@@ -1002,6 +1002,30 @@ export class LarkCardService {
     };
   }
 
+  /**
+   * 更新应用资料（机器人名称 / 头像）。飞书 v7 的 application.base 接口以应用为单位，
+   * 不是群内昵称：改的是这个机器人所有群里的显示名。
+   * 头像传公网 URL；调用方拿不到公网地址时只传名称。
+   */
+  async updateAppBase(input: { name?: string; avatarUrl?: string }): Promise<void> {
+    const name = input.name?.trim();
+    const avatarUrl = input.avatarUrl?.trim();
+    if (!name && !avatarUrl) return;
+    await this.request(`/open-apis/application/v7/applications/${encodeURIComponent(this.config.appId)}/base`, {
+      method: 'PATCH',
+      body: {
+        ...(name ? {
+          i18ns: [
+            { i18n_key: 'zh_cn', name },
+            { i18n_key: 'en_us', name }
+          ]
+        } : {}),
+        ...(avatarUrl ? { avatar_url: avatarUrl } : {})
+      },
+      timeoutMs: 8_000
+    });
+  }
+
   async getUserEmails(openId: string): Promise<string[]> {
     const payload = await this.request(`/open-apis/contact/v3/users/${encodeURIComponent(required(openId, 'openId'))}?user_id_type=open_id`, { method: 'GET' });
     const user = payload.data?.user ?? {};

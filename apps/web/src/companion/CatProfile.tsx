@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Archive, Brush, Eye, Hourglass, LoaderCircle, RotateCcw } from 'lucide-react';
+import { Archive, Brush, Eye, Hourglass, LoaderCircle, RefreshCw, RotateCcw } from 'lucide-react';
 import { api, type AssistantLifecycle, type CatRecord, type LifecycleConfig, type MaintenanceRun } from '../api';
 import { sinceLabel } from './companion-model';
 import { useLifecycleOverview } from './useCompanion';
@@ -47,6 +47,12 @@ export function CatProfile({ onOpenSession, onOpenCeremony }: { onOpenSession(id
   const runNow = useMutation({ mutationFn: () => api.assistantRunMaintenance({ reason: '你在小猫档案里点了立即整理' }), onSuccess: () => ok('整理轮次开始了，进度在主会话时间线上'), onError: fail });
   const save = useMutation({ mutationFn: api.assistantSaveLifecycleConfig, onSuccess: () => ok('已保存'), onError: fail });
   const undo = useMutation({ mutationFn: (batchId: string) => api.assistantUnarchiveNotes({ batchId }), onSuccess: result => ok(`已取出 ${result.restored.length} 张便签`), onError: fail });
+  // 换代后：把飞书机器人同步成当前在岗的小猫。非主会话/权限不足时后端会返回原因。
+  const syncBot = useMutation({
+    mutationFn: () => api.handoverSyncBot(),
+    onSuccess: result => result.ok ? ok(result.message) : fail(new Error(result.message)),
+    onError: fail
+  });
 
   const changed = useMemo(() => {
     if (!overview) return {};
@@ -78,6 +84,9 @@ export function CatProfile({ onOpenSession, onOpenCeremony }: { onOpenSession(id
       {cat && <span className="ui-stage-chip" data-stage={cat.lifeStage}>{generationLabel(cat.generation)} · {stageLabel[cat.lifeStage]}</span>}
       <span className={`text-[12px] ${levelClass[overview.level]}`}>{overview.level === 'ok' ? '指标都正常' : `${levelLabel[overview.level]}：${overview.reasons.filter(reason => reason.level === overview.level).map(formatReason).join('、')}`}</span>
       <div className="ml-auto flex items-center gap-1.5">
+        {lineage.length > 1 && <button type="button" disabled={syncBot.isPending} onClick={() => syncBot.mutate()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 px-2.5 text-[12px] text-zinc-700 hover:bg-zinc-50 disabled:opacity-40">
+          <RefreshCw size={13} className={syncBot.isPending ? 'animate-spin' : ''}/>{syncBot.isPending ? '同步中…' : '同步飞书机器人'}
+        </button>}
         <button type="button" disabled={!cat || maintenanceRunning || runNow.isPending || Boolean(runningHandoff)} onClick={() => runNow.mutate()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 px-2.5 text-[12px] text-zinc-700 hover:bg-zinc-50 disabled:opacity-40">
           {maintenanceRunning || runNow.isPending ? <LoaderCircle size={13} className="animate-spin"/> : <Brush size={13}/>}{maintenanceRunning ? '正在整理…' : '立即整理'}
         </button>

@@ -131,6 +131,13 @@ export type HandoffView = HandoffSummary & {
   steps: HandoffStepRecord[]; archiveBatchId: string | null; briefingTaskId: string | null; metrics: Partial<LifecycleMetrics>;
   fromCat: CatRecord | null; toCat: CatRecord | null; transfers: HandoffTransfer[]; package: HandoffPackageView | null;
 };
+/** 主会话托管时，飞书机器人要显示的当前小猫。 */
+export type HandoverKitten = { isMain: true; name: string; generation: number; avatarUrl: string; catId: string; sessionId: string };
+/** 同步机器人资料的结果；ok=false 时 message 是给用户看的手动处理说明。 */
+export type HandoverBotProfile = {
+  ok: boolean; supported: boolean; updated: boolean; name?: string; generation?: number; avatarUpdated?: boolean;
+  reason?: string; message: string; appId?: string; chatId?: string;
+};
 export type ArchiveBatch = { id: string; source: 'handoff' | 'maintenance' | 'manual'; reason?: string; handoffId?: string; runId?: string; taskIds: string[]; createdAt: string; undoneAt?: string };
 export type MaintenanceRun = {
   id: string; trigger: 'auto' | 'manual'; state: 'running' | 'completed' | 'failed' | 'interrupted'; reason?: string; reasons: LifecycleReason[];
@@ -439,8 +446,9 @@ export const api = {
   larkAppOwner: (appId: string) => json<{ owner: { openId: string; name: string; ownerType?: string; avatarUrl?: string } | null }>(`/api/lark/app-owner?appId=${encodeURIComponent(appId)}`),
   larkMemberSearch: (appId: string, q: string) => json<{ users: { openId: string; name: string }[]; error?: string }>(`/api/lark/member-search?appId=${encodeURIComponent(appId)}&q=${encodeURIComponent(q)}`),
   larkChatMembers: (appId: string, chatId: string) => json<{ users: { openId: string; name: string }[] }>(`/api/lark/chat-members?appId=${encodeURIComponent(appId)}&chatId=${encodeURIComponent(chatId)}`),
-  sessionHandover: (id: string) => json<{ handover: { appId: string; botName: string; chatId: string; name: string; url: string } | null }>(`/api/sessions/${id}/handover`),
-  handoverSession: (id: string, body: { appId: string; name?: string; memberOpenIds?: string[] }) => json<{ sessionId: string; appId: string; chatId: string; name: string; url: string }>(`/api/sessions/${id}/handover`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  sessionHandover: (id: string) => json<{ handover: { appId: string; botName: string; chatId: string; name: string; url: string } | null; kitten?: HandoverKitten | null }>(`/api/sessions/${id}/handover`),
+  handoverSession: (id: string, body: { appId: string; name?: string; memberOpenIds?: string[]; syncBotProfile?: boolean }) => json<{ sessionId: string; appId: string; chatId: string; name: string; url: string; kitten?: HandoverKitten | null; botProfile?: HandoverBotProfile | null }>(`/api/sessions/${id}/handover`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  handoverSyncBot: (sessionId?: string) => json<HandoverBotProfile>('/api/lark/handover/sync-bot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sessionId ? { sessionId } : {}) }),
   action: (id: string, action: string) => json(`/api/sessions/${id}/${action}`, { method: 'POST' }),
   permission: (id: string, permissionId: string, approved: boolean) => json(`/api/sessions/${id}/permissions/${permissionId}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved }) }),
   fsList: (id: string, path = '') => json<FsListResult>(`/api/sessions/${id}/fs/list?path=${encodeURIComponent(path)}`),

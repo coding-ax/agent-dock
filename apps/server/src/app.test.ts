@@ -83,6 +83,46 @@ describe('HTTP API boundary', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it('names a main-session handover after the current kitten and syncs the bot profile', async () => {
+    const repos = createRepositories(':memory:'); repositories.push(repos);
+    await repos.config.set(larkBotsConfigKey, JSON.stringify([{ appId: 'cli_bot', appSecret: 'secret_bot', webBaseUrl: 'https://dock.example.com' }]));
+    const cats = [
+      { id: 'acat_old', familyId: 'fam_main', generation: 1, sessionId: 'ses_old', name: '小A同学', state: 'retired' },
+      { id: 'acat_new', familyId: 'fam_main', generation: 2, sessionId: 'ses_new', name: '小B同学', state: 'active' }
+    ];
+    const assistant = { lifecycle: { lineage: () => cats }, mainSessionId: 'ses_new' } as any;
+    const runtime = { getSession: vi.fn(async (id: string) => id === 'ses_new' ? { id, agentId: 'codex', source: 'assistant-main', title: '主会话' } : undefined) };
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, tenant_access_token: 'token', expire: 7200 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { chat_id: 'oc_kitten' } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0 }), { status: 200 }));
+    const app = await buildApp({} as any, { lark: { env: {}, config: repos.config, cardMappings: repos.channelMappings, fetcher: fetcher as typeof fetch, listener: listenerPool(), runtime: runtime as any, assistant } }); apps.push(app);
+
+    const created = await app.inject({ method: 'POST', url: '/api/sessions/ses_new/handover', payload: { appId: 'cli_bot' } });
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toMatchObject({
+      sessionId: 'ses_new', chatId: 'oc_kitten', name: '小B同学 · AgentDock',
+      kitten: { name: '小B同学', generation: 2 },
+      botProfile: { ok: true, supported: true, updated: true, name: '小B同学', generation: 2, avatarUpdated: true }
+    });
+    const [patchUrl, patchInit] = fetcher.mock.calls[2] as unknown as [string, RequestInit];
+    expect(String(patchUrl)).toContain('/open-apis/application/v7/applications/cli_bot/base');
+    expect(patchInit.method).toBe('PATCH');
+    expect(JSON.parse(String(patchInit.body))).toMatchObject({
+      avatar_url: 'https://dock.example.com/api/lark/kitten-avatar.png',
+      i18ns: [{ i18n_key: 'zh_cn', name: '小B同学' }, { i18n_key: 'en_us', name: '小B同学' }]
+    });
+
+    const info = await app.inject({ method: 'GET', url: '/api/sessions/ses_new/handover' });
+    expect(info.json().kitten).toMatchObject({ name: '小B同学', generation: 2 });
+
+    const avatar = await app.inject({ method: 'GET', url: '/api/lark/kitten-avatar.png' });
+    expect(avatar.statusCode).toBe(200);
+    expect(avatar.headers['content-type']).toContain('image/png');
+    expect(String(avatar.headers['cache-control'])).toContain('max-age=86400');
+    expect(avatar.rawPayload.byteLength).toBeGreaterThan(1_000);
+  });
+
   it('mounts optional Lark status, send, and update routes', async () => {
     const lark: any = { send: vi.fn(async () => ({ messageId: 'om_sent', chatId: 'oc_chat' })), update: vi.fn(async () => ({ messageId: 'om_sent' })) };
     const app = await buildApp({} as any, { lark: { env: { LARK_APP_ID: 'cli_test', LARK_APP_SECRET: 'secret_test', LARK_AGENT_NAME: 'My Agent' }, service: lark } }); apps.push(app);

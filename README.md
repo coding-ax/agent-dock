@@ -458,6 +458,10 @@ POST   /api/lark/update                用 messageId 原地覆盖已有卡片
 
 配置两阶段提交。编辑现有机器人**必须**传 `originalAppId`；新 App ID 已属于另一面板时返回 409 `LARK_BOT_ALREADY_CONFIGURED`。
 
+主会话「小猫」托管时会用当前小猫的名字建群，并尝试把飞书机器人名称/头像同步成这一代；头像由 daemon 暴露在
+`GET /api/lark/kitten-avatar.png`。飞书更新应用资料需要公网可访问的头像地址：优先用环境变量
+`AGENTDOCK_LARK_CDN_BASE_URL`，未设置时回退到该机器人的 `webBaseUrl`，两者都没有时只同步名称并提示到飞书后台手动换头像。
+
 ```json
 {
   "stage": "lark",

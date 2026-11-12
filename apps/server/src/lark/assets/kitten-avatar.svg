@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 96 96">
+  <rect width="96" height="96" rx="22" fill="#FFF7ED"/>
+  <circle cx="48" cy="48" r="36" fill="#FFFFFF" stroke="#FDE7CF" stroke-width="1.2"/>
+  <g transform="translate(0 2)" fill="none" stroke="#3F3F46" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M33 29 L28.5 13.5 Q28 11 30.5 11.8 L42 17.5"/>
+    <path d="M63 29 L67.5 13.5 Q68 11 65.5 11.8 L54 17.5"/>
+    <path d="M30 32 C30 24 37 21 48 21 C59 21 66 24 66 32 L66 44 C66 56 58 63 48 63 C38 63 30 56 30 44 Z" fill="#FFFFFF"/>
+    <circle cx="39.5" cy="40" r="5.2"/>
+    <circle cx="56.5" cy="40" r="5.2"/>
+    <circle cx="39.5" cy="40" r="2" fill="#3F3F46" stroke="none"/>
+    <circle cx="56.5" cy="40" r="2" fill="#3F3F46" stroke="none"/>
+    <ellipse cx="35" cy="48.5" rx="3.6" ry="2" fill="#FDA4AF" stroke="none" opacity=".75"/>
+    <ellipse cx="61" cy="48.5" rx="3.6" ry="2" fill="#FDA4AF" stroke="none" opacity=".75"/>
+    <path d="M45.8 46.5 L50.2 46.5 L48 49 Z" fill="#3F3F46" stroke="none"/>
+    <path d="M48 49 C46 52.5 43 52.5 42 50.5 M48 49 C50 52.5 53 52.5 54 50.5"/>
+    <path d="M29 44 L19.5 43 M29 48 L19.5 49.5"/>
+    <path d="M67 44 L76.5 43 M67 48 L76.5 49.5"/>
+    <path d="M46.5 21 C45.8 17.8 47.6 16 49.8 16.6"/>
+    <path d="M49.2 21 C49.4 18.9 50.9 18 52.4 18.5"/>
+    <path d="M36.6 61.6 Q48 68.2 59.4 61.6" stroke="#F59E0B"/>
+    <circle cx="48" cy="67.4" r="2.4" fill="#FBBF24" stroke="#F59E0B"/>
+  </g>
+</svg>

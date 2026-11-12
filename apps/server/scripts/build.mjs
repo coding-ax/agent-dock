@@ -100,5 +100,6 @@ cpSync(resolve(workspaceRoot, 'packages/acp-client/agents/codex-acp.mjs'), resol
 const assetsDir = resolve(serverRoot, 'dist/assets');
 mkdirSync(assetsDir, { recursive: true });
 cpSync(resolve(serverRoot, 'src/lark/assets/agentdock-bouncing-ball.webp'), resolve(assetsDir, 'agentdock-bouncing-ball.webp'));
+cpSync(resolve(serverRoot, 'src/lark/assets/kitten-avatar.png'), resolve(assetsDir, 'kitten-avatar.png'));
 cpSync(resolve(serverRoot, 'src/lark/assets/SVG-SPINNERS-LICENSE.txt'), resolve(assetsDir, 'SVG-SPINNERS-LICENSE.txt'));
 cpSync(resolve(serverRoot, 'src/lark-avatar/protocol/lark.proto'), resolve(serverRoot, 'dist/lark.proto'));
