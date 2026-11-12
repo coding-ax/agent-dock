@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
 import { now, type RepositoryBundle } from '@agent-dock/agent-dock-shared';
 import { AssistantService, buildMainSystemPrompt, buildSuperagentDirective } from './service.js';
+import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER } from './lifecycle.js';
 
 const repositories: RepositoryBundle[] = [];
 const services: AssistantService[] = [];
@@ -88,6 +89,40 @@ describe('AssistantService', () => {
     expect(buildSuperagentDirective('现在任务进度怎么样了？')).toBe('');
     expect(buildSuperagentDirective('帮我查一下 CI')).toContain('task start');
     expect(buildSuperagentDirective('看看这个任务为什么失败')).toContain('task start');
+    expect(buildSuperagentDirective(`${MAINTENANCE_MARKER}（amaint_1），不是用户消息`)).toBe('');
+    expect(buildSuperagentDirective(`${HANDOFF_BRIEFING_MARKER}，不是用户消息`)).toBe('');
+    expect(buildSuperagentDirective('帮我查一下 CI')).toContain('2-3 行');
+    expect(buildSuperagentDirective('帮我查一下 CI')).toContain('侧边会话 ID');
+  });
+
+  it('limits the main session to delegation, review, reporting and decisions', () => {
+    const prompt = buildMainSystemPrompt();
+    expect(prompt).toContain('只做四件事：派活、验收、汇报、拍板');
+    expect(prompt).toContain('回复限定 2-3 行');
+    expect(prompt).toContain('任务 ID 与侧边会话 ID');
+    expect(prompt).toContain('--done-when');
+    expect(prompt).toContain('例外（直接回答，不派活）：打招呼/闲聊');
+    expect(prompt).toContain('问进度/状态直接看快照和已有事项，不派活');
+  });
+
+  it('keeps greetings and progress checks out of delegation', async () => {
+    const { repos, service } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    for (const prompt of ['你好，在吗？', '现在任务进度怎么样了？']) {
+      expect(buildSuperagentDirective(prompt)).toBe('');
+      expect(await service.composePrompt(main, prompt)).not.toContain('<agentdock-superagent>');
+    }
+  });
+
+  it('requires criterion-by-criterion evidence and rework when any evidence is missing', () => {
+    const prompt = buildMainSystemPrompt();
+    expect(prompt).toContain('对 done-when 每一条逐条找证据');
+    expect(prompt).toContain('任一条找不到证据');
+    expect(prompt).toContain('--verdict rework');
+    expect(prompt).toContain('只有每一条都有证据才 `--verdict accepted`');
   });
 
   it('adopts a named companion, tells the main session its name, and forgets it on release', async () => {
