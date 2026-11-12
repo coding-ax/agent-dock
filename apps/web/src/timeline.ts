@@ -414,7 +414,7 @@ export function buildTimeline(events: DockEvent[] = [], tasks: Task[] = EMPTY_TA
     // 用 createdAt 的话，上一轮跑到一半时排进来的消息会插进上一轮中间：上一轮的回复被挤到它下面，
     // 下一帧真实事件到了又跳回去（实测弹 60px、回复闪一下）。结束了的任务 updatedAt 是结束时间，仍按创建时间。
     const timestamp = task.status === 'running' ? task.updatedAt : task.createdAt;
-    taskEvents.push({ id: `${TASK_ROW_PREFIX}${task.id}`, sequence: -1, type: 'text', timestamp, data: { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' && task.sentPrompt ? { detail: task.sentPrompt } : {}) } });
+    taskEvents.push({ id: `${TASK_ROW_PREFIX}${task.id}`, sequence: -1, type: 'text', timestamp, data: { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...((task.origin === 'injected' || task.origin === 'maintenance' || task.origin === 'handoff') && task.sentPrompt ? { detail: task.sentPrompt } : {}) } });
   }
   const source = sortByTimestampThenSequence([...events, ...taskEvents]);
   for (const event of source) applyTimelineEvent(state, event);

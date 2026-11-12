@@ -5,6 +5,8 @@ import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { now, type RepositoryBundle, type Session, type SessionInterruptIntent } from '@agent-dock/agent-dock-shared';
 import { resolveLoginShell } from '../terminal-manager.js';
 import { AssistantStore } from './store.js';
+import { AssistantLifecycle } from './lifecycle-service.js';
+import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER } from './lifecycle.js';
 import type {
   AssistantSignal, AssistantSignalKind, AssistantTask, CompanionProfile, DraftRecord,
   NotifyInput, QuietHours, TaskCheck, TaskReviewRecord, WatchRecord
@@ -30,6 +32,13 @@ const STALL_DEFAULT_MINUTES = 20;
 const MAX_OUTPUT = 4 * 1024;
 /** 督办注入的唯一文本标记；来源识别以 task.origin 为准，这段文本只作兜底。 */
 const INJECTED_SIGNAL_PREFIX = '以下是 daemon 汇总的督办信号';
+/**
+ * daemon 自己开的系统轮次：督办注入、整理轮次、交接说明。它们不是用户消息，
+ * 绝不能再触发 superagent 派活（整理轮次派活会形成递归）。
+ */
+const SYSTEM_TURN_ORIGINS = new Set(['injected', 'maintenance', 'handoff']);
+const SYSTEM_TURN_MARKERS = [INJECTED_SIGNAL_PREFIX, MAINTENANCE_MARKER, HANDOFF_BRIEFING_MARKER];
+
 /**
  * `interrupted` 会话只有在留下显式意图时才算「主动打断」。旧数据或 daemon 重启
  * 留下的 interrupted 没有这份意图，不能当成用户操作，仍按失败督办。
@@ -66,6 +75,8 @@ export interface StartTaskInput {
 export interface PlanTaskInput extends StartTaskInput {}
 
 export class AssistantService {
+  /** 小猫的一生：指标、整理轮次、交接仪式、归档区（见 lifecycle-service.ts）。 */
+  readonly lifecycle: AssistantLifecycle;
   private readonly store: AssistantStore;
   private readonly runtime: AgentDockRuntime;
   private readonly repos: RepositoryBundle;
@@ -87,11 +98,24 @@ export class AssistantService {
     this.log = options.log ?? { info: () => undefined, warn: message => console.warn(String(message)) };
     this.notifyChannel = options.notify;
     this.store = new AssistantStore(options.databaseUrl === ':memory:' ? ':memory:' : `${options.databaseUrl}.assistant.db`);
+    this.lifecycle = new AssistantLifecycle({
+      store: this.store, runtime: this.runtime, repos: this.repos, log: this.log,
+      host: {
+        mainSessionId: () => this.mainSessionIdValue,
+        switchMainPointer: async sessionId => { await this.setMainSession(sessionId, { lineage: false }); },
+        companionProfile: () => this.getCompanion(),
+        saveCompanionProfile: profile => this.store.setSetting(COMPANION_KEY, JSON.stringify(profile)),
+        nameSession: (sessionId, title) => this.nameSession(sessionId, title),
+        mainSystemPrompt: () => buildMainSystemPrompt(),
+        normalizeName: normalizeCompanionName
+      }
+    });
   }
 
   async initialize() {
     this.mainSessionIdValue = (await this.repos.config.get(MAIN_SESSION_KEY))?.trim() || undefined;
     await this.refreshMainSystemPrompt();
+    await this.lifecycle.initialize();
   }
 
   /**
@@ -113,12 +137,14 @@ export class AssistantService {
   start() {
     if (this.timer) return;
     this.unsubscribe = this.runtime.onStatus(event => { void this.handleStatus(event); });
+    this.lifecycle.start();
     this.timer = setInterval(() => { void this.scan(); }, 30_000);
     this.timer.unref();
   }
 
   async close() {
     this.stopped = true;
+    this.lifecycle.close();
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     if (this.timer) clearInterval(this.timer);
@@ -136,7 +162,11 @@ export class AssistantService {
 
   async listSessions() { return this.repos.sessions.list(); }
 
-  async setMainSession(sessionId: string) {
+  /**
+   * `lineage: false` 只给交接仪式用：仪式自己写血缘（新猫 generation+1），
+   * 其余入口（`main set`、认领）换主会话时按「新认领」处理，旧猫标 released。
+   */
+  async setMainSession(sessionId: string, options: { lineage?: boolean } = {}) {
     const session = await this.repos.sessions.get(sessionId);
     if (!session) throw new Error(`会话不存在：${sessionId}`);
     if (session.archivedAt) throw new Error('已归档的会话不能作为主会话');
@@ -144,6 +174,7 @@ export class AssistantService {
     this.mainSessionIdValue = sessionId;
     this.snapshotFull = true;
     await this.refreshMainSystemPrompt();
+    if (options.lineage !== false) await this.lifecycle.ensureCat();
     return (await this.repos.sessions.get(sessionId)) ?? session;
   }
 
@@ -152,6 +183,7 @@ export class AssistantService {
    * 并通过 `<agentdock-context>` 的「你的名字」小节告诉主会话自己叫什么。
    */
   async createMainSession(input: { agentId: string; cwd?: string; model?: string; reasoningEffort?: string; name?: string }) {
+    this.lifecycle.assertIdle();
     const session = await this.runtime.start({
       agentId: input.agentId,
       ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -160,14 +192,17 @@ export class AssistantService {
       source: 'assistant-main',
       systemPrompt: buildMainSystemPrompt()
     });
-    await this.setMainSession(session.id);
+    // 先写档案再换指针：换指针时血缘按档案里的名字和认领时间建第 1 代。
     const profile: CompanionProfile = { name: normalizeCompanionName(input.name) ?? DEFAULT_COMPANION_NAME, adoptedAt: now() };
     this.store.setSetting(COMPANION_KEY, JSON.stringify(profile));
+    await this.setMainSession(session.id);
     await this.nameSession(session.id, profile.name);
     return (await this.repos.sessions.get(session.id)) ?? session;
   }
 
   async clearMainSession() {
+    // 让它休息：猫的血缘记录保留（state=released），只是不再是主会话。
+    this.lifecycle.releaseActiveCat('released');
     await this.repos.config.set(MAIN_SESSION_KEY, '');
     this.mainSessionIdValue = undefined;
     this.snapshotFull = true;
@@ -201,6 +236,7 @@ export class AssistantService {
     const profile: CompanionProfile = { name: normalized, adoptedAt: current?.adoptedAt ?? now() };
     this.store.setSetting(COMPANION_KEY, JSON.stringify(profile));
     await this.nameSession(mainId, normalized);
+    this.lifecycle.renameActiveCat(normalized);
     return profile;
   }
 
@@ -260,7 +296,7 @@ export class AssistantService {
     // 按意图触发的硬约束，比只在 system prompt 里写「尽量派活」可靠。
     // origin 是可靠判据：文本可能被飞书工具说明、定时任务说明等层反复加前缀，
     // 光看开头会漏掉注入来源。文本兜底仍保留在 buildSuperagentDirective 里。
-    const directive = origin === 'injected' ? '' : buildSuperagentDirective(prompt);
+    const directive = origin && SYSTEM_TURN_ORIGINS.has(origin) ? '' : buildSuperagentDirective(prompt);
     const prefix = [context, directive].filter(Boolean).join('\n\n');
     return prefix ? `${prefix}\n\n${prompt}` : prompt;
   }
@@ -278,6 +314,9 @@ export class AssistantService {
     // 名字也走快照：改名后下一轮自动带上新名字，不用重启会话去换 system prompt。
     const companion = await this.getCompanion();
     if (companion) sections.companion = `你的名字：${companion.name}（用户认领的小猫，自称时用这个名字）`;
+    // 第几代、几岁、前任是谁：阶段很少变，基本只在全量快照里出现。
+    const lineage = await this.lifecycle.snapshotLine().catch(() => '');
+    if (lineage) sections.lineage = lineage;
     const tasks = this.store.listTasks().filter(task => task.state !== 'closed').slice(0, 8);
     if (tasks.length) {
       sections.tasks = ['事项：', ...tasks.map(task => {
@@ -412,6 +451,8 @@ export class AssistantService {
     }
     await this.scanWatches();
     await this.flushPendingNotifications();
+    // 自动检测：到整理档开整理轮次，到交接档提议交接；同一档只处理一次。
+    await this.lifecycle.scan().catch(error => this.log.warn(`生命周期扫描失败：${error instanceof Error ? error.message : String(error)}`));
   }
 
   // ---- 事项 ----
@@ -809,8 +850,9 @@ export function buildSuperagentDirective(prompt: string): string {
   const text = prompt.trim();
   if (!text) return '';
   // 督办注入是 daemon 叫主会话去验收，不是新的用户任务；不能再派一个侧边会话。
+  // 整理轮次、交接说明同理（整理轮次再派活就成了递归）。
   // 这里用包含而不是前缀匹配：飞书工具说明等层可能在注入文本前再加一段前缀。
-  if (text.includes(INJECTED_SIGNAL_PREFIX)) return '';
+  if (SYSTEM_TURN_MARKERS.some(marker => text.includes(marker))) return '';
   if (/^(你好|hi|hello|在吗|早|早上好|晚上好|谢谢|多谢|好的|ok|收到)[。！？?!.\s]*$/i.test(text)) return '';
   // 问进度/状态应该直接看快照或已有事项，不要为此再开一个侧边会话。
   const statusQuery = /(进度|状态|怎么样了|到哪了|完成了吗|好了吗|结果呢|任务列表|事项列表)/;

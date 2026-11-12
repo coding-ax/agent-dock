@@ -69,7 +69,7 @@ function formatTask(task: Record<string, unknown>): string {
 
 function formatTasks(tasks: Array<Record<string, unknown>>): string {
   if (!tasks.length) return '没有事项。';
-  return tasks.map(task => `${task.id}  [${task.plan ? 'plan' : task.state}]  ${task.title}${task.sessionId ? `  ${task.sessionId}` : ''}`).join('\n');
+  return tasks.map(task => `${task.id}  [${task.plan ? 'plan' : task.state}]${task.archivedAt ? '  [已归档]' : ''}  ${task.title}${task.sessionId ? `  ${task.sessionId}` : ''}`).join('\n');
 }
 
 function formatWatch(watch: Record<string, unknown>): string {

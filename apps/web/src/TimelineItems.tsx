@@ -7,6 +7,8 @@ import { AssistantMarkdown, ThinkingMarkdown } from './TypewriterText';
 import { elapsedMilliseconds, formatElapsed, summarizeTools, toolActionLabel, toolPresentation, type ToolKind } from './tool-presentation';
 import { toolDetailView, type ToolDetailView } from './tool-detail';
 import { SupervisionNotice } from './companion/SupervisionNotice';
+import { SystemRoundNotice } from './companion/LifecycleNotices';
+import { isSystemRoundOrigin } from './companion/lifecycle-model';
 import { SILENT_TRIGGER_ORIGIN, type SilentTriggerTarget } from './silent-trigger';
 import { SilentTrigger } from './SilentTrigger';
 
@@ -287,6 +289,11 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
   if (event.data.origin === 'injected') {
     const detail = typeof event.data.detail === 'string' ? event.data.detail : '';
     return <SupervisionNotice text={event.data.text} detail={detail} timestamp={event.timestamp}/>;
+  }
+  // 整理轮次 / 交接说明：系统发起的轮次，同样不是用户气泡。
+  if (isSystemRoundOrigin(event.data.origin)) {
+    const detail = typeof event.data.detail === 'string' ? event.data.detail : '';
+    return <SystemRoundNotice origin={event.data.origin} text={event.data.text} detail={detail} timestamp={event.timestamp} taskId={typeof event.data.taskId === 'string' ? event.data.taskId : undefined} sessionId={sessionId}/>;
   }
   const user = event.data.role === 'user';
   const silent = silentEmoji && sessionId && onSilentTrigger && !event.data.optimistic && !streaming

@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import type { BubbleTone, CompanionEventKind, NoteFilter, RecentKind } from './companion-model';
 
-/** 气泡被点时去哪：打开某张便签，或者回到主会话。 */
-export type BubbleAction = { kind: 'note'; taskId: string } | { kind: 'main' };
+/** 气泡被点时去哪：打开某张便签、回到主会话，或者打开交接仪式。 */
+export type BubbleAction = { kind: 'note'; taskId: string } | { kind: 'main' } | { kind: 'handoff'; handoffId?: string };
 
 export type CompanionBubble = { id: number; text: string; tone: BubbleTone; action?: BubbleAction };
 
@@ -47,6 +47,10 @@ type CompanionUiStore = {
   /** 用户点过「先不了」：首页不再主动邀请，侧栏和右缘也不再探头（设置里仍可认领）。 */
   inviteDismissed: boolean;
   homeTarget: HomeTarget;
+  /** 交接仪式弹窗：带上要看的那一单；没有 id 时从「为什么要交接」开始。 */
+  ceremony?: { handoffId?: string; nonce: number };
+  openCeremony(handoffId?: string): void;
+  closeCeremony(): void;
   openDrawer(options?: { filter?: NoteFilter; highlight?: string }): void;
   closeDrawer(): void;
   toggleDrawer(): void;
@@ -78,6 +82,8 @@ export const useCompanionStore = create<CompanionUiStore>(set => ({
   celebrateNonce: 0,
   inviteDismissed: readStorage(INVITE_KEY) === '1',
   homeTarget: readStorage(TARGET_KEY) === 'companion' ? 'companion' : 'new',
+  openCeremony: handoffId => set(state => ({ ceremony: { ...(handoffId ? { handoffId } : {}), nonce: (state.ceremony?.nonce ?? 0) + 1 }, drawerOpen: false, bubble: undefined, queue: [] })),
+  closeCeremony: () => set({ ceremony: undefined }),
   openDrawer: options => set(state => ({
     drawerOpen: true,
     drawerNonce: state.drawerOpen ? state.drawerNonce : state.drawerNonce + 1,

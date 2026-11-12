@@ -208,7 +208,7 @@ export function HomeStage({ agents, sessions, editorRef, onCreated }: {
   const mood: KittenMood = moodOverride ?? (phase === 'celebrate' ? 'happy' : phase === 'adopting' ? 'busy' : adopted ? (info.mood === 'curious' ? 'idle' : info.mood) : 'curious');
 
   const kitten = <div ref={anchor} className="ui-stage-kitten">
-    <Kitten size={phase === 'form' || phase === 'adopting' ? 76 : 88} mood={mood} collar={adopted || phase === 'celebrate'} drawCollar={phase === 'celebrate'} track typingAware celebrateKey={celebrateNonce} viewTransitionName={KITTEN_TRANSITION_NAME}
+    <Kitten size={phase === 'form' || phase === 'adopting' ? 76 : 88} mood={mood} stage={adopted ? info.stage : undefined} collar={adopted || phase === 'celebrate'} drawCollar={phase === 'celebrate'} track typingAware celebrateKey={celebrateNonce} viewTransitionName={KITTEN_TRANSITION_NAME}
       label={adopted ? `进入主会话（${info.name}）` : '小猫'}
       onClick={() => {
         if (adopted) nav.openMain();

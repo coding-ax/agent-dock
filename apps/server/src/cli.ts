@@ -32,6 +32,10 @@ import {
   runWatchList, runWatchRemove, runWatchShow
 } from './assistant/cli.js';
 import {
+  runMainHandoff, runMainHandoffCancel, runMainHandoffResend, runMainHandoffShow, runMainLineage,
+  runMaintenanceConfig, runMaintenanceRun, runMaintenanceStatus, runNotesArchive, runNotesList, runNotesUnarchive
+} from './assistant/lifecycle-cli.js';
+import {
   runCaseClose, runCaseEvents, runCaseList, runCaseShow, runRouterDryRun, runRouterOpen, runRouterStatus,
   runSourceAdd, runSourceEnable, runSourceList, runSourceLogs, runSourceShow, runSourceTest, runSourceUpdate
 } from './sources-router/cli.js';
@@ -233,6 +237,17 @@ async function main() {
     mainGet: async options => { process.stdout.write(await runMainGet(options)); },
     mainSet: async (sessionId, options) => { process.stdout.write(await runMainSet(sessionId, options)); },
     mainClear: async options => { process.stdout.write(await runMainClear(options)); },
+    mainHandoff: async options => { process.stdout.write(await runMainHandoff(options)); },
+    mainHandoffShow: async (id, options) => { process.stdout.write(await runMainHandoffShow(id, options)); },
+    mainHandoffCancel: async (id, options) => { process.stdout.write(await runMainHandoffCancel(id, options)); },
+    mainHandoffResend: async (id, options) => { process.stdout.write(await runMainHandoffResend(id, options)); },
+    mainLineage: async options => { process.stdout.write(await runMainLineage(options)); },
+    maintenanceStatus: async options => { process.stdout.write(await runMaintenanceStatus(options)); },
+    maintenanceRun: async options => { process.stdout.write(await runMaintenanceRun(options)); },
+    maintenanceConfig: async options => { process.stdout.write(await runMaintenanceConfig(options)); },
+    notesList: async options => { process.stdout.write(await runNotesList(options)); },
+    notesArchive: async options => { process.stdout.write(await runNotesArchive(options)); },
+    notesUnarchive: async options => { process.stdout.write(await runNotesUnarchive(options)); },
     settingsGet: async options => { process.stdout.write(await runSettingsGet(options)); },
     settingsQuietHours: async options => { process.stdout.write(await runSettingsQuietHours(options)); },
     draftCreate: async options => { process.stdout.write(await runDraftCreate(options)); },

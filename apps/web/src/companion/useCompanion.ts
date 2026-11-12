@@ -1,12 +1,31 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, type AssistantCompanion, type AssistantState, type AssistantTask, type Session } from '../api';
+import { api, type AssistantCompanion, type AssistantLifecycle, type AssistantLifecycleLight, type AssistantState, type AssistantTask, type LifeStage, type Session } from '../api';
 import { companionStatus, countNotes, deriveMood, isMainBusy, type KittenMood, type NoteCounts } from './companion-model';
 import { useCompanionStore } from './companion-store';
 
 /** 与服务端 DEFAULT_COMPANION_NAME 一致：旧服务端没有 companion 字段时的兜底。 */
 export const DEFAULT_KITTEN_NAME = '小A同学';
 const EMPTY_TASKS: AssistantTask[] = [];
+
+/**
+ * 小猫档案（指标、阈值、血缘、整理和交接记录）。只在档案或交接仪式打开时查；
+ * 整理轮次或交接在跑时 1.5 秒一次，否则 15 秒。旧服务端没有这个接口时静默失败。
+ */
+export function useLifecycleOverview(enabled = true) {
+  return useQuery({
+    queryKey: ['assistant-lifecycle'],
+    queryFn: api.assistantLifecycle,
+    enabled,
+    retry: false,
+    refetchInterval: query => {
+      const data = query.state.data as AssistantLifecycle | undefined;
+      if (query.state.error) return false;
+      const handoffRunning = Boolean(data?.handoff && data.handoff.state !== 'proposed');
+      return data?.maintenance?.state === 'running' || handoffRunning ? 1_500 : 15_000;
+    }
+  });
+}
 
 /**
  * 主会话状态的唯一查询。所有用到它的地方（侧栏、右缘、首页、抽屉、设置）共用一个缓存键，
@@ -59,6 +78,12 @@ export type CompanionInfo = {
   mood: KittenMood;
   status: string;
   busy: boolean;
+  /** 已折叠进归档区的便签：不上墙、不计数，归档区里只读可取出。 */
+  archivedTasks: AssistantTask[];
+  /** 小猫的一生：代数、阶段、交接提议、整理轮次。旧服务端为空。 */
+  lifecycle?: AssistantLifecycleLight;
+  stage?: LifeStage;
+  generation?: number;
 };
 
 /** 小猫此刻的样子：名字、心情、状态文案、便签计数。纯派生，不发请求以外的副作用。 */
@@ -70,7 +95,11 @@ export function useCompanion(): CompanionInfo {
   const select = useCallback((sessions: Session[]) => sessions.find(session => session.id === mainId), [mainId]);
   const live = useQuery({ queryKey: ['sessions'], queryFn: api.sessions, refetchInterval: 2_000, refetchIntervalInBackground: true, enabled: Boolean(mainId), select }).data;
   const mainSession = mainId ? live ?? data?.mainSession ?? undefined : undefined;
-  const tasks = data?.tasks ?? EMPTY_TASKS;
+  const allTasks = data?.tasks ?? EMPTY_TASKS;
+  // 归档区的便签不上墙：计数、分区、气泡都只看墙上的。
+  const tasks = useMemo(() => allTasks.some(task => task.archivedAt) ? allTasks.filter(task => !task.archivedAt) : allTasks, [allTasks]);
+  const archivedTasks = useMemo(() => allTasks.some(task => task.archivedAt) ? allTasks.filter(task => task.archivedAt) : EMPTY_TASKS, [allTasks]);
+  const lifecycle = data?.lifecycle ?? undefined;
   const recent = useCompanionStore(store => store.recent);
   const lastActiveAt = useCompanionStore(store => store.lastActiveAt);
   const now = useMoodClock(recent?.at, lastActiveAt);
@@ -92,10 +121,13 @@ export function useCompanion(): CompanionInfo {
       counts,
       pendingDrafts: (drafts ?? []).filter(draft => draft.state === 'pending').length,
       mood,
-      status: companionStatus({ mainState, counts, mood, ...(recent ? { recent: recent.kind } : {}) }),
-      busy: isMainBusy(mainState)
+      status: lifecycle?.maintenance && !isMainBusy(mainState) ? '在收拾便签和记忆' : companionStatus({ mainState, counts, mood, ...(recent ? { recent: recent.kind } : {}) }),
+      busy: isMainBusy(mainState),
+      archivedTasks,
+      ...(lifecycle ? { lifecycle } : {}),
+      ...(lifecycle?.cat ? { stage: lifecycle.cat.lifeStage, generation: lifecycle.cat.generation } : {})
     };
-  }, [state.isSuccess, mainId, mainSession, companion, tasks, drafts, recent, lastActiveAt, now]);
+  }, [state.isSuccess, mainId, mainSession, companion, tasks, archivedTasks, lifecycle, drafts, recent, lastActiveAt, now]);
 }
 
 /* ---------- 导航：小猫的各处入口都要能「去主会话 / 打开便签对应的会话 / 去认领」 ---------- */
@@ -108,10 +140,12 @@ export type CompanionNav = {
   /** 回首页并展开认领卡片。 */
   goAdopt(): void;
   openSettings(): void;
+  /** 打开任意会话（例如已退休小猫的只读旧会话）。 */
+  openSession(sessionId: string): void;
 };
 
 const noop = () => undefined;
-const fallbackNav: CompanionNav = { openMain: noop, openTask: noop, goAdopt: noop, openSettings: noop };
+const fallbackNav: CompanionNav = { openMain: noop, openTask: noop, goAdopt: noop, openSettings: noop, openSession: noop };
 const CompanionNavContext = createContext<CompanionNav>(fallbackNav);
 export const CompanionNavProvider = CompanionNavContext.Provider;
 export const useCompanionNav = () => useContext(CompanionNavContext);

@@ -42,6 +42,11 @@ export interface AssistantTask {
   createdAt: string;
   updatedAt: string;
   closedAt?: string;
+  /** 已关闭便签被折叠进归档区的时间；归档只读、可取出，不删除。 */
+  archivedAt?: string;
+  archiveBatchId?: string;
+  /** 用户亲手从归档区取出的时间：之后的自动折叠（整理轮次、交接）不再收它，手动归档不受限。 */
+  restoredAt?: string;
 }
 
 export interface TaskReviewRecord {

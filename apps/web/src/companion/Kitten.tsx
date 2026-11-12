@@ -1,7 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, type CSSProperties, type MouseEvent } from 'react';
 import { burst, prefersReducedMotion } from './effects';
 import type { KittenMood } from './companion-model';
+import type { LifeStage } from '../api';
 import './companion.css';
+import './lifecycle.css';
 
 /**
  * 线条小猫：首页、主会话头像、侧栏卡片、右缘把手共用的一只。
@@ -15,6 +17,9 @@ import './companion.css';
  * - collar：认领后的项圈和小铃铛，第一次出现时一笔画出来；
  * - celebrateKey 变化：原地蹦一下并冒爱心；点它：耳朵抖、偶尔冒一颗心。
  *
+ * - stage：小猫的年纪。幼猫头顶一撮毛、呼吸轻快；资深戴圆眼镜；老年再加白眉、呼吸放慢；
+ *   retired：退休时戴上小帽子（交接仪式里走远的那只）。
+ *
  * variant='face' 只裁出头部，给 24–40px 的头像位用（线宽相应加粗，缩小后仍清楚）。
  * prefers-reduced-motion 下不注册任何监听，保持静态。
  */
@@ -22,6 +27,10 @@ export type KittenProps = {
   size?: number;
   variant?: 'full' | 'face';
   mood?: KittenMood;
+  /** 年纪：不传时是没有阶段道具的成年样子（旧服务端）。 */
+  stage?: LifeStage;
+  /** 退休的老猫：戴上小帽子。 */
+  retired?: boolean;
   collar?: boolean;
   /** 项圈第一次出现时画出来；平时直接显示。 */
   drawCollar?: boolean;
@@ -45,7 +54,7 @@ const isEditable = (target: EventTarget | null) =>
   || (target instanceof HTMLElement && target.isContentEditable);
 
 export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
-  size = 96, variant = 'full', mood = 'idle', collar = false, drawCollar = false, track = false, typingAware = false,
+  size = 96, variant = 'full', mood = 'idle', stage, retired = false, collar = false, drawCollar = false, track = false, typingAware = false,
   interactive = true, celebrateKey, viewTransitionName, label, className = '', style, onClick
 }, ref) {
   const root = useRef<HTMLDivElement>(null);
@@ -193,6 +202,11 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
         <path d="M48 49 C46 52.5 43 52.5 42 50.5 M48 49 C50 52.5 53 52.5 54 50.5"/>
         <g className="ui-cat-whiskers ui-cat-whiskers-l"><path d="M29 44 L19.5 43 M29 48 L19.5 49.5"/></g>
         <g className="ui-cat-whiskers ui-cat-whiskers-r"><path d="M67 44 L76.5 43 M67 48 L76.5 49.5"/></g>
+        {/* 阶段道具：都在头部组里跟着头动，用 opacity 切换，不增删节点。 */}
+        <g className="ui-cat-tuft"><path d="M46.5 21 C45.8 17.8 47.6 16 49.8 16.6"/><path d="M49.2 21 C49.4 18.9 50.9 18 52.4 18.5"/></g>
+        <g className="ui-cat-glasses"><circle cx="39.5" cy="40" r="7.4"/><circle cx="56.5" cy="40" r="7.4"/><path d="M46.9 39.2 Q48 38 49.1 39.2"/><path d="M32.1 38.6 L29.6 37.2 M63.9 38.6 L66.4 37.2"/></g>
+        <g className="ui-cat-brows"><path d="M34.2 31.6 Q39.5 28.6 44.6 31.6"/><path d="M51.4 31.6 Q56.5 28.6 61.8 31.6"/></g>
+        <g className="ui-cat-hat"><path d="M36.5 22.4 C38 16.4 58 16.4 59.5 22.4 C52 21 44 21 36.5 22.4 Z"/><path d="M48 17 L48.8 14.2"/></g>
       </g>
       {collar && <g className={`ui-cat-collar${drawCollar ? ' ui-cat-collar-draw' : ''}`}>
         <path pathLength={1} d="M36.6 61.6 Q48 68.2 59.4 61.6"/>
@@ -207,7 +221,7 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
 
   const classes = `ui-cat ui-kitten ${face ? 'ui-kitten-face' : 'ui-kitten-full'} ${className}`;
   const rootStyle: CSSProperties = { width: size, height: size, ...(viewTransitionName ? { viewTransitionName } as CSSProperties : {}), ...style };
-  return <div ref={root} className={classes} data-mood={mood} style={rootStyle}>
+  return <div ref={root} className={classes} data-mood={mood} data-stage={stage} data-retired={retired || undefined} style={rootStyle}>
     {interactive
       ? <button type="button" tabIndex={onClick ? 0 : -1} aria-label={label ?? '小猫'} onClick={handleClick} className="ui-cat-stage" style={{ width: size, height: size }}>{svg}</button>
       : <span className="ui-cat-stage" role={label ? 'img' : undefined} aria-label={label} style={{ width: size, height: size }}>{svg}</span>}

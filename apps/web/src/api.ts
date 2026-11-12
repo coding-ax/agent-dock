@@ -75,6 +75,8 @@ export type AssistantTask = {
   state: AssistantTaskState; round: number; sessionId?: string; agentId?: string; cwd?: string;
   model?: string; reasoningEffort?: string;
   plan: boolean; outcome?: 'accepted' | 'cancelled'; createdAt: string; updatedAt: string; closedAt?: string;
+  /** 已关闭便签被折叠进归档区：只读、可取出，不是删除。 */
+  archivedAt?: string; archiveBatchId?: string;
 };
 export type AssistantWatch = {
   id: string; ownerSessionId: string; name: string; command: string; cwd?: string;
@@ -97,6 +99,68 @@ export type AssistantReview = {
 export type AssistantState = {
   mainSessionId: string | null; mainSession: Session | null; companion?: AssistantCompanion | null; quietHours: AssistantQuietHours; silentEmoji: string;
   tasks: AssistantTask[]; watches: AssistantWatch[]; drafts: AssistantDraft[];
+  /** 小猫的一生（代数、阶段、交接提议、整理轮次）。旧服务端没有这个字段。 */
+  lifecycle?: AssistantLifecycleLight | null;
+};
+
+/* ---------- 小猫的一生：老化、整理轮次、交接仪式（见 docs/2026-11-12-companion-lifecycle-handoff-design.md） ---------- */
+export type LifeStage = 'kitten' | 'adult' | 'senior' | 'elder';
+export type LifecycleLevel = 'ok' | 'tidy' | 'handoff';
+export type LifecycleMetricKey = 'rounds' | 'events' | 'contextPercent' | 'openNotes' | 'closedNotes' | 'archivedNotes' | 'uptimeDays';
+export type LifecycleReason = { metric: LifecycleMetricKey; level: LifecycleLevel; value: number; threshold: number };
+export type LifecycleMetrics = { rounds: number; events: number; contextPercent?: number; openNotes: number; closedNotes: number; archivedNotes: number; uptimeDays: number; computedAt: string };
+export type LifecycleThreshold = { tidy?: number; handoff?: number };
+export type LifecycleConfig = { autoMaintenance: boolean; autoProposeHandoff: boolean; foldClosedAfterHours: number; maxAutoRunsPerDay: number; thresholds: Record<LifecycleMetricKey, LifecycleThreshold> };
+export type LifecycleConfigPatch = { autoMaintenance?: boolean; autoProposeHandoff?: boolean; foldClosedAfterHours?: number; maxAutoRunsPerDay?: number; set?: Record<string, number | null> };
+export type CatState = 'active' | 'retired' | 'released' | 'aborted';
+export type CatRecord = {
+  id: string; familyId: string; generation: number; sessionId: string; name: string; agentId?: string; model?: string; reasoningEffort?: string; cwd?: string;
+  state: CatState; lifeStage: LifeStage; peakAgeScore: number; rounds: number; adoptedAt: string; retiredAt?: string; retiredReason?: string;
+  predecessorId?: string; successorId?: string; handoffId?: string; createdAt: string; updatedAt: string;
+};
+export type HandoffState = 'proposed' | 'confirmed' | 'packing' | 'spawning' | 'transferring' | 'switching' | 'retiring' | 'briefing' | 'done' | 'rolling_back' | 'rolled_back' | 'cancelled';
+export type HandoffOutcome = 'succeeded' | 'partial' | 'needs_confirmation';
+export type HandoffSummary = {
+  id: string; state: HandoffState; outcome: HandoffOutcome | null; trigger: 'user' | 'threshold' | 'agent'; reason: string | null; reasons: LifecycleReason[];
+  fromSessionId: string; toSessionId: string | null; successorName: string | null; error: string | null; createdAt: string; confirmedAt: string | null; completedAt: string | null;
+};
+export type HandoffTransfer = { id: string; handoffId: string; kind: 'task' | 'watch' | 'draft'; itemId: string; title: string; status: 'transferred' | 'needs_confirmation' | 'failed' | 'reverted'; detail?: string; createdAt: string; updatedAt: string };
+export type HandoffStepRecord = { step: string; at: string; ok: boolean; detail?: string };
+export type HandoffPackageView = { successor: { name: string; generation: number }; predecessor: { generation: number; name: string; sessionId: string; lifeStage: LifeStage }; openTasks: Array<{ id: string; title: string }>; watches: Array<{ id: string; name: string }>; pendingDrafts: Array<{ id: string; target: string }>; closedNotes: { archived: number; batchId?: string } };
+export type HandoffView = HandoffSummary & {
+  steps: HandoffStepRecord[]; archiveBatchId: string | null; briefingTaskId: string | null; metrics: Partial<LifecycleMetrics>;
+  fromCat: CatRecord | null; toCat: CatRecord | null; transfers: HandoffTransfer[]; package: HandoffPackageView | null;
+};
+export type ArchiveBatch = { id: string; source: 'handoff' | 'maintenance' | 'manual'; reason?: string; handoffId?: string; runId?: string; taskIds: string[]; createdAt: string; undoneAt?: string };
+export type MaintenanceRun = {
+  id: string; trigger: 'auto' | 'manual'; state: 'running' | 'completed' | 'failed' | 'interrupted'; reason?: string; reasons: LifecycleReason[];
+  sessionId: string; catId?: string; runtimeTaskId?: string; summary?: string; error?: string; archiveBatchId?: string; createdAt: string; updatedAt: string; completedAt?: string;
+  /** 这一轮折叠出来的归档批次（张数、是否已撤销）。 */
+  batch?: { count: number; undoneAt?: string } | null;
+};
+export type AssistantLifecycleLight = {
+  cat: { id: string; familyId: string; generation: number; name: string; lifeStage: LifeStage; peakAgeScore: number; rounds: number; adoptedAt: string; predecessor?: { name: string; generation: number; sessionId: string } } | null;
+  level: LifecycleLevel;
+  handoff: HandoffSummary | null;
+  lastHandoff: HandoffSummary | null;
+  maintenance: { id: string; trigger: 'auto' | 'manual'; createdAt: string; reasons: LifecycleReason[] } | null;
+  ancestorSessionIds: string[];
+};
+export type AssistantLifecycle = {
+  cat: (CatRecord & { stageLabel: string; ageScore: number; stageProgress: number }) | null;
+  predecessor: CatRecord | null;
+  metrics: LifecycleMetrics | null;
+  levels: Record<LifecycleMetricKey, LifecycleLevel> | null;
+  level: LifecycleLevel;
+  reasons: LifecycleReason[];
+  config: LifecycleConfig;
+  policy: { maintenanceCooldownHours: number; handoffRemindHours: number | null; selfDescription: string } | null;
+  handoff: HandoffView | null;
+  handoffs: HandoffSummary[];
+  maintenance: MaintenanceRun | null;
+  maintenanceRuns: MaintenanceRun[];
+  lineage: CatRecord[];
+  ancestorSessionIds: string[];
 };
 /** `events` 只是一页（最近若干条）；总行数与是否被截断由 eventTotal / eventsTruncated 明说。 */
 export type SessionRecord = { session: Session; tasks: Task[]; events: DockEvent[]; eventTotal?: number; eventsTruncated?: boolean };
@@ -324,6 +388,18 @@ export const api = {
   assistantSendDraft: (id: string) => json<{ draft: AssistantDraft }>(`/api/assistant/drafts/${encodeURIComponent(id)}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
   assistantDiscardDraft: (id: string) => json<{ draft: AssistantDraft }>(`/api/assistant/drafts/${encodeURIComponent(id)}/discard`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
   assistantNotify: (body: { text: string; ask?: boolean; urgent?: boolean }) => json<{ id: string; delayed: boolean; sent?: boolean }>('/api/assistant/notify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantLifecycle: () => json<AssistantLifecycle>('/api/assistant/lifecycle', undefined, true),
+  assistantHandoff: (id: string) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}`),
+  assistantProposeHandoff: (body: { reason?: string; name?: string } = {}) => json<{ handoff: HandoffView }>('/api/assistant/handoff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  /** 网页调用不带 from：确认只能由用户本人做，服务端对带 from 的确认一律 403。 */
+  assistantConfirmHandoff: (id: string, body: { name?: string } = {}) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantCancelHandoff: (id: string) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+  assistantResendHandoff: (id: string) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}/resend`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+  assistantRunMaintenance: (body: { reason?: string } = {}) => json<{ run: MaintenanceRun }>('/api/assistant/maintenance/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantSaveLifecycleConfig: (patch: LifecycleConfigPatch) => json<{ config: LifecycleConfig }>('/api/assistant/maintenance/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }),
+  assistantNotesArchive: () => json<{ batches: ArchiveBatch[]; tasks: AssistantTask[] }>('/api/assistant/notes/archive', undefined, true),
+  assistantArchiveNotes: (body: { taskIds?: string[]; closedBeforeHours?: number; reason?: string }) => json<{ batch: ArchiveBatch | null; archived: number }>('/api/assistant/notes/archive', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantUnarchiveNotes: (body: { batchId?: string; taskIds?: string[] }) => json<{ restored: string[]; batch?: ArchiveBatch }>('/api/assistant/notes/unarchive', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   // 登录接口不走 json()：密码错误是普通失败，不能触发全局「访问被拒」事件。
   authStatus: async (): Promise<{ passwordEnabled: boolean }> => {
     const response = await fetch('/api/auth/status');

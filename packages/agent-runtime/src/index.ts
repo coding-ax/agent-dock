@@ -745,7 +745,7 @@ export class AgentDockRuntime {
     await this.saveTask(task, 'running');
     // 这一条就是轮次锚点：它是本会话唯一可靠的「这一轮从哪开始」的标记，
     // 判终态、面板切轮、按轮取事件全靠它，所以序号要留一份在手上。
-    const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' ? { detail: agentPrompt } : {}) });
+    const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' || task.origin === 'maintenance' || task.origin === 'handoff' ? { detail: agentPrompt } : {}) });
     this.turnAnchors.set(task.id, anchor.sequence);
     // 用户这一轮提问就是一次对话事件，蹭下面的 saveState 一起落盘，不额外多写一次库。
     session.lastMessageAt = now();

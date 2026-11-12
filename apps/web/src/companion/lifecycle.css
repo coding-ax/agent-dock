@@ -1,0 +1,77 @@
+/*
+ * 小猫的一生：阶段道具、交接仪式动画、系统轮次卡片。
+ * 只用 opacity / transform 做动画，不读布局；prefers-reduced-motion 下全部停住。
+ */
+
+/* ---------- 阶段道具：幼猫一撮毛、资深圆眼镜、老年白眉；退休戴小帽子 ---------- */
+.ui-cat-tuft, .ui-cat-glasses, .ui-cat-brows, .ui-cat-hat { opacity: 0; transition: opacity .45s ease; }
+.ui-cat-tuft, .ui-cat-hat { transform-box: fill-box; transform-origin: 50% 100%; }
+.ui-kitten[data-stage="kitten"] .ui-cat-tuft { opacity: 1; }
+.ui-kitten[data-stage="senior"] .ui-cat-glasses, .ui-kitten[data-stage="elder"] .ui-cat-glasses { opacity: .92; }
+.ui-kitten[data-stage="elder"] .ui-cat-brows { opacity: 1; }
+.ui-kitten[data-retired] .ui-cat-hat { opacity: 1; }
+.ui-kitten[data-retired] .ui-cat-tuft { opacity: 0; }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* 呼吸节奏随年纪放慢；犯困时仍以犯困为准。 */
+  .ui-kitten[data-stage="kitten"]:not([data-mood="sleepy"]) .ui-cat-body-group { animation-duration: 3s; }
+  .ui-kitten[data-stage="senior"]:not([data-mood="sleepy"]) .ui-cat-body-group { animation-duration: 4.6s; }
+  .ui-kitten[data-stage="elder"]:not([data-mood="sleepy"]) .ui-cat-body-group { animation-duration: 5.6s; }
+  .ui-kitten[data-stage="elder"]:not([data-mood="happy"]) .ui-cat-tail { animation-duration: 4.8s; }
+  .ui-kitten[data-stage="kitten"] .ui-cat-tuft { animation: ui-cat-tuft 2.4s ease-in-out infinite; }
+}
+@keyframes ui-cat-tuft { 0%, 100% { transform: rotate(-7deg); } 50% { transform: rotate(7deg); } }
+
+/* ---------- 阶段徽标（侧栏卡片、主会话标题栏） ---------- */
+.ui-stage-chip { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 500; line-height: 17px; background: rgb(244 244 245); color: rgb(113 113 122); }
+.ui-stage-chip[data-stage="kitten"] { background: rgb(254 243 199 / .8); color: rgb(146 64 14); }
+.ui-stage-chip[data-stage="senior"] { background: rgb(224 231 255 / .8); color: rgb(67 56 202); }
+.ui-stage-chip[data-stage="elder"] { background: rgb(237 233 254); color: rgb(91 33 182); }
+.ui-handoff-flag { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 600; line-height: 17px; background: rgb(255 237 213); color: rgb(194 65 12); }
+.ui-handoff-flag:hover { background: rgb(254 215 170); }
+.ui-handoff-flag[data-compact] { justify-content: center; width: 17px; height: 17px; padding: 0; }
+
+/* ---------- 年龄条 ---------- */
+.ui-age-bar { position: relative; height: 6px; border-radius: 999px; background: linear-gradient(90deg, rgb(254 243 199) 0 15%, rgb(228 228 231) 15% 45%, rgb(224 231 255) 45% 80%, rgb(237 233 254) 80% 100%); }
+.ui-age-bar-fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: rgb(39 39 42); transition: width .6s var(--ease-out-quint, ease-out); }
+.ui-age-bar-tick { position: absolute; top: -2px; width: 1px; height: 10px; background: rgb(161 161 170); }
+
+/* ---------- 交接仪式 ---------- */
+.ui-ceremony-stage { position: relative; display: flex; align-items: flex-end; justify-content: center; gap: 28px; height: 150px; overflow: hidden; border-radius: 14px; background: radial-gradient(120% 90% at 50% 100%, rgb(250 250 250) 0%, rgb(244 244 245) 60%, rgb(250 250 249) 100%); }
+.ui-ceremony-ground { position: absolute; left: 10%; right: 10%; bottom: 28px; height: 1px; background: rgb(212 212 216); }
+.ui-ceremony-cat { position: relative; z-index: 1; margin-bottom: 26px; transition: opacity .6s ease, transform .6s var(--ease-out-quint, ease-out); }
+.ui-ceremony-cat[data-hidden] { opacity: 0; transform: translateY(16px) scale(.6); }
+.ui-ceremony-tag { position: absolute; left: 50%; bottom: -14px; translate: -50% 0; white-space: nowrap; font-size: 10.5px; color: rgb(113 113 122); transition: opacity .4s ease; }
+/* 老猫走远时名牌先淡出，免得缩小后压在地平线上。 */
+.ui-ceremony-cat[data-act="leave"] .ui-ceremony-tag { opacity: 0; }
+.ui-ceremony-notes { position: absolute; left: 0; right: 0; top: 30px; height: 24px; pointer-events: none; }
+.ui-ceremony-note { position: absolute; left: 34%; top: 0; width: 18px; height: 14px; border-radius: 2px; opacity: 0; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+.ui-ceremony-paws { display: flex; justify-content: center; gap: 10px; }
+.ui-ceremony-paw { color: rgb(212 212 216); transition: color .35s ease, transform .35s var(--spring-soft, ease-out); }
+.ui-ceremony-paw[data-status="done"] { color: rgb(39 39 42); }
+.ui-ceremony-paw[data-status="active"] { color: rgb(245 158 11); }
+.ui-ceremony-paw[data-status="failed"] { color: rgb(220 38 38); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .ui-ceremony-cat[data-act="wave"] { animation: ui-ceremony-wave 1.4s ease-in-out infinite; transform-origin: 50% 100%; }
+  .ui-ceremony-cat[data-act="leave"] { animation: ui-ceremony-leave 2.4s ease-in forwards; }
+  .ui-ceremony-cat[data-act="pop"] { animation: ui-ceremony-pop .9s var(--spring-soft, ease-out) both; transform-origin: 50% 100%; }
+  .ui-ceremony-cat[data-act="bounce"] { animation: ui-ceremony-bounce 1.6s ease-in-out infinite; transform-origin: 50% 100%; }
+  .ui-ceremony-note[data-flying] { animation: ui-ceremony-fly 1.8s ease-in-out infinite; }
+  .ui-ceremony-paw[data-status="active"] { animation: ui-ceremony-paw 1s ease-in-out infinite; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-ceremony-cat[data-act="leave"] { opacity: .35; }
+  .ui-ceremony-note[data-flying] { opacity: .8; left: 50%; }
+}
+@keyframes ui-ceremony-wave { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-5deg); } 75% { transform: rotate(5deg); } }
+@keyframes ui-ceremony-leave { 0% { transform: translateX(0); opacity: 1; } 15% { transform: translateX(4px) rotate(3deg); } 100% { transform: translateX(-110px) scale(.82); opacity: .2; } }
+@keyframes ui-ceremony-pop { 0% { transform: translateY(18px) scale(.2); opacity: 0; } 55% { transform: translateY(-14px) scale(1.08); opacity: 1; } 75% { transform: translateY(0) scale(.96); } 100% { transform: none; opacity: 1; } }
+@keyframes ui-ceremony-bounce { 0%, 100% { transform: translateY(0); } 30% { transform: translateY(-7px); } 55% { transform: translateY(0) scale(1.03, .97); } }
+@keyframes ui-ceremony-fly { 0% { transform: translate(0, 10px) rotate(-8deg); opacity: 0; } 15% { opacity: 1; } 50% { transform: translate(60px, -14px) rotate(4deg); } 85% { opacity: 1; } 100% { transform: translate(120px, 8px) rotate(10deg); opacity: 0; } }
+@keyframes ui-ceremony-paw { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.22); } }
+
+/* ---------- 时间线上的系统轮次卡片（整理 / 交接说明） ---------- */
+.ui-system-round { margin: 18px 0; border: 1px dashed rgb(212 212 216); border-radius: 12px; background: rgb(250 250 250 / .7); }
+.ui-system-round[data-kind="handoff"] { border-color: rgb(196 181 253); background: rgb(245 243 255 / .6); }
+.ui-system-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 500; line-height: 17px; background: rgb(228 228 231 / .8); color: rgb(82 82 91); }

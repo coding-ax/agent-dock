@@ -7,6 +7,7 @@ import { useModalFocusTrap } from './useModalFocusTrap';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { ConfirmDialog, SettingRow } from './ui-controls';
 import { Kitten } from './companion/Kitten';
+import { CatProfile } from './companion/CatProfile';
 import { pickKittenName, sinceLabel } from './companion/companion-model';
 import { useAssistantState, useCompanion } from './companion/useCompanion';
 import { useCompanionStore } from './companion/companion-store';
@@ -18,7 +19,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : '
  * 认领在首页完成（这里没认领时只给一个「去认领」）；认领后可以改名、打开、让它休息（解除主会话）。
  * 静默时段只影响普通通知，默认关闭，起止时间由用户自己定。
  */
-export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt }: { onClose(): void; onOpenMain(): void; onAdopt(): void }) {
+export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt, onOpenSession }: { onClose(): void; onOpenMain(): void; onAdopt(): void; onOpenSession?(id: string): void }) {
   const queryClient = useQueryClient();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -79,7 +80,7 @@ export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt }: { onCl
       <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-4 py-3"><DeferredSkeleton/></div>}>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {info.adopted && main ? <div className="flex items-center gap-4 border-b border-zinc-100 px-5 py-4">
-            <span className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-zinc-50 ring-1 ring-zinc-200"><Kitten variant="face" size={50} mood={info.mood} collar label={info.name}/></span>
+            <span className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-zinc-50 ring-1 ring-zinc-200"><Kitten variant="face" size={50} mood={info.mood} stage={info.stage} collar label={info.name}/></span>
             <div className="min-w-0 flex-1">
               <form className="flex items-center gap-1.5" onSubmit={event => { event.preventDefault(); if (trimmed && trimmed !== info.name) rename.mutate(trimmed); }}>
                 <input value={name} maxLength={16} onChange={event => setName(event.target.value)} aria-label="小猫的名字" className="ui-field h-8 w-36 rounded-lg border border-zinc-300 bg-white px-2.5 text-[14px] font-semibold text-zinc-900 outline-none"/>
@@ -102,6 +103,11 @@ export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt }: { onCl
             </div>
             <button type="button" onClick={onAdopt} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-zinc-900 px-4 text-[13px] font-medium text-white hover:bg-zinc-700"><PawPrint size={14}/>去认领</button>
           </div>}
+
+          {info.adopted && main && <CatProfile
+            onOpenSession={id => onOpenSession?.(id)}
+            onOpenCeremony={handoffId => { onClose(); useCompanionStore.getState().openCeremony(handoffId); }}
+          />}
 
           <SettingRow title={<span className="flex items-center gap-1.5"><Clock size={14}/>静默时段</span>} description="开启后，普通通知会压到结束时间再发；紧急通知（notify --urgent）不受影响。默认关闭。">
             <div className="flex flex-col items-end gap-2">

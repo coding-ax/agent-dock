@@ -3,6 +3,7 @@ import { useEventListener, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LoaderCircle, PawPrint, Send, Settings2, Trash2, X } from 'lucide-react';
 import { api, type AssistantDraft } from '../api';
+import { ArchiveShelf } from './ArchiveShelf';
 import { Kitten } from './Kitten';
 import { StickyNote } from './StickyNote';
 import { groupNotes, type NoteCounts, type NoteFilter } from './companion-model';
@@ -111,7 +112,7 @@ function DrawerBody({ filter, expandedId, onToggle, highlight, now }: { filter: 
       <p className="mt-1 text-[12.5px] leading-5 text-zinc-500">认领一只小猫当主会话，它派出去的活都会贴在这里。</p>
       <button type="button" onClick={() => { useCompanionStore.getState().closeDrawer(); nav.goAdopt(); }} className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-full bg-zinc-900 px-4 text-[13px] font-medium text-white transition-transform hover:bg-zinc-700 active:scale-95"><PawPrint size={14}/>去认领</button>
     </div> : empty ? <div className="flex flex-col items-center px-6 pb-6 pt-10 text-center">
-      <Kitten size={68} mood={filter === 'all' ? 'sleepy' : 'idle'} collar/>
+      <Kitten size={68} mood={filter === 'all' ? 'sleepy' : 'idle'} stage={info.stage} collar/>
       <p className="mt-3 text-[14px] font-semibold text-zinc-800">{filter === 'all' ? '一张便签都还没有' : filter === 'needs_user' ? '没有需要你点头的事' : '这一栏是空的'}</p>
       <p className="mt-1 max-w-[260px] text-[12.5px] leading-5 text-zinc-500">{filter === 'all' ? `跟${info.name}说说要做的事，它会拆成便签派出去，做完帮你验收。` : filter === 'needs_user' ? `${info.name}拿不准的事、写好等你点头的计划会贴到这里。` : '换个分类看看吧。'}</p>
       {filter === 'all' && <button type="button" onClick={() => { useCompanionStore.getState().closeDrawer(); nav.openMain(); }} className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-full bg-zinc-900 px-4 text-[13px] font-medium text-white transition-transform hover:bg-zinc-700 active:scale-95"><PawPrint size={14}/>和{info.name}聊聊</button>}
@@ -127,6 +128,7 @@ function DrawerBody({ filter, expandedId, onToggle, highlight, now }: { filter: 
         </div> : <p className="px-1 text-[12px] text-zinc-400">这一栏是空的。</p>}
       </section>)}
     </>}
+    {info.adopted && (filter === 'all' || filter === 'closed') && <ArchiveShelf/>}
   </div>;
 }
 
@@ -221,7 +223,7 @@ export function StickyDrawer() {
     <div className="ui-drawer-backdrop" onClick={close}/>
     <aside ref={panelRef} role="dialog" aria-modal="true" aria-label={`${info.name}的便签`} className="ui-drawer" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd}>
       <div key={`head-${nonce}`} className="ui-drawer-head">
-        <span className="ui-companion-avatar ui-cat-hover-host"><Kitten variant="face" size={30} mood={info.adopted ? info.mood : 'curious'} collar={info.adopted} interactive={false}/></span>
+        <span className="ui-companion-avatar ui-cat-hover-host"><Kitten variant="face" size={30} mood={info.adopted ? info.mood : 'curious'} stage={info.adopted ? info.stage : undefined} collar={info.adopted} interactive={false}/></span>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-[15px] font-semibold tracking-[-.01em] text-zinc-900">{info.adopted ? `${info.name}的便签` : '便签'}</h2>
           <p className="truncate text-[12px] text-zinc-500">{summary}</p>

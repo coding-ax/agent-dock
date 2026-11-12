@@ -1,8 +1,12 @@
 import { useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import type { AssistantLifecycleLight } from '../api';
 import { CompanionEdge, type CompanionView } from './CompanionEdge';
+import { HandoffCeremony } from './HandoffCeremony';
 import { StickyDrawer } from './StickyDrawer';
 import { companionBubble, diffTasks, isMainBusy, noteTone, snapshotTasks, type TaskSnapshot } from './companion-model';
 import { anchorElement, anchorRect, bump, burst, flyNote } from './effects';
+import { diffLifecycle, lifecycleBubble } from './lifecycle-model';
 import { useCompanion } from './useCompanion';
 import { useCompanionStore } from './companion-store';
 
@@ -60,10 +64,48 @@ function useCompanionReactions(view: CompanionView) {
   }, [state, view, info.name]);
 }
 
+/**
+ * 小猫的一生：交接提议冒泡（点开就是交接仪式）、整理轮次开始/结束、交接完成或回滚、长大一个阶段。
+ * 第一次拿到数据不算变化，刷新页面不会把旧事重播一遍；仪式弹窗开着时它自己会讲，不再冒泡。
+ */
+function useLifecycleReactions() {
+  const info = useCompanion();
+  const qc = useQueryClient();
+  const previous = useRef<AssistantLifecycleLight | undefined>(undefined);
+  const lifecycle = info.lifecycle;
+
+  useEffect(() => {
+    const before = previous.current;
+    previous.current = lifecycle;
+    if (!info.adopted || !lifecycle) return;
+    const events = diffLifecycle(before, lifecycle);
+    if (!events.length) return;
+    const store = useCompanionStore.getState();
+    for (const event of events) {
+      if (event.kind === 'maintenance_finished' || event.kind === 'handoff_done' || event.kind === 'handoff_rolled_back') {
+        void qc.invalidateQueries({ queryKey: ['assistant-lifecycle'] });
+        void qc.invalidateQueries({ queryKey: ['assistant-notes-archive'] });
+      }
+      if (store.ceremony && event.kind !== 'aged' && event.kind !== 'maintenance_started' && event.kind !== 'maintenance_finished') continue;
+      const bubble = lifecycleBubble(event, info.name, lifecycle.cat?.lifeStage);
+      const action = event.kind === 'handoff_proposed' ? { kind: 'handoff' as const, handoffId: event.handoffId }
+        : event.kind === 'handoff_done' || event.kind === 'handoff_rolled_back' || event.kind === 'maintenance_finished' ? { kind: 'main' as const }
+          : undefined;
+      store.say(bubble.text, bubble.tone, action);
+      if (event.kind === 'aged' || event.kind === 'handoff_done') {
+        const rect = anchorRect(KITTEN_ANCHORS);
+        if (rect) burst(rect, event.kind === 'aged' ? 'sparkles' : 'hearts', 8);
+      }
+    }
+  }, [info.adopted, info.name, lifecycle, qc]);
+}
+
 export function CompanionLayer({ view }: { view: CompanionView }) {
   useCompanionReactions(view);
+  useLifecycleReactions();
   return <>
     <CompanionEdge view={view}/>
     <StickyDrawer/>
+    <HandoffCeremony/>
   </>;
 }

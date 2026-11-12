@@ -98,6 +98,7 @@ export function CompanionEdge({ view }: { view: CompanionView }) {
 
   const onAction = useMemoizedFn((action: BubbleAction) => {
     if (action.kind === 'main') nav.openMain();
+    else if (action.kind === 'handoff') useCompanionStore.getState().openCeremony(action.handoffId);
     else useCompanionStore.getState().openDrawer({ highlight: action.taskId });
   });
   const onBubbleDone = useMemoizedFn(() => useCompanionStore.getState().nextBubble());
@@ -172,7 +173,7 @@ export function CompanionEdge({ view }: { view: CompanionView }) {
     <div ref={node => { pill.current = node; pillAnchor(node); }} className="ui-edge-pill">
       <span className="ui-edge-grip" aria-hidden="true" title="上下拖动换位置"/>
       {showKitten && <button type="button" onClick={() => nav.openMain()} aria-label={`和${info.name}聊聊（${info.status}）`} title={`${info.name} · ${info.status}`} className="ui-edge-btn ui-edge-kitten ui-cat-hover-host">
-        <span ref={kittenAnchor}><Kitten variant="face" size={30} mood={info.mood} collar interactive={false}/></span>
+        <span ref={kittenAnchor}><Kitten variant="face" size={30} mood={info.mood} stage={info.stage} collar interactive={false}/></span>
       </button>}
       <button type="button" onClick={() => useCompanionStore.getState().toggleDrawer()} aria-label={label} title={`${label}（也可以往左拉）`} aria-expanded={drawerOpen} className="ui-edge-btn ui-edge-notes">
         <span ref={notesAnchor} className="ui-edge-stack ui-note-paper-running" aria-hidden="true"><i className="ui-note-paper-review"/><i className="ui-note-paper-done"/><i/></span>

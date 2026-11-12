@@ -4,6 +4,7 @@ import { Kitten } from './Kitten';
 import { useAnchor } from './effects';
 import { useCompanion, useCompanionNav } from './useCompanion';
 import { useCompanionStore } from './companion-store';
+import { HandoffFlag, StageChip } from './LifecycleBadges';
 
 /**
  * 侧栏顶部的小猫卡片：主会话的常驻入口。
@@ -41,11 +42,12 @@ export function CompanionCard({ active }: { active: boolean }) {
   ].filter(Boolean).join('，');
   const open = info.counts.open;
   return <div role="button" tabIndex={0} onClick={() => nav.openMain()} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); nav.openMain(); } }} data-active={active || undefined} aria-label={`${info.name}（主会话）：${info.status}`} className="ui-companion-card ui-cat-hover-host cursor-pointer">
-    <span ref={anchor} className="ui-companion-avatar"><Kitten variant="face" size={28} mood={info.mood} collar interactive={false}/></span>
+    <span ref={anchor} className="ui-companion-avatar"><Kitten variant="face" size={28} mood={info.mood} stage={info.stage} collar interactive={false}/></span>
     <span className="min-w-0 flex-1">
       <span className="flex min-w-0 items-center gap-1.5">
         <span className="truncate text-[14px] font-semibold text-zinc-900">{info.name}</span>
-        <span className="shrink-0 rounded-full bg-zinc-200/70 px-1.5 text-[10.5px] font-medium leading-[17px] text-zinc-500">主会话</span>
+        {info.lifecycle?.cat ? <StageChip lifecycle={info.lifecycle} role="主会话" compact/> : <span className="shrink-0 rounded-full bg-zinc-200/70 px-1.5 text-[10.5px] font-medium leading-[17px] text-zinc-500">主会话</span>}
+        <HandoffFlag lifecycle={info.lifecycle} name={info.name} compact/>
       </span>
       <span className={`block truncate text-[12px] ${info.busy ? 'ui-shimmer-text' : 'text-zinc-500'}`}>{info.status}</span>
     </span>
@@ -70,7 +72,7 @@ export function CompanionStripButton() {
   const attention = info.counts.needsUser + info.pendingDrafts;
   return <HoverTooltip content={info.adopted ? `${info.name} · ${info.status}` : '认领一只小猫'}>
     <button type="button" onClick={() => (info.adopted ? nav.openMain() : nav.goAdopt())} aria-label={info.adopted ? `打开主会话（${info.name}）` : '认领一只小猫'} className="ui-cat-hover-host relative grid h-9 w-9 place-items-center rounded-lg text-zinc-700 hover:bg-white">
-      <Kitten variant="face" size={24} mood={info.adopted ? info.mood : 'curious'} collar={info.adopted} interactive={false}/>
+      <Kitten variant="face" size={24} mood={info.adopted ? info.mood : 'curious'} stage={info.adopted ? info.stage : undefined} collar={info.adopted} interactive={false}/>
       {attention > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full border-2 border-rail bg-red-500"/>}
     </button>
   </HoverTooltip>;

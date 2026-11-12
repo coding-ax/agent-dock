@@ -60,6 +60,7 @@ import { CompanionCard, CompanionStripButton } from './companion/CompanionCard';
 import { HomeStage } from './companion/HomeStage';
 import { CompanionNavProvider, useAssistantState, type CompanionNav } from './companion/useCompanion';
 import { useCompanionStore } from './companion/companion-store';
+import { isLineageSource } from './companion/lifecycle-model';
 import { withViewTransition } from './companion/effects';
 
 const PromptEditor = lazy(() => import('./PromptEditor'));
@@ -639,7 +640,8 @@ export default function App() {
     selectSession(task.sessionId);
   });
   const openAssistantSettings = useMemoizedFn(() => { setSidebarOpen(false); openAppDialog('assistant'); });
-  const companionNav = useMemo<CompanionNav>(() => ({ openMain, openTask, goAdopt, openSettings: openAssistantSettings }), [openMain, openTask, goAdopt, openAssistantSettings]);
+  const openSessionById = useMemoizedFn((id: string) => { useCompanionStore.getState().closeDrawer(); selectSession(id); });
+  const companionNav = useMemo<CompanionNav>(() => ({ openMain, openTask, goAdopt, openSettings: openAssistantSettings, openSession: openSessionById }), [openMain, openTask, goAdopt, openAssistantSettings, openSessionById]);
   const companionView = !primarySession ? 'home' : primarySession.id === mainSessionId ? 'main' : 'session';
 
   if (webDenied) return <WebAccessDeniedPanel denied={webDenied}/>;
@@ -706,7 +708,8 @@ export default function App() {
     // 侧边会话的父标题在这儿查好再传下去，卡片自己不去翻会话列表（它只是展示层）。
     // 父会话被归档或不在当前筛选里就查不到，卡片会降级成不带出处。
     const parent = session.sourceId ? sortedSessions.find(item => item.id === session.sourceId) : undefined;
-    const noteOf = mainSessionId && session.sourceId === mainSessionId && sideChatParentId(session) ? assistantState.data?.companion?.name ?? '小猫' : undefined;
+    // 交接后，前几代小猫派出的侧边会话仍是这只猫家的便签。
+    const noteOf = mainSessionId && isLineageSource(session.sourceId, mainSessionId, assistantState.data?.lifecycle?.ancestorSessionIds) && sideChatParentId(session) ? assistantState.data?.companion?.name ?? '小猫' : undefined;
     return <SessionRow key={session.id} session={session} drag={drag} noteOf={noteOf} agent={agents.data?.find(item => item.id === session.agentId)} botName={larkConfig.data?.bots.find(bot => session.sourceId?.startsWith(`${bot.appId}:`))?.name} parentLabel={parent ? sessionLabel(parent, agents.data?.find(item => item.id === parent.agentId)?.name) : undefined} active={primarySessionId === session.id || tabs.some(tab => (tab.kind === 'session' || tab.kind === 'side-chat') && tab.sessionId === session.id)} onClick={() => selectSession(session.id)}/>;
   };
   // TooltipProvider 必须挂在根部：Radix 用它统一管理「同一时刻只显示一个提示」与交错延迟。
@@ -833,7 +836,7 @@ export default function App() {
       lark: <LarkConfigModal agents={agents.data ?? []} onClose={closeAppDialog}/>,
       'lark-avatar': <LarkAvatarDialog onClose={closeAppDialog}/>,
       agent: <AgentConfigDialog onClose={closeAppDialog}/>,
-      assistant: <AssistantSettingsDialog onClose={closeAppDialog} onOpenMain={() => { closeAppDialog(); openMain(); }} onAdopt={() => { closeAppDialog(); goAdopt(); }}/>,
+      assistant: <AssistantSettingsDialog onClose={closeAppDialog} onOpenMain={() => { closeAppDialog(); openMain(); }} onAdopt={() => { closeAppDialog(); goAdopt(); }} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
       schedule: sessionId => <ScheduleDialog {...(sessionId ? { session: sortedSessions.find(item => item.id === sessionId) } : {})} sessions={sortedSessions} onClose={closeAppDialog} onOpenSession={selectSession}/>,
       handover: sessionId => {
         const session = sessionId ? sortedSessions.find(item => item.id === sessionId) : undefined;

@@ -195,7 +195,7 @@ function contextLine(event: TimelineEvent, isTarget: boolean, maxChars: number):
 }
 
 function isContextVisible(event: TimelineEvent): boolean {
-  return event.data.origin !== SILENT_TRIGGER_ORIGIN && event.data.origin !== 'injected';
+  return event.data.origin !== SILENT_TRIGGER_ORIGIN && event.data.origin !== 'injected' && event.data.origin !== 'maintenance' && event.data.origin !== 'handoff';
 }
 
 /**

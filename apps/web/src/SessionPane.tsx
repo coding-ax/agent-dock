@@ -39,7 +39,8 @@ function CompanionPlaceholder() {
 
 type SendMode = 'queue' | 'interrupt';
 /** 静默轮次不能出现在「等待发送」面板：它不是用户可编辑的消息。 */
-const HIDDEN_QUEUE_ORIGINS: ReadonlySet<string> = new Set([SILENT_TRIGGER_ORIGIN]);
+// 整理轮次和交接说明是系统轮次：排队时也不进「等待发送」，免得完整指令被当成用户消息编辑或取消。
+const HIDDEN_QUEUE_ORIGINS: ReadonlySet<string> = new Set([SILENT_TRIGGER_ORIGIN, 'maintenance', 'handoff']);
 
 /**
  * 会话标题栏的副屏开关。空副屏里直接展示可打开的面板类型。

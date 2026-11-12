@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { RuntimeError } from '@agent-dock/agent-dock-shared';
 import type { AssistantService } from './service.js';
 import type { DraftRecord, QuietHours, TaskCheck } from './types.js';
+import { registerLifecycleRoutes } from './lifecycle-routes.js';
 
 type TaskBody = {
   title?: string; notes?: string; doneWhen?: string[]; expectMinutes?: number;
@@ -123,7 +124,9 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
     silentEmoji: assistant.getSilentEmoji(),
     tasks: assistant.listTasks(),
     watches: assistant.listWatches(),
-    drafts: assistant.listDrafts()
+    drafts: assistant.listDrafts(),
+    // 小猫的代数、阶段、交接提议、进行中的整理：网页不用再多轮询一个接口。
+    lifecycle: await assistant.lifecycle.light()
   }));
 
   app.get('/api/assistant/tasks', async () => ({ tasks: assistant.listTasks() }));
@@ -136,6 +139,7 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
 
   app.post<{ Body: TaskBody & { from?: string } }>('/api/assistant/tasks', async request => {
     assertMain(assistant, request.body?.from);
+    await assistant.lifecycle.assertNoSystemRound(request.body?.from, request.body?.plan === true ? '记计划卡' : '派活');
     const body = request.body ?? {};
     const title = body.title?.trim();
     if (!title) throw bad('title 必填');
@@ -156,6 +160,7 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
 
   app.post<{ Params: { id: string }; Body: { from?: string } }>('/api/assistant/tasks/:id/start', async request => {
     assertMain(assistant, request.body?.from);
+    await assistant.lifecycle.assertNoSystemRound(request.body?.from, '让计划卡开工');
     return { task: await assistant.startPlannedTask(request.params.id) };
   });
 
@@ -190,6 +195,7 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
     mode?: 'once' | 'repeat'; cooldown?: string; expires?: string; from?: string;
   } }>('/api/assistant/watches', async request => {
     assertMain(assistant, request.body?.from);
+    await assistant.lifecycle.assertNoSystemRound(request.body?.from, '加 watch');
     const body = request.body ?? {};
     const name = body.name?.trim();
     const command = body.command?.trim();
@@ -251,6 +257,8 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
 
   app.post<{ Body: { text?: string; ask?: boolean; urgent?: boolean; from?: string } }>('/api/assistant/notify', async request => {
     assertMain(assistant, request.body?.from);
+    // 系统轮次（整理 / 交接说明）不打扰用户；真要紧的 --urgent 仍放行。
+    if (request.body?.urgent !== true) await assistant.lifecycle.assertNoSystemRound(request.body?.from, '发通知');
     const text = request.body?.text?.trim();
     if (!text) throw bad('text 必填');
     return await assistant.notify({ text, ask: request.body?.ask === true, urgent: request.body?.urgent === true });
@@ -258,4 +266,6 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
 
   // 给测试和脚本用：立刻跑一轮扫描，不必等 30 秒。
   app.post('/api/assistant/scan', async () => { await assistant.scan(); return { ok: true }; });
+
+  registerLifecycleRoutes(app, assistant);
 }

@@ -8,6 +8,7 @@ import { greeting, pickKittenName, type NoteFilter } from './companion-model';
 import { KITTEN_TRANSITION_NAME, useAnchor } from './effects';
 import { useCompanion } from './useCompanion';
 import { useCompanionStore } from './companion-store';
+import { HandoffFlag, StageChip } from './LifecycleBadges';
 
 const selectMainId = (state: AssistantState) => state.mainSessionId;
 
@@ -55,7 +56,7 @@ export function CompanionHeader({ agentId, agentName }: { agentId: string; agent
 
   return <div className="flex min-w-0 flex-1 items-center gap-2.5">
     <span ref={anchor} className="shrink-0">
-      <Kitten variant="face" size={36} mood={info.mood} collar track celebrateKey={celebrateNonce} viewTransitionName={KITTEN_TRANSITION_NAME} label={`${info.name}：${info.status}`}/>
+      <Kitten variant="face" size={36} mood={info.mood} stage={info.stage} collar track celebrateKey={celebrateNonce} viewTransitionName={KITTEN_TRANSITION_NAME} label={`${info.name}：${info.status}`}/>
     </span>
     <div className="min-w-0">
       <div className="flex min-w-0 items-center gap-1.5">
@@ -69,6 +70,8 @@ export function CompanionHeader({ agentId, agentName }: { agentId: string; agent
             <PencilLine size={12} className="shrink-0 text-zinc-400 opacity-0 transition-opacity group-hover/name:opacity-100"/>
           </button>}
         <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 text-[10.5px] font-medium leading-[17px] text-zinc-500">主会话</span>
+        <StageChip lifecycle={info.lifecycle}/>
+        <HandoffFlag lifecycle={info.lifecycle} name={info.name}/>
       </div>
       <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500">
         <span className={`min-w-0 truncate ${info.busy ? 'ui-shimmer-text' : ''}`}>{info.status}</span>
@@ -103,7 +106,7 @@ export function CompanionWelcome({ onPick }: { onPick(text: string): void }) {
   const info = useCompanion();
   return <div className="ui-empty-state flex flex-col items-center justify-center text-center">
     <div className="ui-speech">{greeting()}～我是<b className="font-semibold">{info.name}</b>，你的主会话。</div>
-    <Kitten size={84} mood={info.mood === 'sleepy' ? 'idle' : info.mood} collar track typingAware label={info.name}/>
+    <Kitten size={84} mood={info.mood === 'sleepy' ? 'idle' : info.mood} stage={info.stage} collar track typingAware label={info.name}/>
     <h2 className="mt-4 text-[18px] font-semibold tracking-tight text-zinc-800">说说今天要做什么</h2>
     <p className="mt-2 max-w-sm text-[13px] leading-6 text-zinc-500">我来拆成一张张便签派给侧边会话去做，做完帮你验收；进度随时在右边的便签里看。</p>
     <div className="mt-6 flex max-w-md flex-wrap justify-center gap-2">

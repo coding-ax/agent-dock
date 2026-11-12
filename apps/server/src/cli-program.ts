@@ -12,6 +12,10 @@ import type {
 import type {
   LarkMessageListenCliOptions, LarkMessageReadCliOptions, LarkMessageSendCliOptions
 } from './lark/message-cli.js';
+import type {
+  HandoffCliOptions, LifecycleCliOptions, MaintenanceConfigCliOptions, MaintenanceRunCliOptions,
+  NotesArchiveCliOptions, NotesListCliOptions, NotesUnarchiveCliOptions
+} from './assistant/lifecycle-cli.js';
 
 export interface CliOptions {
   host?: string;
@@ -156,6 +160,17 @@ export interface CliHandlers {
   mainGet?(options: AssistantCliOptions): void | Promise<void>;
   mainSet?(sessionId: string | undefined, options: MainCliOptions): void | Promise<void>;
   mainClear?(options: AssistantCliOptions): void | Promise<void>;
+  mainHandoff?(options: HandoffCliOptions): void | Promise<void>;
+  mainHandoffShow?(id: string | undefined, options: LifecycleCliOptions): void | Promise<void>;
+  mainHandoffCancel?(id: string | undefined, options: LifecycleCliOptions): void | Promise<void>;
+  mainHandoffResend?(id: string, options: LifecycleCliOptions): void | Promise<void>;
+  mainLineage?(options: LifecycleCliOptions): void | Promise<void>;
+  maintenanceStatus?(options: LifecycleCliOptions): void | Promise<void>;
+  maintenanceRun?(options: MaintenanceRunCliOptions): void | Promise<void>;
+  maintenanceConfig?(options: MaintenanceConfigCliOptions): void | Promise<void>;
+  notesList?(options: NotesListCliOptions): void | Promise<void>;
+  notesArchive?(options: NotesArchiveCliOptions): void | Promise<void>;
+  notesUnarchive?(options: NotesUnarchiveCliOptions): void | Promise<void>;
   settingsGet?(options: AssistantCliOptions): void | Promise<void>;
   settingsQuietHours?(options: SettingsCliOptions): void | Promise<void>;
   draftCreate?(options: DraftCreateCliOptions): void | Promise<void>;
@@ -495,6 +510,66 @@ Notes:
     .option('--json', '输出 JSON')
     .action((sessionId, options) => handlers.mainSet?.(sessionId, options));
   main.command('clear').description('清除主会话设置').option('--json', '输出 JSON').action(options => handlers.mainClear?.(options));
+  // 子命令和 handoff 本身都有 --json / --from：Commander 会让父命令先吃掉它们，子命令用 optsWithGlobals 取回。
+  const handoff = main.command('handoff')
+    .description('交接仪式：老猫退休、新猫接班。不带 --yes 只提议；--yes 由用户本人确认并执行（失败自动回滚）')
+    .option('--yes', '确认并立刻执行仪式（只接受用户本人；Agent 只能提议）')
+    .option('--name <name>', '新猫的名字；默认沿用')
+    .option('--reason <text>', '交接原因')
+    .option('--wait <seconds>', '--yes 时最多等多久，默认 180')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.mainHandoff?.(options));
+  handoff.command('show').description('交接进度、便签交接明细；不传 id 看最近一次').argument('[handoff-id]').option('--json', '输出 JSON')
+    .action((id, _options, command: Command) => handlers.mainHandoffShow?.(id, command.optsWithGlobals()));
+  handoff.command('cancel').description('婉拒交接提议（「再陪我一阵」）').argument('[handoff-id]')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id').option('--json', '输出 JSON')
+    .action((id, _options, command: Command) => handlers.mainHandoffCancel?.(id, command.optsWithGlobals()));
+  handoff.command('resend').description('交接说明没送达时重发给新主会话').argument('<handoff-id>')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id').option('--json', '输出 JSON')
+    .action((id, _options, command: Command) => handlers.mainHandoffResend?.(id, command.optsWithGlobals()));
+  main.command('lineage').description('血缘：每一代小猫和它的主会话 id（已退休的会话归档只读）').option('--json', '输出 JSON')
+    .action(options => handlers.mainLineage?.(options));
+
+  const maintenance = program.command('maintenance').description('主会话整理轮次：指标、阈值、手动整理（系统轮次，不派活、不删记录）');
+  maintenance.command('status').description('指标、档位、阈值、最近整理').option('--json', '输出 JSON').action(options => handlers.maintenanceStatus?.(options));
+  maintenance.command('run')
+    .description('立刻开一轮整理（可见的系统轮次；同一时刻只跑一轮）')
+    .option('--reason <text>', '整理原因')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.maintenanceRun?.(options));
+  maintenance.command('config')
+    .description('查看或修改阈值与开关；不带参数时只查看')
+    .option('--auto', '到整理档自动开整理轮次')
+    .option('--no-auto', '关闭自动整理')
+    .option('--auto-handoff', '到交接档自动生成交接提议（从不自动确认）')
+    .option('--no-auto-handoff', '关闭自动提议交接')
+    .option('--fold-after-hours <hours>', '整理时只折叠关闭超过这么久的便签')
+    .option('--max-runs-per-day <n>', '自动整理每天最多几次')
+    .option('--set <key=value>', '阈值，如 rounds.tidy=300、uptimeDays.handoff=off，可重复', collect, [])
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.maintenanceConfig?.(options));
+
+  const notes = program.command('notes').description('便签墙与归档区：已关闭便签折叠进归档区（只读、可取出，不删除）');
+  notes.command('list').description('列出墙上的便签；--archived 看归档区').option('--archived', '看归档区（按批次）').option('--json', '输出 JSON')
+    .action(options => handlers.notesList?.(options));
+  notes.command('archive')
+    .description('把已关闭的便签折叠进归档区')
+    .option('--task <task-id>', '指定便签，可重复', collect, [])
+    .option('--closed-before-hours <hours>', '折叠关闭超过这么久的便签')
+    .option('--reason <text>', '原因')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.notesArchive?.(options));
+  notes.command('unarchive')
+    .description('从归档区取出便签')
+    .option('--batch <batch-id>', '取出一整批')
+    .option('--task <task-id>', '取出单张，可重复', collect, [])
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.notesUnarchive?.(options));
 
   const settings = program.command('settings').description('主会话设置');
   settings.command('show').description('查看设置').option('--json', '输出 JSON').action(options => handlers.settingsGet?.(options));
