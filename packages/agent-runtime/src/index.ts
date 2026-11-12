@@ -8,7 +8,9 @@ import { JsonlTransport, PipeTransport, probeAgent, PtyTransport, type ProbeMatr
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SESSION_TITLE_MAX_CHARS, resolveSessionTitle } from './session-title.js';
+import { StreamEventCoalescer, isCoalescableStreamDelta } from './stream-coalescer.js';
 export { SESSION_TITLE_MAX_CHARS } from './session-title.js';
+export { STREAM_COALESCE_MAX_BYTES, STREAM_COALESCE_MAX_DELAY_MS, StreamEventCoalescer, isCoalescableStreamDelta } from './stream-coalescer.js';
 
 /**
  * 重复提交的去重窗口。手机断网/切网后浏览器会把未收到响应的 POST 原样重放
@@ -86,6 +88,8 @@ export interface RuntimeOptions {
   probe?: typeof probeAgent;
   driverIdleTimeoutMs?: number;
   cleanupIntervalMs?: number;
+  /** 写入侧流式分片合并阈值；测试可调小，生产默认见 stream-coalescer。 */
+  streamCoalesce?: { maxBytes?: number; maxDelayMs?: number };
   sessionEnvironment?: (session: Session) => Record<string, string>;
   /** 创建会话时确定一次，并作为持久 ACP session 的 system prompt 保存。 */
   createSystemPrompt?: (session: Session) => string | undefined;
@@ -190,6 +194,8 @@ export class AgentDockRuntime {
   private readonly driverEventErrors = new Map<string, unknown>();
   private readonly driverStopReasons = new Map<string, string>();
   private readonly factory: DriverFactory;
+  private readonly streamCoalescer: StreamEventCoalescer;
+  private readonly persistChains = new Map<string, Promise<void>>();
   private readonly lastActivity = new Map<string, number>();
   private readonly cleanupTimer?: NodeJS.Timeout;
   private cleanupRun?: Promise<void>;
@@ -199,6 +205,12 @@ export class AgentDockRuntime {
   private readonly recentSends = new Map<string, RecentSend>();
 
   constructor(private readonly repos: RepositoryBundle, private readonly options: RuntimeOptions = {}) {
+    this.streamCoalescer = new StreamEventCoalescer({
+      append: (sessionId, delta) => this.appendEvent(sessionId, delta.type, delta.data, delta.raw),
+      enqueue: (sessionId, task) => this.enqueuePersist(sessionId, task),
+      maxBytes: options.streamCoalesce?.maxBytes,
+      maxDelayMs: options.streamCoalesce?.maxDelayMs
+    });
     this.factory = options.driverFactory ?? ((agent, protocol, onEvent, onExit, sessionId, driverOptions) => {
       if (protocol === 'acp') return new AcpxAdapter({ ...agent, env: { ...agent.env, agentdock_session_id: sessionId } }, { sessionKey: sessionId, onEvent, ...(driverOptions?.resumeSessionId ? { resumeSessionId: driverOptions.resumeSessionId } : {}) });
       if (protocol === 'pty') return new PtyTransport(agent, { onEvent, onExit });
@@ -600,13 +612,48 @@ export class AgentDockRuntime {
     }
   }
 
-  private async emit(sessionId: string, type: EventType, data: any, raw?: string) {
+  /**
+   * 同一会话的事件写入必须串行：序号在入队后才分配，流式合并的定时 flush 也要排在同一条队上，
+   * 否则「先算序号、后落库」的两次写入可能交错，把时间线顺序写反。
+   */
+  private enqueuePersist<T>(sessionId: string, run: () => Promise<T>): Promise<T> {
+    const previous = this.persistChains.get(sessionId) ?? Promise.resolve();
+    // 上一次失败不能卡死后续写入；当前调用的错误仍然通过返回的 promise 抛给调用方。
+    const next = previous.then(run, run);
+    const settled = next.then(() => undefined, () => undefined);
+    this.persistChains.set(sessionId, settled);
+    void settled.then(() => { if (this.persistChains.get(sessionId) === settled) this.persistChains.delete(sessionId); });
+    return next;
+  }
+
+  private async appendEvent(sessionId: string, type: EventType, data: any, raw?: string) {
     const sequence = (this.sequences.get(sessionId) ?? (await this.repos.events.listRecent(sessionId, 1)).at(-1)?.sequence ?? 0) + 1;
     this.sequences.set(sessionId, sequence);
     const event: AgentEvent = { id: makeId('evt'), sessionId, sequence, type, timestamp: now(), data, ...(raw ? { raw } : {}) };
     await this.repos.events.append(event);
     this.emitter.emit(`session:${sessionId}`, event);
     return event;
+  }
+
+  /**
+   * 流式 text/thinking 分片先按「同类型 + 同附加字段」攒成一段，撞到字节阈值或 250ms 定时器
+   * 再作为一条完整事件落库并派发。其它事件会先把攒着的尾巴 flush 掉，保证顺序不跨事件类型。
+   * 返回 undefined 表示这一段还在缓冲里，调用方不需要等它（实时订阅拿到的是 flush 后的整段）。
+   */
+  private emit(sessionId: string, type: EventType, data: any, raw?: string): Promise<AgentEvent | undefined> {
+    return this.enqueuePersist(sessionId, async () => {
+      const delta = { type, data, raw };
+      if (!isCoalescableStreamDelta(delta)) {
+        await this.streamCoalescer.flush(sessionId);
+        return this.appendEvent(sessionId, type, data, raw);
+      }
+      return this.streamCoalescer.write(sessionId, delta);
+    });
+  }
+
+  /** 把当前缓冲的流式尾巴落库。读本轮终态/最终输出之前必须调用。 */
+  private flushStream(sessionId: string) {
+    return this.enqueuePersist(sessionId, () => this.streamCoalescer.flush(sessionId)).then(() => undefined);
   }
 
   private async saveTask(task: TaskRecord, status = task.status) {
@@ -778,6 +825,7 @@ export class AgentDockRuntime {
     // 这一条就是轮次锚点：它是本会话唯一可靠的「这一轮从哪开始」的标记，
     // 判终态、面板切轮、按轮取事件全靠它，所以序号要留一份在手上。
     const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' || task.origin === 'maintenance' || task.origin === 'handoff' ? { detail: agentPrompt } : {}) });
+    if (!anchor) throw new RuntimeError('EVENT_NOT_PERSISTED', '轮次锚点未能落库', 500);
     this.turnAnchors.set(task.id, anchor.sequence);
     // 用户这一轮提问就是一次对话事件，蹭下面的 saveState 一起落盘，不额外多写一次库。
     session.lastMessageAt = now();
@@ -789,6 +837,7 @@ export class AgentDockRuntime {
       this.driverStopReasons.delete(id);
       await driver.send(resolvedAgentPrompt);
       await this.flushDriverEvents(id);
+      await this.flushStream(id);
       const outcome = await this.resolveTaskOutcome(session, task);
       task.finalText = outcome.finalText;
       // 收尾也算一次对话事件（长轮次结束时该浮上来），同样蹭终端态的 saveState 落盘。
@@ -807,6 +856,8 @@ export class AgentDockRuntime {
       if (this.interruptedTurns.has(id) || this.driverStopReasons.get(id) === 'cancelled') await this.saveTask(task, 'interrupted');
       else { const message = error instanceof Error ? error.message : String(error); await this.saveTask(task, 'failed'); await this.repos.artifacts.saveError(id, message); await this.emit(id, 'error', { message }); await this.recoverSessionAfterTask(session, message); throw error; }
     } finally {
+      // 兜底：异常退出时也不能把最后半段思考/正文留在内存里。
+      await this.flushStream(id).catch(() => undefined);
       const hardInterrupted = this.hardInterrupts.has(id);
       // 锚点只在本轮存续期间有效：`anchor` 那条捷径的上界是「会话当前最大序号 +1」，
       // 只因为「本轮就是最后一轮」才成立。留到下一轮开始之后，同一个 taskId 再被问到
@@ -1137,6 +1188,8 @@ export class AgentDockRuntime {
   async resolvePermission(sessionId: string, permissionId: string, approved: boolean) { const { session, driver } = await this.active(sessionId); const key = this.permissionKey(sessionId, permissionId); const request = this.permissions.get(key); if (!request) throw new RuntimeError('PERMISSION_NOT_FOUND', `Unknown permission request: ${permissionId}`, 404); const resolved = await driver?.resolvePermission?.(permissionId, approved); if (driver?.resolvePermission && !resolved) throw new RuntimeError('PERMISSION_EXPIRED', `Permission request is no longer active: ${permissionId}`, 409); request.status = approved ? 'approved' : 'rejected'; this.permissions.delete(key); this.touch(sessionId); await this.repos.artifacts.savePermission(sessionId, request); await this.emit(sessionId, 'permission_request', request); await this.saveState(session, 'thinking'); return request; }
 
   private releaseSessionMemory(sessionId: string) {
+    this.streamCoalescer.discard(sessionId);
+    this.persistChains.delete(sessionId);
     this.drivers.delete(sessionId);
     this.sequences.delete(sessionId);
     this.lastActivity.delete(sessionId);
@@ -1187,6 +1240,8 @@ export class AgentDockRuntime {
     await Promise.allSettled(drivers.map(driver => driver.stop()));
     await Promise.allSettled(this.queueRuns.values());
     await Promise.allSettled(this.driverEventChains.values());
+    await this.streamCoalescer.flushAll();
+    await Promise.allSettled(this.persistChains.values());
     this.sequences.clear(); this.permissions.clear(); this.lastActivity.clear(); this.activeTurns.clear(); this.activeTasks.clear(); this.interruptedTurns.clear(); this.hardInterrupts.clear(); this.driverEventChains.clear(); this.driverEventErrors.clear(); this.openToolCalls.clear();
     for (const waiters of this.turnWaiters.values()) for (const resolve of waiters) resolve();
     this.turnWaiters.clear(); this.queues.clear(); this.queuedAgentPrompts.clear(); this.queuedRiskPolicies.clear(); this.queueRuns.clear(); this.emitter.removeAllListeners();

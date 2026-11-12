@@ -6,10 +6,10 @@ import { SESSION_TITLE_MAX_CHARS } from './session-title.js';
 
 const agent: AgentConfig = { id: 'mock', name: 'Mock', command: process.execPath, args: [], protocol: 'acp', cwd: '/tmp', env: {}, permissionMode: 'ask', timeout: 10, capabilities: { pause: false, resume: true }, builtin: false };
 
-function harness(options: { onSend?: (emit: (event: any) => void) => void; exitOnSend?: number; driverIdleTimeoutMs?: number; sessionEnvironment?: (session: Session) => Record<string, string>; createSystemPrompt?: (session: Session) => string; sessionPrompt?: (session: Session, prompt: string, origin?: string) => string | Promise<string> } = {}) {
+function harness(options: { onSend?: (emit: (event: any) => void) => void; exitOnSend?: number; driverIdleTimeoutMs?: number; streamCoalesce?: { maxBytes?: number; maxDelayMs?: number }; sessionEnvironment?: (session: Session) => Record<string, string>; createSystemPrompt?: (session: Session) => string; sessionPrompt?: (session: Session, prompt: string, origin?: string) => string | Promise<string> } = {}) {
   const repos = createRepositories(':memory:'); let emit!: (event: any) => void; let exit!: (code: number | null) => void; const configuredAgents: AgentConfig[] = [];
   const driver: AgentDriver = { start: vi.fn(async () => {}), send: vi.fn(async () => { options.onSend?.(emit); if (options.exitOnSend) exit(options.exitOnSend); }), interrupt: vi.fn(async () => {}), resume: vi.fn(async () => {}), stop: vi.fn(async () => {}), setModel: vi.fn(async () => {}), setReasoningEffort: vi.fn(async () => {}), setPermissionMode: vi.fn() };
-  const runtime = new AgentDockRuntime(repos, { probe: () => ({ protocol: 'acp', available: true, pause: false, resume: true }), driverFactory: (configuredAgent, _p, onEvent, onExit) => { configuredAgents.push(configuredAgent); emit = onEvent; exit = onExit; return driver; }, driverIdleTimeoutMs: options.driverIdleTimeoutMs, sessionEnvironment: options.sessionEnvironment, createSystemPrompt: options.createSystemPrompt, sessionPrompt: options.sessionPrompt });
+  const runtime = new AgentDockRuntime(repos, { probe: () => ({ protocol: 'acp', available: true, pause: false, resume: true }), driverFactory: (configuredAgent, _p, onEvent, onExit) => { configuredAgents.push(configuredAgent); emit = onEvent; exit = onExit; return driver; }, driverIdleTimeoutMs: options.driverIdleTimeoutMs, streamCoalesce: options.streamCoalesce, sessionEnvironment: options.sessionEnvironment, createSystemPrompt: options.createSystemPrompt, sessionPrompt: options.sessionPrompt });
   return { repos, runtime, driver, configuredAgents, emit: (event: any) => emit(event) };
 }
 
@@ -34,6 +34,37 @@ describe('runtime lifecycle acceptance', () => {
     expect((await h.runtime.getSession(session.id))?.state).toBe('completed');
     const events = await h.runtime.getEvents(session.id); expect(events.map(e => e.type)).toEqual(expect.arrayContaining(['thinking', 'tool_call', 'tool_result', 'text', 'completed']));
     expect((events.find(e => e.type === 'tool_result')?.data as any).completedAt).toBeTruthy(); h.repos.close();
+  });
+
+  it('coalesces token-level thinking and text into one persisted event each without losing live or final text', async () => {
+    const thinking = '思'.repeat(300);
+    const answer = '答'.repeat(300);
+    const h = harness({ onSend: emit => {
+      for (const text of thinking) emit({ type: 'thinking', data: { text } });
+      for (const text of answer) emit({ type: 'text', data: { text } });
+    } });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+    const live: any[] = [];
+    const unsubscribe = h.runtime.subscribe(session.id, event => live.push(event));
+    const task = await h.runtime.send(session.id, 'work');
+    unsubscribe();
+
+    const rows = await h.repos.events.list(session.id);
+    const thinkingRows = rows.filter(event => event.type === 'thinking');
+    const answerRows = rows.filter(event => event.type === 'text' && (event.data as any).role !== 'user');
+    // 300 个分片、每个 3 字节，远不到 2 KB 阈值：整段思考/正文各只落一行。
+    expect(thinkingRows).toHaveLength(1);
+    expect(answerRows).toHaveLength(1);
+    expect((thinkingRows[0]?.data as any).text).toBe(thinking);
+    expect((answerRows[0]?.data as any).text).toBe(answer);
+
+    // 实时订阅拿到的是 flush 后的完整分段，页面照常一段段流出来。
+    expect(live.filter(event => event.type === 'thinking').map(event => event.data.text).join('')).toBe(thinking);
+    expect(live.filter(event => event.type === 'text' && event.data.role !== 'user').map(event => event.data.text).join('')).toBe(answer);
+    // 终态判定读的是已落库事件，不能因为合并看不到正文。
+    expect(await h.runtime.getTurnText(session.id, task.id)).toBe(answer);
+    await h.runtime.shutdown(); h.repos.close();
   });
 
   it('最后一次对话时间由提问与收尾刷新，纯状态切换不动它', async () => {
@@ -752,7 +783,7 @@ describe('runtime lifecycle acceptance', () => {
   it('resolves a long turn with more than 200 events from persisted storage', async () => {
     // 终态判定必须基于完整轮次，而不是任何被截断的最近 N 条窗口：
     // 配对的 tool_call/tool_result 相距超过 200 条事件时仍须判定为 completed。
-    const h = harness({ onSend: emit => {
+    const h = harness({ streamCoalesce: { maxBytes: 1, maxDelayMs: 0 }, onSend: emit => {
       emit({ type: 'tool_call', data: { id: 'early', name: 'read', status: 'running' } });
       for (let index = 0; index < 260; index++) emit({ type: 'thinking', data: { text: `step ${index}` } });
       emit({ type: 'tool_result', data: { id: 'early', name: 'read', output: 'ok', status: 'completed' } });
