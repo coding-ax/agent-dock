@@ -31,6 +31,16 @@ describe('session-cli transcript formatting', () => {
     expect(text).not.toContain('### 用户');
   });
 
+  it('labels maintenance and handoff turns as system rounds too', () => {
+    const text = formatTranscript([
+      event({ sequence: 1, type: 'text', data: { text: '以下是 daemon 发起的整理轮次（amaint_1）', role: 'user', origin: 'maintenance' } }),
+      event({ sequence: 2, type: 'text', data: { text: '🐾 交接说明 · 第 2 代豆豆接班', role: 'user', origin: 'handoff' } })
+    ]);
+    expect(text).toContain('### 系统 · 整理轮次\n以下是 daemon 发起的整理轮次（amaint_1）');
+    expect(text).toContain('### 系统 · 交接说明\n🐾 交接说明 · 第 2 代豆豆接班');
+    expect(text).not.toContain('### 用户');
+  });
+
   it('omits token-level thinking noise but keeps tool/status one-liners and errors', () => {
     const text = formatTranscript([
       event({ sequence: 1, type: 'thinking', data: { text: 'x'.repeat(1000) } }),

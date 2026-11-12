@@ -1,5 +1,17 @@
 import { isCarriedOverToolCall, type AgentEvent, type Session, type TaskRecord } from '@agent-dock/agent-dock-shared';
 
+/** daemon 开出来的轮次：底层都是 role=user，但都不是用户说的话。 */
+const systemOriginLabels: Record<string, string> = {
+  injected: '系统 · 自动轮次',
+  maintenance: '系统 · 整理轮次',
+  handoff: '系统 · 交接说明'
+};
+const systemOriginTags: Record<string, string> = {
+  injected: ' [系统注入]',
+  maintenance: ' [系统整理]',
+  handoff: ' [交接说明]'
+};
+
 /**
  * 把会话事件流渲染成给「人/侧边会话里的 agent」读的纯文本转录，边迭代边写进 `write`。
  *
@@ -41,8 +53,10 @@ export function writeTranscript(events: Iterable<AgentEvent>, write: (chunk: str
     const data = (event.data ?? {}) as Record<string, unknown>;
     if (event.type === 'text') {
       const text = typeof data.text === 'string' ? data.text : '';
-      // 督办锚点底层也是 role=user，但它不是用户说的话：显式标成 daemon 自动开的轮次。
-      const speaker = data.origin === 'injected' ? '系统 · 自动轮次' : data.role === 'user' ? '用户' : '助手';
+      // 督办、整理、交接说明的锚点底层也是 role=user，但它们不是用户说的话：
+      // 显式标成 daemon 自动开的轮次，避免读转录时误认成用户指令。
+      const origin = typeof data.origin === 'string' ? data.origin : '';
+      const speaker = systemOriginLabels[origin] ?? (data.role === 'user' ? '用户' : '助手');
       if (!pending || pending.speaker !== speaker) { flush(); pending = { speaker, parts: [] }; }
       pending.parts.push(text);
     } else {
@@ -85,7 +99,7 @@ export function formatSessionList(sessions: SessionSummary[]): string {
 
 export function sessionHeader(session: Session, tasks: TaskRecord[]): string {
   const taskLines = tasks.map(task =>
-    `- 任务 ${task.id} [${task.status}]${task.origin === 'injected' ? ' [系统注入]' : ''} ${task.prompt.replaceAll('\n', ' ').slice(0, 200)}`
+    `- 任务 ${task.id} [${task.status}]${systemOriginTags[task.origin ?? ''] ?? ''} ${task.prompt.replaceAll('\n', ' ').slice(0, 200)}`
   );
   return [
     `会话：${session.id}`,
