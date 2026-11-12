@@ -243,6 +243,13 @@ export interface EventRepository {
   listPage(sessionId: string, range: { after: number; limit: number }): Promise<AgentEvent[]>;
   listRecent(sessionId: string, limit: number, beforeSequence?: number): Promise<AgentEvent[]>;
   countBySession(sessionId: string): Promise<number>;
+  /**
+   * 对话段数：把 ACP 的流式增量按「连续同类分片」合并后，再排除 status / raw_terminal
+   * 这类诊断行。生命周期老化用这个口径，避免几字节的 thinking/text chunk 把事件数撑大。
+   */
+  countConversationSegments(sessionId: string): Promise<number>;
+  /** 成功完成的上下文压缩次数：只数 phase=completed，重复的 start/摘要分片不计。 */
+  countCompletedCompactions(sessionId: string): Promise<number>;
   maxSequence(sessionId: string): Promise<number>;
   /** 按轮次锚点切分会话，返回每轮的边界与过程条数。 */
   listTurns(sessionId: string): Promise<TurnRange[]>;

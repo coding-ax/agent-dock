@@ -104,7 +104,8 @@
 | 指标 | 含义 | 来源 |
 | --- | --- | --- |
 | `rounds` | 主会话轮次数（不含 `maintenance` / `handoff` 系统轮次，不含排队/取消） | `tasks.listBySession(main)` |
-| `events` | 主会话事件行数 | `events.countBySession(main)` |
+| `compactions` | 成功完成的上下文压缩次数；一次压缩只算一个 `completed` 周期 | `events.countCompletedCompactions(main)` |
+| `events` | 对话段数：连续 thinking / assistant text 流式分片各合为一段；`status`、`raw_terminal` 诊断行不计。只作高位上限保护 | `events.countConversationSegments(main)` |
 | `contextPercent` | 最近一次上下文用量 `used/size` | 最近 400 条事件里最后一条 `status/usage` |
 | `openNotes` | 未关闭便签数 | assistant 库 |
 | `closedNotes` | 已关闭但未归档的便签数（用户从归档区「取出」过的不计，见 3.3「撤销是持久的」） | assistant 库 |
@@ -116,7 +117,8 @@
 ### 2.2 年龄与阶段
 
 ```
-load      = max(rounds / R_handoff, events / E_handoff, contextPercent / C_handoff)   # 用量疲劳（缺失的项不参与）
+load      = max(rounds / R_handoff, (compactions / K_handoff)^0.83, contextPercent / C_handoff,
+                events / E_handoff if events >= E_handoff else 0)                       # 用量疲劳（缺失的项不参与）
 ageScore  = 0.8 × load + 0.2 × min(1.5, uptimeDays / D_handoff)
 peak      = max(历史 peak, ageScore)                                                 # 单调：猫不会越活越年轻
 lifeStage = kitten (<0.15) → adult (<0.45) → senior (<0.8) → elder (≥0.8)
@@ -124,8 +126,40 @@ lifeStage = kitten (<0.15) → adult (<0.45) → senior (<0.8) → elder (≥0.8
 
 - **不只按时间**：只挂着不用 45 天，`ageScore = 0.2` → 成年，永远到不了老年；用量才是主因。
 - 达到任一项交接阈值时 `load ≥ 1` → `ageScore ≥ 0.8` → 老年，与「该交接了」一致。
+- **压缩是主指标**：默认 `K_handoff=6`，压缩项用 `(count/6)^0.83` 的轻微凸曲线，
+  使 3 次 completed 正好到 senior 的 `0.45`、6 次正好到 elder 的 `0.80`。对应的年龄分约为
+  1 次 `0.181`、2 次 `0.321`、3 次 `0.450`、4 次 `0.571`、6 次 `0.800`。
+  曲线只作用于压缩项，不改 rounds/context 的线性口径或全局阶段线。
+- **事件只作上限**：`events` 未到 `E_handoff`（默认 60,000 段）时不进入 `load`，不会再因为流式分片
+  或历史膨胀单独催老；越过上限才作为病理体积保护。
 - 上下文被压缩后 `contextPercent` 会下降，但 `peak` 不降，所以阶段不会倒退。
 - 交接后新猫 `peak=0`，从幼猫开始。
+
+**为什么以压缩为主**：`contextPercent` 只反映当前窗口，压缩后会立刻回落，无法表达累积记忆压力；
+`events` 即使按对话段合并仍受流式实现和历史长度影响；`rounds` 只数用户轮次，长工具链一轮也可能
+耗尽上下文。`compactions` 是 provider 真正执行过上下文压缩的离散证据，最适合做主指标；`events`
+保留为 60k 段的病理上限，`rounds` 和 `contextPercent` 继续覆盖没有压缩事件的 provider/历史代际。
+
+**为什么事件不数原始行**：ACP 把思考与正文按 token 级 chunk 落库，一个几轮的小会话就能攒出几万行
+（实测第 2 代：20 轮 / 42,259 行，合并后只有 735 个对话段）。`events` 的阈值是按「可阅读的对话体积」
+定的，因此先按 Web 时间线同一套规则合并，再排除 `status` / `raw_terminal`；原始行数仍可用
+`events.countBySession` 查诊断，但不再参与老化。
+
+**上下文分母来自哪里**：`latestContextPercent` 直接读 ACP `usage_update` 的 `used/size`，
+`size` 是 provider 给出的**模型有效窗口**，不是 AgentDock 的默认值或百分比换算。比如 1M 窗口的模型
+会报告 `size=950000`（预留 5%），`used=154180` 时就是 16.2%。只有 `used<=0` 或 `size<=0` 的噪声
+更新会被跳过；拿不到有效 usage 时这一项不参与档位与年龄计算。
+
+**压缩怎么识别**：
+
+- claude-agent-acp 把压缩横幅伪装成 `agent_message_chunk`；`normalizeAcpxEvent` 把
+  `Compacting...`、`Compacting completed.`、`Compacting failed: ...` 归一成
+  `status/compaction` 的 `start/completed/failed`。一次压缩会重复多条 `start`，所以只数 `completed`。
+- codex-acp 发结构化的 `compaction_update`（`status=in_progress|completed|failed|cancelled`）和
+  `compaction_summary_chunk`；两者也归一成 `status/compaction`，摘要不会落成 `raw_terminal`。
+  同一个 `compactionId` 的重复 `completed` 去重计数；没有 id 的旧横幅按 completed 行数计。
+- 历史会话或没有压缩事件的 provider 记 `0`，不会凭空补数；这些代际仍由 rounds / contextPercent
+  计算，事件上限继续兜底。旧版本已落库的显式压缩横幅同样按 `completed` 计数。
 
 | 阶段 | 文案基调 | 样子 | 整理冷却 | 交接提醒（被婉拒后再提醒） |
 | --- | --- | --- | --- | --- |
@@ -143,6 +177,34 @@ lifeStage = kitten (<0.15) → adult (<0.45) → senior (<0.8) → elder (≥0.8
 - 让它休息（`main clear`）：当前猫 `state=released`，记录保留。
 - 老版本升级：已有主会话但没有血缘记录时，懒创建第 1 代，`adoptedAt` 取原来的认领时间。
 
+### 2.4 指标口径迁移（v2）
+
+`assistant.lifecycle.metricVersion` 不存在或小于 2 时，第一次采集新指标会执行一次迁移：
+
+1. 用新口径的 `compactions / events(对话段) / contextPercent / rounds` 重算当前猫的 `peakAgeScore`
+   和 `lifeStage`，**覆盖旧 peak**（这是唯一一次允许峰值回落的路径，因为旧值来自错误口径）。
+2. 清空旧 `assistant.lifecycle.alerts` 档位记录，避免旧 `events=handoff` 继续压着后续判断。
+3. 若存在 `trigger=threshold` 的 `proposed` 交接，且其越线理由包含 `events`、而新口径下 events 已不在
+   handoff 档，则把该提议标成 `cancelled`，写入 `recovery` 步骤和原因；不删除记录，也不会自动确认。
+4. 写入 `metricVersion=2`。此后恢复普通 `advanceAge` 单调规则，不会再次重置。
+
+迁移是惰性的：下一次 `collectMetrics`（网页打开档案、30 秒扫描、`maintenance status` 等）触发，
+不需要手工改数据库；旧会话和旧便签数据不动。
+
+### 2.5 配置口径迁移（v1）
+
+0.3.4 为了避免旧构建按原始行重算 peak，曾把正式库的 `assistant.lifecycle.config` 临时设成
+`events.tidy=200000 / events.handoff=300000`，且配置里还没有 `compactions`。0.3.5 首次启动时
+（`AssistantLifecycle.initialize()`）执行一次配置规范化，并写入 `assistant.lifecycle.configVersion=1`：
+
+1. 按默认值补齐缺失的阈值，重点是 `compactions = { tidy: 3, handoff: 6 }`。
+2. 若 `events` 正好等于临时守卫值 `200000/300000`，恢复为新默认 `20000/60000`。
+3. 把规范化后的完整配置落库（不是只在读取时补默认值），并写一行迁移日志。
+4. `configVersion` 已存在时直接跳过，幂等；此后用户再手动设置 200000/300000 也不会被覆盖。
+
+这一步和 2.4 的指标迁移相互独立：配置迁移保证事件上限保护立刻生效，指标迁移负责按新口径一次性
+重算旧 peak 并作废旧 events 交接提议。
+
 ---
 
 ## 3. 自动检测与整理轮次
@@ -152,7 +214,8 @@ lifeStage = kitten (<0.15) → adult (<0.45) → senior (<0.8) → elder (≥0.8
 | 指标 | 整理档 `tidy` | 交接档 `handoff` |
 | --- | --- | --- |
 | rounds | 200 | 600 |
-| events | 8,000 | 30,000 |
+| compactions | 3 | 6 |
+| events（对话段，上限保护） | 20,000 | 60,000 |
 | contextPercent | 75% | 90% |
 | openNotes | 15 | — |
 | closedNotes | 40 | — |

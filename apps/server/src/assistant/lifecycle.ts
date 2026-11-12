@@ -115,7 +115,7 @@ export interface MaintenanceRun {
 export const lifeStages = ['kitten', 'adult', 'senior', 'elder'] as const;
 export type LifeStage = (typeof lifeStages)[number];
 
-export const lifecycleMetricKeys = ['rounds', 'events', 'contextPercent', 'openNotes', 'closedNotes', 'archivedNotes', 'uptimeDays'] as const;
+export const lifecycleMetricKeys = ['rounds', 'compactions', 'events', 'contextPercent', 'openNotes', 'closedNotes', 'archivedNotes', 'uptimeDays'] as const;
 export type LifecycleMetricKey = (typeof lifecycleMetricKeys)[number];
 
 export const metricLevels = ['ok', 'tidy', 'handoff'] as const;
@@ -124,8 +124,14 @@ export type MetricLevel = (typeof metricLevels)[number];
 export interface LifecycleMetrics {
   /** 主会话轮次（不含 maintenance / handoff 系统轮次，不含排队、取消）。 */
   rounds: number;
+  /** 成功完成的上下文压缩次数；一次压缩只算一个 completed 周期。 */
+  compactions: number;
+  /**
+   * 对话段数：流式 thinking / assistant text 连续分片合并后，再排除 status / raw_terminal。
+   * 它是辅助指标：只有越过很高的 handoff 阈值时才作为上限保护进入年龄分。
+   */
   events: number;
-  /** 最近一次上下文用量百分比；拿不到真实用量时缺省。 */
+  /** 最近一次 ACP usage_update 的 used/size 百分比；size 是模型有效窗口，不是写死的默认值。 */
   contextPercent?: number;
   openNotes: number;
   closedNotes: number;
@@ -155,7 +161,8 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
   maxAutoRunsPerDay: 2,
   thresholds: {
     rounds: { tidy: 200, handoff: 600 },
-    events: { tidy: 8_000, handoff: 30_000 },
+    compactions: { tidy: 3, handoff: 6 },
+    events: { tidy: 20_000, handoff: 60_000 },
     contextPercent: { tidy: 75, handoff: 90 },
     openNotes: { tidy: 15 },
     closedNotes: { tidy: 40 },
@@ -166,7 +173,8 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleConfig = {
 
 export const metricLabel: Record<LifecycleMetricKey, string> = {
   rounds: '主会话轮次',
-  events: '事件条数',
+  compactions: '上下文压缩',
+  events: '事件段数',
   contextPercent: '上下文用量',
   openNotes: '未关闭便签',
   closedNotes: '已完成便签',
@@ -326,6 +334,7 @@ export function reasonsFor(metrics: LifecycleMetrics, config: LifecycleConfig, k
 export function formatMetricValue(metric: LifecycleMetricKey, value: number): string {
   if (metric === 'contextPercent') return `${Math.round(value)}%`;
   if (metric === 'uptimeDays') return `${Math.round(value * 10) / 10} 天`;
+  if (metric === 'compactions') return `${Math.round(value)} 次`;
   return String(Math.round(value));
 }
 
@@ -336,15 +345,25 @@ export function formatReason(reason: MetricReason): string {
 /* ---------- 年龄 ---------- */
 
 /**
- * 年龄分。用量（轮次、事件、上下文）是主因，时间只占两成：只挂着不用永远到不了老年。
+ * 年龄分。用量（轮次、压缩次数、上下文）是主因，时间只占两成：只挂着不用永远到不了老年。
+ * 事件段数只在上限保护：未到 events.handoff 时完全不参与 load，避免流式分片历史把猫催老。
  * 任一项到交接阈值时 load ≥ 1 → 分数 ≥ 0.8 → 老年，与「该交接了」同步。
  */
 export function computeAgeScore(metrics: LifecycleMetrics, config: LifecycleConfig): number {
   const ratio = (value: number | undefined, threshold: number | undefined) =>
     value === undefined || threshold === undefined || threshold <= 0 ? undefined : Math.max(0, value) / threshold;
+  // 压缩是离散事件，早期一次就代表明显的记忆压力；轻微凸曲线让 3 次正好到 senior 0.45、
+  // 6 次正好到 elder 0.80（0.5^0.83≈0.5625），同时不改动全局阶段线。
+  const compactionRatio = (value: number | undefined, threshold: number | undefined) => {
+    const linear = ratio(value, threshold);
+    return linear === undefined ? undefined : Math.pow(linear, 0.83);
+  };
+  const eventCap = config.thresholds.events.handoff;
+  const eventCapLoad = eventCap !== undefined && eventCap > 0 && metrics.events >= eventCap ? metrics.events / eventCap : undefined;
   const loads = [
     ratio(metrics.rounds, config.thresholds.rounds.handoff),
-    ratio(metrics.events, config.thresholds.events.handoff),
+    compactionRatio(metrics.compactions, config.thresholds.compactions.handoff),
+    eventCapLoad,
     ratio(metrics.contextPercent, config.thresholds.contextPercent.handoff)
   ].filter((value): value is number => value !== undefined);
   const load = loads.length ? Math.max(...loads) : 0;

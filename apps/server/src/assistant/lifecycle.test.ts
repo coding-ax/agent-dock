@@ -14,7 +14,7 @@ const HOUR = 3_600_000;
 const iso = (offsetMs: number) => new Date(NOW + offsetMs).toISOString();
 
 const metrics = (patch: Partial<LifecycleMetrics> = {}): LifecycleMetrics => ({
-  rounds: 0, events: 0, openNotes: 0, closedNotes: 0, archivedNotes: 0, uptimeDays: 0, computedAt: iso(0), ...patch
+  rounds: 0, compactions: 0, events: 0, openNotes: 0, closedNotes: 0, archivedNotes: 0, uptimeDays: 0, computedAt: iso(0), ...patch
 });
 
 const decide = (patch: Partial<LifecycleDecisionInput> = {}) => decideLifecycleAction({
@@ -103,7 +103,24 @@ describe('cat aging', () => {
     // 任一用量到交接档 → 老年，与「该交接了」同步
     expect(lifeStageFor(computeAgeScore(metrics({ rounds: 600 }), DEFAULT_LIFECYCLE_CONFIG))).toBe('elder');
     expect(lifeStageFor(computeAgeScore(metrics({ contextPercent: 90 }), DEFAULT_LIFECYCLE_CONFIG))).toBe('elder');
-    expect(lifeStageFor(computeAgeScore(metrics({ events: 30_000 }), DEFAULT_LIFECYCLE_CONFIG))).toBe('elder');
+    expect(lifeStageFor(computeAgeScore(metrics({ events: 60_000 }), DEFAULT_LIFECYCLE_CONFIG))).toBe('elder');
+  });
+
+  it('ages primarily by completed compactions and keeps events as a high cap only', () => {
+    const score = (compactions: number) => computeAgeScore(metrics({ compactions }), DEFAULT_LIFECYCLE_CONFIG);
+    expect(score(1)).toBe(0.181);
+    expect(score(3)).toBe(0.45);
+    expect(score(4)).toBe(0.571);
+    expect(score(6)).toBe(0.8);
+    expect(lifeStageFor(score(3))).toBe('senior');
+    expect(lifeStageFor(score(4))).toBe('senior');
+    expect(lifeStageFor(score(6))).toBe('elder');
+
+    // 30k 段只到整理档，不进入 ageScore；到 60k 上限才作为病理体积保护。
+    const belowCap = metrics({ events: 30_000 });
+    expect(computeAgeScore(belowCap, DEFAULT_LIFECYCLE_CONFIG)).toBe(0);
+    expect(computeLevels(belowCap, DEFAULT_LIFECYCLE_CONFIG).events).toBe('tidy');
+    expect(computeAgeScore(metrics({ events: 60_000 }), DEFAULT_LIFECYCLE_CONFIG)).toBe(0.8);
   });
 
   it('never gets younger when context usage drops after compaction', () => {

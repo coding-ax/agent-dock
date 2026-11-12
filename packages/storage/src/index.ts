@@ -229,6 +229,48 @@ export function createRepositories(filename: string, options: { nativeFallback?:
       async countBySession(sessionId) {
         return (sqlite.prepare('SELECT count(*) AS total FROM events WHERE session_id = ?').get(sessionId) as { total: number }).total;
       },
+      /**
+       * 和 mergeStreamingSegments 同一套合并规则，但只回数量、不物化正文：
+       * 连续 thinking、连续 assistant text 各算一段；user text 是轮次锚点，每行都算；
+       * status / raw_terminal 是诊断信息，不算对话体积。
+       */
+      async countConversationSegments(sessionId) {
+        const row = sqlite.prepare(`
+          WITH ordered AS (
+            SELECT type,
+                   coalesce(json_extract(data, '$.role'), 'assistant') AS role,
+                   lag(type) OVER (ORDER BY sequence) AS prev_type,
+                   lag(coalesce(json_extract(data, '$.role'), 'assistant')) OVER (ORDER BY sequence) AS prev_role
+            FROM events
+            WHERE session_id = ?
+          )
+          SELECT count(*) AS total
+          FROM ordered
+          WHERE type NOT IN ('status', 'raw_terminal')
+            AND (
+              type NOT IN ('thinking', 'text')
+              OR (type = 'text' AND role = 'user')
+              OR prev_type IS NULL
+              OR prev_type <> type
+              OR prev_role IS NULL
+              OR prev_role <> role
+            )
+        `).get(sessionId) as { total: number };
+        return row.total;
+      },
+      async countCompletedCompactions(sessionId) {
+        return (sqlite.prepare(`
+          SELECT
+            count(DISTINCT CASE WHEN json_extract(data, '$.compactionId') IS NOT NULL
+              THEN json_extract(data, '$.compactionId') END)
+            + coalesce(sum(CASE WHEN json_extract(data, '$.compactionId') IS NULL THEN 1 ELSE 0 END), 0) AS total
+          FROM events
+          WHERE session_id = ?
+            AND type = 'status'
+            AND json_extract(data, '$.state') = 'compaction'
+            AND json_extract(data, '$.phase') = 'completed'
+        `).get(sessionId) as { total: number }).total;
+      },
       async maxSequence(sessionId) {
         return (sqlite.prepare('SELECT coalesce(max(sequence), 0) AS max FROM events WHERE session_id = ?').get(sessionId) as { max: number }).max;
       },

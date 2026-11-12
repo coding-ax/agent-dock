@@ -310,6 +310,148 @@ describe('main-session handoff ceremony', () => {
   });
 });
 
+describe('lifecycle metrics', () => {
+  it('recalculates a legacy peak once and cancels the old events-based proposal', async () => {
+    const h = harness();
+    await h.service.initialize();
+    const main = await h.service.createMainSession({ agentId: 'codex', cwd: '/work/dock', name: '团子' });
+    const cat = (await h.lifecycle.ensureCat())!;
+    const store = (h.lifecycle as unknown as { store: any }).store;
+    cat.peakAgeScore = 1.127;
+    cat.lifeStage = 'elder';
+    cat.rounds = 9;
+    store.saveCat(cat);
+    store.saveHandoff({
+      id: 'ahand_legacy', state: 'proposed', trigger: 'threshold',
+      fromCatId: cat.id, fromSessionId: main.id, successorName: '豆豆',
+      metrics: { rounds: 9, compactions: 0, events: 30_469, contextPercent: 9.7, openNotes: 3, closedNotes: 1, archivedNotes: 12, uptimeDays: 0.024 },
+      reasons: [{ metric: 'events', level: 'handoff', value: 30_469, threshold: 30_000 }],
+      steps: [], createdAt: now(), updatedAt: now()
+    });
+    store.setSetting('assistant.lifecycle.alerts', JSON.stringify({ catId: cat.id, levels: { events: 'handoff' }, autoRuns: [], lastProposalAt: now() }));
+
+    const collected = (await h.lifecycle.collectMetrics(true))!;
+    expect(collected.cat.peakAgeScore).toBe(0);
+    expect(collected.cat.lifeStage).toBe('kitten');
+    expect((await h.lifecycle.overview()).handoff).toBeNull();
+    expect((await h.lifecycle.overview()).handoffs.find(item => item.id === 'ahand_legacy')?.state).toBe('cancelled');
+    expect(store.getSetting('assistant.lifecycle.metricVersion')).toBe('2');
+    expect((await h.lifecycle.overview()).alerts.levels).toEqual({});
+
+    // 迁移只做一次：之后再长出的 peak 不会被第二次重置。
+    cat.peakAgeScore = 0.7;
+    cat.lifeStage = 'senior';
+    store.saveCat(cat);
+    const later = (await h.lifecycle.collectMetrics(true))!;
+    expect(later.cat.peakAgeScore).toBe(0.7);
+    expect(later.cat.lifeStage).toBe('senior');
+  });
+
+  it('counts only completed compactions and ages by them', async () => {
+    const h = harness();
+    await h.service.initialize();
+    const main = await h.service.createMainSession({ agentId: 'codex', cwd: '/work/dock', name: '团子' });
+    let sequence = 0;
+    const append = (type: string, data: Record<string, unknown>) => appendEvent(h.repos, main.id, ++sequence, type, data);
+    await append('status', { state: 'compaction', phase: 'start' });
+    await append('status', { state: 'compaction', phase: 'start' });
+    await append('status', { state: 'compaction', phase: 'summary' });
+    await append('status', { state: 'compaction', phase: 'completed' });
+    expect((await h.lifecycle.collectMetrics(true))!.metrics.compactions).toBe(1);
+
+    for (let index = 0; index < 5; index++) await append('status', { state: 'compaction', phase: 'completed' });
+    const collected = (await h.lifecycle.collectMetrics(true))!;
+    expect(collected.metrics.compactions).toBe(6);
+    expect(collected.ageScore).toBe(0.8);
+    await h.lifecycle.scan();
+    const view = await h.lifecycle.overview();
+    expect(view.levels?.compactions).toBe('handoff');
+    expect(view.handoff).toMatchObject({ state: 'proposed', reasons: [{ metric: 'compactions', level: 'handoff', value: 6, threshold: 6 }] });
+  });
+
+  it('counts merged conversation segments instead of raw streaming rows', async () => {
+    const h = harness();
+    await h.service.initialize();
+    const main = await h.service.createMainSession({ agentId: 'codex', cwd: '/work/dock', name: '团子' });
+    h.lifecycle.updateConfig({ set: { 'events.tidy': 5, 'events.handoff': 10 } });
+
+    let sequence = 0;
+    const append = (type: string, data: Record<string, unknown>) => appendEvent(h.repos, main.id, ++sequence, type, data);
+    for (let index = 0; index < 1_000; index++) await append('thinking', { text: 'x' });
+    for (let index = 0; index < 100; index++) await append('status', { state: 'usage', used: 10, size: 100 });
+    for (let index = 0; index < 50; index++) await append('raw_terminal', { text: 'noise' });
+    await append('text', { role: 'user', text: '开始' });
+    await append('text', { text: '收到' });
+    await append('tool_call', { title: 'read' });
+
+    // 1,152 行原始事件，但只有 1 个思考段 + 用户锚点 + 正文段 + 工具 = 4 个对话段。
+    const before = (await h.lifecycle.collectMetrics(true))!;
+    expect(await h.repos.events.countBySession(main.id)).toBe(1_153);
+    expect(before.metrics.events).toBe(4);
+    await h.lifecycle.scan();
+    expect((await h.lifecycle.overview()).levels?.events).toBe('ok');
+    expect((await h.lifecycle.overview()).handoff).toBeNull();
+
+    for (let index = 0; index < 10; index++) await append('tool_call', { title: `call-${index}` });
+    const after = (await h.lifecycle.collectMetrics(true))!;
+    expect(after.metrics.events).toBe(14);
+    await h.lifecycle.scan();
+    expect((await h.lifecycle.overview()).levels?.events).toBe('handoff');
+    expect((await h.lifecycle.overview()).reasons).toContainEqual({ metric: 'events', level: 'handoff', value: 14, threshold: 10 });
+    expect((await h.lifecycle.overview()).handoff).toMatchObject({ state: 'proposed', reasons: [{ metric: 'events', level: 'handoff', value: 14, threshold: 10 }] });
+  });
+});
+
+describe('lifecycle config migration', () => {
+  const storeOf = (h: ReturnType<typeof harness>) => (h.lifecycle as unknown as { store: { getSetting(key: string): string | undefined; setSetting(key: string, value: string): void } }).store;
+
+  it('restores the temporary events guard and fills compaction thresholds exactly once', async () => {
+    const h = harness();
+    const store = storeOf(h);
+    store.setSetting('assistant.lifecycle.config', JSON.stringify({
+      autoMaintenance: true, autoProposeHandoff: true, foldClosedAfterHours: 12, maxAutoRunsPerDay: 2,
+      thresholds: {
+        rounds: { tidy: 200, handoff: 600 },
+        events: { tidy: 200_000, handoff: 300_000 },
+        contextPercent: { tidy: 75, handoff: 90 },
+        openNotes: { tidy: 15 }, closedNotes: { tidy: 40 }, archivedNotes: { tidy: 500 },
+        uptimeDays: { tidy: 14, handoff: 45 }
+      }
+    }));
+
+    await h.service.initialize();
+    const config = h.lifecycle.getConfig();
+    expect(config.thresholds.compactions).toEqual({ tidy: 3, handoff: 6 });
+    expect(config.thresholds.events).toEqual({ tidy: 20_000, handoff: 60_000 });
+    expect(config.thresholds.rounds).toEqual({ tidy: 200, handoff: 600 });
+    expect(store.getSetting('assistant.lifecycle.configVersion')).toBe('1');
+    // 规范化结果要落库，不能只靠读取时补默认值。
+    const persisted = JSON.parse(store.getSetting('assistant.lifecycle.config')!);
+    expect(persisted.thresholds.compactions).toEqual({ tidy: 3, handoff: 6 });
+    expect(persisted.thresholds.events).toEqual({ tidy: 20_000, handoff: 60_000 });
+
+    // 版本标记之后不再干预：用户明确设置守卫值也会被保留。
+    h.lifecycle.updateConfig({ set: { 'events.tidy': 200_000, 'events.handoff': 300_000 } });
+    await h.service.initialize();
+    expect(h.lifecycle.getConfig().thresholds.events).toEqual({ tidy: 200_000, handoff: 300_000 });
+    expect(h.lifecycle.getConfig().thresholds.compactions).toEqual({ tidy: 3, handoff: 6 });
+  });
+
+  it('keeps intentional thresholds while filling missing compaction thresholds', async () => {
+    const h = harness();
+    const store = storeOf(h);
+    store.setSetting('assistant.lifecycle.config', JSON.stringify({
+      thresholds: { events: { tidy: 100_000, handoff: 200_000 } }
+    }));
+
+    await h.service.initialize();
+    const config = h.lifecycle.getConfig();
+    expect(config.thresholds.events).toEqual({ tidy: 100_000, handoff: 200_000 });
+    expect(config.thresholds.compactions).toEqual({ tidy: 3, handoff: 6 });
+    expect(config.autoMaintenance).toBe(true);
+  });
+});
+
 describe('crash recovery', () => {
   async function crashDuringRetiring(archiveFirst: boolean) {
     const directory = mkdtempSync(join(tmpdir(), 'agentdock-lifecycle-'));

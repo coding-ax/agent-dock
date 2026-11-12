@@ -106,9 +106,9 @@ export type AssistantState = {
 /* ---------- 小猫的一生：老化、整理轮次、交接仪式（见 docs/2026-11-12-companion-lifecycle-handoff-design.md） ---------- */
 export type LifeStage = 'kitten' | 'adult' | 'senior' | 'elder';
 export type LifecycleLevel = 'ok' | 'tidy' | 'handoff';
-export type LifecycleMetricKey = 'rounds' | 'events' | 'contextPercent' | 'openNotes' | 'closedNotes' | 'archivedNotes' | 'uptimeDays';
+export type LifecycleMetricKey = 'rounds' | 'compactions' | 'events' | 'contextPercent' | 'openNotes' | 'closedNotes' | 'archivedNotes' | 'uptimeDays';
 export type LifecycleReason = { metric: LifecycleMetricKey; level: LifecycleLevel; value: number; threshold: number };
-export type LifecycleMetrics = { rounds: number; events: number; contextPercent?: number; openNotes: number; closedNotes: number; archivedNotes: number; uptimeDays: number; computedAt: string };
+export type LifecycleMetrics = { rounds: number; compactions: number; events: number; contextPercent?: number; openNotes: number; closedNotes: number; archivedNotes: number; uptimeDays: number; computedAt: string };
 export type LifecycleThreshold = { tidy?: number; handoff?: number };
 export type LifecycleConfig = { autoMaintenance: boolean; autoProposeHandoff: boolean; foldClosedAfterHours: number; maxAutoRunsPerDay: number; thresholds: Record<LifecycleMetricKey, LifecycleThreshold> };
 export type LifecycleConfigPatch = { autoMaintenance?: boolean; autoProposeHandoff?: boolean; foldClosedAfterHours?: number; maxAutoRunsPerDay?: number; set?: Record<string, number | null> };

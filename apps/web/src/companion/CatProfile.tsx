@@ -103,7 +103,7 @@ export function CatProfile({ onOpenSession, onOpenCeremony }: { onOpenSession(id
         {(['adult', 'senior', 'elder'] as const).map(stage => <span key={stage} className="ui-age-bar-tick" style={{ left: `${STAGE_FLOORS[stage] * 100}%` }} title={`${stageLabel[stage]}从这里开始`}/>)}
       </div>
       <p className="mt-1.5 text-[11.5px] leading-5 text-zinc-500">
-        年纪看轮次、事件量、上下文用量，时间只占两成；只长不缩，整理不会让它变年轻。
+        年纪看压缩次数、轮次和上下文用量，事件量只在极高时作上限保护；时间占两成，只长不缩。
         {next ? ` 再长到 ${Math.round(STAGE_FLOORS[next] * 100)}% 就是${stageLabel[next]}。` : ' 已经是最后一个阶段，交接后新猫从幼猫开始。'}
         {` 认领于 ${sinceLabel(cat.adoptedAt) || '刚刚'}，陪你聊了 ${cat.rounds} 轮。`}
       </p>

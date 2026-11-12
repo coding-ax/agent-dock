@@ -40,9 +40,9 @@ export function nextStage(stage: LifeStage): LifeStage | undefined {
 
 /* ---------- 指标 ---------- */
 
-export const METRIC_KEYS: LifecycleMetricKey[] = ['rounds', 'events', 'contextPercent', 'openNotes', 'closedNotes', 'archivedNotes', 'uptimeDays'];
+export const METRIC_KEYS: LifecycleMetricKey[] = ['rounds', 'compactions', 'events', 'contextPercent', 'openNotes', 'closedNotes', 'archivedNotes', 'uptimeDays'];
 export const metricLabel: Record<LifecycleMetricKey, string> = {
-  rounds: '主会话轮次', events: '事件条数', contextPercent: '上下文用量', openNotes: '未关闭便签',
+  rounds: '主会话轮次', compactions: '上下文压缩', events: '事件段数', contextPercent: '上下文用量', openNotes: '未关闭便签',
   closedNotes: '已完成便签', archivedNotes: '归档区便签', uptimeDays: '连续运行天数'
 };
 
@@ -50,6 +50,7 @@ export function formatMetricValue(metric: LifecycleMetricKey, value: number | un
   if (value === undefined || !Number.isFinite(value)) return '—';
   if (metric === 'contextPercent') return `${Math.round(value)}%`;
   if (metric === 'uptimeDays') return `${Math.round(value * 10) / 10} 天`;
+  if (metric === 'compactions') return `${Math.round(value)} 次`;
   return String(Math.round(value));
 }
 

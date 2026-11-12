@@ -3,9 +3,10 @@ import { makeId, now, RuntimeError, type RepositoryBundle, type Session, type Ta
 import type { AssistantStore } from './store.js';
 import type { AssistantTask, CompanionProfile } from './types.js';
 import {
+  DEFAULT_LIFECYCLE_CONFIG,
   acknowledgeAll, advanceAge, applyLifecycleConfigPatch, assertTransition, buildHandoffPackage, buildMaintenancePrompt,
   computeAgeScore, computeLevels, countRounds, decideLifecycleAction, emptyAlertState, extractFileRefs, handoffOutcome,
-  handoffVisibleText, isHandoffExecuting, isHandoffOpen, latestContextPercent, lifecycleMetricKeys, maintenanceVisibleText,
+  handoffVisibleText, isHandoffExecuting, isHandoffOpen, latestContextPercent, lifeStageFor, lifecycleMetricKeys, maintenanceVisibleText,
   normalizeAlertState, normalizeLifecycleConfig, overallLevel, planTransfers, reasonsFor, recoveryAction, renderHandoffBriefing, serializeLifecycleConfig,
   STAGE_POLICY, stageCatLabel, stageLabel, stageProgress,
   type ArchiveBatch, type ArchiveSource, type CatRecord, type HandoffRecord, type HandoffStep, type HandoffStepRecord,
@@ -15,6 +16,14 @@ import {
 
 const CONFIG_KEY = 'assistant.lifecycle.config';
 const ALERTS_KEY = 'assistant.lifecycle.alerts';
+const CONFIG_VERSION_KEY = 'assistant.lifecycle.configVersion';
+/** v1：补齐压缩阈值，并把为防旧构建回推而临时抬高的 events 守卫值恢复成默认口径。 */
+const LIFECYCLE_CONFIG_VERSION = 1;
+/** 0.3.4 正式库为防旧构建把 peak 回推，临时把 events 阈值调到了这两个值。 */
+const LEGACY_EVENTS_GUARD = { tidy: 200_000, handoff: 300_000 } as const;
+const METRIC_VERSION_KEY = 'assistant.lifecycle.metricVersion';
+/** v2：events 从原始行改为对话段，并加入压缩次数主指标。旧 peak 必须按新口径重算一次。 */
+const LIFECYCLE_METRIC_VERSION = 2;
 const METRICS_TTL_MS = 60_000;
 const DAY_MS = 86_400_000;
 const BUSY_STATES = new Set(['starting', 'thinking', 'running_tool', 'waiting_for_permission', 'interrupting']);
@@ -75,6 +84,7 @@ export class AssistantLifecycle {
 
   /** 启动时收拾上次没收完的摊子：交接提交点之前的回滚，整理轮次标成中断。 */
   async initialize() {
+    this.migrateConfig();
     const open = this.store.openHandoff();
     if (open) {
       const predecessor = open.state === 'retiring' ? await this.repos.sessions.get(open.fromSessionId) : undefined;
@@ -107,6 +117,30 @@ export class AssistantLifecycle {
   async settle() { await this.execution; }
 
   // ---------------------------------------------------------------- 配置
+
+  /**
+   * 配置口径迁移。旧正式库为了不让 0.3.4 按原始行重算 peak，把 events 阈值临时设成
+   * 200000/300000，而且没有 compactions 阈值；新版本必须把它们落库修正，否则事件上限保护
+   * 在装上新版后仍然形同虚设。版本标记保证只执行一次，之后用户再手动设置也不会被覆盖。
+   */
+  private migrateConfig() {
+    const stored = Number(this.store.getSetting(CONFIG_VERSION_KEY) ?? 0);
+    if (Number.isFinite(stored) && stored >= LIFECYCLE_CONFIG_VERSION) return;
+    const raw = this.store.getSetting(CONFIG_KEY);
+    let parsed: unknown;
+    try { parsed = raw ? JSON.parse(raw) : undefined; } catch { parsed = undefined; }
+    const config = normalizeLifecycleConfig(parsed);
+    const events = config.thresholds.events;
+    const restoredEvents = events.tidy === LEGACY_EVENTS_GUARD.tidy && events.handoff === LEGACY_EVENTS_GUARD.handoff;
+    if (restoredEvents) config.thresholds.events = { ...DEFAULT_LIFECYCLE_CONFIG.thresholds.events };
+    this.store.setSetting(CONFIG_KEY, serializeLifecycleConfig(config));
+    this.store.setSetting(CONFIG_VERSION_KEY, String(LIFECYCLE_CONFIG_VERSION));
+    this.log.info(
+      `生命周期配置迁移到 v${LIFECYCLE_CONFIG_VERSION}：compactions=${config.thresholds.compactions.tidy ?? '-'}/${config.thresholds.compactions.handoff ?? '-'}`
+      + `，events=${config.thresholds.events.tidy ?? '-'}/${config.thresholds.events.handoff ?? '-'}`
+      + (restoredEvents ? `（已从临时守卫值 ${LEGACY_EVENTS_GUARD.tidy}/${LEGACY_EVENTS_GUARD.handoff} 恢复）` : '')
+    );
+  }
 
   getConfig(): LifecycleConfig {
     const raw = this.store.getSetting(CONFIG_KEY);
@@ -213,14 +247,16 @@ export class AssistantLifecycle {
     const cat = await this.ensureCat();
     if (!cat) return undefined;
     const config = this.getConfig();
-    const [tasks, events, recent] = await Promise.all([
+    const [tasks, compactions, events, recent] = await Promise.all([
       this.runtime.getTasks(mainId),
-      this.repos.events.countBySession(mainId),
+      this.repos.events.countCompletedCompactions(mainId),
+      this.repos.events.countConversationSegments(mainId),
       this.repos.events.listRecent(mainId, 400)
     ]);
     const notes = this.store.listTasks();
     const metrics: LifecycleMetrics = {
       rounds: countRounds(tasks),
+      compactions,
       events,
       ...withContext(latestContextPercent([...recent].sort((left, right) => left.sequence - right.sequence))),
       openNotes: notes.filter(task => task.state !== 'closed').length,
@@ -231,7 +267,8 @@ export class AssistantLifecycle {
       computedAt: now()
     };
     const ageScore = computeAgeScore(metrics, config);
-    const { peak, stage } = advanceAge(cat.peakAgeScore, ageScore);
+    const migrated = this.migrateMetricVersion(cat, metrics, config, ageScore);
+    const { peak, stage } = advanceAge(migrated.peakAgeScore, ageScore);
     if (peak !== cat.peakAgeScore || stage !== cat.lifeStage || metrics.rounds !== cat.rounds) {
       cat.peakAgeScore = peak;
       cat.lifeStage = stage;
@@ -241,6 +278,40 @@ export class AssistantLifecycle {
     const value = { cat, metrics, ageScore };
     this.metricsCache = { sessionId: mainId, at: Date.now(), value };
     return value;
+  }
+
+  /**
+   * 一次性口径迁移。旧版 events 数的是 ACP 的原始流式行，会把刚接班的小猫直接推到老年；
+   * 升级后第一次拿到新指标时，用新口径重算当前猫的 peak/stage，并清掉旧档位记录。
+   * 只做一次：之后 peak 仍按单调规则增长。
+   */
+  private migrateMetricVersion(cat: CatRecord, metrics: LifecycleMetrics, config: LifecycleConfig, ageScore: number): CatRecord {
+    const stored = Number(this.store.getSetting(METRIC_VERSION_KEY) ?? 0);
+    if (Number.isFinite(stored) && stored >= LIFECYCLE_METRIC_VERSION) return cat;
+    cat.peakAgeScore = ageScore;
+    cat.lifeStage = lifeStageFor(ageScore);
+    cat.rounds = metrics.rounds;
+    this.store.saveCat(cat);
+    this.invalidateLegacyProposal(cat, metrics, config);
+    this.writeAlerts(emptyAlertState(cat.id));
+    this.store.setSetting(METRIC_VERSION_KEY, String(LIFECYCLE_METRIC_VERSION));
+    this.log.info(`生命周期指标迁移到 v${LIFECYCLE_METRIC_VERSION}：${cat.name} peak=${ageScore} stage=${cat.lifeStage}`);
+    return cat;
+  }
+
+  /** 旧提议的越线理由若只靠旧 events 口径，新口径下已经不再成立，就直接作废，等下一轮扫描重新判断。 */
+  private invalidateLegacyProposal(cat: CatRecord, metrics: LifecycleMetrics, config: LifecycleConfig) {
+    const open = this.store.openHandoff();
+    if (!open || open.state !== 'proposed' || open.fromCatId !== cat.id || open.trigger !== 'threshold') return;
+    const levels = computeLevels(metrics, config);
+    if (!open.reasons.some(reason => reason.metric === 'events' && levels.events !== 'handoff')) return;
+    if (!this.store.compareAndSetHandoffState(open.id, 'proposed', 'cancelled')) return;
+    const fresh = this.store.getHandoff(open.id)!;
+    fresh.completedAt = now();
+    fresh.error = '指标口径升级：旧的 events 行数口径已废弃，这张交接提议作废';
+    fresh.steps = [...fresh.steps, { step: 'recovery', at: now(), ok: true, detail: '指标口径升级，旧提议作废' }];
+    this.store.saveHandoff(fresh);
+    this.log.info(`已作废旧口径交接提议 ${open.id}`);
   }
 
   // ---------------------------------------------------------------- 视图

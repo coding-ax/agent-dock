@@ -56,6 +56,53 @@ describe('历史事件压缩', () => {
     }
   });
 
+  it('对话段数合并流式分片、保留用户锚点并排除诊断行', async () => {
+    const repos = createRepositories(':memory:');
+    try {
+      const append = async (sequence: number, type: 'thinking' | 'text' | 'tool_call' | 'status' | 'raw_terminal', data: Record<string, unknown>) => {
+        await repos.events.append({ id: `seg-${sequence}`, sessionId: 'session-segments', sequence, type, timestamp: `2026-09-23T00:00:0${sequence}.000Z`, data });
+      };
+      await append(1, 'text', { role: 'user', text: '问题' });
+      await append(2, 'thinking', { text: '想' });
+      await append(3, 'thinking', { text: '一下' });
+      await append(4, 'status', { state: 'usage', used: 10, size: 100 });
+      await append(5, 'text', { text: '答' });
+      await append(6, 'text', { text: '案' });
+      await append(7, 'text', { role: 'user', text: '追问' });
+      await append(8, 'tool_call', { title: 'read' });
+      await append(9, 'raw_terminal', { text: 'noise' });
+      await append(10, 'thinking', { text: '再' });
+      await append(11, 'thinking', { text: '想' });
+
+      // 原始 11 行 → 1 个用户锚点 + 思考段 + 正文段 + 追问锚点 + 工具 + 思考段 = 6
+      expect(await repos.events.countBySession('session-segments')).toBe(11);
+      expect(await repos.events.countConversationSegments('session-segments')).toBe(6);
+      expect(await repos.events.countConversationSegments('session-missing')).toBe(0);
+    } finally {
+      repos.close();
+    }
+  });
+
+  it('压缩次数只数 completed 周期，不数重复的 start 和摘要分片', async () => {
+    const repos = createRepositories(':memory:');
+    try {
+      const append = async (sequence: number, data: Record<string, unknown>) => {
+        await repos.events.append({ id: `cmp-${sequence}`, sessionId: 'session-compaction', sequence, type: 'status', timestamp: `2026-09-23T00:00:0${sequence}.000Z`, data });
+      };
+      await append(1, { state: 'compaction', phase: 'start' });
+      await append(2, { state: 'compaction', phase: 'start' });
+      await append(3, { state: 'compaction', phase: 'summary' });
+      await append(4, { state: 'compaction', phase: 'completed', compactionId: 'cmp_a' });
+      await append(5, { state: 'compaction', phase: 'failed', detail: 'x' });
+      await append(6, { state: 'compaction', phase: 'completed', compactionId: 'cmp_a' });
+      await append(7, { state: 'compaction', phase: 'completed', compactionId: 'cmp_b' });
+      expect(await repos.events.countCompletedCompactions('session-compaction')).toBe(2);
+      expect(await repos.events.countCompletedCompactions('session-missing')).toBe(0);
+    } finally {
+      repos.close();
+    }
+  });
+
   it('按序号区间取事件时连正文一起合并，用户锚点原样留下当分隔符', async () => {
     const repos = createRepositories(':memory:');
     try {
