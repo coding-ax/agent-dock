@@ -35,8 +35,12 @@ describe('session last_message_at', () => {
     const repos = createRepositories(file);
     try {
       expect((await repos.sessions.get('legacy'))?.lastMessageAt ?? null).toBeNull();
-      await repos.sessions.save(session({ id: 'legacy', lastMessageAt: '2026-09-23T11:00:00.000Z' }));
-      expect((await repos.sessions.get('legacy'))?.lastMessageAt).toBe('2026-09-23T11:00:00.000Z');
+      expect((await repos.sessions.get('legacy'))?.interruptIntent ?? null).toBeNull();
+      await repos.sessions.save(session({ id: 'legacy', lastMessageAt: '2026-09-23T11:00:00.000Z', interruptIntent: 'daemon_restart' }));
+      expect(await repos.sessions.get('legacy')).toMatchObject({
+        lastMessageAt: '2026-09-23T11:00:00.000Z',
+        interruptIntent: 'daemon_restart'
+      });
     } finally { repos.close(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

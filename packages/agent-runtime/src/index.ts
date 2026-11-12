@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, RepositoryBundle, Session, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
+import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, RepositoryBundle, Session, SessionInterruptIntent, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
 import { agentConfigSchema, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 export type { AgentConfig };
 import { AcpxAdapter, describeAcpError, wrapAgentForSsh, type NormalizedDriverEvent } from '@agent-dock/agent-dock-acp-client';
@@ -325,7 +325,7 @@ export class AgentDockRuntime {
           await this.repos.artifacts.saveError(session.id, message);
           await this.emit(session.id, 'error', { message });
         }
-        await this.saveState(session, 'interrupted', message);
+        await this.saveState(session, 'interrupted', message, 'daemon_restart');
       }
       const queued = persistedTasks.filter(task => task.status === 'queued').sort((left, right) => left.createdAt.localeCompare(right.createdAt));
       if (queued.length) {
@@ -483,12 +483,14 @@ export class AgentDockRuntime {
     return { text, ...(message ? { error: message } : {}) };
   }
 
-  private async saveState(session: Session, state: Session['state'], error?: string) {
+  private async saveState(session: Session, state: Session['state'], error?: string, interruptIntent?: SessionInterruptIntent) {
     this.touch(session.id);
     session.state = state; session.updatedAt = now(); session.error = error;
+    session.interruptIntent = state === 'interrupted' ? interruptIntent : undefined;
     await this.repos.sessions.save(session);
-    await this.emit(session.id, 'status', { state, ...(error ? { error } : {}) });
-    this.emitter.emit('status', { sessionId: session.id, state, ...(error ? { error } : {}) });
+    const status = { state, ...(error ? { error } : {}), ...(state === 'interrupted' && interruptIntent ? { interruptIntent } : {}) };
+    await this.emit(session.id, 'status', status);
+    this.emitter.emit('status', { sessionId: session.id, ...status });
   }
 
   // A task-level failure (e.g. no final output, a capped turn, or a transient
@@ -501,6 +503,7 @@ export class AgentDockRuntime {
     if (session.archivedAt || ['stopped', 'failed'].includes(session.state)) return;
     this.touch(session.id);
     session.state = 'idle'; session.updatedAt = now(); session.error = error;
+    session.interruptIntent = undefined;
     await this.repos.sessions.save(session);
     await this.emit(session.id, 'status', { state: 'idle', error });
     this.emitter.emit('status', { sessionId: session.id, state: 'idle', error });
@@ -589,7 +592,7 @@ export class AgentDockRuntime {
    * 订阅所有会话的状态变化。督办器靠它即时发现「等权限 / 轮次结束 / 失败」，
    * 不必轮询整个会话列表；30 秒扫描只做补漏和时间条件。
    */
-  onStatus(listener: (event: { sessionId: string; state: Session['state']; error?: string }) => void) {
+  onStatus(listener: (event: { sessionId: string; state: Session['state']; error?: string; interruptIntent?: SessionInterruptIntent }) => void) {
     const name = 'status';
     this.emitter.on(name, listener);
     return () => this.emitter.off(name, listener);
@@ -758,7 +761,10 @@ export class AgentDockRuntime {
       task.finalText = outcome.finalText;
       // 收尾也算一次对话事件（长轮次结束时该浮上来），同样蹭终端态的 saveState 落盘。
       session.lastMessageAt = now();
-      if (outcome.status === 'interrupted') { await this.saveTask(task, 'interrupted'); await this.saveState(session, 'interrupted'); }
+      if (outcome.status === 'interrupted') {
+        await this.saveTask(task, 'interrupted');
+        await this.saveState(session, 'interrupted', undefined, this.interruptedTurns.has(id) ? 'user' : 'agent_cancelled');
+      }
       else if (outcome.status === 'failed') {
         await this.saveTask(task, 'failed');
         if (outcome.message) { await this.repos.artifacts.saveError(id, outcome.message); await this.emit(id, 'error', { message: outcome.message }); await this.recoverSessionAfterTask(session, outcome.message); }
@@ -958,7 +964,7 @@ export class AgentDockRuntime {
     await Promise.all(queue.map(task => { this.queuedAgentPrompts.delete(task.id); this.queuedRiskPolicies.delete(task.id); return this.saveTask(task, 'cancelled'); }));
   }
 
-  async interrupt(id: string) { const { session, driver } = await this.active(id); if (!driver) throw new RuntimeError('SESSION_DISCONNECTED', 'Session is disconnected', 409); if (this.activeTurns.has(id)) this.interruptedTurns.add(id); await this.saveState(session, 'interrupting'); await driver.interrupt(); await this.saveState(session, 'interrupted'); }
+  async interrupt(id: string) { const { session, driver } = await this.active(id); if (!driver) throw new RuntimeError('SESSION_DISCONNECTED', 'Session is disconnected', 409); if (this.activeTurns.has(id)) this.interruptedTurns.add(id); await this.saveState(session, 'interrupting'); await driver.interrupt(); await this.saveState(session, 'interrupted', undefined, 'user'); }
   async setRiskPolicy(id: string, policy?: ToolRiskPolicy) {
     const { session, driver } = await this.active(id);
     await this.applyRiskPolicy(session, driver, policy);
@@ -1038,7 +1044,7 @@ export class AgentDockRuntime {
     if (this.drivers.get(id) === driver) this.drivers.delete(id);
     // 换 driver 之后，旧进程起的后台调用不会再推进度；留着只会让新进程的同名 id 被认成跨轮调用。
     this.openToolCalls.delete(id);
-    await this.saveState(session, 'interrupted');
+    await this.saveState(session, 'interrupted', undefined, 'user');
     this.hardInterrupts.delete(id);
   }
   async pause(id: string) { const { session } = await this.active(id); const agent = await this.repos.agents.get(session.agentId); if (!agent?.capabilities.pause) throw new RuntimeError('UNSUPPORTED_CAPABILITY', `Agent ${agent?.name ?? session.agentId} does not support pause/resume`, 422); await this.interrupt(id); }

@@ -243,6 +243,126 @@ describe('AssistantService', () => {
     expect(await service.composePrompt(main, `[飞书群工具说明]\n\n${review[3] as string}`)).not.toContain('<agentdock-superagent>');
   });
 
+  it('reports an explicit interrupt as interrupted, never as failed', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '发布 v0.3.2', doneWhen: ['发布完成'], agentId: 'claude' });
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'interrupted', interruptIntent: 'user' });
+    await service.flushNow();
+
+    const injected = runtime.dispatch.mock.calls.at(-1)!;
+    expect(injected[3]).toContain('[interrupted]');
+    expect(injected[3]).toContain('侧边会话被主动打断');
+    expect(injected[3]).not.toContain('[failed]');
+    // 会话确实停了，事项仍需要主会话决定返工/取消/验收。
+    expect(service.getTask(task.id)?.state).toBe('needs_user');
+  });
+
+  it('keeps real failures as failed signals', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '修 CI', doneWhen: ['测试通过'], agentId: 'claude' });
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'failed', error: 'Agent exited with code 17' });
+    await service.flushNow();
+
+    const injected = runtime.dispatch.mock.calls.at(-1)!;
+    expect(injected[3]).toContain('[failed]');
+    expect(injected[3]).toContain('Agent exited with code 17');
+    expect(injected[3]).not.toContain('[interrupted]');
+    expect(service.getTask(task.id)?.state).toBe('needs_user');
+  });
+
+  it('reports a crashed turn recovered to idle+error as failed, not review', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '真实崩溃', doneWhen: ['给出证据'], agentId: 'claude' });
+    // runtime 对轮次内失败的会话会回到 idle 以便继续接活，错误留在 session.error。
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'idle', error: 'ACP agent disconnected during request' });
+    await service.flushNow();
+
+    const injected = runtime.dispatch.mock.calls.at(-1)!;
+    expect(injected[3]).toContain('[failed]');
+    expect(injected[3]).toContain('ACP agent disconnected during request');
+    expect(injected[3]).not.toContain('[interrupted]');
+    expect(service.getTask(task.id)?.state).toBe('needs_user');
+  });
+
+  it('treats an interrupted state without explicit intent as a failure', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '长跑任务', doneWhen: ['给出结果'], agentId: 'claude' });
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'interrupted', interruptIntent: 'daemon_restart' });
+    await service.flushNow();
+
+    const injected = runtime.dispatch.mock.calls.at(-1)!;
+    expect(injected[3]).toContain('[failed]');
+    expect(injected[3]).not.toContain('[interrupted]');
+  });
+
+  it('scan reports an explicit interrupt as interrupted', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '扫描主动打断', doneWhen: ['给出结果'], agentId: 'claude' });
+    await repos.sessions.save({
+      id: task.sessionId!, agentId: 'claude', state: 'interrupted', interruptIntent: 'user',
+      cwd: '/tmp', runId: 'run_side', createdAt: now(), updatedAt: now()
+    });
+    await service.scan();
+    await service.flushNow();
+    expect(runtime.dispatch.mock.calls.at(-1)![3]).toContain('[interrupted]');
+    expect(runtime.dispatch.mock.calls.at(-1)![3]).not.toContain('[failed]');
+  });
+
+  it('scan reports an unexpected interrupted session as failed', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '扫描意外中断', doneWhen: ['给出结果'], agentId: 'claude' });
+    await repos.sessions.save({
+      id: task.sessionId!, agentId: 'claude', state: 'interrupted', interruptIntent: 'daemon_restart',
+      cwd: '/tmp', runId: 'run_side', createdAt: now(), updatedAt: now()
+    });
+    await service.scan();
+    await service.flushNow();
+    expect(runtime.dispatch.mock.calls.at(-1)![3]).toContain('[failed]');
+    expect(runtime.dispatch.mock.calls.at(-1)![3]).not.toContain('[interrupted]');
+  });
+
+  it('scan reports an idle session with a task error as failed', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '扫描真实崩溃', doneWhen: ['给出结果'], agentId: 'claude' });
+    await repos.sessions.save({
+      id: task.sessionId!, agentId: 'claude', state: 'idle', error: 'Agent exited with code 17',
+      cwd: '/tmp', runId: 'run_side', createdAt: now(), updatedAt: now()
+    });
+    await service.scan();
+    await service.flushNow();
+    expect(runtime.dispatch.mock.calls.at(-1)![3]).toContain('[failed]');
+    expect(runtime.dispatch.mock.calls.at(-1)![3]).toContain('Agent exited with code 17');
+    expect(runtime.dispatch.mock.calls.at(-1)![3]).not.toContain('[review]');
+  });
+
   it('never delegates an injected review signal when other layers prefix the prompt', async () => {
     const { repos, service } = harness();
     await service.initialize();

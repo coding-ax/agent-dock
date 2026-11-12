@@ -1,11 +1,9 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Bot, ChevronDown, ClipboardList } from 'lucide-react';
-import { noteTilt, noteTone, parseSupervisionDetail, supervisionKindTone } from './companion-model';
+import { noteTilt, noteTone, parseSupervisionDetail, supervisionChipTone, supervisionKindLabel, supervisionKindTone } from './companion-model';
 import { supervisionSystemRoundCopy } from './supervision-notice-copy';
 import { useCompanion } from './useCompanion';
 import { useCompanionStore } from './companion-store';
-
-const kindLabel: Record<string, string> = { review: '待验收', needs_you: '需要你', failed: '出错了' };
 
 /**
  * daemon 注入主会话的督办信号。以前是一行灰色 details，现在把每条信号画成一张迷你便签：
@@ -37,12 +35,12 @@ export function SupervisionNotice({ text, detail, timestamp }: { text?: string; 
     {items.length > 0 && <div className="mt-2.5 flex flex-wrap gap-2">
       {items.map((item, index) => {
         const task = item.taskId ? tasks.find(candidate => candidate.id === item.taskId) : undefined;
-        const tone = task ? noteTone(task) : supervisionKindTone[item.kind] ?? 'plan';
+        const tone = supervisionChipTone(item.kind, task ? noteTone(task) : supervisionKindTone[item.kind]);
         const style = { '--tilt': `${noteTilt(item.taskId ?? `${item.title}:${index}`)}deg` } as CSSProperties;
         const body = <>
           <span className="ui-note-dot ui-note-ink"/>
           <span className="min-w-0 truncate font-medium">{task?.title ?? item.title}</span>
-          <span className="shrink-0 text-[11px] text-zinc-500">{kindLabel[item.kind] ?? item.kind}</span>
+          <span className="shrink-0 text-[11px] text-zinc-500">{supervisionKindLabel[item.kind] ?? item.kind}</span>
         </>;
         return task
           ? <button key={index} type="button" title={item.detail || task.title} onClick={() => useCompanionStore.getState().openDrawer({ highlight: task.id })} className={`ui-supervision-chip ui-note-paper-${tone}`} style={style}>{body}</button>

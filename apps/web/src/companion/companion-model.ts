@@ -10,7 +10,7 @@ export type NoteFilter = 'all' | 'needs_user' | 'review' | 'running' | 'closed';
 /** planned 不是独立筛选项：计划卡在服务端是 review，但用户要点头才开工，和「需要你」放同一栏。 */
 export type NoteSectionKey = Exclude<NoteFilter, 'all'> | 'planned';
 /** 便签的纸色。plan = 还没开工的计划卡，铅笔草稿感；其余与事项状态一一对应。 */
-export type NoteTone = 'running' | 'review' | 'needs' | 'plan' | 'done' | 'cancelled';
+export type NoteTone = 'running' | 'review' | 'needs' | 'plan' | 'done' | 'cancelled' | 'interrupted';
 
 export const KITTEN_NAMES = ['小A同学', '年糕', '芝麻', '布丁', '栗子', '可乐', '小满', '豆包', '麻薯', '橘子', '汤圆', '奶盖'];
 
@@ -25,7 +25,7 @@ export function noteTone(task: Pick<AssistantTask, 'state' | 'plan' | 'outcome'>
 }
 
 export const noteToneLabel: Record<NoteTone, string> = {
-  running: '进行中', review: '待验收', needs: '需要你', plan: '计划待开工', done: '已验收', cancelled: '已取消'
+  running: '进行中', review: '待验收', needs: '需要你', plan: '计划待开工', done: '已验收', cancelled: '已取消', interrupted: '已打断'
 };
 
 export function noteSectionOf(task: Pick<AssistantTask, 'state' | 'plan'>): NoteSectionKey {
@@ -274,4 +274,19 @@ export function parseSupervisionDetail(detail: string): SupervisionItem[] {
   return items;
 }
 
-export const supervisionKindTone: Record<string, NoteTone> = { review: 'review', needs_you: 'needs', failed: 'needs' };
+export const supervisionKindLabel: Record<string, string> = {
+  review: '待验收', needs_you: '需要你', failed: '出错了', interrupted: '已打断'
+};
+
+export const supervisionKindTone: Record<string, NoteTone> = {
+  review: 'review', needs_you: 'needs', failed: 'needs', interrupted: 'interrupted'
+};
+
+/**
+ * 督办小卡的纸色。事项本身处于 needs_user（被打断后确实需要主会话处理）时，
+ * 不能因此把 interrupted 信号画成 failed 的红色；主动打断始终用中性琥珀色。
+ */
+export function supervisionChipTone(kind: string, taskTone?: NoteTone): NoteTone {
+  if (kind === 'interrupted') return 'interrupted';
+  return taskTone ?? supervisionKindTone[kind] ?? 'plan';
+}

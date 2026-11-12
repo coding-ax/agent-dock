@@ -2,7 +2,7 @@ import { spawn, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
-import { now, type RepositoryBundle, type Session } from '@agent-dock/agent-dock-shared';
+import { now, type RepositoryBundle, type Session, type SessionInterruptIntent } from '@agent-dock/agent-dock-shared';
 import { resolveLoginShell } from '../terminal-manager.js';
 import { AssistantStore } from './store.js';
 import type {
@@ -23,12 +23,20 @@ const DEFAULT_QUIET_HOURS: QuietHours = { enabled: false, start: '23:00', end: '
 const SIGNAL_THROTTLE_MS: Record<AssistantSignalKind, number> = {
   review: 10 * 60_000,
   needs_you: 2 * 60_000,
-  failed: 2 * 60_000
+  failed: 2 * 60_000,
+  interrupted: 2 * 60_000
 };
 const STALL_DEFAULT_MINUTES = 20;
 const MAX_OUTPUT = 4 * 1024;
 /** 督办注入的唯一文本标记；来源识别以 task.origin 为准，这段文本只作兜底。 */
 const INJECTED_SIGNAL_PREFIX = '以下是 daemon 汇总的督办信号';
+/**
+ * `interrupted` 会话只有在留下显式意图时才算「主动打断」。旧数据或 daemon 重启
+ * 留下的 interrupted 没有这份意图，不能当成用户操作，仍按失败督办。
+ */
+export function isIntentionalInterrupt(intent?: SessionInterruptIntent) {
+  return intent === 'user' || intent === 'agent_cancelled';
+}
 
 export interface AssistantLogger { info(message: string): void; warn(message: string): void }
 
@@ -288,7 +296,7 @@ export class AssistantService {
     return sections;
   }
 
-  async handleStatus(event: { sessionId: string; state: Session['state']; error?: string }) {
+  async handleStatus(event: { sessionId: string; state: Session['state']; error?: string; interruptIntent?: SessionInterruptIntent }) {
     if (this.stopped) return;
     const task = this.store.findOpenTaskBySession(event.sessionId);
     if (!task) return;
@@ -300,15 +308,22 @@ export class AssistantService {
       if (task.state !== 'needs_user') {
         task.state = 'needs_user';
         this.store.saveTask(task);
-        this.signal('failed', task.title, event.error ? `侧边会话失败：${event.error}` : '侧边会话中断或失败', task.id, event.sessionId);
+        if (event.state === 'interrupted' && isIntentionalInterrupt(event.interruptIntent)) {
+          this.signal('interrupted', task.title, '侧边会话被主动打断，等待你决定返工/取消/验收', task.id, event.sessionId);
+        } else {
+          this.signal('failed', task.title, event.error ? `侧边会话失败：${event.error}` : '侧边会话中断或失败', task.id, event.sessionId);
+        }
       }
       return;
     }
     if (event.state === 'idle' || event.state === 'completed') {
       if (task.state === 'running') {
-        task.state = 'review';
+        // runtime 对「轮次内失败」的会话会回收成 idle 并带上 error，好让同一会话继续接活；
+        // 这不是正常完成，仍要按失败督办，否则真实崩溃会被误报成待验收。
+        task.state = event.error ? 'needs_user' : 'review';
         this.store.saveTask(task);
-        this.signal('review', task.title, '侧边会话这一轮结束，等待验收', task.id, event.sessionId);
+        if (event.error) this.signal('failed', task.title, `侧边会话失败：${event.error}`, task.id, event.sessionId);
+        else this.signal('review', task.title, '侧边会话这一轮结束，等待验收', task.id, event.sessionId);
       }
     }
   }
@@ -376,14 +391,19 @@ export class AssistantService {
         if (task.state !== 'needs_user') {
           task.state = 'needs_user';
           this.store.saveTask(task);
-          this.signal('failed', task.title, session.error ?? '侧边会话中断或失败', task.id, task.sessionId);
+          if (session.state === 'interrupted' && isIntentionalInterrupt(session.interruptIntent)) {
+            this.signal('interrupted', task.title, '侧边会话被主动打断，等待你决定返工/取消/验收', task.id, task.sessionId);
+          } else {
+            this.signal('failed', task.title, session.error ?? '侧边会话中断或失败', task.id, task.sessionId);
+          }
         }
         continue;
       }
       if ((session.state === 'idle' || session.state === 'completed') && task.state === 'running') {
-        task.state = 'review';
+        task.state = session.error ? 'needs_user' : 'review';
         this.store.saveTask(task);
-        this.signal('review', task.title, '侧边会话这一轮结束，等待验收', task.id, task.sessionId);
+        if (session.error) this.signal('failed', task.title, `侧边会话失败：${session.error}`, task.id, task.sessionId);
+        else this.signal('review', task.title, '侧边会话这一轮结束，等待验收', task.id, task.sessionId);
         continue;
       }
       if (task.state === 'running' && isStalled(session, task.expectMinutes)) {

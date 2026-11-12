@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { AssistantTask } from '../api';
 import {
   companionBubble, companionStatus, countNotes, deriveMood, diffTasks, greeting, groupNotes,
-  noteTilt, noteTone, parseSupervisionDetail, pickKittenName, sinceLabel, snapshotTasks, tapeTilt, KITTEN_NAMES
+  noteTilt, noteTone, parseSupervisionDetail, pickKittenName, sinceLabel, snapshotTasks,
+  supervisionChipTone, supervisionKindLabel, supervisionKindTone, tapeTilt, KITTEN_NAMES
 } from './companion-model';
 
 const task = (patch: Partial<AssistantTask> & { id: string }): AssistantTask => ({
@@ -170,12 +171,23 @@ describe('helpers', () => {
       '',
       '- [review] 梳理仓库现状：侧边会话这一轮结束，等待验收（atask_abc-1）',
       '- [needs_you] watch：文件出现：条件满足：ok',
-      '- [failed] 修 CI：侧边会话失败：boom（atask_def）'
+      '- [failed] 修 CI：侧边会话失败：boom（atask_def）',
+      '- [interrupted] 发布 v0.3.2：侧边会话被主动打断，等待你决定返工/取消/验收（atask_ghi）'
     ].join('\n');
     expect(parseSupervisionDetail(detail)).toEqual([
       { kind: 'review', title: '梳理仓库现状', detail: '侧边会话这一轮结束，等待验收', taskId: 'atask_abc-1' },
       { kind: 'needs_you', title: 'watch', detail: '文件出现：条件满足：ok' },
-      { kind: 'failed', title: '修 CI', detail: '侧边会话失败：boom', taskId: 'atask_def' }
+      { kind: 'failed', title: '修 CI', detail: '侧边会话失败：boom', taskId: 'atask_def' },
+      { kind: 'interrupted', title: '发布 v0.3.2', detail: '侧边会话被主动打断，等待你决定返工/取消/验收', taskId: 'atask_ghi' }
     ]);
+  });
+
+  it('shows interrupted supervision as a neutral amber chip, never the failed tone', () => {
+    expect(supervisionKindLabel.interrupted).toBe('已打断');
+    expect(supervisionKindTone.interrupted).toBe('interrupted');
+    expect(supervisionKindTone.interrupted).not.toBe(supervisionKindTone.failed);
+    // 被打断的事项在服务端仍是 needs_user；任务纸色不能覆盖信号本身的语义。
+    expect(supervisionChipTone('interrupted', 'needs')).toBe('interrupted');
+    expect(supervisionChipTone('failed', 'needs')).toBe('needs');
   });
 });

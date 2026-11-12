@@ -126,12 +126,14 @@ html[data-theme="dark"] .ui-cat-blush { fill: rgb(244 114 182 / .3); }
 .ui-note-paper-plan { --paper: 250 250 246; --paper-edge: 200 200 190; --paper-ink: 90 90 82; }
 .ui-note-paper-done { --paper: 228 247 236; --paper-edge: 150 214 178; --paper-ink: 22 120 72; }
 .ui-note-paper-cancelled { --paper: 240 240 240; --paper-edge: 210 210 210; --paper-ink: 120 120 120; }
+.ui-note-paper-interrupted { --paper: 250 244 230; --paper-edge: 216 200 170; --paper-ink: 120 100 60; }
 html[data-theme="dark"] .ui-note-paper-running { --paper: 70 61 32; --paper-edge: 120 102 44; --paper-ink: 246 214 120; }
 html[data-theme="dark"] .ui-note-paper-review { --paper: 30 50 72; --paper-edge: 56 94 130; --paper-ink: 150 200 250; }
 html[data-theme="dark"] .ui-note-paper-needs { --paper: 76 42 34; --paper-edge: 130 70 52; --paper-ink: 252 176 150; }
 html[data-theme="dark"] .ui-note-paper-plan { --paper: 50 50 48; --paper-edge: 90 90 84; --paper-ink: 210 210 200; }
 html[data-theme="dark"] .ui-note-paper-done { --paper: 26 58 44; --paper-edge: 46 104 76; --paper-ink: 130 226 176; }
 html[data-theme="dark"] .ui-note-paper-cancelled { --paper: 46 46 46; --paper-edge: 70 70 70; --paper-ink: 150 150 150; }
+html[data-theme="dark"] .ui-note-paper-interrupted { --paper: 58 52 38; --paper-edge: 100 88 62; --paper-ink: 226 206 160; }
 .ui-note-ink { color: rgb(var(--paper-ink)); }
 .ui-note-swatch { background: rgb(var(--paper)); box-shadow: inset 0 0 0 1px rgb(var(--paper-edge) / .8); }
 

@@ -157,7 +157,7 @@ describe('runtime lifecycle acceptance', () => {
     await h.repos.tasks.save({ id: 'task_orphaned', sessionId: 'ses_orphaned', prompt: 'long task', status: 'running', createdAt: timestamp, updatedAt: timestamp });
     await h.runtime.initialize([agent]);
     expect((await h.runtime.getTasks('ses_orphaned'))[0]?.status).toBe('interrupted');
-    expect((await h.runtime.getSession('ses_orphaned'))?.state).toBe('interrupted');
+    expect((await h.runtime.getSession('ses_orphaned'))).toMatchObject({ state: 'interrupted', interruptIntent: 'daemon_restart' });
     const events = await h.runtime.getEvents('ses_orphaned');
     expect(events.some(e => e.type === 'error' && e.data.message.includes('守护进程重启'))).toBe(true);
     await h.runtime.shutdown(); h.repos.close();
@@ -422,11 +422,34 @@ describe('runtime lifecycle acceptance', () => {
     await runtime.shutdown(); repos.close();
   });
 
-  it('interrupt cancels only the current turn and retains the session', async () => { const h = harness(); await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' }); await h.runtime.interrupt(s.id); expect(h.driver.interrupt).toHaveBeenCalledOnce(); expect((await h.runtime.getSession(s.id))?.state).toBe('interrupted'); h.repos.close(); });
+  it('interrupt cancels only the current turn and records explicit user intent', async () => {
+    const h = harness();
+    const statuses: Array<{ state: string; interruptIntent?: string }> = [];
+    h.runtime.onStatus(event => statuses.push(event));
+    await h.runtime.initialize([agent]);
+    const s = await h.runtime.start({ agentId: 'mock' });
+    await h.runtime.interrupt(s.id);
+    expect(h.driver.interrupt).toHaveBeenCalledOnce();
+    expect((await h.runtime.getSession(s.id))).toMatchObject({ state: 'interrupted', interruptIntent: 'user' });
+    expect(statuses.at(-1)).toMatchObject({ state: 'interrupted', interruptIntent: 'user' });
+    h.repos.close();
+  });
   it('stop delegates process-tree cleanup and marks stopped', async () => { const h = harness(); await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' }); await h.runtime.stop(s.id); expect(h.driver.stop).toHaveBeenCalledOnce(); expect((await h.runtime.getSession(s.id))?.state).toBe('stopped'); h.repos.close(); });
   it('permanently archives a session and rejects subsequent actions', async () => { const h = harness(); await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' }); const archived = await h.runtime.archive(s.id); expect(archived.archivedAt).toBeTruthy(); expect(archived.state).toBe('stopped'); await expect(h.runtime.dispatch(s.id, 'not allowed')).rejects.toMatchObject({ code: 'SESSION_ARCHIVED' }); expect((await h.runtime.listSessions())[0]?.archivedAt).toBe(archived.archivedAt); await h.runtime.shutdown(); h.repos.close(); });
   it('restart creates a new run instance', async () => { const h = harness(); await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' }); const old = s.runId; const restarted = await h.runtime.restart(s.id); expect(restarted.runId).not.toBe(old); expect(h.driver.stop).toHaveBeenCalledOnce(); h.repos.close(); });
-  it('abnormal agent exit produces failed state and error event', async () => { const h = harness({ exitOnSend: 17 }); await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' }); await h.runtime.send(s.id, 'exit'); await vi.waitFor(async () => expect((await h.runtime.getEvents(s.id)).some(e => e.type === 'error')).toBe(true)); h.repos.close(); });
+  it('abnormal agent exit produces failed state and error event', async () => {
+    const h = harness({ exitOnSend: 17 });
+    const statuses: Array<{ state: string; error?: string; interruptIntent?: string }> = [];
+    h.runtime.onStatus(event => statuses.push(event));
+    await h.runtime.initialize([agent]);
+    const s = await h.runtime.start({ agentId: 'mock' });
+    await h.runtime.send(s.id, 'exit');
+    await vi.waitFor(async () => expect((await h.runtime.getEvents(s.id)).some(e => e.type === 'error')).toBe(true));
+    expect(statuses).toContainEqual(expect.objectContaining({ state: 'failed', error: 'Agent exited with code 17' }));
+    expect((await h.runtime.getTasks(s.id))[0]?.status).toBe('failed');
+    expect((await h.runtime.getSession(s.id))?.interruptIntent ?? null).toBeNull();
+    h.repos.close();
+  });
   it('permission requests can be approved and rejected', async () => { const h = harness({ onSend: emit => { emit({ type: 'permission_request', data: { id: 'p1', title: 'Write?', status: 'pending' } }); emit({ type: 'permission_request', data: { id: 'p2', title: 'Delete?', status: 'pending' } }); } }); await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' }); await h.runtime.send(s.id, 'write'); expect((await h.runtime.resolvePermission(s.id, 'p1', true)).status).toBe('approved'); expect((await h.runtime.resolvePermission(s.id, 'p2', false)).status).toBe('rejected'); await expect(h.runtime.resolvePermission(s.id, 'p1', true)).rejects.toMatchObject({ code: 'PERMISSION_NOT_FOUND' }); await h.runtime.shutdown(); h.repos.close(); });
   it('returns an explicit error for unsupported pause/resume', async () => { const h = harness(); await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' }); await expect(h.runtime.pause(s.id)).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY', statusCode: 422 }); h.repos.close(); });
   it('returns a clear dependency error when a scanned Agent becomes unavailable', async () => { const h = harness(); const unavailable = { ...agent, id: 'trae', name: 'Trae', command: 'missing-trae' }; const runtime = new AgentDockRuntime(h.repos, { probe: () => ({ protocol: 'acp', available: false, detail: 'command disappeared after scan', pause: false, resume: true }) }); await runtime.initialize([unavailable]); await expect(runtime.start({ agentId: 'trae' })).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' }); h.repos.close(); });
@@ -629,7 +652,7 @@ describe('runtime lifecycle acceptance', () => {
     await h.runtime.initialize([agent]); const s = await h.runtime.start({ agentId: 'mock' });
     await h.runtime.send(s.id, 'work');
     expect((await h.runtime.getTasks(s.id))[0]?.status).toBe('interrupted');
-    expect((await h.runtime.getSession(s.id))?.state).toBe('interrupted');
+    expect((await h.runtime.getSession(s.id))).toMatchObject({ state: 'interrupted', interruptIntent: 'agent_cancelled' });
     await h.runtime.shutdown(); h.repos.close();
   });
 

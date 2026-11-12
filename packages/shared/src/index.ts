@@ -22,6 +22,13 @@ export const permissionModes = ['ask', 'approve-reads', 'deny-all', 'full-trust'
 export type PermissionMode = (typeof permissionModes)[number];
 export const sessionStates = ['created', 'starting', 'idle', 'thinking', 'running_tool', 'waiting_for_permission', 'interrupting', 'interrupted', 'completed', 'failed', 'stopped'] as const;
 export type SessionState = (typeof sessionStates)[number];
+/**
+ * `state=interrupted` 的原因。只有显式打断（用户点取消 / `session send --mode interrupt` /
+ * Agent 自己报告 cancelled）才记为主动打断；daemon 重启遗留的未完成轮次也复用
+ * `interrupted` 状态，但原因是 `daemon_restart`，对用户来说仍是一次失败。
+ */
+export const sessionInterruptIntents = ['user', 'agent_cancelled', 'daemon_restart'] as const;
+export type SessionInterruptIntent = (typeof sessionInterruptIntents)[number];
 export const eventTypes = ['text', 'thinking', 'tool_call', 'tool_result', 'permission_request', 'status', 'error', 'completed', 'task', 'raw_terminal'] as const;
 export type EventType = (typeof eventTypes)[number];
 
@@ -104,6 +111,8 @@ export interface Session {
   id: string;
   agentId: string;
   state: SessionState;
+  /** 仅 `state=interrupted` 时有意义；缺失表示旧数据/来源不明，按意外中断处理。 */
+  interruptIntent?: SessionInterruptIntent;
   cwd: string;
   model?: string;
   reasoningEffort?: string;

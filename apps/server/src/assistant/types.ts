@@ -4,7 +4,7 @@ export type AssistantTaskState = (typeof assistantTaskStates)[number];
 export const assistantTaskOutcomes = ['accepted', 'cancelled'] as const;
 export type AssistantTaskOutcome = (typeof assistantTaskOutcomes)[number];
 
-export const assistantSignalKinds = ['review', 'needs_you', 'failed'] as const;
+export const assistantSignalKinds = ['review', 'needs_you', 'failed', 'interrupted'] as const;
 export type AssistantSignalKind = (typeof assistantSignalKinds)[number];
 
 export const watchModes = ['once', 'repeat'] as const;
