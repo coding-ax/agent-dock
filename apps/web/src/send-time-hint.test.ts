@@ -1,11 +1,23 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SendTimeHint, TimelineTurn } from './SendTimeHint';
 
+// 组件内部用 new Date() 判断「是不是今天」。夹具和冻结时钟都用本机时区构造，
+// 这样无论跑在哪一天、哪个时区，21:50 都落在同一天，断言不会随日历翻篇。
+const now = new Date(2026, 10, 12, 22, 5);
 const timestamp = new Date(2026, 10, 12, 21, 50).toISOString();
 
 describe('SendTimeHint', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('is absolutely positioned and carries the stored timestamp without taking its own tab stop', () => {
     const html = renderToStaticMarkup(createElement(SendTimeHint, { timestamp }));
     expect(html).toContain('ui-send-time');
