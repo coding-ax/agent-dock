@@ -761,6 +761,8 @@ export class LarkAvatarService {
     const senderName = names.chatter?.name || message.fromId;
     const chatName = names.chat?.name || (chatTypeNumber === 1 ? senderName : undefined);
     const occurred = timeMs(message.createTime, this.clock().getTime());
+    const previousCursor = this.store.cursor(message.chatId);
+    const staleByCursor = previousCursor !== undefined && occurred < previousCursor - 60_000;
     const anchor = message.rootId || (chatTypeNumber === 3 ? message.messageId : '');
     const chatType = chatTypeLabel(chatTypeNumber);
     const replyTarget = this.replyTargetFor(message, chatType, state.config);
@@ -778,7 +780,7 @@ export class LarkAvatarService {
       ...(names.chatter?.avatarUrl ? { senderAvatarUrl: names.chatter.avatarUrl } : {}),
       title: message.content.slice(0, 240) || `[消息类型 ${message.type}]`,
       tier: 'fyi',
-      state: backfill || !isTrigger ? 'handled' : 'new',
+      state: backfill || staleByCursor || !isTrigger ? 'handled' : 'new',
       occurredAt: new Date(occurred).toISOString(),
       receivedAt: this.clock().toISOString(),
       payload: {
@@ -790,7 +792,10 @@ export class LarkAvatarService {
       }
     };
     const inserted = this.store.upsertInbox(item);
-    if (!inserted.created || backfill || !isSelf || triggerPrompt === undefined) return inserted.created;
+    this.store.setCursor(message.chatId, occurred);
+    if (!inserted.created || backfill || staleByCursor || !isSelf || triggerPrompt === undefined) {
+      return inserted.created && !staleByCursor;
+    }
 
     if (!triggerPrompt) {
       this.store.setInboxState(item.id, 'handled');
