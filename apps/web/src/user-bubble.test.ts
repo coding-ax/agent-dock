@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { TimelineItem } from './TimelineItems';
 import { TooltipProvider } from './HoverTooltip';
 import type { TimelineEvent } from './timeline';
+import { formatUserMessageTime } from './send-time';
 
 const userText = (optimistic: boolean): TimelineEvent => ({
   id: 'u1', sequence: 1, type: 'text', timestamp: '2026-01-01T00:00:00.000Z',
@@ -23,6 +24,14 @@ describe('user bubble sending state', () => {
 
   it('drops the spinner once the message is confirmed', () => {
     expect(render(userText(false))).not.toContain('发送中');
+  });
+
+  it('shows the stored send time visibly under the bubble, not only on hover', () => {
+    const html = render(userText(false));
+    expect(html).toContain('ui-user-send-time');
+    expect(html).toContain(`发送 ${formatUserMessageTime(userText(false).timestamp)}`);
+    // 气泡时间不能复用轮末的 hover 角标，否则触摸屏上仍然看不到。
+    expect(html).not.toContain('ui-send-time"');
   });
 
   it('lets long links wrap instead of overflowing the bubble', () => {

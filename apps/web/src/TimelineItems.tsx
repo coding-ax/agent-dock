@@ -11,6 +11,7 @@ import { SystemRoundNotice } from './companion/LifecycleNotices';
 import { isSystemRoundOrigin } from './companion/lifecycle-model';
 import { SILENT_TRIGGER_ORIGIN, type SilentTriggerTarget } from './silent-trigger';
 import { SilentTrigger } from './SilentTrigger';
+import { UserMessageTime } from './SendTimeHint';
 
 /**
  * 时间线的渲染单元。原先这些组件都藏在 SessionPane 内部，只有它能用；「实际请求」轨迹面板
@@ -303,7 +304,14 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
     const text = markLeadingSlashCommand(stripImageReferenceLines(event.data.text ?? ''));
     // 「发送中」是气泡左侧的绝对定位圆环，对齐最后一行文字：不占位，确认后消失也不会让气泡跳动。
     // 用 bottom 而不是 translate 定位，避免和 animate-spin 的 transform 冲突。
-    return <div className="group/msg ui-timeline-item relative my-6 flex justify-end"><div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900"><MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>{event.data.optimistic && <Spinner size={14} label="发送中" className="absolute bottom-4 right-full mr-2 text-zinc-400"/>}</div>{silent && <div className="absolute -bottom-3 right-0">{silent}</div>}</div>;
+    // 时间放在气泡下方独立的常驻行：不挤正文、不依赖 hover，桌面和触摸屏都能直接看到。
+    return <div className="group/msg ui-timeline-item relative my-6 flex flex-col items-end">
+      <div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900"><MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>{event.data.optimistic && <Spinner size={14} label="发送中" className="absolute bottom-4 right-full mr-2 text-zinc-400"/>}</div>
+      <div className="mt-1 flex max-w-[80%] items-center justify-end gap-2">
+        {silent}
+        <UserMessageTime timestamp={event.timestamp}/>
+      </div>
+    </div>;
   }
   // 挂载时已不在流式输出的正文直接给全文。轮次结束时最终回答会从执行面板搬成独立的 final 行（重新挂载），
   // tasks 刷新的空档也可能让它短暂搬回去再搬出来；否则这些早就返回过的内容会从 0 重新打一遍。
@@ -320,6 +328,7 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
   </div>;
 }, (prev, next) => prev.final === next.final && prev.streaming === next.streaming && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId
   && prev.silentEmoji === next.silentEmoji && prev.hasMainSession === next.hasMainSession && prev.onSilentTrigger === next.onSilentTrigger
+  && prev.event.timestamp === next.event.timestamp
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event)
   // error/warning/permission 卡片的 payload 变化也要刷新；text 长度已在签名内。
   && JSON.stringify(prev.event.data.status ?? '') === JSON.stringify(next.event.data.status ?? '')

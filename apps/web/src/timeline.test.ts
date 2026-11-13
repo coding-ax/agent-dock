@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildActivitySteps, thinkingTitle, buildTimeline, buildTimelineSections, eventRenderSignature, groupTimelineSections, isStreamingSection, isTurnOngoing, toolDisplayName, turnSendTime, type TimelineEvent } from './timeline';
+import { buildActivitySteps, thinkingTitle, buildTimeline, buildTimelineSections, eventRenderSignature, groupTimelineSections, isStreamingSection, isTurnOngoing, toolDisplayName, turnTimeBadge, type TimelineEvent } from './timeline';
 
 const event = (sequence: number, type: string, data: any) => ({ id: `e${sequence}`, sequence, type, timestamp: '', data });
 
@@ -566,17 +566,19 @@ describe('send time on terminal segments', () => {
     expect(sections.length).toBeGreaterThan(1);
     expect(sections.every(section => section.terminal)).toBe(true);
     expect(sections.map(section => section.sentAt)).toEqual(sections.map(() => '2026-11-12T13:50:05.120Z'));
+    expect(sections.map(section => section.completedAt)).toEqual(sections.map(() => '2026-11-12T13:50:10.500Z'));
     const turns = groupTimelineSections(sections);
     expect(turns).toHaveLength(1);
     expect(turns[0]!.sections).toHaveLength(sections.length);
-    expect(turnSendTime(turns[0]!)).toEqual({ timestamp: '2026-11-12T13:50:05.120Z', align: 'left' });
+    // 发送时间交给用户气泡常驻展示；轮末只保留完成时间，避免同一轮出现两个发送角标。
+    expect(turnTimeBadge(turns[0]!)).toEqual({ timestamp: '2026-11-12T13:50:10.500Z', align: 'left', kind: '完成' });
   });
 
   it('shows nothing while the turn is still running', () => {
     const sections = turn('running');
     expect(sections.every(section => section.terminal)).toBe(false);
     expect(sections.every(section => section.sentAt === undefined)).toBe(true);
-    expect(turnSendTime(groupTimelineSections(sections)[0]!)).toBeUndefined();
+    expect(turnTimeBadge(groupTimelineSections(sections)[0]!)).toBeUndefined();
   });
 
   it('keeps consecutive turns separate', () => {
@@ -592,14 +594,23 @@ describe('send time on terminal segments', () => {
     for (const status of ['failed', 'interrupted']) expect(turn(status).every(section => section.terminal)).toBe(true);
   });
 
-  it('falls back to the user event time for legacy turns without task records', () => {
+  it('falls back to the last event time for legacy turns without task records', () => {
     const first = { ...event(1, 'text', { role: 'user', text: '第一轮' }), timestamp: '2026-11-12T13:50:06.000Z' };
     const answer = { ...event(2, 'text', { role: 'assistant', text: '答' }), timestamp: '2026-11-12T13:50:08.000Z' };
     const next = { ...event(3, 'text', { role: 'user', text: '第二轮' }), timestamp: '2026-11-12T13:51:00.000Z' };
     const sections = buildTimelineSections(buildTimeline([first, answer, next]), []);
     const turns = groupTimelineSections(sections);
-    expect(turnSendTime(turns[0]!)).toEqual({ timestamp: '2026-11-12T13:50:06.000Z', align: 'left' });
+    expect(turns[0]!.sentAt).toBe('2026-11-12T13:50:06.000Z');
+    expect(turnTimeBadge(turns[0]!)).toEqual({ timestamp: '2026-11-12T13:50:08.000Z', align: 'left', kind: '完成' });
     // 最后一行（还在跑的那一轮）没有发送时间。
-    expect(turnSendTime(turns.at(-1)!)).toBeUndefined();
+    expect(turnTimeBadge(turns.at(-1)!)).toBeUndefined();
+  });
+
+  it('leaves the turn-end badge to the user bubble when the turn has no answer', () => {
+    const first = { ...event(1, 'text', { role: 'user', text: '第一轮' }), timestamp: '2026-11-12T13:50:06.000Z' };
+    const next = { ...event(2, 'text', { role: 'user', text: '第二轮' }), timestamp: '2026-11-12T13:51:00.000Z' };
+    const turns = groupTimelineSections(buildTimelineSections(buildTimeline([first, next]), []));
+    expect(turns[0]!.sections).toHaveLength(1);
+    expect(turnTimeBadge(turns[0]!)).toBeUndefined();
   });
 });

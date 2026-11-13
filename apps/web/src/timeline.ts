@@ -17,8 +17,8 @@ export type OptimisticMessage = { id: string; prompt: string; createdAt: string;
 /** 「等待发送」面板的一行：服务端已入队的任务；pending 是刚提交、服务端还没确认的消息，不能操作。 */
 export type QueuedTask = Task & { pending?: true };
 export type TimelineActivityGroup = { id: string; label: string; labelTitle: string; events: TimelineEvent[]; startedAt: string; completedAt?: string };
-/** 同一轮的片段共享 turnId 和发送时间，渲染时据此合并成一个悬停区域。 */
-export type TimelineSectionMeta = { terminal: boolean; sentAt?: string; turnId: string };
+/** 同一轮的片段共享 turnId 和发送/完成时间，渲染时据此合并成一个悬停区域。 */
+export type TimelineSectionMeta = { terminal: boolean; sentAt?: string; completedAt?: string; turnId: string };
 export type TimelineSection =
   | ({ kind: 'event'; event: TimelineEvent; final: boolean } & TimelineSectionMeta)
   | ({ kind: 'activity'; id: string; groups: TimelineActivityGroup[]; hasAnswer: boolean; taskStatus: string; isLatestTurn: boolean; startedAt: string; completedAt?: string } & TimelineSectionMeta);
@@ -28,6 +28,7 @@ export type TimelineTurn = {
   sections: TimelineSection[];
   terminal: boolean;
   sentAt?: string;
+  completedAt?: string;
 };
 
 /**
@@ -466,22 +467,33 @@ export function groupTimelineSections(sections: TimelineSection[]): TimelineTurn
     if (previous?.turnId === section.turnId) {
       previous.sections.push(section);
       previous.terminal &&= section.terminal;
+      previous.completedAt ??= section.completedAt;
       continue;
     }
-    turns.push({ turnId: section.turnId, sections: [section], terminal: section.terminal, ...(section.sentAt ? { sentAt: section.sentAt } : {}) });
+    turns.push({
+      turnId: section.turnId, sections: [section], terminal: section.terminal,
+      ...(section.sentAt ? { sentAt: section.sentAt } : {}),
+      ...(section.completedAt ? { completedAt: section.completedAt } : {})
+    });
   }
   return turns;
 }
 
 /**
- * 一轮的发送时间角标：只给终态轮次，进行中（含最后一行仍在跑）一律不给。
- * 时间挂在整轮下方；只有纯用户消息轮才靠右，正常有回复的轮次统一贴左。
+ * 一轮末尾的时间角标：只给终态轮次，进行中（含最后一行仍在跑）一律不给。
+ *
+ * 用户气泡自己常驻显示「发送」时间后，轮末不再重复同一个值：有完成时间就标「完成」，
+ * 早期没有 task.updatedAt 的数据才退回发送时间并标「发送」。纯用户消息轮没有可看的
+ * 轮末内容，气泡旁的时间已经足够，不再多挂一个角标。
  */
-export function turnSendTime(turn: TimelineTurn): { timestamp: string; align: 'left' | 'right' } | undefined {
-  if (!turn.terminal || !turn.sentAt) return undefined;
+export function turnTimeBadge(turn: TimelineTurn): { timestamp: string; align: 'left' | 'right'; kind: '发送' | '完成' } | undefined {
+  if (!turn.terminal) return undefined;
   const onlyUserMessage = turn.sections.length === 1 && turn.sections[0]!.kind === 'event'
     && turn.sections[0]!.event.data.role === 'user';
-  return { timestamp: turn.sentAt, align: onlyUserMessage ? 'right' : 'left' };
+  if (onlyUserMessage) return undefined;
+  const timestamp = turn.completedAt ?? turn.sentAt;
+  if (!timestamp) return undefined;
+  return { timestamp, align: 'left', kind: turn.completedAt ? '完成' : '发送' };
 }
 
 /**
@@ -587,7 +599,14 @@ export function buildTimelineSections(timeline: TimelineEvent[], tasks: Task[] =
     // 只在终态挂出去，排队/执行中的那一轮不会拿运行时间冒充发送时间。
     const sentAt = task?.createdAt ?? userMessage?.timestamp;
     const turnId = `turn-${userMessage?.data.taskId ?? userMessage?.id ?? turn[0]!.id}`;
-    const meta: TimelineSectionMeta = { terminal, turnId, ...(terminal && sentAt ? { sentAt } : {}) };
+    // 完成时间取任务落库的 updatedAt；早期没有 task 记录时退回这一轮最后一条事件的时间。
+    // 两者都只在终态挂出：进行中的 updatedAt 是心跳，不是完成时刻。
+    const completedAt = terminal ? task?.updatedAt ?? turn.at(-1)?.timestamp : undefined;
+    const meta: TimelineSectionMeta = {
+      terminal, turnId,
+      ...(terminal && sentAt ? { sentAt } : {}),
+      ...(completedAt ? { completedAt } : {})
+    };
     // 终态规则与 runtime、飞书卡片共用同一实现（packages/shared/src/turn-outcome.ts）：
     // 最终输出必须是最后一次活动（思考 / 工具调用）之后的最后一条 assistant 文本。
     const finalEntry = terminal ? pickFinalAssistantEntry(turn) : undefined;
@@ -628,10 +647,6 @@ export function buildTimelineSections(timeline: TimelineEvent[], tasks: Task[] =
     const groups = pieces.flatMap(piece => piece.kind === 'group' ? [piece.group] : []);
     if (!groups.length) return pieces.filter((piece): piece is Extract<Piece, { kind: 'event' }> => piece.kind === 'event').map(piece => ({ ...piece, ...meta }));
     const firstGroupIndex = pieces.findIndex(piece => piece.kind === 'group');
-    const lastGroup = groups.at(-1)!;
-    const completedAt = terminal && task?.updatedAt
-      ? task.updatedAt
-      : hasAnswer ? finalEntry?.timestamp : lastGroup.completedAt;
     const reportedTaskStatus = task?.status ?? (terminal ? 'completed' : 'running');
     const taskStatus = reportedTaskStatus === 'completed' && !hasAnswer ? 'incomplete' : reportedTaskStatus;
     const activity: TimelineSection = {
@@ -642,7 +657,6 @@ export function buildTimelineSections(timeline: TimelineEvent[], tasks: Task[] =
       taskStatus,
       isLatestTurn: turnIndex === turns.length - 1,
       startedAt: userMessage?.timestamp ?? groups[0]!.startedAt,
-      ...(completedAt ? { completedAt } : {}),
       ...meta
     };
     const sections: TimelineSection[] = [];

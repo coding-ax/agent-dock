@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type DockEvent, type Session, type Task } from './api';
-import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, groupTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, turnSendTime, waitingQueuedTasks, type OptimisticMessage, type TimelineEvent } from './timeline';
+import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, groupTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, turnTimeBadge, waitingQueuedTasks, type OptimisticMessage, type TimelineEvent } from './timeline';
 import { ActivityPanel, TimelineItem } from './TimelineItems';
 import { TimelineTurn } from './SendTimeHint';
 import { Composer } from './Composer';
@@ -394,8 +394,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
         <div className="flex min-w-0 flex-1 flex-col">
       <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
         {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineTurns.map(turn => {
-          const sendTime = turnSendTime(turn);
-          return <TimelineTurn key={turn.turnId} turnId={turn.turnId} sendTime={sendTime}>
+          const time = turnTimeBadge(turn);
+          return <TimelineTurn key={turn.turnId} turnId={turn.turnId} time={time}>
             {turn.sections.map(section => section.kind === 'event'
               ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id} silentEmoji={silentEmoji} hasMainSession={Boolean(mainSessionId)} onSilentTrigger={handleSilentTrigger}/>
               : <ActivityPanel key={section.id} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}
