@@ -14,6 +14,12 @@ import type {
 export const MAX_INBOX_ITEMS = 60;
 /** 回复记录也按同一个原则限量；pending 保留等待发送，其余状态超限时从最旧开始丢弃。 */
 export const MAX_DRAFT_ITEMS = 80;
+/**
+ * 持久化消息去重集合上限。
+ * avatar_inbox 只保留最近 60 条用于 UI 展示，不能承担幂等防线；
+ * 即使旧消息从展示面板淘汰，也必须在此表保留足够长的已处理记录。
+ */
+export const MAX_SEEN_MESSAGES = 10_000;
 
 export const AVATAR_SCHEMA = `
   CREATE TABLE IF NOT EXISTS avatar_state (
@@ -42,6 +48,11 @@ export const AVATAR_SCHEMA = `
   CREATE TABLE IF NOT EXISTS avatar_chat_cursor (
     chat_id TEXT PRIMARY KEY, last_seen_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS avatar_seen_messages (
+    message_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL,
+    occurred_at INTEGER NOT NULL, seen_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS avatar_seen_messages_seen ON avatar_seen_messages(seen_at);
 `;
 
 export function avatarDatabasePath(databaseUrl: string): string {
@@ -161,8 +172,14 @@ export class LarkAvatarStore {
     if (!draftColumns.some(column => column.name === 'reply_root_id')) this.sqlite.exec('ALTER TABLE avatar_drafts ADD COLUMN reply_root_id TEXT');
     if (!draftColumns.some(column => column.name === 'reply_quote')) this.sqlite.exec('ALTER TABLE avatar_drafts ADD COLUMN reply_quote INTEGER');
     if (!draftColumns.some(column => column.name === 'reply_thread_chat')) this.sqlite.exec('ALTER TABLE avatar_drafts ADD COLUMN reply_thread_chat INTEGER');
+    this.sqlite.exec(`
+      INSERT OR IGNORE INTO avatar_seen_messages (message_id, chat_id, occurred_at, seen_at)
+      SELECT message_id, chat_id, 0, CAST(strftime('%s', 'now') AS INTEGER) * 1000
+      FROM avatar_inbox
+    `);
     this.pruneInbox();
     this.pruneDrafts();
+    this.pruneSeenMessages();
   }
 
   close() { this.sqlite.close(); }
@@ -204,9 +221,13 @@ export class LarkAvatarStore {
 
   upsertInbox(item: LarkAvatarInboxItem): { record: LarkAvatarInboxItem; created: boolean } {
     const run = this.sqlite.transaction(() => {
+      const occurredAtMs = Number.isFinite(Date.parse(item.occurredAt)) ? Date.parse(item.occurredAt) : 0;
+      const seenAtMs = Number.isFinite(Date.parse(item.receivedAt)) ? Date.parse(item.receivedAt) : Date.now();
       const existing = this.sqlite.prepare('SELECT * FROM avatar_inbox WHERE message_id = ?')
         .get(item.messageId) as StateRow | undefined;
       if (existing) {
+        this.sqlite.prepare(`INSERT OR IGNORE INTO avatar_seen_messages (message_id, chat_id, occurred_at, seen_at)
+          VALUES (?, ?, ?, ?)`).run(item.messageId, item.chatId, occurredAtMs, seenAtMs);
         this.sqlite.prepare(`UPDATE avatar_inbox SET
           chat_name = COALESCE(?, chat_name),
           chat_avatar_url = COALESCE(?, chat_avatar_url),
@@ -223,6 +244,13 @@ export class LarkAvatarStore {
           .get(item.messageId) as StateRow;
         return { record: inboxFromRow(updated), created: false };
       }
+      const seen = this.sqlite.prepare('SELECT 1 FROM avatar_seen_messages WHERE message_id = ?')
+        .get(item.messageId);
+      if (seen) {
+        return { record: item, created: false };
+      }
+      this.sqlite.prepare(`INSERT INTO avatar_seen_messages (message_id, chat_id, occurred_at, seen_at)
+        VALUES (?, ?, ?, ?)`).run(item.messageId, item.chatId, occurredAtMs, seenAtMs);
       this.sqlite.prepare(`INSERT INTO avatar_inbox
         (id, thread_key, message_id, chat_id, chat_type, chat_name, chat_avatar_url,
          sender_id, sender_name, sender_avatar_url, title, summary, tier, tier_reason,
@@ -231,9 +259,27 @@ export class LarkAvatarStore {
          @sender_id, @sender_name, @sender_avatar_url, @title, @summary,
          @tier, @tier_reason, @state, @occurred_at, @received_at, @payload)`).run(insertValues(item));
       this.pruneInbox();
+      this.pruneSeenMessages();
       return { record: item, created: true };
     });
     return run();
+  }
+
+  hasSeenMessage(messageId: string): boolean {
+    const row = this.sqlite.prepare('SELECT 1 FROM avatar_seen_messages WHERE message_id = ?').get(messageId);
+    return Boolean(row);
+  }
+
+  pruneSeenMessages(limit = MAX_SEEN_MESSAGES): number {
+    const count = Number((this.sqlite.prepare('SELECT count(*) AS count FROM avatar_seen_messages').get() as { count?: number } | undefined)?.count ?? 0);
+    const excess = count - limit;
+    if (excess <= 0) return 0;
+    const result = this.sqlite.prepare(`
+      DELETE FROM avatar_seen_messages WHERE rowid IN (
+        SELECT rowid FROM avatar_seen_messages ORDER BY seen_at ASC, rowid ASC LIMIT ?
+      )
+    `).run(excess);
+    return result.changes;
   }
 
   listInbox(states?: string[], tier?: string): LarkAvatarInboxItem[] {
@@ -350,9 +396,10 @@ export class LarkAvatarStore {
   }
 
   setCursor(chatId: string, lastSeenAt: number): void {
+    const next = Math.max(0, Math.floor(lastSeenAt));
     this.sqlite.prepare(`INSERT INTO avatar_chat_cursor (chat_id, last_seen_at)
-      VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET last_seen_at=excluded.last_seen_at`)
-      .run(chatId, Math.max(0, Math.floor(lastSeenAt)));
+      VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET last_seen_at = MAX(avatar_chat_cursor.last_seen_at, excluded.last_seen_at)`)
+      .run(chatId, next);
   }
 
   statusCounts(): { inbox: number; action: number; pendingDrafts: number } {

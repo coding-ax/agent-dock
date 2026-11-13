@@ -1,16 +1,22 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { openDatabase } from '@agent-dock/agent-dock-storage';
 import type { AgentEvent } from '@agent-dock/agent-dock-shared';
 import { LarkAvatarService, type LarkAvatarRuntime } from './service.js';
-import { LarkAvatarStore } from './store.js';
+import { LarkAvatarStore, MAX_INBOX_ITEMS } from './store.js';
 import type { LarkProtocolClientHandlers, LarkProtocolClientLike } from './protocol/client.js';
 import type { LarkIncomingMessage } from './protocol/proto.js';
 
 const stores: LarkAvatarStore[] = [];
 const services: LarkAvatarService[] = [];
+const tempDirs: string[] = [];
 
 afterEach(async () => {
   for (const service of services.splice(0)) await service.close();
   for (const store of stores.splice(0)) store.close();
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 const json = (value: unknown, headers: Record<string, string> = {}) =>
@@ -681,5 +687,173 @@ describe('Lark avatar service', () => {
     const sent = await service.sendDraft(draft.id);
     expect(sent).toMatchObject({ state: 'sent', sentMessageId: 'om_sent_1' });
     expect(fake.sent).toEqual([{ chatId: 'oc_chat', text: '确认发送' }]);
+  });
+
+  it('does not re-trigger the same message after >60 inbox items evict it and advances chat cursor', async () => {
+    const fake = fakeClient();
+    const rt = fakeRuntime();
+    const service = createService({ client: fake.client, runtime: rt.runtime });
+    await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+
+    const baseSec = 1_767_225_600;
+    await fake.emit({
+      messageId: 'om_trigger_evict',
+      fromId: '42',
+      chatId: 'oc_chat',
+      createTime: baseSec,
+      content: '/ai 只触发一次'
+    });
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    expect(rt.dispatched).toHaveLength(1);
+    expect(service.store.cursor('oc_chat')).toBe(baseSec * 1000);
+
+    for (let index = 1; index <= MAX_INBOX_ITEMS + 5; index++) {
+      await fake.emit({
+        messageId: `om_noise_${index}`,
+        fromId: '100',
+        chatId: 'oc_chat',
+        createTime: baseSec + index,
+        content: `群消息 ${index}`
+      });
+    }
+
+    expect(service.inbox()).toHaveLength(MAX_INBOX_ITEMS);
+    expect(service.inbox().some(item => item.messageId === 'om_trigger_evict')).toBe(false);
+    expect(service.store.cursor('oc_chat')).toBe((baseSec + MAX_INBOX_ITEMS + 5) * 1000);
+
+    // 模拟 syncRecent 在 5 分钟窗口内以 backfill=false 再次拉回同一条触发消息
+    await fake.emit({
+      messageId: 'om_trigger_evict',
+      fromId: '42',
+      chatId: 'oc_chat',
+      createTime: baseSec,
+      content: '/ai 只触发一次'
+    }, { backfill: false });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(rt.dispatched).toHaveLength(1);
+    expect(fake.sent).toHaveLength(1);
+
+    // 明显早于已持久化游标的历史消息也不应误触发
+    await fake.emit({
+      messageId: 'om_stale_before_cursor',
+      fromId: '42',
+      chatId: 'oc_chat',
+      createTime: baseSec - 300,
+      content: '/ai 过时消息'
+    }, { backfill: false });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(rt.dispatched).toHaveLength(1);
+    expect(fake.sent).toHaveLength(1);
+    expect(service.store.cursor('oc_chat')).toBe((baseSec + MAX_INBOX_ITEMS + 5) * 1000);
+  });
+
+  it('does not re-reply after a service restart once the message is in the seen set', async () => {
+    const store = new LarkAvatarStore(':memory:');
+    stores.push(store);
+    const fake = fakeClient();
+    const rt = fakeRuntime();
+    const service = createService({ existingStore: store, client: fake.client, runtime: rt.runtime });
+    await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+
+    await fake.emit({
+      messageId: 'om_restart',
+      fromId: '42',
+      chatId: 'oc_chat',
+      createTime: 1_767_225_600,
+      content: '/ai 重启后不要再回'
+    });
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    await service.close();
+
+    const restartedClient = fakeClient();
+    const restartedRuntime = fakeRuntime();
+    const restarted = createService({ existingStore: store, client: restartedClient.client, runtime: restartedRuntime.runtime });
+    restarted.start();
+    await restartedClient.emit({
+      messageId: 'om_restart',
+      fromId: '42',
+      chatId: 'oc_chat',
+      createTime: 1_767_225_600,
+      content: '/ai 重启后不要再回'
+    }, { backfill: false });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(restartedRuntime.dispatched).toHaveLength(0);
+    expect(restartedClient.sent).toHaveLength(0);
+    expect(store.hasSeenMessage('om_restart')).toBe(true);
+  });
+
+  it('does not re-reply to messages backfilled from the inbox during upgrade', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'avatar-upgrade-service-'));
+    tempDirs.push(dir);
+    const filename = join(dir, 'avatar.db');
+    const sqlite = openDatabase(filename);
+    sqlite.exec(`
+      CREATE TABLE avatar_inbox (
+        id TEXT PRIMARY KEY, thread_key TEXT NOT NULL, message_id TEXT NOT NULL UNIQUE,
+        chat_id TEXT NOT NULL, chat_type TEXT NOT NULL, chat_name TEXT,
+        chat_avatar_url TEXT, sender_id TEXT, sender_name TEXT, sender_avatar_url TEXT,
+        title TEXT NOT NULL, summary TEXT,
+        tier TEXT NOT NULL, tier_reason TEXT, state TEXT NOT NULL,
+        occurred_at TEXT NOT NULL, received_at TEXT NOT NULL, payload TEXT NOT NULL
+      );
+    `);
+    sqlite.prepare(`INSERT INTO avatar_inbox
+      (id, thread_key, message_id, chat_id, chat_type, sender_id, title, tier, state, occurred_at, received_at, payload)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      'item_legacy',
+      'lark:oc_chat',
+      'om_legacy',
+      'oc_chat',
+      'group',
+      '42',
+      '/ai 升级前的消息',
+      'fyi',
+      'handled',
+      '2026-01-01T00:00:00.000Z',
+      '2026-01-01T00:00:00.000Z',
+      '{}'
+    );
+    sqlite.close();
+
+    const store = new LarkAvatarStore(filename);
+    stores.push(store);
+    for (let index = 0; index <= MAX_INBOX_ITEMS; index++) {
+      store.upsertInbox({
+        id: `item_noise_${index}`,
+        threadKey: 'lark:oc_chat',
+        messageId: `om_noise_${index}`,
+        chatId: 'oc_chat',
+        chatType: 'group',
+        senderId: '100',
+        title: `群消息 ${index}`,
+        tier: 'fyi',
+        state: 'handled',
+        occurredAt: new Date(Date.UTC(2026, 0, 1, 0, 1, index)).toISOString(),
+        receivedAt: new Date(Date.UTC(2026, 0, 1, 0, 1, index)).toISOString(),
+        payload: {}
+      });
+    }
+    expect(store.inboxItem('item_legacy')).toBeUndefined();
+    expect(store.cursor('oc_chat')).toBeUndefined();
+
+    const fake = fakeClient();
+    const rt = fakeRuntime();
+    const service = createService({ existingStore: store, client: fake.client, runtime: rt.runtime });
+    await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+
+    await fake.emit({
+      messageId: 'om_legacy',
+      fromId: '42',
+      chatId: 'oc_chat',
+      createTime: 1_767_225_600,
+      content: '/ai 升级前的消息'
+    }, { backfill: false });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(rt.dispatched).toHaveLength(0);
+    expect(fake.sent).toHaveLength(0);
+    expect(store.hasSeenMessage('om_legacy')).toBe(true);
   });
 });
