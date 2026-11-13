@@ -40,7 +40,7 @@ export const ASSISTANT_SCHEMA = `
   CREATE INDEX IF NOT EXISTS assistant_watches_state ON assistant_watches(state);
   CREATE TABLE IF NOT EXISTS assistant_drafts (
     id TEXT PRIMARY KEY, task_id TEXT, channel TEXT NOT NULL, target TEXT NOT NULL,
-    body TEXT NOT NULL, state TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE,
+    body TEXT NOT NULL, payload TEXT, state TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE,
     attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, created_by TEXT,
     created_at TEXT NOT NULL, sent_at TEXT
   );
@@ -142,14 +142,25 @@ const watchFromRow = (row: WatchRow): WatchRecord => ({
 
 type DraftRow = {
   id: string; task_id: string | null; channel: string; target: string; body: string;
-  state: string; idempotency_key: string; attempts: number; last_error: string | null;
+  payload: string | null; state: string; idempotency_key: string; attempts: number; last_error: string | null;
   created_by: string | null; created_at: string; sent_at: string | null;
+};
+
+const draftPayload = (value: string | null): Record<string, unknown> | undefined => {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 const draftFromRow = (row: DraftRow): DraftRecord => ({
   id: row.id,
   ...(row.task_id ? { taskId: row.task_id } : {}),
   channel: row.channel as DraftRecord['channel'], target: row.target, body: row.body,
+  ...(draftPayload(row.payload) ? { payload: draftPayload(row.payload)! } : {}),
   state: row.state as DraftState, idempotencyKey: row.idempotency_key,
   attempts: row.attempts,
   ...(row.last_error ? { lastError: row.last_error } : {}),
@@ -173,6 +184,9 @@ export class AssistantStore {
     if (!columns.has('archived_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN archived_at TEXT');
     if (!columns.has('archive_batch_id')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN archive_batch_id TEXT');
     if (!columns.has('restored_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN restored_at TEXT');
+    // lark_reply 草稿要记住 chat/replyTo/inThread/at：旧库补一列 JSON，github 草稿不受影响。
+    const draftColumns = new Set((this.sqlite.prepare('PRAGMA table_info(assistant_drafts)').all() as Array<{ name: string }>).map(column => column.name));
+    if (!draftColumns.has('payload')) this.sqlite.exec('ALTER TABLE assistant_drafts ADD COLUMN payload TEXT');
   }
 
   /** 多步写入要么全成要么全不成（交接回滚、归档批次）。 */
@@ -352,12 +366,13 @@ export class AssistantStore {
 
   createDraft(input: {
     taskId?: string; channel: DraftRecord['channel']; target: string; body: string;
-    idempotencyKey?: string; createdBy?: string;
+    payload?: Record<string, unknown>; idempotencyKey?: string; createdBy?: string;
   }): DraftRecord {
     const draft: DraftRecord = {
       id: makeId('adraft'),
       ...(input.taskId ? { taskId: input.taskId } : {}),
       channel: input.channel, target: input.target, body: input.body, state: 'pending',
+      ...(input.payload ? { payload: input.payload } : {}),
       idempotencyKey: input.idempotencyKey ?? makeId('adraft-idem'),
       attempts: 0,
       ...(input.createdBy ? { createdBy: input.createdBy } : {}),
@@ -369,13 +384,14 @@ export class AssistantStore {
 
   saveDraft(draft: DraftRecord) {
     this.sqlite.prepare(`INSERT INTO assistant_drafts
-      (id, task_id, channel, target, body, state, idempotency_key, attempts, last_error, created_by, created_at, sent_at)
-      VALUES (@id, @taskId, @channel, @target, @body, @state, @idempotencyKey, @attempts, @lastError, @createdBy, @createdAt, @sentAt)
+      (id, task_id, channel, target, body, payload, state, idempotency_key, attempts, last_error, created_by, created_at, sent_at)
+      VALUES (@id, @taskId, @channel, @target, @body, @payload, @state, @idempotencyKey, @attempts, @lastError, @createdBy, @createdAt, @sentAt)
       ON CONFLICT(id) DO UPDATE SET
         state = excluded.state, attempts = excluded.attempts, last_error = excluded.last_error,
-        sent_at = excluded.sent_at`).run({
+        payload = excluded.payload, sent_at = excluded.sent_at`).run({
       id: draft.id, taskId: draft.taskId ?? null, channel: draft.channel, target: draft.target,
-      body: draft.body, state: draft.state, idempotencyKey: draft.idempotencyKey,
+      body: draft.body, payload: draft.payload ? JSON.stringify(draft.payload) : null,
+      state: draft.state, idempotencyKey: draft.idempotencyKey,
       attempts: draft.attempts, lastError: draft.lastError ?? null, createdBy: draft.createdBy ?? null,
       createdAt: draft.createdAt, sentAt: draft.sentAt ?? null
     });

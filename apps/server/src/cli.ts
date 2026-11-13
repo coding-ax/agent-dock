@@ -10,6 +10,7 @@ import { packagedNativeFallback } from './native-compat.js';
 import { startLocalServer } from './service.js';
 import { runLarkSend, runLarkUpdate } from './lark/cli.js';
 import { runLarkMessageListen, runLarkMessageRead, runLarkMessageSend } from './lark/message-cli.js';
+import { runLarkAvatarSend } from './lark-avatar/cli.js';
 import { acpxPassThroughArgs, runAcpx } from './acpx.js';
 import { AgentGroupToolCliError, runGroupBots, runGroupMembers, runGroupMessage, runGroupMessages, runGroupPeers, runGroupReplyMode, runGroupSelf, runGroupSend, runGroupWait } from './lark/agent-tools-cli.js';
 import { agentDockGroupToolsCommand } from './lark/agent-tools.js';
@@ -171,6 +172,7 @@ async function main() {
     larkMessageSend: async (text, options) => { process.stdout.write(await runLarkMessageSend(text, options)); },
     larkMessageRead: async options => { process.stdout.write(await runLarkMessageRead(options)); },
     larkMessageListen: async options => { await runLarkMessageListen(options); },
+    larkAvatarSend: async options => { process.stdout.write(await runLarkAvatarSend(options)); },
     groupSelf: async () => { output(await runGroupSelf()); },
     groupPeers: async () => { output(await runGroupPeers()); },
     groupMembers: async () => { output(await runGroupMembers()); },

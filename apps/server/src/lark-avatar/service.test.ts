@@ -1,17 +1,23 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '@agent-dock/agent-dock-storage';
+import protobuf from 'protobufjs';
 import type { AgentEvent } from '@agent-dock/agent-dock-shared';
 import { LarkAvatarService, type LarkAvatarRuntime } from './service.js';
 import { LarkAvatarStore, MAX_INBOX_ITEMS } from './store.js';
 import type { LarkProtocolClientHandlers, LarkProtocolClientLike } from './protocol/client.js';
-import type { LarkIncomingMessage } from './protocol/proto.js';
+import { encodePutMessageRequest, type LarkIncomingMessage } from './protocol/proto.js';
 
 const stores: LarkAvatarStore[] = [];
 const services: LarkAvatarService[] = [];
 const tempDirs: string[] = [];
+
+const protoRoot = protobuf.parse(
+  readFileSync(new URL('./protocol/lark.proto', import.meta.url), 'utf8'),
+  { keepCase: true }
+).root;
 
 afterEach(async () => {
   for (const service of services.splice(0)) await service.close();
@@ -106,7 +112,14 @@ const fakeRuntime = () => {
 
 const fakeClient = () => {
   let handlers: LarkProtocolClientHandlers | undefined;
-  const sent: Array<{ chatId: string; text: string; rootId?: string; quote?: boolean; threadChat?: boolean }> = [];
+  const sent: Array<{
+    chatId: string;
+    text: string;
+    mentions?: Array<{ userId: string; content: string }>;
+    rootId?: string;
+    quote?: boolean;
+    threadChat?: boolean;
+  }> = [];
   const reacted: Array<{ messageId: string; type: string }> = [];
   const historyMessages: LarkIncomingMessage[] = [];
   const historyCalls: Array<{ chatId: string; beforePosition: number; limit: number }> = [];
@@ -855,5 +868,75 @@ describe('Lark avatar service', () => {
     expect(rt.dispatched).toHaveLength(0);
     expect(fake.sent).toHaveLength(0);
     expect(store.hasSeenMessage('om_legacy')).toBe(true);
+  });
+
+  it('sends resolved mentions and reply targets through the real encoder', async () => {
+    const fake = fakeClient();
+    const service = createService({ client: fake.client });
+    await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+
+    const sent = await service.sendMessage({
+      chat: '900001',
+      text: '@小肥鱼 请看',
+      replyTo: '555',
+      inThread: true,
+      at: ['100']
+    });
+    expect(sent).toEqual({
+      messageId: 'om_sent_1',
+      chatId: '900001',
+      rootId: 555,
+      mentions: [{ userId: 100, name: '小肥鱼' }]
+    });
+    expect(fake.sent[0]).toEqual({
+      chatId: '900001',
+      text: '@小肥鱼 请看',
+      mentions: [{ userId: '100', content: '小肥鱼' }],
+      rootId: '555'
+    });
+
+    const decode = (input: (typeof fake.sent)[number]) => {
+      const requestType = protoRoot.lookupType('lark.messages.PutMessageRequest');
+      return requestType.toObject(requestType.decode(encodePutMessageRequest(input)), {
+        longs: String, enums: Number, bytes: Buffer, defaults: false, arrays: true, objects: true
+      }) as {
+        rootId?: string;
+        parentId?: string;
+        isReplyInThread?: boolean;
+        atUserIdList?: string[];
+        content?: { richText?: { elementIds?: string[]; elements?: { dictionary?: Record<string, { tag?: number; property?: Buffer }> } } };
+      };
+    };
+    const request = decode(fake.sent[0]!);
+    expect(request).toMatchObject({
+      rootId: '555',
+      parentId: '555',
+      isReplyInThread: true,
+      atUserIdList: ['100']
+    });
+    const dictionary = request.content?.richText?.elements?.dictionary ?? {};
+    const elements = (request.content?.richText?.elementIds ?? []).map(id => dictionary[id]!);
+    expect(elements.map(element => element.tag)).toContain(5);
+    const atElement = elements.find(element => element.tag === 5)!;
+    const atType = protoRoot.lookupType('lark.entities.RichTextElement.AtProperty');
+    expect(atType.toObject(atType.decode(atElement.property!), { defaults: false })).toEqual({
+      userId: '100',
+      content: '小肥鱼'
+    });
+
+    await service.sendMessage({ chat: '900001', text: '@小肥鱼 引用回复', replyTo: '555', at: ['100'] });
+    const quoted = decode(fake.sent[1]!);
+    expect(quoted).toMatchObject({ rootId: '555', parentId: '555', atUserIdList: ['100'] });
+    expect(quoted.isReplyInThread ?? false).toBe(false);
+  });
+
+  it('rejects an at target that is missing from the message body', async () => {
+    const fake = fakeClient();
+    const service = createService({ client: fake.client });
+    await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+
+    await expect(service.sendMessage({ chat: '900001', text: '请看', at: ['100'] }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT', statusCode: 400 });
+    expect(fake.sent).toHaveLength(0);
   });
 });

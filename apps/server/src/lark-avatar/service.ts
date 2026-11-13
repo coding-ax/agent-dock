@@ -10,6 +10,14 @@ import {
 } from './protocol/client.js';
 import { normalizeAvatarUrl, type LarkChatInfo, type LarkChatterInfo, type LarkIncomingMessage } from './protocol/proto.js';
 import { getRegion, isLarkRegionName } from './protocol/region.js';
+import {
+  LarkAvatarIdResolver,
+  type LarkChatMatchMode,
+  type LarkChatSearchResult,
+  type ResolvedLarkChat,
+  type ResolvedLarkMention,
+  type ResolvedLarkTarget
+} from './id-resolution.js';
 import type {
   DraftState,
   LarkAvatarAccount,
@@ -43,6 +51,14 @@ type LarkReplyTarget = {
   quote?: boolean;
   threadChat?: boolean;
 };
+
+export interface LarkAvatarSendResult {
+  messageId: string;
+  /** 实际发给 Web 网关的会话 ID（通常是 oc_*，也可能是网关的内部数字 ID 字符串）。 */
+  chatId: string;
+  rootId: number | null;
+  mentions: ResolvedLarkMention[];
+}
 
 /** 历史 inbox 里可能存着不可达的 pstatp 头像，读出时统一换成飞书 CDN。 */
 const normalizeItemAvatars = (item: LarkAvatarInboxItem): LarkAvatarInboxItem => ({
@@ -214,6 +230,7 @@ export class LarkAvatarService {
   private readonly workspace: string;
   private readonly ownsStore: boolean;
   private readonly clientFactory: (credentials: LarkAvatarCredentials) => LarkProtocolClientLike;
+  private readonly idResolver: LarkAvatarIdResolver;
   private credentials?: LarkAvatarCredentials;
   private client?: LarkProtocolClientLike;
   private login?: QrLoginSession;
@@ -243,6 +260,13 @@ export class LarkAvatarService {
     this.agentId = options.agentId ?? 'codex';
     this.workspace = options.workspace ?? process.cwd();
     this.clientFactory = options.clientFactory ?? (credentials => new LarkProtocolClient({ credentials, fetcher: this.fetcher }));
+    this.idResolver = new LarkAvatarIdResolver({
+      client: () => this.client,
+      isLoggedIn: () => Boolean(this.credentials?.cookies.session),
+      inbox: () => this.store.listInbox(),
+      now: () => this.clock().getTime(),
+      log: this.log
+    });
     this.credentials = this.store.getCredentials();
     const region = this.store.getState()?.config.region;
     if (region) this.loginSnapshot = { ...this.loginSnapshot, region };
@@ -339,6 +363,89 @@ export class LarkAvatarService {
       const groupOrder = (left.type === 'unknown' ? 1 : 0) - (right.type === 'unknown' ? 1 : 0);
       return groupOrder || (right.lastMessageAt ?? '').localeCompare(left.lastMessageAt ?? '');
     });
+  }
+
+  /**
+   * 解析 OpenAPI ID / 群名 / 消息关键字 / 姓名到 Web 内部数字 ID。
+   * 只读复用当前已登录的 Web 网关，不会新建登录态，也不会发消息。
+   */
+  searchChats(query: string, options: { match?: LarkChatMatchMode } = {}): Promise<LarkChatSearchResult> {
+    return this.idResolver.searchChats(query, options);
+  }
+
+  resolveChat(query: string, options: { match?: LarkChatMatchMode } = {}): Promise<ResolvedLarkChat> {
+    return this.idResolver.resolveChat(query, options);
+  }
+
+  async resolveRoot(input: { chat: string; root: string }): Promise<number> {
+    const chat = await this.idResolver.resolveChat(input.chat);
+    return this.idResolver.resolveRoot(chat, input.root);
+  }
+
+  async resolveMentions(input: { chat: string; mentions: string[] }): Promise<ResolvedLarkMention[]> {
+    const chat = await this.idResolver.resolveChat(input.chat);
+    return this.idResolver.resolveMentions(chat, input.mentions);
+  }
+
+  resolveTarget(input: {
+    chat: string;
+    root?: string;
+    mentions?: string[];
+    match?: LarkChatMatchMode;
+  }): Promise<ResolvedLarkTarget> {
+    return this.idResolver.resolveTarget(input);
+  }
+
+  /**
+   * 发送文本消息：先按群名 / chat_id / 消息关键字 / 姓名解析，再走现有 Web 网关发送。
+   * `replyTo` 默认按引用回复；`inThread` 时回到原话题，话题群沿用 `threadChat` 语义。
+   */
+  async sendMessage(input: {
+    chat: string;
+    text: string;
+    replyTo?: string;
+    inThread?: boolean;
+    at?: string[];
+    match?: LarkChatMatchMode;
+  }): Promise<LarkAvatarSendResult> {
+    const text = typeof input.text === 'string' ? input.text : '';
+    if (!text.trim()) throw new RuntimeError('INVALID_INPUT', '消息正文不能为空', 400);
+
+    const options = input.match ? { match: input.match } : {};
+    const chat = await this.idResolver.resolveChat(input.chat, options);
+    const target = await this.idResolver.resolveTarget({
+      chat: input.chat,
+      ...(input.replyTo?.trim() ? { root: input.replyTo } : {}),
+      ...(input.at?.length ? { mentions: input.at } : {}),
+      ...options
+    });
+    const missing = target.mentions.find(mention => !text.includes(`@${mention.name}`));
+    if (missing) {
+      throw new RuntimeError(
+        'INVALID_INPUT',
+        `正文里找不到 @${missing.name}；--at 需要正文同时包含对应的 @姓名`,
+        400
+      );
+    }
+    const client = this.client;
+    if (!client) throw new RuntimeError('NOT_LOGGED_IN', '飞书替身 Web 网关未连接', 401);
+
+    const result = await client.sendText({
+      chatId: chat.webChatId,
+      text,
+      ...(target.mentions.length
+        ? { mentions: target.mentions.map(mention => ({ userId: String(mention.userId), content: mention.name })) }
+        : {}),
+      ...(target.rootId !== undefined ? { rootId: String(target.rootId) } : {}),
+      ...(target.rootId !== undefined && input.inThread !== true ? { quote: true } : {}),
+      ...(target.rootId !== undefined && input.inThread === true && chat.type === 'topic' ? { threadChat: true } : {})
+    });
+    return {
+      messageId: result.messageId,
+      chatId: chat.webChatId,
+      rootId: target.rootId ?? null,
+      mentions: target.mentions
+    };
   }
 
   async saveConfig(input: Partial<LarkAvatarConfig>): Promise<PublicLarkAvatarState> {
@@ -553,6 +660,7 @@ export class LarkAvatarService {
     this.store.saveCredentials(credentials);
     this.chatCache.clear();
     this.chatterCache.clear();
+    this.idResolver.clear();
     if (config.listening !== false) this.startClient(credentials);
   }
 
@@ -616,6 +724,7 @@ export class LarkAvatarService {
     this.store.saveCredentials(undefined);
     this.chatCache.clear();
     this.chatterCache.clear();
+    this.idResolver.clear();
     if (state) this.store.saveState(state);
   }
 

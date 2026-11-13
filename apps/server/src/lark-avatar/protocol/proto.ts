@@ -316,15 +316,125 @@ export const encodeCreateReactionRequest = (messageId: string, type: string): Bu
 export const decodeCreateReactionRequest = (payload: Buffer): { messageId?: string; type?: string } =>
   decodeObject('messages.CreateReactionRequest', payload);
 
+export interface LarkMention {
+  /** 飞书数字 user_id（不是 open_id）。 */
+  userId: string | number | bigint;
+  /** 展示名，不含前导 @。 */
+  content: string;
+  /** @ 在 text 中的起始下标（UTF-16 code unit）。省略时按正文顺序查找。 */
+  offset?: number;
+}
+
+const MAX_INT64 = 9223372036854775807n;
+
+const normalizeMentionUserId = (raw: LarkMention['userId']): string => {
+  if (typeof raw === 'number' && !Number.isSafeInteger(raw)) {
+    throw new Error('飞书 @ 提及的 userId 必须是安全整数或十进制字符串');
+  }
+  const value = String(raw).trim();
+  if (value.startsWith('ou_')) {
+    throw new Error(`飞书 @ 提及需要数字 user_id，不能使用 open_id（${value}）；协议层不做 open_id 兑换`);
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`飞书 @ 提及的 userId 必须是十进制数字，收到 ${JSON.stringify(value)}`);
+  }
+  const id = BigInt(value);
+  if (id <= 0n || id > MAX_INT64) {
+    throw new Error(`飞书 @ 提及的 userId 超出 int64 范围：${value}`);
+  }
+  return id.toString();
+};
+
+const normalizeMentionContent = (raw: string): string => {
+  if (typeof raw !== 'string') throw new Error('飞书 @ 提及的 content 必须是字符串');
+  const content = raw.startsWith('@') ? raw.slice(1) : raw;
+  if (!content.trim()) throw new Error('飞书 @ 提及的 content（显示名）不能为空');
+  return content;
+};
+
+interface LocatedMention {
+  offset: number;
+  token: string;
+  userId: string;
+  content: string;
+}
+
+const locateMentions = (text: string, mentions: LarkMention[]): LocatedMention[] => {
+  let cursor = 0;
+  const located = mentions.map(mention => {
+    const content = normalizeMentionContent(mention.content);
+    const userId = normalizeMentionUserId(mention.userId);
+    const token = `@${content}`;
+    let offset: number;
+    if (mention.offset === undefined) {
+      offset = text.indexOf(token, cursor);
+      if (offset < 0) throw new Error(`飞书 @ 提及 ${token} 未在正文中找到`);
+    } else {
+      offset = mention.offset;
+      if (!Number.isInteger(offset) || offset < 0) {
+        throw new Error(`飞书 @ 提及的 offset 必须是非负整数，收到 ${String(mention.offset)}`);
+      }
+      if (text.slice(offset, offset + token.length) !== token) {
+        throw new Error(`飞书 @ 提及 offset=${offset} 与正文不匹配，期望 ${token}`);
+      }
+    }
+    if (offset < cursor) throw new Error('飞书 @ 提及的 offset 不能重叠或乱序');
+    cursor = offset + token.length;
+    return { offset, token, userId, content };
+  });
+  return located;
+};
+
+type RichTextSegment =
+  | { kind: 'text'; content: string }
+  | { kind: 'at'; content: string; userId: string };
+
+const buildMessageSegments = (text: string, mentions: LarkMention[]): RichTextSegment[] => {
+  if (!mentions.length) return [{ kind: 'text', content: text }];
+  const located = locateMentions(text, mentions);
+  const segments: RichTextSegment[] = [];
+  let cursor = 0;
+  for (const mention of located) {
+    if (mention.offset > cursor) segments.push({ kind: 'text', content: text.slice(cursor, mention.offset) });
+    segments.push({ kind: 'at', content: mention.content, userId: mention.userId });
+    cursor = mention.offset + mention.token.length;
+  }
+  if (cursor < text.length) segments.push({ kind: 'text', content: text.slice(cursor) });
+  return segments;
+};
+
 export const encodePutMessageRequest = (input: {
   chatId: string;
   text: string;
+  mentions?: LarkMention[];
   rootId?: string;
   quote?: boolean;
   threadChat?: boolean;
 }): Buffer => {
-  const elementId = generateRequestCid();
-  const textProperty = encodeObject('entities.RichTextElement.TextProperty', { content: input.text });
+  const segments = buildMessageSegments(input.text, input.mentions ?? []);
+  const elementIds: string[] = [];
+  const dictionary: Record<string, { tag: number; property: Buffer }> = {};
+  for (const segment of segments) {
+    const elementId = generateRequestCid();
+    elementIds.push(elementId);
+    dictionary[elementId] = segment.kind === 'text'
+      ? {
+          tag: TAG.TEXT,
+          property: encodeObject('entities.RichTextElement.TextProperty', { content: segment.content })
+        }
+      : {
+          tag: TAG.AT,
+          property: encodeObject('entities.RichTextElement.AtProperty', {
+            userId: segment.userId,
+            content: segment.content
+          })
+        };
+  }
+  // AT 元素保留正文里的重复 @；atUserIdList 是通知集合，按首次出现去重。
+  const atUserIds = [...new Set(
+    segments.filter((segment): segment is Extract<RichTextSegment, { kind: 'at' }> => segment.kind === 'at')
+      .map(segment => segment.userId)
+  )];
   const request: Record<string, unknown> = {
     type: 4,
     chatId: input.chatId,
@@ -333,19 +443,15 @@ export const encodePutMessageRequest = (input: {
     version: 1,
     content: {
       richText: {
-        elementIds: [elementId],
+        elementIds,
         innerText: input.text,
         elements: {
-          dictionary: {
-            [elementId]: {
-              tag: 1,
-              property: textProperty
-            }
-          }
+          dictionary
         }
       }
     }
   };
+  if (atUserIds.length) request.atUserIdList = atUserIds;
   if (input.rootId) {
     request.rootId = input.rootId;
     request.parentId = input.rootId;

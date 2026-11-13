@@ -22,6 +22,7 @@ export interface MainCliOptions extends AssistantCliOptions { agent?: string; cw
 export interface SettingsCliOptions extends AssistantCliOptions { enabled?: boolean; off?: boolean; start?: string; end?: string }
 export interface DraftCreateCliOptions extends AssistantCliOptions {
   channel?: string; target?: string; bodyFile?: string; task?: string;
+  chat?: string; replyTo?: string; inThread?: boolean; at?: string[];
 }
 
 const daemon = () => requireDaemon();
@@ -268,11 +269,21 @@ export async function runSettingsQuietHours(options: SettingsCliOptions): Promis
 export async function runDraftCreate(options: DraftCreateCliOptions): Promise<string> {
   const channel = options.channel;
   if (channel !== 'github_comment' && channel !== 'lark_reply') throw new Error('--channel 必须是 github_comment 或 lark_reply');
-  const target = options.target?.trim();
-  if (!target) throw new Error('--target 必填');
+  const chat = channel === 'lark_reply' ? (options.chat?.trim() || options.target?.trim()) : undefined;
+  const target = channel === 'lark_reply' ? chat : options.target?.trim();
+  if (!target) throw new Error(channel === 'lark_reply' ? '--chat 或 --target 必填' : '--target 必填');
   const body = readBody(options);
+  const at = (options.at ?? []).map(item => item.trim()).filter(Boolean);
   return print(await callDaemon(daemon(), '/api/assistant/drafts', 'POST', {
     channel, target, body,
+    ...(channel === 'lark_reply' ? {
+      payload: {
+        chat,
+        ...(options.replyTo?.trim() ? { replyTo: options.replyTo.trim() } : {}),
+        ...(options.inThread === true ? { inThread: true } : {}),
+        ...(at.length ? { at } : {})
+      }
+    } : {}),
     ...(options.task ? { taskId: options.task } : {}),
     ...fromFields(options.from)
   }), options.json);

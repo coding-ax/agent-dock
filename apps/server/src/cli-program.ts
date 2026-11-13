@@ -12,6 +12,7 @@ import type {
 import type {
   LarkMessageListenCliOptions, LarkMessageReadCliOptions, LarkMessageSendCliOptions
 } from './lark/message-cli.js';
+import type { LarkAvatarSendCliOptions } from './lark-avatar/cli.js';
 import type {
   HandoffCliOptions, LifecycleCliOptions, MaintenanceConfigCliOptions, MaintenanceRunCliOptions,
   NotesArchiveCliOptions, NotesListCliOptions, NotesUnarchiveCliOptions
@@ -98,6 +99,7 @@ export interface CliHandlers {
   larkMessageSend?(text: string | undefined, options: LarkMessageSendCliOptions): void | Promise<void>;
   larkMessageRead?(options: LarkMessageReadCliOptions): void | Promise<void>;
   larkMessageListen?(options: LarkMessageListenCliOptions): void | Promise<void>;
+  larkAvatarSend?(options: LarkAvatarSendCliOptions): void | Promise<void>;
   groupSelf?(): void | Promise<void>;
   groupPeers?(): void | Promise<void>;
   groupMembers?(): void | Promise<void>;
@@ -241,6 +243,25 @@ export function createCliProgram(version: string, handlers: CliHandlers = {}) {
     .argument('[markdown]', 'Final Markdown or fallback card content')
     .requiredOption('--message-id <id>', 'Lark card message ID to update'))
     .action((markdown, options) => handlers.larkUpdate?.(markdown, options));
+
+  const larkAvatar = lark.command('avatar')
+    .description('AI 飞书替身：用本人已登录的 Web 会话发送消息（群名/消息关键字/@ 姓名都会先解析）');
+  larkAvatar.command('send')
+    .description('发送文本消息；默认引用回复，--in-thread 在话题内回复')
+    .requiredOption('--chat <chat>', '群名、oc_* chat_id 或数字 chat_id')
+    .option('--text <text>', '消息正文')
+    .option('--text-file <file>', '正文文件；- 表示 stdin')
+    .option('--reply-to <target>', 'om_* 消息 ID、数字 rootId 或最近消息关键字')
+    .option('--in-thread', '回到原话题内回复（默认引用回复）')
+    .option('--at <user>', '要 @ 的姓名、ou_* open_id 或数字 userId，可重复', collect, [])
+    .option('--match <mode>', '群名匹配：exact 或 fuzzy')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.larkAvatarSend?.(options))
+    .addHelpText('after', `
+Examples:
+  $ agent-dock lark avatar send --chat "发布群" --text "构建完成"
+  $ agent-dock lark avatar send --chat oc_xxx --reply-to "发布计划" --in-thread --at 张三 --text "@张三 已更到预发"
+  $ echo "部署完成" | agent-dock lark avatar send --chat 900001 --text-file - --json`);
 
   const larkMessage = lark.command('message')
     .description('Generic Lark IM messages using a configured bot (does not create AgentDock sessions)');
@@ -587,8 +608,12 @@ Notes:
   draft.command('create')
     .description('创建草稿')
     .requiredOption('--channel <channel>', 'github_comment / lark_reply')
-    .requiredOption('--target <target>', '如 github:owner/repo#12')
+    .option('--target <target>', '如 github:owner/repo#12；lark_reply 可改用 --chat')
     .option('--body-file <file>', '正文文件；- 表示 stdin')
+    .option('--chat <chat>', 'lark_reply 目标群名或 chat_id')
+    .option('--reply-to <target>', 'lark_reply 回复目标：om_* / 数字 rootId / 关键字')
+    .option('--in-thread', 'lark_reply 在话题内回复')
+    .option('--at <user>', 'lark_reply 要 @ 的姓名、ou_* open_id 或数字 userId，可重复', collect, [])
     .option('--task <task-id>', '关联事项')
     .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
     .option('--json', '输出 JSON')

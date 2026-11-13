@@ -95,6 +95,32 @@ describe('AgentDock CLI', () => {
     expect(larkMessageSend).toHaveBeenCalledWith(undefined, expect.objectContaining({ chat: 'oc_1', text: 'from flag' }));
   });
 
+  it('parses lark avatar send with repeatable mentions and thread options', async () => {
+    const larkAvatarSend = vi.fn();
+    await createCliProgram('0.0.6', { larkAvatarSend }).parseAsync([
+      'node', 'agent-dock', 'lark', 'avatar', 'send',
+      '--chat', '测试群', '--text', '@张三 已更到预发', '--reply-to', 'om_parent',
+      '--in-thread', '--at', '张三', '--at', 'ou_abc', '--match', 'exact', '--json'
+    ]);
+    expect(larkAvatarSend).toHaveBeenCalledWith(expect.objectContaining({
+      chat: '测试群',
+      text: '@张三 已更到预发',
+      replyTo: 'om_parent',
+      inThread: true,
+      at: ['张三', 'ou_abc'],
+      match: 'exact',
+      json: true
+    }));
+  });
+
+  it('parses lark avatar send text files without --text', async () => {
+    const larkAvatarSend = vi.fn();
+    await createCliProgram('0.0.6', { larkAvatarSend }).parseAsync([
+      'node', 'agent-dock', 'lark', 'avatar', 'send', '--chat', '900001', '--text-file', '-'
+    ]);
+    expect(larkAvatarSend).toHaveBeenCalledWith(expect.objectContaining({ chat: '900001', textFile: '-', at: [] }));
+  });
+
   it('parses Agent group discovery, incremental reads, sends, and waits', async () => {
     const groupPeers = vi.fn(); const groupMembers = vi.fn(); const groupMessages = vi.fn(); const groupSend = vi.fn(); const groupWait = vi.fn();
     await createCliProgram('0.0.6', { groupPeers }).parseAsync(['node', 'agent-dock', 'group', 'peers']);

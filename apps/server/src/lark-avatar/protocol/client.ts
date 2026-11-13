@@ -25,6 +25,7 @@ import {
   encodePullMessagesByPositionsRequest,
   encodePullSidsRequest,
   encodePutMessageRequest,
+  type LarkMention,
   type LarkChatInfo,
   type LarkChatterInfo,
   type LarkIncomingMessage
@@ -56,9 +57,17 @@ export interface LarkProtocolClientLike {
   start(handlers: LarkProtocolClientHandlers): void;
   stop(): void | Promise<void>;
   reconnect(): void;
-  sendText(input: { chatId: string; text: string; rootId?: string; quote?: boolean; threadChat?: boolean }): Promise<{ messageId: string }>;
+  sendText(input: {
+    chatId: string;
+    text: string;
+    mentions?: LarkMention[];
+    rootId?: string;
+    quote?: boolean;
+    threadChat?: boolean;
+  }): Promise<{ messageId: string }>;
   react?(messageId: string, type: string): Promise<void>;
   lookup?(chatIds: string[], userIds: string[]): Promise<LarkProtocolLookup>;
+  messagesByIds?(messageIds: string[]): Promise<LarkIncomingMessage[]>;
   listChats?(): Promise<LarkAvailableChat[]>;
   syncRecent?(sinceMs: number, options?: { backfill?: boolean }): Promise<number>;
   history?(chatId: string, beforePosition: number, limit: number): Promise<LarkIncomingMessage[]>;
@@ -301,6 +310,13 @@ export class LarkProtocolClient implements LarkProtocolClientLike {
     return decodePullMessagesByIdsResponse(payload);
   }
 
+  /** 只读：按消息 ID 批量取消息，用于把外部传入的 om_* / 消息 ID 解析成会话内的 root。 */
+  async messagesByIds(messageIds: string[]): Promise<LarkIncomingMessage[]> {
+    const ids = messageIds.map(id => id.trim()).filter(Boolean);
+    if (!ids.length) return [];
+    return this.pullMessagesByIds(ids);
+  }
+
   async lookup(chatIds: string[], userIds: string[]): Promise<LarkProtocolLookup> {
     const [chats, chatters] = await Promise.all([
       chatIds.length
@@ -381,7 +397,14 @@ export class LarkProtocolClient implements LarkProtocolClientLike {
       .sort((left, right) => left.position - right.position);
   }
 
-  async sendText(input: { chatId: string; text: string; rootId?: string; quote?: boolean; threadChat?: boolean }): Promise<{ messageId: string }> {
+  async sendText(input: {
+    chatId: string;
+    text: string;
+    mentions?: LarkMention[];
+    rootId?: string;
+    quote?: boolean;
+    threadChat?: boolean;
+  }): Promise<{ messageId: string }> {
     const payload = encodePutMessageRequest(input);
     const content = await this.gatewayRequest(CMD_PUT_MESSAGE, payload);
     const messageId = decodePutMessageResponse(content);

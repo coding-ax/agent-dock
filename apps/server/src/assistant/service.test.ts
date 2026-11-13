@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
 import { now, type RepositoryBundle } from '@agent-dock/agent-dock-shared';
-import { AssistantService, buildMainSystemPrompt, buildSuperagentDirective, classifyMainTurn } from './service.js';
+import {
+  AssistantService, buildMainSystemPrompt, buildSuperagentDirective, classifyMainTurn,
+  type AssistantServiceOptions
+} from './service.js';
 import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER } from './lifecycle.js';
 
 const repositories: RepositoryBundle[] = [];
@@ -23,7 +26,7 @@ async function mainSession(repos: RepositoryBundle) {
   return session;
 }
 
-function harness() {
+function harness(overrides: Partial<Pick<AssistantServiceOptions, 'sendLarkReply' | 'postGithubComment'>> = {}) {
   const repos = createRepositories(':memory:');
   repositories.push(repos);
   const listeners: Array<(event: { sessionId: string; state: string }) => void> = [];
@@ -41,7 +44,7 @@ function harness() {
     stop: vi.fn(async () => undefined)
   };
   const notify = vi.fn(async () => true);
-  const service = new AssistantService({ databaseUrl: ':memory:', runtime: runtime as never, repos, notify });
+  const service = new AssistantService({ databaseUrl: ':memory:', runtime: runtime as never, repos, notify, ...overrides });
   services.push(service);
   return { repos, service, runtime, listeners, notify };
 }
@@ -566,5 +569,46 @@ describe('AssistantService', () => {
     expect(after.lastExitCode).toBe(0);
     expect(after.fireCount).toBe(1);
     expect(after.state).toBe('fired');
+  });
+
+  it('sends lark_reply drafts through the avatar channel without changing github_comment', async () => {
+    const sendLarkReply = vi.fn(async () => ({ messageId: 'om_lark' }));
+    const postGithubComment = vi.fn(async () => undefined);
+    const { service } = harness({ sendLarkReply, postGithubComment });
+
+    const lark = service.createDraft({
+      channel: 'lark_reply',
+      target: '测试群',
+      body: '@张三 收到',
+      payload: { chat: '测试群', replyTo: 'om_parent', inThread: true, at: ['张三'] }
+    });
+    expect(lark.payload).toEqual({ chat: '测试群', replyTo: 'om_parent', inThread: true, at: ['张三'] });
+
+    const sent = await service.sendDraft(lark.id);
+    expect(sendLarkReply).toHaveBeenCalledWith({
+      chat: '测试群',
+      text: '@张三 收到',
+      replyTo: 'om_parent',
+      inThread: true,
+      at: ['张三']
+    });
+    expect(sent).toMatchObject({ state: 'sent' });
+    expect(sent.sentAt).toBeTruthy();
+    expect(postGithubComment).not.toHaveBeenCalled();
+
+    const github = service.createDraft({ channel: 'github_comment', target: 'github:o/r#1', body: 'LGTM' });
+    const githubSent = await service.sendDraft(github.id);
+    expect(githubSent.state).toBe('sent');
+    expect(postGithubComment).toHaveBeenCalledTimes(1);
+    const posted = postGithubComment.mock.calls[0]![0];
+    expect(posted).toMatchObject({ owner: 'o', repo: 'r', number: 1 });
+    expect(posted.body).toContain('LGTM');
+    expect(posted.body).toContain(`<!-- agentdock:${github.idempotencyKey} -->`);
+    expect(sendLarkReply).toHaveBeenCalledTimes(1);
+
+    const malformed = service.createDraft({ channel: 'github_comment', target: 'oops', body: 'LGTM' });
+    await expect(service.sendDraft(malformed.id)).rejects.toThrow(/GitHub 目标格式/);
+    expect(service.getDraft(malformed.id)?.attempts).toBe(0);
+    expect(postGithubComment).toHaveBeenCalledTimes(1);
   });
 });

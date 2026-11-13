@@ -90,7 +90,12 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       runtime,
       repos,
       log: { info: () => undefined, warn: message => console.warn(String(message)) },
-      notify: createLarkNotifier(repos, env)
+      notify: createLarkNotifier(repos, env),
+      // larkAvatar 在下面才构造；回调在真正发草稿时才解析到实例。
+      sendLarkReply: input => {
+        if (!larkAvatar) throw new Error('飞书替身尚未初始化');
+        return larkAvatar.sendMessage(input);
+      }
     });
     await assistant.initialize();
     larkAvatar = new LarkAvatarService({

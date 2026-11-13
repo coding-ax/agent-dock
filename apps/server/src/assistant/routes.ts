@@ -233,7 +233,7 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
 
   app.get('/api/assistant/drafts', async () => ({ drafts: assistant.listDrafts() }));
 
-  app.post<{ Body: { channel?: DraftRecord['channel']; target?: string; body?: string; taskId?: string; from?: string } }>('/api/assistant/drafts', async request => {
+  app.post<{ Body: { channel?: DraftRecord['channel']; target?: string; body?: string; payload?: Record<string, unknown>; taskId?: string; from?: string } }>('/api/assistant/drafts', async request => {
     assertMain(assistant, request.body?.from);
     const body = request.body ?? {};
     if (body.channel !== 'github_comment' && body.channel !== 'lark_reply') throw bad('channel 必须是 github_comment 或 lark_reply');
@@ -241,6 +241,7 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
     if (!body.body?.trim()) throw bad('body 必填');
     return { draft: assistant.createDraft({
       channel: body.channel, target: body.target.trim(), body: body.body,
+      ...(body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload) ? { payload: body.payload } : {}),
       ...(body.taskId ? { taskId: body.taskId } : {}),
       ...(assistant.mainSessionId ? { createdBy: assistant.mainSessionId } : {})
     }) };

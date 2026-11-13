@@ -85,6 +85,8 @@ export interface DraftRecord {
   channel: 'github_comment' | 'lark_reply';
   target: string;
   body: string;
+  /** lark_reply 的发送参数（chat/replyTo/inThread/at）；github_comment 不用。 */
+  payload?: Record<string, unknown>;
   state: DraftState;
   idempotencyKey: string;
   attempts: number;

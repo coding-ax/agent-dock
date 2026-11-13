@@ -1,11 +1,21 @@
 import type { FastifyInstance } from 'fastify';
 import { RuntimeError } from '@agent-dock/agent-dock-shared';
 import { LarkAvatarService } from './service.js';
+import { LarkAvatarResolutionError, larkAvatarResolutionHttpStatus, type LarkChatMatchMode } from './id-resolution.js';
 import type { LarkRegionName } from './types.js';
 
 export function registerLarkAvatarRoutes(app: FastifyInstance, service: LarkAvatarService) {
   const handleError = (reply: { code(code: number): { send(value: unknown): unknown } }, error: unknown) => {
     if (error instanceof RuntimeError) return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
+    if (error instanceof LarkAvatarResolutionError) {
+      const body = error.toJSON();
+      return reply.code(larkAvatarResolutionHttpStatus(error.code)).send({
+        error: {
+          ...body,
+          message: error.hint && error.hint !== error.message ? `${error.message}（${error.hint}）` : error.message
+        }
+      });
+    }
     const message = error instanceof Error ? error.message : String(error);
     return reply.code(500).send({ error: { code: 'INTERNAL_ERROR', message } });
   };
@@ -37,6 +47,47 @@ export function registerLarkAvatarRoutes(app: FastifyInstance, service: LarkAvat
   app.post('/api/lark-avatar/poll', async (request, reply) => {
     try { return await service.pollNow(); }
     catch (error) { return handleError(reply, error); }
+  });
+  app.post<{
+    Body: {
+      chat?: string;
+      text?: string;
+      replyTo?: string;
+      inThread?: boolean;
+      at?: string[];
+      match?: LarkChatMatchMode;
+    };
+  }>('/api/lark-avatar/send', async (request, reply) => {
+    try {
+      const body = request.body ?? {};
+      if (typeof body.chat !== 'string' || !body.chat.trim()) {
+        throw new RuntimeError('INVALID_INPUT', 'chat 必填：群名、oc_* chat_id 或数字 chat_id', 400);
+      }
+      if (typeof body.text !== 'string' || !body.text.trim()) {
+        throw new RuntimeError('INVALID_INPUT', 'text 必填且不能为空', 400);
+      }
+      if (body.replyTo !== undefined && typeof body.replyTo !== 'string') {
+        throw new RuntimeError('INVALID_INPUT', 'replyTo 必须是字符串', 400);
+      }
+      if (body.inThread !== undefined && typeof body.inThread !== 'boolean') {
+        throw new RuntimeError('INVALID_INPUT', 'inThread 必须是布尔值', 400);
+      }
+      if (body.at !== undefined && (!Array.isArray(body.at) || body.at.some(item => typeof item !== 'string'))) {
+        throw new RuntimeError('INVALID_INPUT', 'at 必须是字符串数组', 400);
+      }
+      if (body.match !== undefined && body.match !== 'exact' && body.match !== 'fuzzy') {
+        throw new RuntimeError('INVALID_INPUT', 'match 只能是 exact 或 fuzzy', 400);
+      }
+      const sent = await service.sendMessage({
+        chat: body.chat,
+        text: body.text,
+        ...(body.replyTo ? { replyTo: body.replyTo } : {}),
+        ...(body.inThread === true ? { inThread: true } : {}),
+        ...(body.at?.length ? { at: body.at } : {}),
+        ...(body.match ? { match: body.match } : {})
+      });
+      return { ok: true, ...sent };
+    } catch (error) { return handleError(reply, error); }
   });
   app.put<{ Body: { enabled?: unknown } }>('/api/lark-avatar/listening', async (request, reply) => {
     const enabled = request.body?.enabled;

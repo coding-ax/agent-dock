@@ -2,17 +2,23 @@ import { spawn, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
-import { now, type RepositoryBundle, type Session, type SessionInterruptIntent } from '@agent-dock/agent-dock-shared';
+import { now, RuntimeError, type RepositoryBundle, type Session, type SessionInterruptIntent } from '@agent-dock/agent-dock-shared';
 import { resolveLoginShell } from '../terminal-manager.js';
 import { AssistantStore } from './store.js';
 import { AssistantLifecycle } from './lifecycle-service.js';
 import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER } from './lifecycle.js';
+import { LarkAvatarResolutionError, larkAvatarResolutionHttpStatus } from '../lark-avatar/id-resolution.js';
 import type {
   AssistantSignal, AssistantSignalKind, AssistantTask, CompanionProfile, DraftRecord,
   NotifyInput, QuietHours, TaskCheck, TaskReviewRecord, WatchRecord
 } from './types.js';
 
 const execFileAsync = promisify(execFile);
+const defaultPostGithubComment = async (input: { owner: string; repo: string; number: number; body: string }) => {
+  await execFileAsync('gh', [
+    'api', `repos/${input.owner}/${input.repo}/issues/${input.number}/comments`, '-f', `body=${input.body}`
+  ], { timeout: 30_000 });
+};
 const MAIN_SESSION_KEY = 'assistant.main';
 const QUIET_HOURS_KEY = 'assistant.quietHours';
 const SILENT_EMOJI_KEY = 'assistant.silentEmoji';
@@ -65,6 +71,14 @@ export function isIntentionalInterrupt(intent?: SessionInterruptIntent) {
 
 export interface AssistantLogger { info(message: string): void; warn(message: string): void }
 
+export interface LarkReplySendInput {
+  chat: string;
+  text: string;
+  replyTo?: string;
+  inThread?: boolean;
+  at?: string[];
+}
+
 export interface AssistantServiceOptions {
   /** 核心数据库路径；assistant 库固定为 `<database>.assistant.db`。 */
   databaseUrl: string;
@@ -73,6 +87,10 @@ export interface AssistantServiceOptions {
   log?: AssistantLogger;
   /** 推送通知（飞书/桌面）。返回 false 表示没有可用的推送通道。 */
   notify?: (input: { text: string; ask: boolean; urgent: boolean; sessionId?: string }) => Promise<boolean>;
+  /** lark_reply 草稿发送；由 daemon 接到 LarkAvatarService.sendMessage 上。 */
+  sendLarkReply?: (input: LarkReplySendInput) => Promise<{ messageId: string }>;
+  /** 便于测试；默认调用 gh api。 */
+  postGithubComment?: (input: { owner: string; repo: string; number: number; body: string }) => Promise<void>;
 }
 
 export interface StartTaskInput {
@@ -98,6 +116,8 @@ export class AssistantService {
   private readonly repos: RepositoryBundle;
   private readonly log: AssistantLogger;
   private readonly notifyChannel?: AssistantServiceOptions['notify'];
+  private readonly sendLarkReplyChannel?: AssistantServiceOptions['sendLarkReply'];
+  private readonly postGithubComment: NonNullable<AssistantServiceOptions['postGithubComment']>;
   private unsubscribe?: () => void;
   private timer?: NodeJS.Timeout;
   private flushTimer?: NodeJS.Timeout;
@@ -113,6 +133,8 @@ export class AssistantService {
     this.repos = options.repos;
     this.log = options.log ?? { info: () => undefined, warn: message => console.warn(String(message)) };
     this.notifyChannel = options.notify;
+    this.sendLarkReplyChannel = options.sendLarkReply;
+    this.postGithubComment = options.postGithubComment ?? defaultPostGithubComment;
     this.store = new AssistantStore(options.databaseUrl === ':memory:' ? ':memory:' : `${options.databaseUrl}.assistant.db`);
     this.lifecycle = new AssistantLifecycle({
       store: this.store, runtime: this.runtime, repos: this.repos, log: this.log,
@@ -741,7 +763,14 @@ export class AssistantService {
 
   getDraft(id: string) { return this.store.getDraft(id); }
 
-  createDraft(input: { taskId?: string; channel: DraftRecord['channel']; target: string; body: string; createdBy?: string }) {
+  createDraft(input: {
+    taskId?: string;
+    channel: DraftRecord['channel'];
+    target: string;
+    body: string;
+    payload?: Record<string, unknown>;
+    createdBy?: string;
+  }) {
     return this.store.createDraft(input);
   }
 
@@ -758,24 +787,66 @@ export class AssistantService {
     if (!draft) throw new Error(`草稿不存在：${id}`);
     if (draft.state === 'sent') return draft;
     if (draft.state !== 'pending') throw new Error(`草稿状态是 ${draft.state}，不能发送`);
-    if (draft.channel !== 'github_comment') throw new Error(`暂不支持发送 ${draft.channel}`);
+    if (!draft.body.trim()) throw new Error('草稿正文不能为空');
+    // GitHub 目标格式错误是调用方输入问题，不能算一次发送尝试；保持原有立即报错行为。
+    if (draft.channel === 'github_comment' && !parseGithubTarget(draft.target)) {
+      throw new Error(`GitHub 目标格式应为 github:owner/repo#123，收到：${draft.target}`);
+    }
+    draft.attempts += 1;
+    try {
+      if (draft.channel === 'github_comment') await this.sendGithubDraft(draft);
+      else if (draft.channel === 'lark_reply') await this.sendLarkDraft(draft);
+      else throw new Error(`暂不支持发送 ${String(draft.channel)}`);
+      draft.state = 'sent';
+      draft.sentAt = now();
+      draft.lastError = undefined;
+      this.store.saveDraft(draft);
+      return draft;
+    } catch (error) {
+      draft.lastError = error instanceof Error ? error.message : String(error);
+      if (draft.attempts >= 3) draft.state = 'failed';
+      this.store.saveDraft(draft);
+      if (draft.channel === 'github_comment' && draft.state !== 'failed') return draft;
+      throw error;
+    }
+  }
+
+  private async sendGithubDraft(draft: DraftRecord): Promise<void> {
     const target = parseGithubTarget(draft.target);
     if (!target) throw new Error(`GitHub 目标格式应为 github:owner/repo#123，收到：${draft.target}`);
     const marker = `\n\n<!-- agentdock:${draft.idempotencyKey} -->`;
     const body = draft.body.includes('<!-- agentdock:') ? draft.body : `${draft.body}${marker}`;
-    draft.attempts += 1;
-    try {
-      await execFileAsync('gh', ['api', `repos/${target.owner}/${target.repo}/issues/${target.number}/comments`, '-f', `body=${body}`], { timeout: 30_000 });
-      draft.state = 'sent';
-      draft.sentAt = now();
-      draft.lastError = undefined;
-    } catch (error) {
-      draft.lastError = error instanceof Error ? error.message : String(error);
-      if (draft.attempts >= 3) draft.state = 'failed';
+    await this.postGithubComment({ ...target, body });
+  }
+
+  private async sendLarkDraft(draft: DraftRecord): Promise<void> {
+    if (!this.sendLarkReplyChannel) {
+      throw new RuntimeError('LARK_AVATAR_UNAVAILABLE', '当前 daemon 未启用飞书替身发送', 409);
     }
-    this.store.saveDraft(draft);
-    if (draft.state === 'failed') throw new Error(draft.lastError ?? '发送失败');
-    return draft;
+    const payload = draft.payload ?? {};
+    const chat = typeof payload.chat === 'string' && payload.chat.trim() ? payload.chat.trim() : draft.target.trim();
+    if (!chat) throw new RuntimeError('INVALID_DRAFT', '飞书草稿缺少目标群（chat）', 400);
+    const at = Array.isArray(payload.at)
+      ? payload.at.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+      : [];
+    try {
+      await this.sendLarkReplyChannel({
+        chat,
+        text: draft.body,
+        ...(typeof payload.replyTo === 'string' && payload.replyTo.trim() ? { replyTo: payload.replyTo.trim() } : {}),
+        ...(payload.inThread === true ? { inThread: true } : {}),
+        ...(at.length ? { at } : {})
+      });
+    } catch (error) {
+      if (error instanceof LarkAvatarResolutionError) {
+        throw new RuntimeError(
+          error.code,
+          error.hint && error.hint !== error.message ? `${error.message}（${error.hint}）` : error.message,
+          larkAvatarResolutionHttpStatus(error.code)
+        );
+      }
+      throw error;
+    }
   }
 
   // ---- 通知 ----
