@@ -1,7 +1,7 @@
 /*
  * 主会话小猫与便签的样式。
  *
- * 原则：线条小猫仍是 currentColor 单色；便签纸用很淡的状态底色（和全站状态色同一套语义），
+ * 原则：小猫走 --cat-* 一套配色（Q 版怪兽画风，橙 + 奶油 + 青）；便签纸用很淡的状态底色（和全站状态色同一套语义），
  * 只有庆祝时的爱心 / 星星带一点颜色。所有循环动画都只动 transform / opacity，
  * prefers-reduced-motion 下全部停住（index.css 末尾还有一条全局兜底）。
  */
@@ -19,14 +19,44 @@
   }
 }
 
-/* ---------- 线条小猫：基础（原 index.css 的 DockMascot 样式搬到这里） ---------- */
-.ui-cat { --mx: 0; --my: 0; position: relative; flex-shrink: 0; color: rgb(var(--zinc-800)); }
+/* ---------- 小猫：基础（原 index.css 的 DockMascot 样式搬到这里） ---------- */
+/* 配色：亮橙毛 + 奶油肚皮 + 青色点缀（额头宝石、尾巴接驳球），近黑暖色粗墨线，平涂一层阴影。
+   深色主题下墨线保持深色，靠亮色毛块和背景拉开对比。 */
+.ui-cat {
+  --mx: 0; --my: 0; position: relative; flex-shrink: 0;
+  --cat-ink: #2a1d17; --cat-fur: #ffae45; --cat-fur-shade: #ec8a2c; --cat-cream: #fff3d6; --cat-pink: #ff9f9a;
+  --cat-ear: #ffb7b0; --cat-tip: #6b3a1f; --cat-iris: #6b3f1d; --cat-gem: #36cfc5; --cat-gem-glow: #a6fff6;
+  --cat-collar: #e2504a; --cat-bell: #ffd04a; --cat-hat: #6f8f5e;
+  color: var(--cat-ink);
+}
+.ui-cat-shadow { fill: rgb(42 29 23 / .16); }
+html[data-theme="dark"] .ui-cat-shadow { fill: rgb(0 0 0 / .4); }
+.ui-cat-fur, .ui-cat-tuft path { fill: var(--cat-fur); }
+.ui-cat-tail-fur { stroke: var(--cat-fur); }
+.ui-cat-shade { fill: var(--cat-fur-shade); }
+.ui-cat-cream { fill: var(--cat-cream); }
+.ui-cat-ear-inner { fill: var(--cat-ear); }
+.ui-cat-ear-tip { fill: var(--cat-tip); }
+.ui-cat-nose { fill: #3a2219; }
+.ui-cat-cheek { fill: var(--cat-pink); opacity: .55; }
+.ui-cat-eye-ball { fill: #1d1411; }
+.ui-cat-iris { fill: var(--cat-iris); }
+.ui-cat-glint { fill: #fff; }
+.ui-cat-gem, .ui-cat-orb { fill: var(--cat-gem); }
+.ui-cat-orb { filter: drop-shadow(0 0 2px var(--cat-gem-glow)); }
+.ui-cat-hat-felt { fill: var(--cat-hat); }
+.ui-cat-glasses { stroke: #3a2a20; }
+.ui-cat-brows { stroke: var(--cat-cream); }
+.ui-cat-collar-band { stroke: var(--cat-collar); }
+.ui-cat-bell { fill: var(--cat-bell); stroke: #8a5a10; }
+/* 头顶的心情道具不在毛色上，用正文色保证深浅主题都看得清。 */
+.ui-cat-thought, .ui-cat-alert, .ui-cat-zzz { color: rgb(var(--zinc-800)); }
 .ui-cat-stage { display: block; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; border-radius: 30%; }
 span.ui-cat-stage { cursor: inherit; }
 .ui-cat-stage svg { display: block; overflow: visible; }
 .ui-cat-head { transform: translate(calc(var(--mx) * 3px), calc(var(--my) * 2px)) rotate(calc(var(--mx) * 4deg)); transform-box: view-box; transform-origin: 48px 58px; transition: transform .12s linear, rotate .6s var(--spring-soft), translate .6s var(--spring-soft); }
 .ui-cat-pupil { transform: translate(calc(var(--mx) * 2.4px), calc(var(--my) * 2.4px)); transition: transform .12s linear, translate .4s var(--spring-soft); }
-.ui-cat-typing .ui-cat-pupil { transform: translate(0, 2.8px); }
+.ui-cat-typing .ui-cat-pupil { transform: translate(0, 1.8px); }
 .ui-cat-eye { transform-box: fill-box; transform-origin: center; transition: transform .12s ease-out, opacity .15s ease, scale .35s var(--spring-soft); }
 .ui-cat-blinking .ui-cat-eye { transform: scaleY(.1); transition-duration: 60ms; }
 .ui-cat-happy { opacity: 0; transition: opacity .15s ease; }
@@ -44,7 +74,7 @@ span.ui-cat-stage { cursor: inherit; }
 .ui-cat-body-group { transform-box: view-box; transform-origin: 48px 86px; }
 .ui-kitten-face .ui-cat-body-group { transform-origin: 48px 64px; }
 /* 腮红：唯一一处颜色，只在开心时浮现。 */
-.ui-cat-blush { fill: rgb(244 114 182 / .38); opacity: 0; transition: opacity .3s ease; }
+.ui-cat-blush { fill: rgb(255 110 110 / .6); opacity: 0; transition: opacity .3s ease; }
 html[data-theme="dark"] .ui-cat-blush { fill: rgb(244 114 182 / .3); }
 /* 心情小道具默认藏起来。 */
 .ui-cat-thought circle, .ui-cat-zzz path { opacity: 0; transform-box: fill-box; transform-origin: center; }
@@ -72,6 +102,24 @@ html[data-theme="dark"] .ui-cat-blush { fill: rgb(244 114 182 / .3); }
 @keyframes ui-cat-bell-ring { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(22deg); } 45% { transform: rotate(-16deg); } 65% { transform: rotate(9deg); } 82% { transform: rotate(-4deg); } }
 @keyframes ui-cat-hop { 0% { transform: translateY(0) scale(1, 1); } 18% { transform: translateY(0) scale(1.08, .88); } 42% { transform: translateY(-20%) scale(.95, 1.07); } 62% { transform: translateY(0) scale(1.06, .93); } 78% { transform: translateY(-3%) scale(.99, 1.01); } 100% { transform: translateY(0) scale(1, 1); } }
 @keyframes ui-cat-hop-alt { 0% { transform: translateY(0) scale(1, 1); } 18% { transform: translateY(0) scale(1.08, .88); } 42% { transform: translateY(-20%) scale(.95, 1.07); } 62% { transform: translateY(0) scale(1.06, .93); } 78% { transform: translateY(-3%) scale(.99, 1.01); } 100% { transform: translateY(0) scale(1, 1); } }
+
+/* ---------- 像素立绘 ---------- */
+.ui-cat-sprite-box { position: relative; display: block; width: 100%; height: 100%; transform-origin: 50% 100%; }
+.ui-cat-sprite { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: 50% 100%; pointer-events: none; user-select: none;
+  transform: translate(calc(var(--mx) * 3%), calc(var(--my) * 2%)) rotate(calc(var(--mx) * 4deg)); transform-origin: 50% 100%; transition: transform .12s linear; }
+.ui-cat-shadow-px { position: absolute; left: 18%; right: 18%; bottom: -1%; height: 6%; border-radius: 50%; background: rgb(40 30 50 / .14); }
+html[data-theme="dark"] .ui-cat-shadow-px { background: rgb(0 0 0 / .45); }
+.ui-cat-typing .ui-cat-sprite { transform: translateY(3%) rotate(0deg); }
+.ui-kitten-face .ui-cat-sprite-box { overflow: hidden; border-radius: 28%; }
+.ui-kitten-face .ui-cat-sprite { inset: auto; left: -12%; top: -2%; width: 124%; height: 124%; object-position: 50% 0; }
+.ui-cat-twitching-a .ui-cat-sprite-box, .ui-cat-ear-wiggle-a .ui-cat-sprite-box { animation: ui-cat-wiggle .3s ease-in-out; }
+.ui-cat-twitching-b .ui-cat-sprite-box, .ui-cat-ear-wiggle-b .ui-cat-sprite-box { animation: ui-cat-wiggle-alt .3s ease-in-out; }
+@keyframes ui-cat-wiggle { 0%, 100% { rotate: 0deg; } 30% { rotate: -3deg; } 65% { rotate: 2deg; } }
+@keyframes ui-cat-wiggle-alt { 0%, 100% { rotate: 0deg; } 30% { rotate: -3deg; } 65% { rotate: 2deg; } }
+@media (prefers-reduced-motion: no-preference) {
+  .ui-kitten:not(.ui-kitten-face) .ui-cat-sprite-box { animation: ui-cat-breathe 3.8s ease-in-out infinite; }
+  .ui-kitten[data-mood="sleepy"]:not(.ui-kitten-face) .ui-cat-sprite-box { animation-duration: 5.2s; }
+}
 
 /* ---------- 心情 ---------- */
 .ui-kitten[data-mood="curious"] .ui-cat-head { rotate: -7deg; }

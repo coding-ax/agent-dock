@@ -295,7 +295,7 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
   gap: 8px;
 }
 
-/* 线条小猫（DockMascot / Kitten）的样式在 companion/companion.css，随组件按需加载。 */
+/* 小猫（DockMascot / Kitten）的样式在 companion/companion.css，随组件按需加载。 */
 
 /* ---------- Loading 家族（见 Loaders.tsx） ---------- */
 @keyframes ui-skeleton { from { background-position: 150% 0; } to { background-position: -150% 0; } }
