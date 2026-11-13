@@ -319,15 +319,25 @@ html[data-theme="dark"] .ui-note-stamp { mix-blend-mode: normal; }
 @media (prefers-reduced-motion: reduce) { .ui-note-progress::after { width: 100%; opacity: .35; } }
 
 /* ---------- 首页舞台：邀请、认领、庆祝 ---------- */
-.ui-stage { position: relative; display: flex; flex-direction: column; align-items: center; }
+/* min-width:0：舞台和认领卡片都在 flex 里。默认 min-width:auto 按内容的最小宽度撑开，
+   会盖过 width/max-width，模型名和目录路径这种不能折行的长文本就把卡片画出屏幕。 */
+.ui-stage { position: relative; display: flex; width: 100%; max-width: 100%; min-width: 0; flex-direction: column; align-items: center; }
 .ui-stage-kitten { position: relative; }
 .ui-stage-shadow { width: 64px; height: 8px; margin-top: -4px; border-radius: 50%; background: radial-gradient(closest-side, rgb(var(--zinc-900) / .12), transparent); transition: transform .6s var(--spring-soft), opacity .3s ease; }
 .ui-speech { position: relative; max-width: min(420px, calc(100vw - 48px)); margin-bottom: 14px; padding: 10px 14px; border: 1px solid rgb(var(--zinc-200)); border-radius: 16px; background: rgb(var(--surface)); color: rgb(var(--zinc-800)); font-size: 13.5px; line-height: 1.6; box-shadow: 0 10px 30px rgba(24, 24, 27, .08); transform-origin: 50% 100%; }
 .ui-speech::after { content: ''; position: absolute; left: 50%; bottom: -6px; width: 11px; height: 11px; translate: -50% 0; rotate: 45deg; border-right: 1px solid rgb(var(--zinc-200)); border-bottom: 1px solid rgb(var(--zinc-200)); background: rgb(var(--surface)); }
 @keyframes ui-speech-in { 0% { opacity: 0; transform: translateY(8px) scale(.82); } 100% { opacity: 1; transform: none; } }
-.ui-adopt-card { width: 100%; max-width: 460px; border: 1px solid rgb(var(--zinc-200)); border-radius: 22px; background: rgb(var(--surface)); box-shadow: 0 24px 60px -18px rgba(24, 24, 27, .22), 0 1px 2px rgba(0, 0, 0, .04); text-align: left; transform-origin: 50% 0; }
+.ui-adopt-card { width: 100%; max-width: min(460px, 100%); min-width: 0; border: 1px solid rgb(var(--zinc-200)); border-radius: 22px; background: rgb(var(--surface)); box-shadow: 0 24px 60px -18px rgba(24, 24, 27, .22), 0 1px 2px rgba(0, 0, 0, .04); text-align: left; transform-origin: 50% 0; }
+/* antd Select 是 inline-flex，选中项又不折行。宽度跟着触发器走之前，先把最小宽度打掉，
+   超长模型名在框内省略，而不是把下拉框撑出卡片。 */
+.ui-adopt-card .ant-select { width: 100%; max-width: 100%; min-width: 0; }
+.ui-adopt-card .ant-select-selector,
+.ui-adopt-card .ant-select-selection-wrap,
+.ui-adopt-card .ant-select-selection-item,
+.ui-adopt-card .ant-select-selection-placeholder { min-width: 0; max-width: 100%; }
+.ui-adopt-card input::placeholder { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes ui-adopt-in { 0% { opacity: 0; transform: translateY(-10px) scale(.94); } 100% { opacity: 1; transform: none; } }
-.ui-pill-choice { display: inline-flex; height: 30px; align-items: center; gap: 6px; padding: 0 11px; border: 1px solid rgb(var(--zinc-200)); border-radius: 999px; font-size: 12.5px; color: rgb(var(--zinc-600)); transition: border-color .15s ease, background-color .15s ease, color .15s ease, transform .3s var(--spring-bouncy); }
+.ui-pill-choice { display: inline-flex; max-width: 100%; min-width: 0; height: 30px; align-items: center; gap: 6px; padding: 0 11px; border: 1px solid rgb(var(--zinc-200)); border-radius: 999px; font-size: 12.5px; color: rgb(var(--zinc-600)); transition: border-color .15s ease, background-color .15s ease, color .15s ease, transform .3s var(--spring-bouncy); }
 .ui-pill-choice:hover { border-color: rgb(var(--zinc-300)); color: rgb(var(--zinc-900)); }
 .ui-pill-choice:active { transform: scale(.95); }
 .ui-pill-choice[aria-pressed="true"] { border-color: rgb(var(--zinc-900)); background: rgb(var(--zinc-900)); color: rgb(var(--bg)); }
