@@ -186,7 +186,8 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   };
 
   // my-auto：内容比视口矮时垂直居中；比视口高时自动退化为 0，滚动容器不会把顶部的吉祥物裁掉。
-  return <div className="relative my-auto w-full max-w-[720px]">
+  // min-w-0：这一层是页面横向 flex 的子项，默认 min-width:auto 会被认领卡片里的长路径撑出视口。
+  return <div className="relative my-auto w-full min-w-0 max-w-[720px]">
     {hero ?? <div className="flex flex-col items-center text-center">
       <DockMascot size={88}/>
       <h1 className="ui-empty-state ui-hero-title mt-4 text-[22px] font-semibold tracking-[-.02em]">有什么要做的？</h1>

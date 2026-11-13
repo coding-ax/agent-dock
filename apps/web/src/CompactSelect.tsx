@@ -27,9 +27,9 @@ export function CompactSelect({ options, value, placeholder, disabledText, disab
   const resolvedPopupWidth = typeof popupWidth === 'number'
     ? (viewportWidth < 640 ? true : Math.min(popupWidth, viewportWidth - 16))
     : popupWidth;
-  return <div className={size === 'sm' ? undefined : 'mt-1.5'}>
+  return <div className={size === 'sm' ? 'min-w-0 max-w-full' : 'mt-1.5 min-w-0 max-w-full'}>
     <Select
-      className="w-full"
+      className="w-full min-w-0 max-w-full"
       size={size === 'sm' ? 'middle' : 'large'}
       value={selectedKey}
       disabled={disabled || !options.length}
@@ -42,12 +42,12 @@ export function CompactSelect({ options, value, placeholder, disabledText, disab
       options={rows.map(({ option, key }) => ({
         value: key,
         title: `${option.label} ${option.meta ?? ''}`,
-        label: <span className="flex min-w-0 items-center gap-2">
+        label: <span className="flex min-w-0 max-w-full items-center gap-2 overflow-hidden">
           {option.agentId && <AgentIcon agentId={option.agentId} agentName={option.label} size={15}/>}
           {/* 标题给原生 tooltip 兜底：下拉层再宽也可能被超长模型名撑满，hover 时要能看到全名。 */}
           <span className="min-w-0 flex-1 truncate" title={option.label}>{option.label}</span>
           {/* 窄屏弹层只能跟随触发器宽度，meta 会挤掉主标题；手机上先只显示主标题。 */}
-          {option.meta && <span className="hidden max-w-[50%] shrink-0 truncate font-mono text-[12px] text-zinc-400 sm:inline">{option.meta}</span>}
+          {option.meta && <span className="hidden max-w-[50%] min-w-0 shrink truncate font-mono text-[12px] text-zinc-400 sm:inline">{option.meta}</span>}
         </span>
       }))}
     />

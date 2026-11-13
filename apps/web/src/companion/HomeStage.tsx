@@ -250,42 +250,43 @@ export function HomeStage({ agents, sessions, editorRef, onCreated }: {
       {kitten}
       {phase === 'celebrate' && <span className="ui-name-tag">{adoptedName}</span>}
       {(phase === 'form' || phase === 'adopting') && <div ref={card} className="ui-adopt-card mt-4">
-        <form onSubmit={event => { event.preventDefault(); if (!adopt.isPending && effectiveAgentId) startAdopt(); }}>
-          <div className="px-5 pt-5">
-            <label className="block">
+        <form className="min-w-0" onSubmit={event => { event.preventDefault(); if (!adopt.isPending && effectiveAgentId) startAdopt(); }}>
+          <div className="min-w-0 px-5 pt-5">
+            <label className="block min-w-0">
               <span className="text-[14px] font-semibold text-zinc-900">给它起个名字</span>
-              <span className="mt-2 flex items-center gap-2">
+              <span className="mt-2 flex min-w-0 items-center gap-2">
                 <input ref={nameInput} value={name} maxLength={16} disabled={phase === 'adopting'} onChange={event => setName(event.target.value)} placeholder={DEFAULT_KITTEN_NAME} aria-label="小猫的名字" className="ui-field h-10 min-w-0 flex-1 rounded-xl border border-zinc-300 bg-white px-3 text-[15px] font-semibold text-zinc-900 outline-none placeholder:font-normal placeholder:text-zinc-400 disabled:opacity-60"/>
                 <button type="button" disabled={phase === 'adopting'} onClick={() => setName(current => pickKittenName(current.trim()))} aria-label="随机换一个名字" title="随机换一个名字" className="ui-dice grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-zinc-200 text-zinc-500 hover:border-zinc-300 hover:text-zinc-900 disabled:opacity-50"><Dices size={17}/></button>
               </span>
             </label>
             <div className="mt-4 text-[12.5px] font-medium text-zinc-600">它用哪个 Agent 思考</div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {usableAgents.map(agent => <button key={agent.id} type="button" disabled={phase === 'adopting'} aria-pressed={agent.id === effectiveAgentId} onClick={() => { setAgentId(agent.id); setModel(''); setReasoningEffort(''); setError(undefined); }} className="ui-pill-choice"><AgentIcon agentId={agent.id} agentName={agent.name} size={13}/>{agent.name}</button>)}
+            <div className="mt-2 flex min-w-0 max-w-full flex-wrap gap-1.5">
+              {usableAgents.map(agent => <button key={agent.id} type="button" disabled={phase === 'adopting'} aria-pressed={agent.id === effectiveAgentId} onClick={() => { setAgentId(agent.id); setModel(''); setReasoningEffort(''); setError(undefined); }} className="ui-pill-choice"><AgentIcon agentId={agent.id} agentName={agent.name} size={13}/><span className="min-w-0 truncate">{agent.name}</span></button>)}
               {!usableAgents.length && <span className="text-[12.5px] text-zinc-400">还没有可用的 Agent，先到设置里配一个。</span>}
             </div>
-            <div className="mt-4 grid gap-3">
-              <div>
+            <div className="mt-4 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3">
+              <div className="min-w-0">
                 <div className="text-[12.5px] font-medium text-zinc-600">模型 <span className="font-normal text-zinc-400">可选</span></div>
                 <CompactSelect size="sm" options={modelOptions} value={model} placeholder="Agent 默认" disabledText={modelsLoading ? '正在读取模型…' : models.isError ? '模型列表读取失败，可先不选' : '这个 Agent 没有提供模型选项'} disabled={phase === 'adopting'} onChange={value => { setModel(value); setReasoningEffort(''); }}/>
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="text-[12.5px] font-medium text-zinc-600">思考深度 <span className="font-normal text-zinc-400">可选</span></div>
                 <CompactSelect size="sm" options={reasoningOptions} value={reasoningEffort} placeholder="Agent 默认" disabledText={modelsLoading ? '正在读取…' : models.isError ? '读取失败，可先不选' : '这个模型没有思考深度选项'} disabled={phase === 'adopting'} onChange={setReasoningEffort}/>
               </div>
             </div>
-            {models.data?.warning && <p className="mt-1.5 text-[11px] leading-4 text-amber-600">这个 Agent 的配置没读出来：{models.data.warning} 如果一直这样，先检查它是否已登录。</p>}
+            {models.data?.warning && <p className="mt-1.5 break-words text-[11px] leading-4 text-amber-600 [overflow-wrap:anywhere]">这个 Agent 的配置没读出来：{models.data.warning} 如果一直这样，先检查它是否已登录。</p>}
             <div className="mt-4 text-[12.5px] font-medium text-zinc-600">常驻目录 <span className="font-normal text-zinc-400">可选，派活时仍可指定别的目录</span></div>
-            <div className="mt-2 flex items-center gap-1.5">
-              <input list="adopt-workspaces" value={cwd} disabled={phase === 'adopting'} onChange={event => setCwd(event.target.value)} placeholder={defaultWorkspace ?? '绝对路径，例如 /Users/you/project'} aria-label="常驻目录" spellCheck={false} className="ui-field h-9 min-w-0 flex-1 rounded-xl border border-zinc-300 bg-white px-3 font-mono text-[12.5px] text-zinc-800 outline-none placeholder:font-sans placeholder:text-zinc-400 disabled:opacity-60"/>
+            <div className="mt-2 flex min-w-0 max-w-full items-center gap-1.5">
+              <input list="adopt-workspaces" value={cwd} disabled={phase === 'adopting'} onChange={event => setCwd(event.target.value)} placeholder={defaultWorkspace ?? '绝对路径，例如 /Users/you/project'} aria-label="常驻目录" title={cwd.trim() || defaultWorkspace || undefined} spellCheck={false} className="ui-field h-9 w-0 min-w-0 max-w-full flex-1 truncate rounded-xl border border-zinc-300 bg-white px-3 font-mono text-[12.5px] text-zinc-800 outline-none placeholder:font-sans placeholder:text-zinc-400 disabled:opacity-60"/>
               {capabilities.data?.directoryPicker && <button type="button" disabled={phase === 'adopting' || pickDirectory.isPending} onClick={() => pickDirectory.mutate()} title={pickDirectory.isPending ? '选择中…' : '选择目录'} aria-label="选择目录" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-zinc-200 text-zinc-500 transition-colors hover:border-zinc-300 hover:text-zinc-900 disabled:opacity-50">{pickDirectory.isPending ? <RefreshCw size={14} className="animate-spin"/> : <FolderOpen size={14}/>}</button>}
             </div>
+            {cwd.trim() && <p className="mt-1.5 break-all font-mono text-[11.5px] leading-4 text-zinc-400" title={cwd.trim()}>{cwd.trim()}</p>}
             <datalist id="adopt-workspaces">{workspaceOptions.map(path => <option key={path} value={path}>{workspaceLabel(path, homeDirectory)}</option>)}</datalist>
             <p className="mt-1.5 text-[11.5px] leading-4 text-zinc-400">可以直接粘贴任意绝对路径，或从最近用过的目录里挑；留空就用 Agent 自己的默认目录。</p>
             <p className="mt-4 rounded-xl bg-zinc-50 px-3 py-2.5 text-[12px] leading-5 text-zinc-500">它会成为你的<b className="font-medium text-zinc-700">主会话</b>：听你说要做什么，派侧边会话去干、盯进度、验收结果。派出去的每件事都是一张便签，贴在屏幕右边，随时划出来看。</p>
-            {error && <p role="alert" className="mt-3 text-[12px] text-red-600">{error}</p>}
+            {error && <p role="alert" className="mt-3 break-words text-[12px] text-red-600 [overflow-wrap:anywhere]">{error}</p>}
           </div>
-          <div className="mt-4 flex items-center justify-end gap-2 border-t border-zinc-100 px-4 py-3">
+          <div className="mt-4 flex min-w-0 flex-wrap items-center justify-end gap-2 border-t border-zinc-100 px-4 py-3">
             <button type="button" disabled={phase === 'adopting'} onClick={() => setPhase(inviteDismissed ? 'idle' : 'invite')} className="h-9 rounded-full px-3.5 text-[13px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-50">先不了</button>
             <button type="submit" disabled={phase === 'adopting' || !effectiveAgentId} className="inline-flex h-9 min-w-[8.5rem] items-center justify-center gap-1.5 rounded-full bg-zinc-900 px-4 text-[13px] font-medium text-white transition-[background-color,transform] hover:bg-zinc-700 active:scale-95 disabled:opacity-60">{phase === 'adopting' ? <><PawWalk/>正在带它回家…</> : <><PawPrint size={14}/>带它回家</>}</button>
           </div>
