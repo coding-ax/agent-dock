@@ -11,6 +11,7 @@ import { getMarkdown, replaceAll } from '@milkdown/kit/utils';
 import { Plugin, Selection } from '@milkdown/kit/prose/state';
 import { DOMParser, DOMSerializer } from '@milkdown/kit/prose/model';
 import type { Ctx } from '@milkdown/kit/ctx';
+import type { CompositionGuard } from './composer-keyboard';
 import { linkedPasteToken, needsPasteSeparator, pastedLink } from './composer-paste';
 import '@milkdown/kit/prose/view/style/prosemirror.css';
 
@@ -68,6 +69,8 @@ interface ComposerEditorProps {
   onCaretChange(before: string): void;
   /** 返回 true 表示已处理（Enter 发送、命令面板选择等），编辑器会阻止默认行为。 */
   onKeydown(event: KeyboardEvent): boolean;
+  /** 与 Composer.keyboard 共享的输入法组合态。 */
+  compositionGuard: CompositionGuard;
   onFiles(files: File[]): void;
 }
 
@@ -259,13 +262,26 @@ export const ComposerEditor = forwardRef<ComposerEditorHandle, ComposerEditorPro
     }
   }), []);
 
-  return <div ref={host} className="composer-editor" onKeyDownCapture={event => {
-    // 捕获阶段先于 ProseMirror 的 keymap：Enter 发送、Shift+Enter 换行（交给编辑器）。
-    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-    if (!latest.current.onKeydown(event.nativeEvent)) return;
-    event.preventDefault();
-    event.stopPropagation();
-  }} onPasteCapture={event => {
+  return <div ref={host} className="composer-editor"
+    // compositionend 之后浏览器可能再补一个 isComposing=false 的 Enter；
+    // 组合态必须在编辑器上记录，键盘处理才能认出这一下。
+    onCompositionStartCapture={() => latest.current.compositionGuard.start()}
+    onCompositionEndCapture={() => latest.current.compositionGuard.end()}
+    onKeyDownCapture={event => {
+      // 捕获阶段先于 ProseMirror 的 keymap：Enter 发送、Shift+Enter 换行（交给编辑器）。
+      const ime = latest.current.compositionGuard.classify(event.nativeEvent);
+      // 组合中不 preventDefault，交给浏览器/输入法确认候选词。
+      if (ime === 'composing') return;
+      // compositionend 后补发的 Enter 不属于用户输入：吞掉，别让它插入换行。
+      if (ime === 'composition-enter') {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (!latest.current.onKeydown(event.nativeEvent)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }} onPasteCapture={event => {
     const clipboardData = event.clipboardData;
     if (!clipboardData) return;
     const items = Array.from(clipboardData.items);
