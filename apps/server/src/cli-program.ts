@@ -6,7 +6,7 @@ import type {
 } from './sources-router/cli.js';
 import type {
   AssistantCliOptions, DraftCreateCliOptions, MainCliOptions, NotifyCliOptions,
-  SettingsCliOptions, TaskReportCliOptions, TaskReviewCliOptions, TaskStartCliOptions,
+  SettingsCliOptions, TaskAppendCliOptions, TaskReportCliOptions, TaskReviewCliOptions, TaskStartCliOptions,
   WatchAddCliOptions
 } from './assistant/cli.js';
 import type {
@@ -149,6 +149,7 @@ export interface CliHandlers {
   taskList?(options: AssistantCliOptions): void | Promise<void>;
   taskShow?(id: string, options: AssistantCliOptions): void | Promise<void>;
   taskReview?(id: string, options: TaskReviewCliOptions): void | Promise<void>;
+  taskAppend?(id: string, options: TaskAppendCliOptions): void | Promise<void>;
   taskReport?(options: TaskReportCliOptions): void | Promise<void>;
   taskCancel?(id: string, options: AssistantCliOptions & { reason?: string }): void | Promise<void>;
   watchAdd?(options: WatchAddCliOptions): void | Promise<void>;
@@ -471,6 +472,14 @@ Notes:
     .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
     .option('--json', '输出 JSON')
     .action((id, options) => handlers.taskReview?.(id, options));
+  task.command('append')
+    .description('把补充/打回要求追加回原事项（已关闭也可续做）')
+    .argument('<task-id>', '事项 ID')
+    .requiredOption('--text <text>', '用户补充/打回要求')
+    .option('--mode <mode>', 'queue / interrupt', 'queue')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action((id, options) => handlers.taskAppend?.(id, options));
   task.command('report')
     .description('侧边会话汇报：done / question / blocked')
     .requiredOption('--kind <kind>', 'done / question / blocked')

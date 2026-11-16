@@ -173,6 +173,15 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
     return { task: await assistant.reviewTask(request.params.id, verdict, request.body?.checks ?? [], request.body?.note) };
   });
 
+  app.post<{ Params: { id: string }; Body: { text?: string; mode?: string; from?: string } }>('/api/assistant/tasks/:id/append', async request => {
+    assertMain(assistant, request.body?.from);
+    const text = request.body?.text?.trim();
+    if (!text) throw bad('text 必填');
+    const mode = request.body?.mode ?? 'queue';
+    if (mode !== 'queue' && mode !== 'interrupt') throw bad('mode 必须是 queue / interrupt');
+    return { task: await assistant.appendTask(request.params.id, text, mode) };
+  });
+
   app.post<{ Params: { id: string }; Body: { reason?: string; from?: string } }>('/api/assistant/tasks/:id/cancel', async request => {
     assertMain(assistant, request.body?.from);
     return { task: await assistant.cancelTask(request.params.id, request.body?.reason) };

@@ -29,7 +29,7 @@ import { runScheduleAdd, runScheduleList, runSchedulePause, runScheduleRemove, r
 import {
   runDraftCreate, runDraftDiscard, runDraftList, runDraftSend, runMainClear, runMainGet, runMainSet,
   runNotify, runSettingsGet, runSettingsQuietHours, runTaskCancel, runTaskList, runTaskPlan,
-  runTaskReport, runTaskReview, runTaskShow, runTaskStart, runWatchAdd, runWatchControl,
+  runTaskAppend, runTaskReport, runTaskReview, runTaskShow, runTaskStart, runWatchAdd, runWatchControl,
   runWatchList, runWatchRemove, runWatchShow
 } from './assistant/cli.js';
 import {
@@ -226,6 +226,7 @@ async function main() {
     taskList: async options => { process.stdout.write(await runTaskList(options)); },
     taskShow: async (id, options) => { process.stdout.write(await runTaskShow(id, options)); },
     taskReview: async (id, options) => { process.stdout.write(await runTaskReview(id, options)); },
+    taskAppend: async (id, options) => { process.stdout.write(await runTaskAppend(id, options)); },
     taskReport: async options => { process.stdout.write(await runTaskReport(options)); },
     taskCancel: async (id, options) => { process.stdout.write(await runTaskCancel(id, options)); },
     watchAdd: async options => { process.stdout.write(await runWatchAdd(options)); },

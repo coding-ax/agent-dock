@@ -122,6 +122,7 @@ describe('AssistantService', () => {
     for (const command of [
       'agent-dock task start', 'agent-dock task plan', 'agent-dock task list',
       'agent-dock task show', 'agent-dock task review', 'agent-dock task cancel',
+      'agent-dock task append',
       'agent-dock session show', 'agent-dock session send',
       'agent-dock watch add', 'agent-dock notify', 'agent-dock draft create',
       'agent-dock status --json'
@@ -134,6 +135,9 @@ describe('AssistantService', () => {
     expect(prompt).toContain('--check "验收标准=met:证据"');
     expect(prompt).toContain('--mode queue');
     expect(prompt).toContain('--mode interrupt');
+    expect(prompt).toContain('【既有事项延续】');
+    expect(prompt).toContain('已验收/已关闭');
+    expect(prompt).toContain('不要 `task start`');
   });
 
   it('keeps greetings and progress checks out of delegation', async () => {
@@ -180,6 +184,28 @@ describe('AssistantService', () => {
     for (const prompt of ['你好，在吗？', '谢谢，辛苦了', '今天天气不错，哈哈', '现在任务进度怎么样了？', '这个你自己做吧，不用派活']) {
       expect(buildSuperagentDirective(prompt)).toBe('');
     }
+  });
+
+  it('routes rework and continuation of an existing note to append instead of a new task', () => {
+    const prompts = [
+      '继续',
+      '把刚才那个便签再改一下，按钮还是太小',
+      'atask_1234abcd-1111-2222-3333-444455556666 打回：缺少测试证据',
+      '这个便签补充一下：只改登录页',
+      '好了 可以删掉那个了，删掉一下包',
+      '你还记得我前面有没有跟你提到过飞书消息发送？需要调研下实现方式。'
+    ];
+    for (const prompt of prompts) expect(classifyMainTurn(prompt)).toBe('append');
+    const typed = buildSuperagentDirective(prompts[2]!);
+    expect(typed).toContain('agent-dock task show atask_1234abcd-1111-2222-3333-444455556666');
+    expect(typed).toContain('agent-dock task append');
+    expect(typed).toContain('不要 `agent-dock task start` 新开便签');
+    expect(typed).not.toContain('第一个工具调用必须是 `agent-dock task start`');
+    const untyped = buildSuperagentDirective('继续把刚才那个改完');
+    expect(untyped).toContain('agent-dock task list');
+    expect(untyped).toContain('列出候选问用户');
+    // 分类器没抓到的语义续做，delegate 指令里也要留一条回到「既有事项延续」的口子。
+    expect(buildSuperagentDirective('感觉应该是按压缩轮次来合理点？你觉得呢')).toContain('【既有事项延续】');
   });
 
   it('puts the directive immediately before the user message', async () => {
@@ -519,6 +545,24 @@ describe('AssistantService', () => {
     const accepted = await service.reviewTask(task.id, 'accepted', [{ criterion: '测试通过', met: true, evidence: 'pnpm test' }]);
     expect(accepted.state).toBe('closed');
     expect(accepted.outcome).toBe('accepted');
+  });
+
+  it('appends new requirements to the original note after it was accepted', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+    const task = service.planTask({ title: '修按钮', doneWhen: ['按钮尺寸正确'], agentId: 'claude' });
+    await service.startPlannedTask(task.id);
+    await service.reviewTask(task.id, 'accepted', [{ criterion: '按钮尺寸正确', met: true, evidence: '截图' }]);
+
+    const reopened = await service.appendTask(task.id, '按钮还是太小，再改一版');
+    expect(reopened.id).toBe(task.id);
+    expect(reopened.state).toBe('running');
+    expect(reopened.round).toBe(1);
+    expect(service.listTasks()).toHaveLength(1);
+    expect(reopened.notes).toContain('按钮还是太小');
+    expect(runtime.dispatch).toHaveBeenLastCalledWith('ses_side', expect.stringContaining('按钮还是太小'), 'queue');
   });
 
   it('keeps quiet hours off by default and delays only normal notifications when enabled', async () => {

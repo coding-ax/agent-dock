@@ -10,6 +10,9 @@ export interface TaskStartCliOptions extends AssistantCliOptions {
 export interface TaskReviewCliOptions extends AssistantCliOptions {
   verdict?: string; check?: string[]; note?: string;
 }
+export interface TaskAppendCliOptions extends AssistantCliOptions {
+  text?: string; mode?: string;
+}
 export interface TaskReportCliOptions extends AssistantCliOptions {
   kind?: string; text?: string; evidence?: string;
 }
@@ -164,6 +167,17 @@ export async function runTaskReview(id: string, options: TaskReviewCliOptions): 
   const result = await callDaemon(daemon(), `/api/assistant/tasks/${encodeURIComponent(id)}/review`, 'POST', {
     verdict, checks, ...(options.note ? { note: options.note } : {}),
     ...fromFields(options.from)
+  });
+  return print(result, options.json);
+}
+
+export async function runTaskAppend(id: string, options: TaskAppendCliOptions): Promise<string> {
+  const text = options.text?.trim();
+  if (!text) throw new Error('--text 必填');
+  const mode = options.mode ?? 'queue';
+  if (mode !== 'queue' && mode !== 'interrupt') throw new Error('--mode 必须是 queue / interrupt');
+  const result = await callDaemon(daemon(), `/api/assistant/tasks/${encodeURIComponent(id)}/append`, 'POST', {
+    text, mode, ...fromFields(options.from)
   });
   return print(result, options.json);
 }
