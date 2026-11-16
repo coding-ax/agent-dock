@@ -12,7 +12,12 @@ import type {
 import type {
   LarkMessageListenCliOptions, LarkMessageReadCliOptions, LarkMessageSendCliOptions
 } from './lark/message-cli.js';
-import type { LarkAvatarSendCliOptions } from './lark-avatar/cli.js';
+import type {
+  LarkAvatarDiagnosticsCliOptions,
+  LarkAvatarReactionCliOptions,
+  LarkAvatarReactionRouteCliOptions,
+  LarkAvatarSendCliOptions
+} from './lark-avatar/cli.js';
 import type {
   HandoffCliOptions, LifecycleCliOptions, MaintenanceConfigCliOptions, MaintenanceRunCliOptions,
   NotesArchiveCliOptions, NotesListCliOptions, NotesUnarchiveCliOptions
@@ -100,6 +105,9 @@ export interface CliHandlers {
   larkMessageRead?(options: LarkMessageReadCliOptions): void | Promise<void>;
   larkMessageListen?(options: LarkMessageListenCliOptions): void | Promise<void>;
   larkAvatarSend?(options: LarkAvatarSendCliOptions): void | Promise<void>;
+  larkAvatarDiagnostics?(options: LarkAvatarDiagnosticsCliOptions): void | Promise<void>;
+  larkAvatarReaction?(options: LarkAvatarReactionCliOptions): void | Promise<void>;
+  larkAvatarReactionRoute?(options: LarkAvatarReactionRouteCliOptions): void | Promise<void>;
   groupSelf?(): void | Promise<void>;
   groupPeers?(): void | Promise<void>;
   groupMembers?(): void | Promise<void>;
@@ -263,6 +271,34 @@ Examples:
   $ agent-dock lark avatar send --chat "发布群" --text "构建完成"
   $ agent-dock lark avatar send --chat oc_xxx --reply-to "发布计划" --in-thread --at 张三 --text "@张三 已更到预发"
   $ echo "部署完成" | agent-dock lark avatar send --chat 900001 --text-file - --json`);
+
+  larkAvatar.command('triggers')
+    .description('查看最近一次飞书表情事件和触发账本（排查“加了表情没反应”）')
+    .option('--limit <n>', '账本条数（1–100，默认 10）')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.larkAvatarDiagnostics?.(options));
+
+  larkAvatar.command('reaction')
+    .description('仅隔离沙箱：注入一条 fake reaction 事件，验证「加表情 → 触发一轮」')
+    .requiredOption('--message <messageId>', '被反应消息的 om_* message_id')
+    .requiredOption('--emoji <emojiType>', '飞书 emoji_type，例如 THUMBSUP')
+    .option('--operator <id>', '操作人 ID；默认 ou_test_operator')
+    .option('--operator-type <type>', 'user / bot / app')
+    .option('--action-time <time>', '飞书 action_time；重试测试时传新值')
+    .option('--chat <chatId>', '会话 ID；默认 oc_test_chat')
+    .option('--chat-name <name>', '会话名；默认 测试群')
+    .option('--sender <name>', '发送人显示名；默认 测试用户')
+    .option('--content <text>', '被反应消息正文')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.larkAvatarReaction?.(options));
+
+  larkAvatar.command('reaction-route')
+    .description('仅隔离沙箱：模拟点击询问卡片的「发到主会话 / 单独处理」')
+    .requiredOption('--trigger <key>', 'reaction 账本 key（triggers --json 可查）')
+    .requiredOption('--route <route>', 'main 或 independent')
+    .option('--operator <id>', '操作人 open_id')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.larkAvatarReactionRoute?.(options));
 
   const larkMessage = lark.command('message')
     .description('Generic Lark IM messages using a configured bot (does not create AgentDock sessions)');

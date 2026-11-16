@@ -349,8 +349,15 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   if (options.schedules) registerScheduleRoutes(app, options.schedules);
   if (options.assistant) registerAssistantRoutes(app, options.assistant);
   if (options.sourcesRouter) registerSourceRouterRoutes(app, options.sourcesRouter);
-  if (options.larkAvatar) registerLarkAvatarRoutes(app, options.larkAvatar);
-  await registerLarkRoutes(app, { ...options.lark, assistant: options.lark?.assistant ?? options.assistant, runtime: options.lark?.runtime ?? runtime });
+  if (options.larkAvatar) {
+    registerLarkAvatarRoutes(app, options.larkAvatar, {
+      // fake reaction 注入口只给隔离沙箱（dev up 会同时设置 SANDBOX + ALLOW_REACTION_TEST）。
+      // 只认 ALLOW_REACTION_TEST 会让正式实例在外层环境意外带上变量时暴露伪造触发入口。
+      allowReactionTest: process.env.AGENTDOCK_DEV_SANDBOX === 'true'
+        && process.env.AGENTDOCK_ALLOW_REACTION_TEST === 'true'
+    });
+  }
+  await registerLarkRoutes(app, { ...options.lark, assistant: options.lark?.assistant ?? options.assistant, runtime: options.lark?.runtime ?? runtime, ...(options.larkAvatar ? { larkAvatar: options.larkAvatar } : {}) });
   app.get('/api/agents', async request => {
     // 停用的内置 agent 只在配置面板展示，面板入口仅 master token 可用（会话令牌拿到的列表不含停用项）。
     const url = new URL(request.url, 'http://agent-dock.local');

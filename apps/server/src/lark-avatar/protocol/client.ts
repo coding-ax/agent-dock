@@ -14,8 +14,8 @@ import {
   decodePullSidsResponse,
   decodePushMessages,
   decodePutMessageResponse,
+  decodePutReactionResponse,
   encodeAckPacket,
-  encodeCreateReactionRequest,
   encodeHeartbeatPacket,
   encodePacket,
   encodePullChatsRequest,
@@ -25,6 +25,7 @@ import {
   encodePullMessagesByPositionsRequest,
   encodePullSidsRequest,
   encodePutMessageRequest,
+  encodePutReactionRequest,
   type LarkMention,
   type LarkChatInfo,
   type LarkChatterInfo,
@@ -65,7 +66,7 @@ export interface LarkProtocolClientLike {
     quote?: boolean;
     threadChat?: boolean;
   }): Promise<{ messageId: string }>;
-  react?(messageId: string, type: string): Promise<void>;
+  react?(messageId: string, type: string): Promise<{ count: number } | void>;
   lookup?(chatIds: string[], userIds: string[]): Promise<LarkProtocolLookup>;
   messagesByIds?(messageIds: string[]): Promise<LarkIncomingMessage[]>;
   listChats?(): Promise<LarkAvailableChat[]>;
@@ -91,7 +92,8 @@ const CMD_PULL_FEED = 1000;
 const CMD_PUSH_BATCH_COPY = 134;
 const CMD_PUSH_SID = 6000;
 const CMD_PULL_SIDS = 12001;
-const CMD_CREATE_REACTION = 1011;
+/** 飞书 Web 端 reactions.PutReactionRequest 的真实 command（不是 1011）。 */
+const CMD_PUT_REACTION = 25;
 const HEARTBEAT_MS = 30_000;
 
 const asBuffer = (data: WebSocket.RawData): Buffer => {
@@ -414,9 +416,17 @@ export class LarkProtocolClient implements LarkProtocolClientLike {
     return { messageId };
   }
 
-  async react(messageId: string, type: string): Promise<void> {
-    if (!messageId || !type) return;
-    await this.gatewayRequest(CMD_CREATE_REACTION, encodeCreateReactionRequest(messageId, type));
+  async react(messageId: string, type: string): Promise<{ count: number }> {
+    if (!messageId || !type) return { count: 0 };
+    const payload = await this.gatewayRequest(CMD_PUT_REACTION, encodePutReactionRequest(messageId, type));
+    const response = payload.length ? decodePutReactionResponse(payload) : undefined;
+    const count = Number(response?.count ?? 0);
+    // 网关可能 HTTP 200 但实际没加上表情（旧实现 1011 命令就是这样静默失败）。
+    // 只有明确返回 count > 0 才算成功，否则让调用方把这条记进失败诊断。
+    if (!(count > 0)) {
+      throw new LarkProtocolError('LARK_REACTION_NOT_APPLIED', '飞书网关未返回表情数量（count=0），表情可能没有加上');
+    }
+    return { count };
   }
 
   private async gatewayRequest(cmd: number, payload: Buffer): Promise<Buffer> {
@@ -449,10 +459,27 @@ export class LarkProtocolClient implements LarkProtocolClientLike {
     });
     this.jar.absorb(response.headers);
     if (!response.ok) {
-      throw new LarkProtocolError('LARK_GATEWAY_HTTP', `飞书网关请求失败：HTTP ${response.status}`);
+      // 飞书网关把业务错误放在 HTTP 4xx 的 Packet.sid 里（例如 "message not found"）；
+      // 不解析就会只剩一个 HTTP 状态码，用户看到的排障原因会丢失。
+      const raw = Buffer.from(await response.arrayBuffer());
+      let detail = '';
+      try {
+        const packet = decodePacket(raw);
+        detail = packet.sid?.trim() || packet.payload?.toString('utf8').trim() || '';
+      } catch {
+        detail = raw.toString('utf8').trim().slice(0, 200);
+      }
+      throw new LarkProtocolError('LARK_GATEWAY_HTTP', `飞书网关请求失败：HTTP ${response.status}${detail ? `：${detail}` : ''}`);
     }
     const raw = Buffer.from(await response.arrayBuffer());
     const decoded = decodePacket(raw);
+    // HTTP 200 也可能带业务错误（status 非 0），不检查就会把失败当成功。
+    if (typeof decoded.status === 'number' && decoded.status !== 0) {
+      throw new LarkProtocolError(
+        'LARK_GATEWAY_STATUS',
+        `飞书网关返回错误（status ${decoded.status}）${decoded.sid?.trim() ? `：${decoded.sid.trim()}` : ''}`
+      );
+    }
     return decoded.payload ?? Buffer.alloc(0);
   }
 

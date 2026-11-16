@@ -19,6 +19,22 @@ const protoRoot = protobuf.parse(
   { keepCase: true }
 ).root;
 
+interface DecodedPutMessage {
+  chatId?: string;
+  rootId?: string;
+  parentId?: string;
+  isReplyInThread?: boolean;
+  atUserIdList?: string[];
+  content?: { richText?: { elementIds?: string[]; elements?: { dictionary?: Record<string, { tag?: number; property?: Buffer }> } } };
+}
+
+const decodePutMessage = (input: Parameters<typeof encodePutMessageRequest>[0]): DecodedPutMessage => {
+  const requestType = protoRoot.lookupType('lark.messages.PutMessageRequest');
+  return requestType.toObject(requestType.decode(encodePutMessageRequest(input)), {
+    longs: String, enums: Number, bytes: Buffer, defaults: false, arrays: true, objects: true
+  }) as DecodedPutMessage;
+};
+
 afterEach(async () => {
   for (const service of services.splice(0)) await service.close();
   for (const store of stores.splice(0)) store.close();
@@ -427,6 +443,28 @@ describe('Lark avatar service', () => {
 
     await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
     expect(fake.reacted).toEqual([]);
+  });
+
+  it('still reacts in topic-thread reply mode and passes the web message id through unchanged', async () => {
+    const fake = fakeClient();
+    const service = createService({ client: fake.client });
+    await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+    // 用户截图里的组合：开话题回复 + 仅本人触发。表情回应不应被回复目标改写。
+    await service.saveConfig({ emojiReactions: true, replyInTopic: true, replyMode: 'thread' });
+
+    // Web 协议的 message.id 是数字串，不是 om_*；reaction 请求必须原样使用它。
+    await fake.emit({
+      messageId: '7707449809967303948',
+      fromId: '42',
+      chatId: 'oc_chat',
+      chatType: 3,
+      rootId: '7707449809967303948',
+      threadId: 'omt_thread_1',
+      content: '/ai 话题里反应一下'
+    });
+
+    await vi.waitFor(() => expect(fake.reacted.length).toBeGreaterThanOrEqual(2));
+    expect(fake.reacted.every(item => item.messageId === '7707449809967303948')).toBe(true);
   });
 
   it('uses the configured trigger prefix', async () => {
@@ -885,8 +923,8 @@ describe('Lark avatar service', () => {
     expect(sent).toEqual({
       messageId: 'om_sent_1',
       chatId: '900001',
-      rootId: 555,
-      mentions: [{ userId: 100, name: '小肥鱼' }]
+      rootId: '555',
+      mentions: [{ userId: '100', name: '小肥鱼' }]
     });
     expect(fake.sent[0]).toEqual({
       chatId: '900001',
@@ -895,19 +933,7 @@ describe('Lark avatar service', () => {
       rootId: '555'
     });
 
-    const decode = (input: (typeof fake.sent)[number]) => {
-      const requestType = protoRoot.lookupType('lark.messages.PutMessageRequest');
-      return requestType.toObject(requestType.decode(encodePutMessageRequest(input)), {
-        longs: String, enums: Number, bytes: Buffer, defaults: false, arrays: true, objects: true
-      }) as {
-        rootId?: string;
-        parentId?: string;
-        isReplyInThread?: boolean;
-        atUserIdList?: string[];
-        content?: { richText?: { elementIds?: string[]; elements?: { dictionary?: Record<string, { tag?: number; property?: Buffer }> } } };
-      };
-    };
-    const request = decode(fake.sent[0]!);
+    const request = decodePutMessage(fake.sent[0]!);
     expect(request).toMatchObject({
       rootId: '555',
       parentId: '555',
@@ -925,7 +951,7 @@ describe('Lark avatar service', () => {
     });
 
     await service.sendMessage({ chat: '900001', text: '@小肥鱼 引用回复', replyTo: '555', at: ['100'] });
-    const quoted = decode(fake.sent[1]!);
+    const quoted = decodePutMessage(fake.sent[1]!);
     expect(quoted).toMatchObject({ rootId: '555', parentId: '555', atUserIdList: ['100'] });
     expect(quoted.isReplyInThread ?? false).toBe(false);
   });
@@ -938,5 +964,63 @@ describe('Lark avatar service', () => {
     await expect(service.sendMessage({ chat: '900001', text: '请看', at: ['100'] }))
       .rejects.toMatchObject({ code: 'INVALID_INPUT', statusCode: 400 });
     expect(fake.sent).toHaveLength(0);
+  });
+
+  it('sends 19-digit chat, root and user ids without JS number rounding', async () => {
+    const chatId = '7246718914305097756';
+    const rootId = '7246718914305097758';
+    const userId = '7246718914305097757';
+    const fake = fakeClient();
+    const service = createService({ client: fake.client });
+    await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+
+    const sent = await service.sendMessage({
+      chat: chatId,
+      text: '@小肥鱼 19 位 id',
+      replyTo: rootId,
+      inThread: true,
+      at: [userId]
+    });
+    expect(sent).toEqual({
+      messageId: 'om_sent_1',
+      chatId,
+      rootId,
+      mentions: [{ userId, name: '小肥鱼' }]
+    });
+    expect(fake.sent[0]).toEqual({
+      chatId,
+      text: '@小肥鱼 19 位 id',
+      mentions: [{ userId, content: '小肥鱼' }],
+      rootId
+    });
+
+    const decoded = decodePutMessage(fake.sent[0]!);
+    expect(decoded).toMatchObject({ chatId, rootId, parentId: rootId, isReplyInThread: true, atUserIdList: [userId] });
+    const dictionary = decoded.content?.richText?.elements?.dictionary ?? {};
+    const atElement = (decoded.content?.richText?.elementIds ?? [])
+      .map(id => dictionary[id]!)
+      .find(element => element.tag === 5)!;
+    const atType = protoRoot.lookupType('lark.entities.RichTextElement.AtProperty');
+    expect(atType.toObject(atType.decode(atElement.property!), { defaults: false })).toEqual({
+      userId,
+      content: '小肥鱼'
+    });
+
+    const wire = encodePutMessageRequest(fake.sent[0]!).toString('hex');
+    expect(wire).toContain(Buffer.from(chatId).toString('hex'));
+    expect(wire).toContain(Buffer.from(rootId).toString('hex'));
+    const varint = (value: string) => {
+      let remaining = BigInt(value);
+      const bytes: number[] = [];
+      do {
+        let byte = Number(remaining & 0x7fn);
+        remaining >>= 7n;
+        if (remaining) byte |= 0x80;
+        bytes.push(byte);
+      } while (remaining);
+      return Buffer.from(bytes);
+    };
+    const packed = varint(userId);
+    expect(wire).toContain(Buffer.concat([Buffer.from([0x72, packed.length]), packed]).toString('hex'));
   });
 });

@@ -3,8 +3,12 @@ import { registerApp as larkRegisterApp } from './sdk.js';
 import { cleanChatName, validateHighRiskPattern, type AgentRepository, type ChannelMappingRepository, type ConfigRepository } from '@agent-dock/agent-dock-shared';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { createLarkCardService, LarkServiceError, larkConfigurationStatus, type LarkBotConfigInput, type LarkCardService, type LarkSendInput, type LarkUpdateInput } from './service.js';
+import { parseLarkMessageContent } from './message-content.js';
+import { isLarkOperatorAllowed, type OperatorAccessInput } from './access-config.js';
 import { defaultHighRiskPattern, deleteLarkConfig, publicLarkConfigs, readLarkConfig, readLarkConfigs, saveLarkConfig, type SaveLarkConfigInput } from './config.js';
 import { LarkLongConnectionListenerPool, larkHandoverChannel, type LarkListenerPool } from './listener.js';
+import type { LarkAvatarService, LarkReactionPort, LarkReactionSourceStatus } from '../lark-avatar/service.js';
+import type { LarkChatMessage } from './service.js';
 import { installLarkHook, larkHookStatus } from './security-hooks.js';
 import { registerLarkAgentToolRoutes } from './agent-tools-routes.js';
 import type { LarkAgentToolsService } from './agent-tools.js';
@@ -72,7 +76,7 @@ const LARK_ONECLICK_PRESET = {
     },
     events: {
       items: {
-        tenant: ['im.message.receive_v1']
+        tenant: ['im.message.receive_v1', 'im.message.reaction.created_v1']
       }
     },
     callbacks: {
@@ -100,7 +104,121 @@ export interface LarkRoutesOptions {
   agentTools?: LarkAgentToolsService;
   registerApp?: typeof larkRegisterApp;
   registrationTimeoutMs?: number;
+  /** AI 飞书替身：接收 reaction 事件、处理询问卡片上的路由选择。 */
+  larkAvatar?: LarkAvatarService;
 }
+
+type ReactionChatInfo = { webChatId?: string; name?: string; type?: 'p2p' | 'group' | 'topic' | 'unknown' };
+
+/**
+ * 卡片按钮的权限入口。`card.action.trigger` 的 operator 只有 user_id/open_id/union_id，
+ * 没有 operator_type，且卡片只能由终端用户点击：这里显式声明 `user` + `open_id`，
+ * 让共享判定层在 230001 时 fail-closed，而不是靠“没传类型就放行”。
+ */
+export const authorizeCardOperator = (input: Omit<OperatorAccessInput, 'operatorType' | 'operatorIdentity'>) =>
+  isLarkOperatorAllowed({ ...input, operatorType: 'user', operatorIdentity: 'open_id' });
+
+/** 卡片 markdown 里只放纯文本摘要：用户消息不能改写卡片结构或插入链接。 */
+export const escapeCardMarkdown = (value: string): string => value
+  .replace(/[\r\n]+/g, ' ')
+  .replace(/([\\`*_[\]<>~|#])/g, '\\$1')
+  .trim();
+
+/** 把 OpenAPI 消息转成替身侧的精简形态；正文按飞书消息类型解析成可读文本。 */
+const toReactionMessage = async (
+  item: LarkChatMessage,
+  chatInfo?: ReactionChatInfo,
+  log?: { warn(details: unknown, message?: string): void }
+) => {
+  if (!item.chatId) return undefined;
+  const parsed = await parseLarkMessageContent(item.messageType, item.rawContent).catch(error => {
+    log?.warn({ error, messageId: item.messageId, messageType: item.messageType }, '解析飞书消息正文失败，表情触发上下文按空正文处理');
+    return { text: '' };
+  });
+  return {
+    messageId: item.messageId,
+    chatId: item.chatId,
+    ...(chatInfo?.webChatId ? { webChatId: chatInfo.webChatId } : {}),
+    ...(chatInfo?.name ? { chatName: chatInfo.name } : {}),
+    ...(chatInfo?.type && chatInfo.type !== 'unknown' ? { chatType: chatInfo.type } : {}),
+    ...(item.threadId ? { threadId: item.threadId } : {}),
+    ...(item.sender.id ? { senderId: item.sender.id } : {}),
+    ...(item.sender.name ? { senderName: item.sender.name } : {}),
+    content: parsed.text.trim(),
+    messageType: item.messageType,
+    ...(item.createTime ? { createTime: item.createTime } : {})
+  };
+};
+
+/** reaction 事件只带 message_id；正文、聊天和上下文统一由机器人 OpenAPI 补齐。 */
+const avatarReactionPort = (
+  service: LarkCardService,
+  avatarService: LarkAvatarService,
+  log: { warn(details: unknown, message?: string): void }
+): LarkReactionPort => {
+  /**
+   * OpenAPI 的 oc_* chat_id 与网页网关的监听白名单不是同一套 id。
+   * 这里尽力反查一次，拿不到也不影响正文读取（listChatMessages 仍然使用 oc_*）。
+   */
+  const resolveChat = async (chatId: string): Promise<ReactionChatInfo | undefined> => {
+    if (!chatId.startsWith('oc_')) return undefined;
+    try {
+      const chat = await avatarService.resolveChat(chatId);
+      return {
+        ...(chat.webChatId || chat.chatId ? { webChatId: chat.webChatId || chat.chatId } : {}),
+        ...(chat.name ? { name: chat.name } : {}),
+        ...(chat.type ? { type: chat.type } : {})
+      };
+    } catch (error) {
+      // 替身 Web 登录态失效时无法把 oc_* 映射成网页数字 id；白名单会因此判成 chat_not_listened。
+      // 至少把原因留在日志里，排障时能区分“真的不在白名单”和“ID 映射失败”。
+      log.warn({ error, chatId }, '飞书表情触发反查群 ID 失败，监听白名单可能无法匹配');
+      return undefined;
+    }
+  };
+  return {
+  async getMessage(messageId) {
+    const message = await service.getMessage(messageId);
+    return toReactionMessage(message, message.chatId ? await resolveChat(message.chatId) : undefined, log);
+  },
+  async listContext(input) {
+    const result = await service.listChatMessages({
+      chatId: input.chatId,
+      // listChatMessages 只接受 omt_* 的 thread id；om_* 会直接 400，导致上下文静默降级。
+      ...(input.threadId?.startsWith('omt_') ? { threadId: input.threadId } : {}),
+      pageSize: Math.min(50, Math.max(5, input.limit)),
+      order: 'desc'
+    });
+    const chatInfo = await resolveChat(input.chatId);
+    const messages = (await Promise.all(result.items.map(item => toReactionMessage(item, chatInfo, log))))
+      .filter((item): item is NonNullable<Awaited<ReturnType<typeof toReactionMessage>>> => Boolean(item));
+    return messages.reverse().slice(-Math.max(1, input.limit));
+  },
+  async sendAskCard(input) {
+    const summary = escapeCardMarkdown(input.summary);
+    return service.sendChoiceCard({
+      chatId: input.chatId,
+      replyTo: input.replyTo,
+      title: 'AI 替身 · 表情触发',
+      markdown: [
+        `你在一条消息上添加了「${input.emoji}」。`,
+        '',
+        `> ${summary}`,
+        '',
+        '这一轮交给谁处理？'
+      ].join('\n'),
+      buttons: [
+        { action: 'avatar_reaction_route', label: '发到主会话', style: 'primary', value: { trigger_id: input.triggerId, route: 'main' } },
+        { action: 'avatar_reaction_route', label: '单独处理', value: { trigger_id: input.triggerId, route: 'independent' } }
+      ],
+      idempotencyKey: `avatar-reaction-ask:${input.triggerId}`
+    });
+  },
+  async updateAskCard(input) {
+    await service.updateChoiceCard({ messageId: input.messageId, text: input.ok ? `✅ ${input.text}` : `⚠️ ${input.text}` });
+  }
+  };
+};
 
 export async function registerLarkRoutes(app: FastifyInstance, options: LarkRoutesOptions = {}) {
   const env = options.env ?? process.env;
@@ -115,7 +233,43 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
     configRepository: options.config,
     env,
     fetcher,
-    peerBotAuthorized: (appId, chatId, senderOpenId) => options.agentTools?.isConfiguredPeer(appId, chatId, senderOpenId) ?? Promise.resolve(false)
+    peerBotAuthorized: (appId, chatId, senderOpenId) => options.agentTools?.isConfiguredPeer(appId, chatId, senderOpenId) ?? Promise.resolve(false),
+    onReaction: async (event, config) => {
+      if (!options.larkAvatar) return;
+      try {
+        const avatarService = await resolveService(undefined, config.appId);
+        await options.larkAvatar.handleReaction(event, avatarReactionPort(avatarService, options.larkAvatar, app.log), {
+          appId: config.appId,
+          // reaction 与消息入口共用同一套机器人白名单；未授权时只落一条 ignored 账本，不派发。
+          authorizeOperator: (operatorId, operatorType, operatorIdentity) => isLarkOperatorAllowed({
+            config,
+            ...(operatorId ? { operatorOpenId: operatorId } : {}),
+            ...(operatorType ? { operatorType } : {}),
+            ...(operatorIdentity ? { operatorIdentity } : {}),
+            service: avatarService,
+            ...(options.config ? { repository: options.config } : {}),
+            log: app.log
+          })
+        });
+      } catch (error) {
+        app.log.warn({ error, messageId: event.messageId, appId: config.appId }, 'AI 替身处理飞书表情事件失败');
+      }
+    },
+    onCardAction: async (value, operatorOpenId, config) => {
+      if (!options.larkAvatar) return undefined;
+      const avatarService = await resolveService(undefined, config.appId);
+      return options.larkAvatar.resolveReactionRoute({
+        value,
+        ...(operatorOpenId ? { operatorId: operatorOpenId } : {}),
+        authorize: () => authorizeCardOperator({
+          config,
+          ...(operatorOpenId ? { operatorOpenId } : {}),
+          service: avatarService,
+          ...(options.config ? { repository: options.config } : {}),
+          log: app.log
+        })
+      });
+    }
   });
   const syncListeners = async (configs: Awaited<ReturnType<typeof readLarkConfigs>>) => {
     try { await listener.sync(configs); }
@@ -143,6 +297,29 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
 
   const initialConfigs = await readLarkConfigs(options.config);
   if (!listeningDisabled) await syncListeners(initialConfigs);
+  const reactionSourceStatus = async (): Promise<LarkReactionSourceStatus> => {
+    const configs = await readLarkConfigs(options.config);
+    return {
+      botConfigured: configs.length > 0,
+      botEnabled: configs.filter(config => config.listening).length,
+      botAppIds: configs.map(config => config.appId),
+      listenerActive: listener.listening,
+      activeAppIds: listener.activeAppIds,
+      listenerDisabled: listeningDisabled
+    };
+  };
+  options.larkAvatar?.setReactionSourceStatusProvider(reactionSourceStatus);
+  if (options.larkAvatar?.publicState()?.config.reactionTriggerEnabled) {
+    const source = await reactionSourceStatus();
+    options.larkAvatar.setReactionSourceStatus(source);
+    if (source.listenerDisabled || !source.botConfigured) {
+      app.log.warn({
+        listenerDisabled: source.listenerDisabled,
+        botConfigured: source.botConfigured,
+        activeAppIds: source.activeAppIds
+      }, 'AI 替身已启用表情触发，但飞书机器人 reaction 事件通道未就绪');
+    }
+  }
   app.addHook('onClose', async () => listener.stop());
   // 下面这组托管/选人路由统一把 LarkServiceError 翻成对应状态码；全局 errorHandler 只认 RuntimeError，
   // 不包一层的话缺参、已托管、飞书会话不可托管都会变成 500。

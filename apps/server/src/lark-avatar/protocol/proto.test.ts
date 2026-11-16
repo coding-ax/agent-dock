@@ -119,6 +119,7 @@ describe('Lark protocol protobuf', () => {
           name: '测试群',
           type: 2,
           lastMessagePosition: 10,
+          openChatId: 'oc_open_1',
           avatar: { urls: ['https://example.com/chat.png'] }
         },
         oc_2: {
@@ -132,6 +133,7 @@ describe('Lark protocol protobuf', () => {
     const decodedChats = decodeChatsResponse(chats);
     expect(decodedChats.find(chat => chat.id === 'oc_1')).toMatchObject({
       name: '测试群',
+      openChatId: 'oc_open_1',
       avatarUrl: 'https://example.com/chat.png'
     });
     expect(decodedChats.find(chat => chat.id === 'oc_2')).toMatchObject({

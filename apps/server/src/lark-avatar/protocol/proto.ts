@@ -23,6 +23,7 @@ const decodeObject = <T>(name: string, bytes: Uint8Array): T => {
 };
 
 const encodeObject = (name: string, value: Record<string, unknown>): Buffer =>
+  // int64 由 protobufjs 的 Long 处理；string 输入不会被转成 JS Number。
   Buffer.from(type(name).encode(type(name).fromObject(value)).finish());
 
 export interface LarkFrame {
@@ -74,6 +75,8 @@ export interface LarkIncomingMessage {
 
 export interface LarkChatInfo {
   id: string;
+  /** OpenAPI 的 oc_* chat_id；Web 端群列表不保证返回。 */
+  openChatId?: string;
   name: string;
   type: number;
   chatMode: number;
@@ -192,6 +195,7 @@ export const decodeChatsResponse = (payload: Buffer): LarkChatInfo[] => {
   const response = decodeObject<{ chats?: Record<string, Record<string, unknown>> }>('chats.PullChatsByIdsResponse', payload);
   return Object.values(response.chats ?? {}).map(chat => ({
     id: String(chat.id ?? ''),
+    ...(chat.openChatId ? { openChatId: String(chat.openChatId) } : {}),
     name: String(chat.name ?? ''),
     type: Number(chat.type ?? 0),
     chatMode: Number(chat.chatMode ?? 0),
@@ -310,14 +314,24 @@ export const decodeMessage = (message: Record<string, unknown>, atMe: boolean): 
   };
 };
 
-export const encodeCreateReactionRequest = (messageId: string, type: string): Buffer =>
-  encodeObject('messages.CreateReactionRequest', { messageId, type });
+/** x-command 25：给消息添加表情回应。 */
+export const encodePutReactionRequest = (messageId: string, reactionType: string): Buffer =>
+  encodeObject('reactions.PutReactionRequest', { messageId, reactionType });
 
-export const decodeCreateReactionRequest = (payload: Buffer): { messageId?: string; type?: string } =>
-  decodeObject('messages.CreateReactionRequest', payload);
+export const decodePutReactionRequest = (payload: Buffer): { messageId?: string; reactionType?: string } =>
+  decodeObject('reactions.PutReactionRequest', payload);
+
+export const decodePutReactionResponse = (payload: Buffer): { count?: number } =>
+  decodeObject('reactions.PutReactionResponse', payload);
+
+export const encodePutReactionResponse = (count: number): Buffer =>
+  encodeObject('reactions.PutReactionResponse', { count });
 
 export interface LarkMention {
-  /** 飞书数字 user_id（不是 open_id）。 */
+  /**
+   * 飞书数字 user_id（不是 open_id）。内部链路只传十进制 string；
+   * number 仅保留给测试/旧调用的安全整数，bigint 供直接调用者使用。
+   */
   userId: string | number | bigint;
   /** 展示名，不含前导 @。 */
   content: string;

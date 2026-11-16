@@ -1,6 +1,6 @@
 # lark-avatar @ 机器人：协议、解析与 CLI 方案
 
-> 状态：调研 + 设计草案（未改代码）
+> 状态：调研 + 设计草案；**2026-11-16 P0 已修复**（ID 全链路字符串化 + `oc_*` 映射兜底）
 > 日期：2026-11-16
 > 范围：`apps/server/src/lark-avatar/`（AI 飞书替身，用户身份 Web 协议）
 > 目标：在已登录 AI 替身账号时，CLI 既能 `@` 人类，也能 `@` 应用机器人；人类与机器人可混用。
@@ -10,7 +10,7 @@
 ## 0. 结论摘要
 
 1. **发送协议层不需要新增“机器人专用字段”。** 机器人是 `entities.Chatter.type = BOT` 的普通 chatter；出站 `@` 仍是富文本 `tag=5` 的 `AtProperty { userId, content }`，机器人数字 id 同时进 `PutMessageRequest.atUserIdList`。没有 `bot=true` 之类的标记。
-2. **现有 `AtProperty` / `atUserIdList` 能承载机器人 id，但解析层目前过不去。** `LarkMention` 和 protobuf 编码已经接受十进制字符串（甚至超过 2^53 的 int64），但 `ResolvedLarkMention.userId` 被定义成 `number`，`toNumericId()` 会拒绝任何大于 `Number.MAX_SAFE_INTEGER` 的 id。飞书 chatter/chat id 常见为 19 位数字，机器人 id 也是 int64；所以这是当前最硬的缺口，且同样影响部分真实人类 id。
+2. **`AtProperty` / `atUserIdList` 与解析层现已统一使用字符串 ID。** 解析结果中的 `chatId` / `rootId` / `userId` 都是规范十进制字符串，`toDecimalId()` 只校验十进制和 int64 范围，不再用 `Number.isSafeInteger`。19 位 chat/user/root id 可原样进入 protobuf（`atUserIdList` 由 protobufjs 的 `Long` 编码），不会经过 JS `number`。
 3. **当前无法可靠“按名字找机器人”。** 现有成员目录只来自本机 inbox 和最近消息参与者（`id-resolution.ts:705-749`），机器人如果从没说过话、也没被人 @ 过，就完全不在目录里。需要新增群成员枚举（`chats.PullChatChattersRequest`，cmd 44），并用 `Chatter.type` 过滤 BOT。
 4. **本地 proto 把机器人信息丢了。** 本地 `entities.Chatter` 只有 `id/name/avatar/email`，没有 `type`、`botConfig`、`alias`；`chatters.PullChattersByIdsResponse` 也没有 `botInfo`。请求里虽然已经发了 `needBotInfo: true`（`proto.ts:205-206`），响应字段仍被 protobufjs 忽略。
 5. **CLI 建议显式 `--at-bot`，并保留 `--at` 的人类语义。** `--at-bot <名字|cli_*|ou_*|数字 id>` 可重复，可与 `--at` 混用；HTTP 增加 `atBots`（以及可选的 `{ target, kind }` 对象形式）。机器人按名字默认精确匹配，重名必须用 `app_id` 或数字 id 消歧。
@@ -153,26 +153,34 @@ OpenAPI 侧也明确区分 `users` 和 `bots`：`apps/server/src/lark/service.ts
 
 ## 2. 与现实现的差距
 
-### P0：mention id 被强制转成 JS `number`，大 id 直接被拒
+### P0（已修复，2026-11-16）：ID 曾被强制转成 JS `number`，大 id 直接被拒
 
-证据链：
+**修复结果**
+
+- `ResolvedLarkChat.chatId`、`ResolvedLarkTarget.chatId/rootId`、`ResolvedLarkMention.userId` 全部改成 `string`。
+- `toNumericId()` 改为 `toDecimalId()`：只校验十进制与 `1..2^63-1`，返回规范字符串；新增 `ID_OUT_OF_RANGE`，移除 `ID_NOT_SAFE_INTEGER`。
+- protobuf 的 string 字段（`chatId` / `rootId` / `parentId` / `AtProperty.userId`）直接写原字符串；`atUserIdList` 的 int64 由 protobufjs 用 `Long` 编码。
+- `entities.Chat` 补上公开 schema 中的 `string openChatId = 134`；`oc_*` 优先从 Web 群列表直接映射，其次直查 Web 网关，最后用已配置的飞书机器人 OpenAPI `getChat` 按群名反查并缓存。
+- 回归覆盖：19 位 chat/root/user、超过 2^53 的 wire 精度、`oc_*` 直命中/OpenAPI 命中/未命中、CLI 用户实测命令。
+
+修复前证据（历史）：
 
 - `apps/server/src/lark-avatar/id-resolution.ts:81-84`：`ResolvedLarkMention.userId` 是 `number`。
 - `apps/server/src/lark-avatar/id-resolution.ts:456-490`：`resolveMention()` 最终都走 `toNumericId()`。
 - `apps/server/src/lark-avatar/id-resolution.ts:771-785`：`toNumericId()` 如果 id 超过 `Number.isSafeInteger`，抛 `ID_NOT_SAFE_INTEGER`。
 - `apps/server/src/lark-avatar/service.ts:433-438`：发送时再 `String(mention.userId)`。
 
-后果：
+修复前影响：
 
 - 19 位机器人 id（如 `7701...`）无法通过解析层，尽管编码层完全能处理。
 - 部分真实人类 id、chat id 也可能触发同一问题；这不是机器人独有。
 - `proto.mentions.test.ts:190-204` 已经证明编码层支持大 int64，说明修在解析层即可，不需要改 wire format。
 
-建议：
+原建议已全部落地，并且覆盖范围从 mention 扩展到 chat/root：
 
-- 把 `ResolvedLarkMention.userId` 改成 `string`（规范十进制），解析、去重、缓存、响应全链路都用字符串。
-- `AtProperty.userId` 和 `atUserIdList` 继续保持字符串/`longs: String`，不要 `Number()`。
-- `LarkAvatarResolutionError` 的 `ID_NOT_SAFE_INTEGER` 对 mention 不再使用；`chatId/rootId` 可留作后续独立治理（它们也是同一类问题，但不在本次 bot 改动范围内）。
+- `AtProperty.userId` 和 `atUserIdList` 继续保持字符串/`longs: String`，不调用 `Number()`。
+- `ID_NOT_SAFE_INTEGER` 已从错误码中移除。
+- `chatId/rootId` 与 mention 一起完成字符串化，避免同一条发送链路里两套 ID 语义。
 
 ### P1：本地 `Chatter` schema 缺 `type` / `botConfig` / `botInfo`
 
@@ -661,7 +669,7 @@ E2E 可复用现有 route/service 注入模式：`POST /api/lark-avatar/send` ->
 
 ## 9. 实施顺序建议（不在本次改动范围）
 
-1. 先修 mention id 字符串化（P0），补大 id 回归测试。
+1. ~~先修 mention id 字符串化（P0），补大 id 回归测试。~~ **已完成（2026-11-16）：扩展到 chat/root/user 全链路，并补 19 位 wire 回归。**
 2. 补 `Chatter.type` / `botInfo` schema 与 decoder，单测覆盖 BOT/AI。
 3. 加 `listChatMembers` + `checkChatters` 到 `LarkProtocolClientLike`，用 fake 跑通群成员目录。
 4. 解析器加 `kind` 与 `--at-bot` 错误码。

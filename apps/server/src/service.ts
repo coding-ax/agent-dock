@@ -9,6 +9,8 @@ import { SelfUpdateService } from './self-update.js';
 import { buildApp } from './app.js';
 import { createHandoverLookup } from './lark/handover-binding.js';
 import { LarkAgentToolCapabilityRegistry, LarkAgentToolsService, loadOrCreateGroupToolsSigningSecret } from './lark/agent-tools.js';
+import { readLarkConfigs } from './lark/config.js';
+import { createLarkCardService } from './lark/service.js';
 import { LlmEndpointService } from './llm/service.js';
 import { LarkAvatarService } from './lark-avatar/service.js';
 import { buildInitialSystemPrompt } from './initial-system-prompt.js';
@@ -98,10 +100,35 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       }
     });
     await assistant.initialize();
+    let openChatService: ReturnType<typeof createLarkCardService> | undefined;
+    const openChatLookup = async (openChatId: string) => {
+      try {
+        if (!openChatService) {
+          const stored = (await readLarkConfigs(repos.config))[0];
+          const appId = stored?.appId?.trim() || env.LARK_APP_ID?.trim();
+          const appSecret = stored?.appSecret?.trim() || env.LARK_APP_SECRET?.trim();
+          if (!appId || !appSecret) return undefined;
+          openChatService = createLarkCardService(env, globalThis.fetch, { appId, appSecret });
+        }
+        return await openChatService.getChat(openChatId);
+      } catch (error) {
+        console.warn(`飞书替身 OpenAPI 反查群 ${openChatId} 失败：${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
+    };
     larkAvatar = new LarkAvatarService({
       databaseUrl: config.databaseUrl, runtime, llm,
       workspace: config.defaultCwd,
-      log: { info: () => undefined, warn: message => console.warn(String(message)) }
+      log: { info: message => console.info(String(message)), warn: message => console.warn(String(message)) },
+      openChatLookup,
+      mainSession: {
+        id: () => assistant?.mainSessionId,
+        dispatch: async input => {
+          const sessionId = assistant?.mainSessionId;
+          if (!sessionId) throw new Error('还没有指定主会话');
+          return runtime.dispatch(sessionId, input.prompt, 'queue', input.agentPrompt, undefined, input.origin, input.clientMessageId);
+        }
+      }
     });
     const autostart = options.cliEntrypoint ? new AutostartService({ entrypoint: options.cliEntrypoint, env }) : undefined;
     // 偏好存库：daemon 重启后按上次的选择恢复；caffeinate 用 -w 绑定本进程，异常退出时不会留孤儿。

@@ -3,6 +3,7 @@ import safeRegex from 'safe-regex2';
 
 export * from './turn-outcome.js';
 export * from './chat-name.js';
+export * from './lark-reaction-emoji.js';
 
 export const highRiskPatternMaxLength = 4_096;
 export type RegexPatternValidation = { valid: true } | { valid: false; error: string };

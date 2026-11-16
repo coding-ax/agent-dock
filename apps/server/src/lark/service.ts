@@ -570,6 +570,85 @@ export class LarkCardService {
     return { messageId, chatId: payload.data?.chat_id };
   }
 
+  /**
+   * 发送一张只有正文和按钮的轻量卡片（用于 AI 替身表情触发的「这一轮交给谁」）。
+   * 不复用 buildLarkCard：那张卡带任务状态、耗时和 trace 链接，不适合做一次性选择。
+   */
+  async sendChoiceCard(input: {
+    chatId: string;
+    replyTo?: string;
+    title: string;
+    markdown: string;
+    buttons: Array<{
+      action: string;
+      label: string;
+      style?: 'primary' | 'default' | 'danger';
+      value?: Record<string, unknown>;
+    }>;
+    idempotencyKey?: string;
+  }): Promise<LarkMessageResult> {
+    const chatId = required(input.chatId, 'chatId');
+    if (!chatId.startsWith('oc_')) throw new LarkServiceError('INVALID_CHAT_ID', 'chatId must start with oc_', 400);
+    const card = {
+      schema: '2.0',
+      config: { update_multi: true, width_mode: 'default', summary: { content: input.title } },
+      header: { template: 'blue', title: { tag: 'plain_text', content: input.title } },
+      body: {
+        direction: 'vertical',
+        elements: [
+          { tag: 'markdown', content: input.markdown },
+          {
+            tag: 'action',
+            actions: input.buttons.map(button => ({
+              tag: 'button',
+              text: { tag: 'plain_text', content: button.label },
+              type: button.style ?? 'default',
+              behaviors: [{ type: 'callback', value: { action: button.action, ...(button.value ?? {}) } }]
+            }))
+          }
+        ]
+      }
+    };
+    const replyTo = input.replyTo?.trim();
+    // 飞书 im/v1/messages 的 uuid 上限 50 字符且不接受控制字符；超限时直接报错，
+    // 不要静默发出去再被网关拒绝（默认 ask 路由曾因此完全不可用）。
+    const idempotencyKey = input.idempotencyKey?.trim();
+    if (idempotencyKey && (idempotencyKey.length > 50 || /[\u0000-\u001f\u007f]/.test(idempotencyKey))) {
+      throw new LarkServiceError('INVALID_IDEMPOTENCY_KEY', '飞书消息 uuid 最多 50 个字符，且不能包含控制字符', 400);
+    }
+    const payload = await this.request(
+      replyTo
+        ? `/open-apis/im/v1/messages/${encodeURIComponent(replyTo)}/reply`
+        : '/open-apis/im/v1/messages?receive_id_type=chat_id',
+      {
+        body: {
+          ...(replyTo ? {} : { receive_id: chatId }),
+          msg_type: 'interactive',
+          content: JSON.stringify(card),
+          ...(idempotencyKey ? { uuid: idempotencyKey } : {})
+        }
+      }
+    );
+    const messageId = payload.data?.message_id;
+    if (!messageId) throw new LarkServiceError('INVALID_LARK_RESPONSE', 'Lark card response did not include message_id', 502);
+    return { messageId, chatId: payload.data?.chat_id ?? chatId };
+  }
+
+  /** 选择完成后把询问卡片改成结果态，避免用户重复点击。 */
+  async updateChoiceCard(input: { messageId: string; text: string }): Promise<LarkMessageResult> {
+    const messageId = required(input.messageId, 'messageId');
+    const card = {
+      schema: '2.0',
+      config: { update_multi: true },
+      body: { direction: 'vertical', elements: [{ tag: 'markdown', content: input.text }] }
+    };
+    const payload = await this.request(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
+      method: 'PATCH',
+      body: { content: JSON.stringify(card) }
+    });
+    return { messageId: payload.data?.message_id || messageId, chatId: payload.data?.chat_id };
+  }
+
   async reply(input: LarkReplyInput): Promise<LarkMessageResult> {
     const messageId = required(input.messageId, 'messageId');
     const cardInput = await this.cardInput(input);

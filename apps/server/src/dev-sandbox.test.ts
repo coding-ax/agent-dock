@@ -47,7 +47,15 @@ describe('dev sandbox', () => {
   it('isolates HOME and strips the session variables that would route commands back to the live daemon', () => {
     const sandbox = sandboxPaths('/repo', 4399);
     const env = sandboxEnv(sandbox, { HOME: '/home/u', PATH: '/bin', agentdock_session_id: 'ses_1', agentdock_group_tools_token: 't', agentdock_database: '/home/u/.agentdock/agentdock.db' });
-    expect(env).toMatchObject({ HOME: '/repo/.agentdock/dev/home', PATH: '/repo/.agentdock/dev/bin:/bin', AGENTDOCK_DISABLE_LARK_LISTENER: 'true', agentdock_database: '/repo/.agentdock/dev/agentdock.db' });
+    // fake reaction 注入口需要 SANDBOX + ALLOW 两个标记同时存在；只设置 ALLOW 的正式实例不开放端点。
+    expect(env).toMatchObject({
+      HOME: '/repo/.agentdock/dev/home',
+      PATH: '/repo/.agentdock/dev/bin:/bin',
+      AGENTDOCK_DISABLE_LARK_LISTENER: 'true',
+      AGENTDOCK_DEV_SANDBOX: 'true',
+      AGENTDOCK_ALLOW_REACTION_TEST: 'true',
+      agentdock_database: '/repo/.agentdock/dev/agentdock.db'
+    });
     expect(env).not.toHaveProperty('agentdock_session_id');
     expect(env).not.toHaveProperty('agentdock_group_tools_token');
   });

@@ -1,3 +1,5 @@
+import type { LarkReactionRoute } from './reaction-trigger.js';
+
 export const inboxTiers = ['action', 'fyi', 'noise'] as const;
 export type InboxTier = (typeof inboxTiers)[number];
 
@@ -66,6 +68,14 @@ export interface LarkAvatarConfig {
   replyMode: LarkAvatarReplyMode;
   /** 触发后先在原消息上加 2–3 个随机飞书表情回应。 */
   emojiReactions: boolean;
+  /** 用飞书 reaction 触发 Agent 轮次（与 emojiReactions 的出站反馈是两件事）。 */
+  reactionTriggerEnabled: boolean;
+  /** 触发用的单个飞书 emoji_type，例如 THUMBSUP。 */
+  reactionTriggerEmoji: string;
+  /** 命中后的默认路由：询问、发到主会话、或起独立轮次。 */
+  reactionTriggerRoute: LarkReactionRoute;
+  /** 忽略机器人/应用添加的表情，默认 true。 */
+  reactionTriggerIgnoreBots: boolean;
   /** 加在 Agent 发出的每条消息末尾。 */
   replySignature: string;
   /** Agent 单轮超时秒数；0 表示不限制。 */
@@ -104,6 +114,10 @@ export interface PublicLarkAvatarConfig {
   replyInTopic: boolean;
   replyMode: LarkAvatarReplyMode;
   emojiReactions: boolean;
+  reactionTriggerEnabled: boolean;
+  reactionTriggerEmoji: string;
+  reactionTriggerRoute: LarkReactionRoute;
+  reactionTriggerIgnoreBots: boolean;
   replySignature: string;
   agentTimeoutSeconds: number;
   listening: boolean;
@@ -166,4 +180,27 @@ export interface LarkAvatarDraft {
   createdAt: string;
   updatedAt: string;
   sentAt?: string;
+}
+
+export const reactionTriggerStates = ['pending', 'dispatching', 'awaiting_route', 'dispatched', 'ignored', 'failed'] as const;
+export type LarkAvatarReactionTriggerState = (typeof reactionTriggerStates)[number];
+
+/** 表情触发账本：同一 key（消息+操作人+emoji）只允许一条，失败原因也留在这里。 */
+export interface LarkAvatarReactionTrigger {
+  key: string;
+  messageId: string;
+  chatId?: string;
+  operatorId?: string;
+  operatorType?: string;
+  emoji: string;
+  route: LarkReactionRoute;
+  state: LarkAvatarReactionTriggerState;
+  /** 飞书事件里的 action_time；用于区分“重投”与“失败后重新加表情”。 */
+  actionTime?: string;
+  reason?: string;
+  sessionId?: string;
+  taskId?: string;
+  payload: JsonObject;
+  createdAt: string;
+  updatedAt: string;
 }

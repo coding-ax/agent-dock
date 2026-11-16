@@ -1,4 +1,4 @@
-import { readLarkAccessConfig, resolveLarkAccessConfig } from './access-config.js';
+import { isLarkOperatorAllowed, resolveLarkAccessConfig } from './access-config.js';
 import { EventDispatcher, LoggerLevel, WSClient } from './sdk.js';
 import type { WSClient as LarkWSClient } from './sdk.js';
 import { createHash } from 'node:crypto';
@@ -50,6 +50,53 @@ export interface LarkMessageEvent {
   senderOpenId?: string;
   senderType?: string;
   mentions: Array<{ key: string; name: string; openId?: string; appId?: string; mentionedType?: string }>;
+}
+
+/** `im.message.reaction.created_v1` 的本地精简形态；正文/聊天需再按 message_id 查询。 */
+export interface LarkReactionEvent {
+  messageId: string;
+  emojiType: string;
+  operatorType: 'user' | 'bot' | 'app' | 'unknown';
+  operatorId?: string;
+  /** operatorId 来自哪个字段；白名单只存 open_id，其他形态需要先解析或直接 fail-closed。 */
+  operatorIdentity?: 'open_id' | 'user_id' | 'union_id' | 'app_id';
+  appId?: string;
+  actionTime?: string;
+}
+
+/**
+ * `im.message.reaction.created_v1` 原始事件 → 本地精简形态。
+ * 飞书不同版本可能只给其中一个 user_id 字段；app 反应只带 app_id。
+ */
+export function parseLarkReactionEvent(raw: unknown): LarkReactionEvent | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const event = raw as Record<string, any>;
+  const messageId = String(event.message_id ?? '').trim();
+  const emojiType = String(event.reaction_type?.emoji_type ?? '').trim();
+  if (!messageId || !emojiType) return undefined;
+  const operatorTypeRaw = String(event.operator_type ?? '').toLowerCase();
+  const operatorType = operatorTypeRaw === 'user' || operatorTypeRaw === 'bot' || operatorTypeRaw === 'app'
+    ? operatorTypeRaw
+    : 'unknown';
+  const identity: LarkReactionEvent['operatorIdentity'] | undefined = event.user_id?.open_id
+    ? 'open_id'
+    : event.user_id?.user_id
+      ? 'user_id'
+      : event.user_id?.union_id
+        ? 'union_id'
+        : event.app_id
+          ? 'app_id'
+          : undefined;
+  const operatorId = String(event.user_id?.open_id ?? event.user_id?.user_id ?? event.user_id?.union_id ?? event.app_id ?? '').trim();
+  return {
+    messageId,
+    emojiType,
+    operatorType,
+    ...(identity ? { operatorIdentity: identity } : {}),
+    ...(operatorId ? { operatorId } : {}),
+    ...(event.app_id ? { appId: String(event.app_id) } : {}),
+    ...(event.action_time ? { actionTime: String(event.action_time) } : {})
+  };
 }
 
 export interface LarkListener {
@@ -1233,53 +1280,17 @@ export class LarkMessageCoordinator {
    * - 仅配置 allowedEmails 时拉取操作人邮箱匹配
    */
   private async isOperatorAllowed(config: StoredLarkConfig, operatorOpenId?: string, chatId?: string): Promise<boolean> {
-    try { config = await readLarkAccessConfig(config, this.configRepository); }
-    catch (error) {
-      this.log.warn({ error, operatorOpenId, chatId }, '读取卡片操作人权限失败，按无权限处理');
-      return false;
-    }
-    const restricted = Boolean(config.allowedUsers?.length || config.allowedEmails?.length || config.allowedUserNames?.length);
-    if (!restricted) return true;
-    if (!operatorOpenId) return false;
-    if (config.allowedUsers?.some(user => user.openId === operatorOpenId) || config.allowedBots?.some(bot => bot.openId === operatorOpenId)) return true;
-    // 两种身份分开解析：一类名单失败不能阻断另一类已经确定的授权。
-    try {
-      config = await resolveLarkAccessConfig(config, this.service, 'operator', this.configRepository);
-      if (config.allowedUsers?.some(user => user.openId === operatorOpenId)) return true;
-    } catch (error) {
-      if (error instanceof LarkServiceError && error.code === 'LARK_ACCESS_CONFIG_CHANGED') return false;
-      this.log.warn({ error, operatorOpenId, chatId }, '卡片成员姓名解析失败，继续独立判断机器人身份');
-    }
-    try {
-      config = await resolveLarkAccessConfig(config, this.service, 'bot', this.configRepository);
-      if (config.allowedBots?.some(bot => bot.openId === operatorOpenId)) return true;
-    } catch (error) {
-      if (error instanceof LarkServiceError && error.code === 'LARK_ACCESS_CONFIG_CHANGED') return false;
-      this.log.warn({ error, operatorOpenId, chatId }, '卡片机器人姓名解析失败，继续判断已有邮箱策略');
-    }
-    const allowedUsers = config.allowedUsers ?? [];
-    const allowedEmails = config.allowedEmails ?? [];
-    const allowedBots = config.allowedBots ?? [];
-    const peerBotsAllowed = config.peerBotsAllowed !== false;
-    const accessRestricted = allowedUsers.length > 0 || allowedEmails.length > 0 || Boolean(config.allowedUserNames?.length);
-    if (!accessRestricted) return true;
-    if (!operatorOpenId) return false;
-    if (allowedUsers.some(user => user.openId === operatorOpenId)) return true;
-    if (allowedBots.some(bot => bot.openId === operatorOpenId)) return true;
-    try {
-      const emails = await this.service.getUserEmails(operatorOpenId);
-      return emails.some(email => allowedEmails.includes(email));
-    } catch (error) {
-      // 通讯录 API 找不到该 open_id 对应的用户（Feishu 错误码 230001），
-      // 说明操作人是机器人——bot 不在企业通讯录中。
-      // 白名单为"所有人"时已在上方放行；白名单受限则需校验是否为 peer bot 或已加入机器人白名单。
-      const upstreamCode = error instanceof LarkServiceError ? Number(error.details?.upstreamCode) : undefined;
-      if (upstreamCode === 230001) {
-        return peerBotsAllowed;
-      }
-      this.log.warn({ error, operatorOpenId, upstreamCode }, '获取卡片操作人邮箱失败，按无权限处理');
-      return false;
-    }
+    return isLarkOperatorAllowed({
+      config,
+      ...(operatorOpenId ? { operatorOpenId } : {}),
+      // card.action.trigger 的 operator 只可能是终端用户；显式声明后才能对 230001 fail-closed。
+      operatorType: 'user',
+      operatorIdentity: 'open_id',
+      ...(chatId ? { chatId } : {}),
+      service: this.service,
+      ...(this.configRepository ? { repository: this.configRepository } : {}),
+      log: this.log
+    });
   }
 
   private pushTaskError(task: LarkTask, message: string) {
@@ -2081,6 +2092,17 @@ export interface LarkLongConnectionListenerOptions {
    */
   onMessage?: (event: LarkMessageEvent, config: StoredLarkConfig) => void | Promise<void>;
   /**
+   * 收到 `im.message.reaction.created_v1` 后的旁路回调（AI 替身的表情触发）。
+   * 与 onMessage 一样只做旁路消费，不影响卡片/消息协调器。
+   */
+  onReaction?: (event: LarkReactionEvent, config: StoredLarkConfig) => void | Promise<void>;
+  /**
+   * 卡片操作的第一处理人。返回 toast 结果表示已处理；返回 undefined 时交回原有 coordinator。
+   * 用于 AI 替身的「询问」卡片按钮。
+   */
+  onCardAction?: (value: unknown, operatorOpenId: string | undefined, config: StoredLarkConfig) =>
+    Promise<{ type: 'success' | 'warning' | 'error'; content: string } | undefined> | { type: 'success' | 'warning' | 'error'; content: string } | undefined;
+  /**
    * 监听在后台耗尽重连次数（或遇到不可恢复错误）后回调。
    * 注意：正常 stop() 不触发。由上层（pool）决定是否冷却后重建，listener 自身不自愈。
    */
@@ -2140,6 +2162,16 @@ export class LarkLongConnectionListener implements LarkListener {
       loggerLevel: LoggerLevel.warn,
       ...(this.options.sdkLogger ? { logger: this.options.sdkLogger } : {})
     }).register({
+      'im.message.reaction.created_v1': (event: any) => {
+        const reaction = parseLarkReactionEvent(event);
+        if (!reaction) return;
+        this.log.info({ messageId: reaction.messageId, emojiType: reaction.emojiType, operatorType: reaction.operatorType, operatorId: reaction.operatorId }, '收到飞书表情事件');
+        if (this.options.onReaction) {
+          void Promise.resolve(this.options.onReaction(reaction, this.config ?? config)).catch(error => {
+            this.log.error({ error, messageId: reaction.messageId, emojiType: reaction.emojiType }, '处理飞书表情事件失败');
+          });
+        }
+      },
       'im.message.receive_v1': event => {
         const message = event.message;
         // mentions 原样打出：@ 相关问题（唤不醒、通知丢失）的第一现场就是这里的原始结构。
@@ -2182,6 +2214,14 @@ export class LarkLongConnectionListener implements LarkListener {
       },
       'card.action.trigger': async (event: any) => {
         const operatorOpenId = event.operator?.open_id;
+        if (this.options.onCardAction) {
+          try {
+            const routed = await this.options.onCardAction(event.action?.value, operatorOpenId, this.config ?? config);
+            if (routed) return { toast: routed };
+          } catch (error) {
+            this.log.error({ error, operatorOpenId }, '处理飞书卡片旁路操作失败');
+          }
+        }
         const result = await coordinator?.handleAction(event.action?.value, operatorOpenId);
         if (!result) return;
         return { toast: result };

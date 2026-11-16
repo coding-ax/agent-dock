@@ -121,6 +121,21 @@ describe('AgentDock CLI', () => {
     expect(larkAvatarSend).toHaveBeenCalledWith(expect.objectContaining({ chat: '900001', textFile: '-', at: [] }));
   });
 
+  it('parses the reported 19-digit group and ou_ mention command', async () => {
+    const larkAvatarSend = vi.fn();
+    await createCliProgram('0.0.6', { larkAvatarSend }).parseAsync([
+      'node', 'agent-dock', 'lark', 'avatar', 'send',
+      '--chat', '[TikTok Search] Code Review Group (Search Cloud)',
+      '--at', 'ou_3658a80b8ff9251eee1c2b0f36d1a',
+      '--text', '@ou_3658a80b8ff9251eee1c2b0f36d1a 请看', '--json'
+    ]);
+    expect(larkAvatarSend).toHaveBeenCalledWith(expect.objectContaining({
+      chat: '[TikTok Search] Code Review Group (Search Cloud)',
+      at: ['ou_3658a80b8ff9251eee1c2b0f36d1a'],
+      json: true
+    }));
+  });
+
   it('parses Agent group discovery, incremental reads, sends, and waits', async () => {
     const groupPeers = vi.fn(); const groupMembers = vi.fn(); const groupMessages = vi.fn(); const groupSend = vi.fn(); const groupWait = vi.fn();
     await createCliProgram('0.0.6', { groupPeers }).parseAsync(['node', 'agent-dock', 'group', 'peers']);

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '@agent-dock/agent-dock-storage';
 import { LarkAvatarStore, MAX_DRAFT_ITEMS, MAX_INBOX_ITEMS } from './store.js';
-import type { LarkAvatarDraft, LarkAvatarInboxItem } from './types.js';
+import type { LarkAvatarDraft, LarkAvatarInboxItem, LarkAvatarReactionTrigger } from './types.js';
 
 const stores: LarkAvatarStore[] = [];
 const tempDirs: string[] = [];
@@ -146,5 +146,101 @@ describe('Lark avatar store', () => {
     expect(replay.created).toBe(false);
     expect(store.inboxItem('item_legacy_replay')).toBeUndefined();
     expect(store.hasSeenMessage('om_legacy')).toBe(true);
+  });
+
+  it('allows a stale pending reaction trigger to be reclaimed after a restart', () => {
+    const store = new LarkAvatarStore(':memory:');
+    stores.push(store);
+    const trigger = (
+      key: string,
+      updatedAt: string,
+      actionTime = '1000',
+      state: LarkAvatarReactionTrigger['state'] = 'pending'
+    ): LarkAvatarReactionTrigger => ({
+      key,
+      messageId: 'om_test',
+      emoji: 'THUMBSUP',
+      route: 'main',
+      operatorId: 'ou_me',
+      operatorType: 'user',
+      state,
+      actionTime,
+      payload: {},
+      createdAt: updatedAt,
+      updatedAt
+    });
+
+    const freshKey = 'om_fresh\u0000ou_me\u0000THUMBSUP';
+    const fresh = new Date().toISOString();
+    expect(store.recordReactionTrigger(trigger(freshKey, fresh))).toBe(true);
+    // 刚写入的 pending 仍然只允许一次，防止同一事件在进程内重复派发。
+    expect(store.recordReactionTrigger(trigger(freshKey, fresh))).toBe(false);
+
+    const staleKey = 'om_stale\u0000ou_me\u0000THUMBSUP';
+    expect(store.recordReactionTrigger(trigger(staleKey, '2020-01-01T00:00:00.000Z'))).toBe(true);
+    // 超过 2 分钟的 pending 说明进程在落账后、派发前中断；飞书重投同一 action_time 应能重领。
+    expect(store.recordReactionTrigger(trigger(staleKey, '2020-01-01T00:00:00.000Z', '1000'))).toBe(true);
+  });
+
+  it('does not auto-reclaim a stale dispatching trigger because the turn may already have started', () => {
+    const store = new LarkAvatarStore(':memory:');
+    stores.push(store);
+    const now = new Date().toISOString();
+    const record: LarkAvatarReactionTrigger = {
+      key: 'stale-dispatching-key',
+      messageId: 'om_test',
+      emoji: 'THUMBSUP',
+      route: 'main',
+      operatorId: 'ou_me',
+      operatorType: 'user',
+      state: 'pending',
+      actionTime: '1000',
+      payload: {},
+      createdAt: now,
+      updatedAt: now
+    };
+    expect(store.claimReactionTrigger(record)).toBe('claimed');
+    expect(store.claimReactionTrigger(record)).toBe('duplicate');
+    // 派发开始后被进程崩溃打断，记录停在 dispatching 且已过 2 分钟。
+    store.updateReactionTrigger(record.key, { state: 'dispatching', updatedAt: '2020-01-01T00:00:00.000Z' });
+    // 已进入 dispatching 且超过 2 分钟：不能自动重派，只标成 dispatch_uncertain。
+    expect(store.claimReactionTrigger({ ...record, updatedAt: now })).toBe('dispatch_uncertain');
+    expect(store.reactionTrigger(record.key)).toMatchObject({ state: 'failed' });
+    expect(store.reactionTrigger(record.key)!.reason).toContain('dispatch_uncertain');
+    // 同一事件重投仍是 duplicate，不能因为变成 failed 就自动重跑。
+    expect(store.claimReactionTrigger({ ...record, updatedAt: now })).toBe('duplicate');
+    // 用户重新加表情（新 action_time）才允许重试。
+    expect(store.claimReactionTrigger({ ...record, updatedAt: now, actionTime: '2000' })).toBe('claimed');
+  });
+  it('survives a real process restart: a reopened database still refuses to re-dispatch dispatching rows', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentdock-reaction-restart-'));
+    tempDirs.push(dir);
+    const file = join(dir, 'avatar.db');
+    const record: LarkAvatarReactionTrigger = {
+      key: 'restart-key',
+      messageId: 'om_restart',
+      emoji: 'THUMBSUP',
+      route: 'main',
+      operatorId: 'ou_me',
+      operatorType: 'user',
+      state: 'pending',
+      actionTime: '1000',
+      payload: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const first = new LarkAvatarStore(file);
+    expect(first.claimReactionTrigger(record)).toBe('claimed');
+    first.updateReactionTrigger(record.key, { state: 'dispatching', updatedAt: '2020-01-01T00:00:00.000Z' });
+    first.close();
+
+    // 新进程/新连接读同一个库：stale dispatching 仍然不能自动重派。
+    const reopened = new LarkAvatarStore(file);
+    try {
+      expect(reopened.claimReactionTrigger({ ...record, updatedAt: new Date().toISOString() })).toBe('dispatch_uncertain');
+      expect(reopened.reactionTrigger(record.key)).toMatchObject({ state: 'failed' });
+    } finally {
+      reopened.close();
+    }
   });
 });

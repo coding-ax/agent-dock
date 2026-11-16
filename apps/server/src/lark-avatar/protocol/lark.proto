@@ -105,6 +105,7 @@ message entities {
     int32 userCount = 16;
     ChatMode chatMode = 39;
     Image miniAvatar = 52;
+    string openChatId = 134;
   }
   message Chatter {
     string id = 1;
@@ -189,7 +190,6 @@ message messages {
   }
   message TextContent { string text = 1; entities.RichText richText = 3; }
   message PostContent { string title = 1; string text = 2; entities.RichText richText = 6; }
-  message CreateReactionRequest { string messageId = 1; string type = 2; }
   message PutMessageRequest {
     entities.Message.Type type = 1;
     Content content = 2;
@@ -207,4 +207,16 @@ message messages {
     message Content { string text = 1; entities.RichText richText = 14; }
   }
   message PutMessageResponse { entities.Message message = 1; }
+}
+
+// 对应 x-command: 25。字段来自飞书 Web 端 lark.reactions.PutReactionRequest；
+// 注意不是 messages.CreateReactionRequest（后者不存在，曾导致加表情静默失败）。
+message reactions {
+  message PutReactionRequest {
+    string messageId = 1;
+    string reactionType = 2;
+    int32 reactionStrategyVersion = 3;
+    bool isFromMigration = 4;
+  }
+  message PutReactionResponse { int32 count = 1; }
 }

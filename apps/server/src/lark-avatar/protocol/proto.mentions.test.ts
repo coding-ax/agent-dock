@@ -26,6 +26,9 @@ interface DecodedElement {
 }
 
 interface DecodedRequest {
+  chatId?: string;
+  rootId?: string;
+  parentId?: string;
   atUserIdList?: string[];
   content?: {
     richText?: {
@@ -201,6 +204,46 @@ describe('Lark rich text mentions', () => {
       userId,
       content: ZHANG
     });
+  });
+
+  it('keeps 19-digit chat, root and user ids exact in the wire bytes', () => {
+    const chatId = '7246718914305097756';
+    const rootId = '7246718914305097758';
+    const userId = '7246718914305097757';
+    const bytes = encodePutMessageRequest({
+      chatId,
+      rootId,
+      text: `@${ZHANG}`,
+      mentions: [{ userId, content: ZHANG }]
+    });
+    const request = decodeRequest(bytes);
+    const rich = richTextOf(request);
+
+    expect(request.chatId).toBe(chatId);
+    expect(request.rootId).toBe(rootId);
+    expect(request.parentId).toBe(rootId);
+    expect(request.atUserIdList).toEqual([userId]);
+    expect(decodeProperty('entities.RichTextElement.AtProperty', rich.elements[0]!.property!)).toEqual({
+      userId,
+      content: ZHANG
+    });
+
+    const wire = bytes.toString('hex');
+    expect(wire).toContain(Buffer.from(chatId).toString('hex'));
+    expect(wire).toContain(Buffer.from(rootId).toString('hex'));
+    const varint = (value: string) => {
+      let remaining = BigInt(value);
+      const output: number[] = [];
+      do {
+        let byte = Number(remaining & 0x7fn);
+        remaining >>= 7n;
+        if (remaining) byte |= 0x80;
+        output.push(byte);
+      } while (remaining);
+      return Buffer.from(output);
+    };
+    const packed = varint(userId);
+    expect(wire).toContain(Buffer.concat([Buffer.from([0x72, packed.length]), packed]).toString('hex'));
   });
 
   it('rejects open_id instead of silently sending it as text', () => {

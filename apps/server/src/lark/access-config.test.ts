@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
 import type { RepositoryBundle } from '@agent-dock/agent-dock-shared';
-import { resolveLarkAccessConfig } from './access-config.js';
+import { isLarkOperatorAllowed, resolveLarkAccessConfig } from './access-config.js';
 import { deleteLarkConfig, readLarkConfig, saveLarkConfig, type SaveLarkConfigInput } from './config.js';
-import { createLarkCardService } from './service.js';
+import { createLarkCardService, LarkServiceError } from './service.js';
 
 const bundles: RepositoryBundle[] = [];
 const directories: string[] = [];
@@ -119,5 +119,76 @@ describe('persistent Lark identity bindings', () => {
     const broken = { ...repo, compareAndSet: async () => { throw new Error('disk full'); } };
     await expect(resolveLarkAccessConfig(config, { resolveChatUsersByNames: async () => [member('ou_original')] }, 'user', broken)).rejects.toThrow('disk full');
     expect((await readLarkConfig(repo, config.appId))?.allowedUserNames).toEqual(['成员']);
+  });
+});
+
+describe('operator access policy', () => {
+  const open = (file: string, methods: Record<string, unknown> = {}) => ({ getUserEmails: async () => [] as string[], resolveChatUsersByNames: async () => [] as Array<{ openId: string; name: string }>, ...methods });
+
+  it('allows everyone when no list is configured', async () => {
+    const repo = repository(); const config = await configured(repo);
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_any', service: open(':memory:'), repository: repo })).toBe(true);
+  });
+
+  it('matches allowedUsers by open id and rejects strangers', async () => {
+    const repo = repository(); const config = await configured(repo, { allowedUsers: [{ openId: 'ou_member', name: '成员' }] });
+    const service = open(':memory:');
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_member', service, repository: repo })).toBe(true);
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_stranger', service, repository: repo })).toBe(false);
+    expect(await isLarkOperatorAllowed({ config, service, repository: repo })).toBe(false);
+  });
+
+  it('resolves an email-only allow list instead of denying everyone', async () => {
+    const repo = repository(); const config = await configured(repo, { allowedEmails: ['member@example.com'] });
+    // 仅邮箱白名单时旧实现只看 allowedUsers，把所有人都拒绝；这是权限逻辑分叉。
+    const service = open(':memory:', { getUserEmails: async (openId: string) => openId === 'ou_member' ? ['member@example.com'] : ['other@example.com'] });
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_member', service, repository: repo })).toBe(true);
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_other', service, repository: repo })).toBe(false);
+  });
+
+  it('resolves a name-only allow list through the persistent binding', async () => {
+    const repo = repository(); const config = await configured(repo, { allowedUserNames: ['成员'] });
+    const service = open(':memory:', { resolveChatUsersByNames: async () => [member('ou_member')] });
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_member', service, repository: repo })).toBe(true);
+    expect((await readLarkConfig(repo, config.appId))?.allowedUsers).toEqual([member('ou_member')]);
+  });
+
+  it('honours allowedBots and peerBotsAllowed for directory-less bot operators', async () => {
+    // allowedBots 单独存在时不限制人类名单（与消息入口一致），必须叠加一个受限名单才会走到 230001 分支。
+    const repo = repository(); const config = await configured(repo, { allowedUsers: [member('ou_member')], allowedBots: [member('ou_bot', '机器人')], peerBotsAllowed: false });
+    const service = open(':memory:', { getUserEmails: async () => { throw new LarkServiceError('LARK_OPENAPI_ERROR', 'not in contacts', 502, { upstreamCode: 230001 }); } });
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_bot', service, repository: repo })).toBe(true);
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_peer', service, repository: repo })).toBe(false);
+  });
+
+  it('fails closed for a human missing from the directory even when peer bots are allowed', async () => {
+    const repo = repository();
+    const config = await configured(repo, { allowedUsers: [member('ou_member')], peerBotsAllowed: true });
+    const service = open(':memory:', { getUserEmails: async () => { throw new LarkServiceError('LARK_OPENAPI_ERROR', 'not in contacts', 502, { upstreamCode: 230001 }); } });
+    // 230001 在旧实现里直接返回 peerBotsAllowed=true，会把“不在通讯录可见范围的人类”当成 peer bot 放行。
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_human', operatorType: 'user', service, repository: repo })).toBe(false);
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_unknown', operatorType: 'unknown', service, repository: repo })).toBe(false);
+    // 明确是机器人时才走 peerBotsAllowed。
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_peer_bot', operatorType: 'bot', service, repository: repo })).toBe(true);
+  });
+
+  it('fails closed when operator_type is missing: call sites must declare how the operator was identified', async () => {
+    const repo = repository();
+    const config = await configured(repo, { allowedUsers: [member('ou_member')], peerBotsAllowed: true });
+    const service = open(':memory:', { getUserEmails: async () => { throw new LarkServiceError('LARK_OPENAPI_ERROR', 'not in contacts', 502, { upstreamCode: 230001 }); } });
+    // 共享判定层不再有“没传 operator_type 就按 peer bot 放行”的默认分支。
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_card_actor', service, repository: repo })).toBe(false);
+  });
+
+  it('refuses user_id/union_id identities under a restricted allow list instead of guessing', async () => {
+    const repo = repository();
+    const config = await configured(repo, { allowedUsers: [member('ou_member')] });
+    const emails = vi.fn(async () => ['member@example.com']);
+    const service = open(':memory:', { getUserEmails: emails });
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: '12345', operatorType: 'user', operatorIdentity: 'user_id', service, repository: repo })).toBe(false);
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: '12345', operatorType: 'user', operatorIdentity: 'union_id', service, repository: repo })).toBe(false);
+    expect(emails).not.toHaveBeenCalled();
+    // 事件只有 open_id 时才正常匹配。
+    expect(await isLarkOperatorAllowed({ config, operatorOpenId: 'ou_member', operatorType: 'user', operatorIdentity: 'open_id', service, repository: repo })).toBe(true);
   });
 });

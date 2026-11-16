@@ -7,7 +7,7 @@ export const larkAvatarResolutionErrorCodes = [
   'INVALID_INPUT',
   'API_UNAVAILABLE',
   'ID_NOT_NUMERIC',
-  'ID_NOT_SAFE_INTEGER',
+  'ID_OUT_OF_RANGE',
   'CHAT_NOT_FOUND',
   'CHAT_AMBIGUOUS',
   'ROOT_NOT_FOUND',
@@ -25,8 +25,10 @@ export type LarkChatMatch = 'id' | 'exact' | 'fuzzy' | 'none';
 export type LarkUserMatch = 'id' | 'email' | 'exact' | 'fuzzy' | 'none';
 
 export interface LarkChatCandidate {
-  /** Web 网关里的 chat id，通常以 oc_ 开头；只用于再次解析，不能当数字 ID 用。 */
+  /** Web 网关里的内部十进制 chat id；只用于再次解析。 */
   chatId: string;
+  /** Web 群列表返回的 OpenAPI chat_id；旧网关可能没有。 */
+  openChatId?: string;
   name: string;
   type: LarkChatKind;
   memberCount?: number;
@@ -71,22 +73,25 @@ export interface LarkUserSearchResult {
 
 /** 内部解析结果。webChatId 只用于回头访问 Web 网关，不进入对外的数字 ID 结构。 */
 export interface ResolvedLarkChat {
-  chatId: number;
+  /** 规范十进制 int64 字符串；绝不转 Number，避免 19 位 id 丢精度。 */
+  chatId: string;
   webChatId: string;
+  openChatId?: string;
   name: string;
   type: LarkChatKind;
   memberCount?: number;
 }
 
 export interface ResolvedLarkMention {
-  userId: number;
+  /** 规范十进制 int64 字符串。 */
+  userId: string;
   name: string;
 }
 
-/** 对外统一结构：所有 ID 字段都是 Web 内部数字 ID，绝不把 oc_/om_/ou_ 直接塞进 number。 */
+/** 对外统一结构：数字 ID 一律用十进制字符串，避免超过 2^53 时丢精度。 */
 export interface ResolvedLarkTarget {
-  chatId: number;
-  rootId?: number;
+  chatId: string;
+  rootId?: string;
   mentions: ResolvedLarkMention[];
 }
 
@@ -140,7 +145,7 @@ export const larkAvatarResolutionHttpStatus = (code: LarkAvatarResolutionErrorCo
     case 'NOT_LOGGED_IN': return 401;
     case 'INVALID_INPUT':
     case 'ID_NOT_NUMERIC':
-    case 'ID_NOT_SAFE_INTEGER': return 400;
+    case 'ID_OUT_OF_RANGE': return 400;
     case 'CHAT_NOT_FOUND':
     case 'ROOT_NOT_FOUND':
     case 'USER_NOT_FOUND': return 404;
@@ -162,6 +167,11 @@ export interface LarkAvatarIdResolverOptions {
   ttlMs?: number;
   maxScanMessages?: number;
   log?: { warn(message?: unknown): void };
+  /**
+   * oc_* -> 群信息的 OpenAPI 兜底。返回 chatId（Web 内部数字 id）或 name（再按群名反查）。
+   * 不接入时保持 undefined；解析器会给出明确的下一步提示。
+   */
+  openChatLookup?(openChatId: string): Promise<{ chatId?: string; name?: string } | undefined>;
 }
 
 interface CacheEntry {
@@ -171,6 +181,7 @@ interface CacheEntry {
 
 interface ChatDirectoryEntry {
   webChatId: string;
+  openChatId?: string;
   name: string;
   type: LarkChatKind;
   memberCount?: number;
@@ -210,7 +221,7 @@ const sameChatId = (left: string, right: string): boolean => {
   if (left === right) return true;
   const leftNumeric = numericIdPattern.test(left);
   const rightNumeric = numericIdPattern.test(right);
-  if (leftNumeric && rightNumeric) return Number(left) === Number(right);
+  if (leftNumeric && rightNumeric) return BigInt(left) === BigInt(right);
   // oc_* 与内部数字 id 之间没有本地映射；只有两者都是同一种格式时才能安全判定不相等。
   return leftNumeric !== rightNumeric;
 };
@@ -259,7 +270,7 @@ export class LarkAvatarIdResolver {
     if (!raw) throw new LarkAvatarResolutionError('INVALID_INPUT', '群名或 chat_id 不能为空');
 
     const directory = await this.chatDirectory();
-    const byId = directory.find(entry => entry.webChatId === raw);
+    const byId = directory.find(entry => entry.webChatId === raw || entry.openChatId === raw);
     if (byId) {
       return { match: 'id', ambiguous: false, candidates: [this.chatCandidate(byId, 'id')] };
     }
@@ -313,7 +324,8 @@ export class LarkAvatarIdResolver {
     return this.rememberChat({
       ...resolved,
       name: resolved.name || candidate.name,
-      type: resolved.type === 'unknown' ? candidate.type : resolved.type
+      type: resolved.type === 'unknown' ? candidate.type : resolved.type,
+      ...(resolved.openChatId || candidate.openChatId ? { openChatId: resolved.openChatId ?? candidate.openChatId } : {})
     });
   }
 
@@ -335,12 +347,12 @@ export class LarkAvatarIdResolver {
     };
   }
 
-  async resolveRoot(chat: ResolvedLarkChat, root: string): Promise<number> {
+  async resolveRoot(chat: ResolvedLarkChat, root: string): Promise<string> {
     const client = this.requireClient();
     const raw = root.trim();
     if (!raw) throw new LarkAvatarResolutionError('INVALID_INPUT', 'rootId 或消息关键字不能为空');
 
-    if (numericIdPattern.test(raw)) return this.toNumericId(raw, 'rootId');
+    if (numericIdPattern.test(raw)) return this.toDecimalId(raw, 'rootId');
 
     if (messageIdPattern.test(raw)) {
       if (!client.messagesByIds) throw apiUnavailable('按消息 ID 取消息');
@@ -357,7 +369,7 @@ export class LarkAvatarIdResolver {
           hint: '请指定该消息所在的群，或改用数字 chatId 对应的会话。'
         });
       }
-      return this.toNumericId(message.rootId || message.messageId, '消息的 rootId');
+      return this.messageRootId(message);
     }
 
     const search = await this.searchMessages(chat, raw);
@@ -379,7 +391,21 @@ export class LarkAvatarIdResolver {
     if (!message) {
       throw new LarkAvatarResolutionError('ROOT_NOT_FOUND', `消息 ${match.messageId} 在最近消息缓存里已失效`);
     }
-    return this.toNumericId(message.rootId || message.messageId, '消息的 rootId');
+    return this.messageRootId(message);
+  }
+
+  /**
+   * Web 消息的 rootId 有两种历史形态：内部十进制 id 和 om_* 消息 id。
+   * 十进制统一规范化成字符串；om_* 原样保留，交给 PutMessageRequest 的 string 字段。
+   */
+  private messageRootId(message: LarkIncomingMessage): string {
+    const raw = message.rootId || message.messageId;
+    if (!raw) {
+      throw new LarkAvatarResolutionError('ROOT_NOT_FOUND', '消息没有可用的 rootId 或 messageId', {
+        hint: '请改用数字 rootId 或 om_* 消息 ID。'
+      });
+    }
+    return numericIdPattern.test(raw) ? this.toDecimalId(raw, '消息的 rootId') : raw;
   }
 
   async searchUsers(chat: ResolvedLarkChat, query: string): Promise<LarkUserSearchResult> {
@@ -427,7 +453,7 @@ export class LarkAvatarIdResolver {
   }
 
   async resolveMentions(chat: ResolvedLarkChat, mentions: string[]): Promise<ResolvedLarkMention[]> {
-    const resolved = new Map<number, ResolvedLarkMention>();
+    const resolved = new Map<string, ResolvedLarkMention>();
     for (const input of mentions) {
       const raw = input.trim().replace(/^@/, '').trim();
       if (!raw) continue;
@@ -455,12 +481,12 @@ export class LarkAvatarIdResolver {
 
   private async resolveMention(chat: ResolvedLarkChat, raw: string): Promise<ResolvedLarkMention> {
     if (numericIdPattern.test(raw)) {
-      return { userId: this.toNumericId(raw, 'userId'), name: await this.chatterName(raw) };
+      return { userId: this.toDecimalId(raw, 'userId'), name: await this.chatterName(raw) };
     }
     if (openUserIdPattern.test(raw)) {
       const chatter = await this.lookupChatter(raw);
       return {
-        userId: this.toNumericId(chatter.id, `用户 ${raw} 的 userId`),
+        userId: this.toDecimalId(chatter.id, `用户 ${raw} 的 userId`),
         name: chatter.name || raw
       };
     }
@@ -480,11 +506,11 @@ export class LarkAvatarIdResolver {
 
     const candidate = search.candidates[0]!;
     if (numericIdPattern.test(candidate.userId)) {
-      return { userId: this.toNumericId(candidate.userId, 'userId'), name: candidate.name || candidate.userId };
+      return { userId: this.toDecimalId(candidate.userId, 'userId'), name: candidate.name || candidate.userId };
     }
     const chatter = await this.lookupChatter(candidate.userId);
     return {
-      userId: this.toNumericId(chatter.id, `用户 ${candidate.userId} 的 userId`),
+      userId: this.toDecimalId(chatter.id, `用户 ${candidate.userId} 的 userId`),
       name: chatter.name || candidate.name || candidate.userId
     };
   }
@@ -493,28 +519,85 @@ export class LarkAvatarIdResolver {
     return this.cached(`chat:web:${webChatId}`, async () => {
       if (numericIdPattern.test(webChatId)) {
         return this.rememberChat({
-          chatId: this.toNumericId(webChatId, '会话 chat_id'),
+          chatId: this.toDecimalId(webChatId, '会话 chat_id'),
           webChatId,
           name: '',
           type: 'unknown'
         });
       }
 
-      const chat = await this.lookupChat(webChatId);
-      if (!chat) {
-        throw new LarkAvatarResolutionError('CHAT_NOT_FOUND', `找不到 chat_id 为 ${webChatId} 的会话`, {
-          hint: '确认当前登录账号在该群里；OpenAPI chat_id 需要 Web 网关能识别才可解析。'
+      const known = [...this.knownChats.values()].find(chat => chat.openChatId === webChatId);
+      if (known) return known;
+
+      const directory = await this.chatDirectory();
+      const mapped = directory.find(entry => entry.openChatId === webChatId);
+      if (mapped) return this.rememberChat(this.fromDirectoryEntry(mapped, webChatId));
+
+      // 旧网关不认识 oc_*：lookup 可能返回空、抛 API_UNAVAILABLE，或返回的 id 仍是 oc_*。
+      try {
+        const chat = await this.lookupChat(webChatId);
+        if (chat) return this.rememberChat(this.fromChatInfo(chat, webChatId));
+      } catch (error) {
+        if (!(error instanceof LarkAvatarResolutionError)) throw error;
+        if (error.code !== 'API_UNAVAILABLE' && error.code !== 'ID_NOT_NUMERIC') throw error;
+        this.log.warn(`飞书替身按 oc_* 直查失败，尝试 OpenAPI 兜底：${error.message}`);
+      }
+
+      const hint = await this.openChatInfo(webChatId);
+      if (hint?.chatId && numericIdPattern.test(hint.chatId)) {
+        return this.rememberChat({
+          chatId: this.toDecimalId(hint.chatId, `OpenAPI 会话 ${webChatId} 的 chat_id`),
+          webChatId: hint.chatId,
+          openChatId: webChatId,
+          name: hint.name ?? '',
+          type: 'unknown'
         });
       }
-      return this.rememberChat(this.fromChatInfo(chat, webChatId));
+      if (hint?.name) {
+        const search = await this.searchChats(hint.name, { match: 'exact' });
+        if (search.candidates.length > 1) {
+          throw new LarkAvatarResolutionError('CHAT_AMBIGUOUS', `OpenAPI 群「${hint.name}」在 Web 列表里匹配到 ${search.candidates.length} 个会话`, {
+            hint: '请从候选中选择 chatId，或改用数字 chat_id。',
+            candidates: search.candidates
+          });
+        }
+        if (search.candidates.length === 1) {
+          const entry = directory.find(item => item.webChatId === search.candidates[0]!.chatId);
+          if (entry) {
+            return this.rememberChat({
+              ...this.fromDirectoryEntry(entry, webChatId),
+              name: entry.name || hint.name
+            });
+          }
+        }
+      }
+
+      const nextStep = this.options.openChatLookup
+        ? (hint?.name
+            ? `OpenAPI 找到了群「${hint.name}」，但 Web 会话列表里没有同名群；请先在飞书打开该群刷新列表，或改用数字 chat_id。`
+            : 'OpenAPI 也查不到该群；请确认机器人已加入该群并具备 im:chat:readonly，或改用群名/数字 chat_id。')
+        : 'Web 群列表没有返回 openChatId，当前实例也未接入 OpenAPI 群信息反查；请改用群名/数字 chat_id，或先配置飞书机器人（im:chat:readonly）后重试。';
+      throw new LarkAvatarResolutionError('CHAT_NOT_FOUND', `找不到 chat_id 为 ${webChatId} 的会话`, { hint: nextStep });
     });
+  }
+
+  private fromDirectoryEntry(entry: ChatDirectoryEntry, openChatId?: string): ResolvedLarkChat {
+    return {
+      chatId: this.toDecimalId(entry.webChatId, `会话 ${entry.name || entry.webChatId} 的 chat_id`),
+      webChatId: entry.webChatId,
+      ...(openChatId ?? entry.openChatId ? { openChatId: openChatId ?? entry.openChatId } : {}),
+      name: entry.name,
+      type: entry.type,
+      ...(entry.memberCount !== undefined ? { memberCount: entry.memberCount } : {})
+    };
   }
 
   private fromChatInfo(chat: LarkChatInfo, fallbackWebId: string): ResolvedLarkChat {
     const webChatId = chat.id || fallbackWebId;
     return {
-      chatId: this.toNumericId(webChatId, `会话 ${chat.name || webChatId} 的 chat_id`),
+      chatId: this.toDecimalId(webChatId, `会话 ${chat.name || webChatId} 的 chat_id`),
       webChatId,
+      ...(chat.openChatId ? { openChatId: chat.openChatId } : {}),
       name: chat.name,
       type: chatKind(chat.type),
       ...(chat.memberCount > 0 ? { memberCount: chat.memberCount } : {})
@@ -535,6 +618,16 @@ export class LarkAvatarIdResolver {
     // 网关可能用内部数字 id 作为返回的 key，所以单个请求时接受唯一的返回值。
     const values = [...result.chats.values()];
     return values.length === 1 ? values[0] : undefined;
+  }
+
+  private async openChatInfo(openChatId: string): Promise<{ chatId?: string; name?: string } | undefined> {
+    if (!this.options.openChatLookup) return undefined;
+    try {
+      return await this.options.openChatLookup(openChatId);
+    } catch (error) {
+      this.log.warn(`飞书替身 OpenAPI 反查 ${openChatId} 失败：${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
   }
 
   private async lookupChatter(webId: string): Promise<LarkChatterInfo> {
@@ -594,6 +687,7 @@ export class LarkAvatarIdResolver {
         const current = entries.get(chat.webChatId);
         entries.set(chat.webChatId, {
           webChatId: chat.webChatId,
+          ...(chat.openChatId ?? current?.openChatId ? { openChatId: chat.openChatId ?? current?.openChatId } : {}),
           name: chat.name || current?.name || '',
           type: chat.type === 'unknown' ? current?.type ?? 'unknown' : chat.type,
           ...(chat.memberCount !== undefined
@@ -615,6 +709,7 @@ export class LarkAvatarIdResolver {
       : current?.lastMessageAt;
     entries.set(chat.id, {
       webChatId: chat.id,
+      ...(chat.openChatId ?? current?.openChatId ? { openChatId: chat.openChatId ?? current?.openChatId } : {}),
       name: chat.name || current?.name || chat.id,
       type: chatKind(chat.type) === 'unknown' ? current?.type ?? 'unknown' : chatKind(chat.type),
       ...(chat.memberCount > 0
@@ -627,6 +722,7 @@ export class LarkAvatarIdResolver {
   private chatCandidate(entry: ChatDirectoryEntry, matchedBy: Exclude<LarkChatMatch, 'none'>): LarkChatCandidate {
     return {
       chatId: entry.webChatId,
+      ...(entry.openChatId ? { openChatId: entry.openChatId } : {}),
       name: entry.name,
       type: entry.type,
       ...(entry.memberCount !== undefined ? { memberCount: entry.memberCount } : {}),
@@ -768,20 +864,21 @@ export class LarkAvatarIdResolver {
     return client;
   }
 
-  private toNumericId(value: string, label: string): number {
+  /** 只校验十进制与 int64 范围，返回规范字符串；不经过 Number，19 位 id 不会丢精度。 */
+  private toDecimalId(value: string, label: string): string {
     const text = value.trim();
     if (!numericIdPattern.test(text)) {
       throw new LarkAvatarResolutionError('ID_NOT_NUMERIC', `${label} 不是 Web 数字 ID：${text || '(空)'}`, {
-        hint: 'oc_/om_/ou_ 前缀是 OpenAPI ID，不能直接当数字用；需要 Web 网关返回内部数字 ID。'
+        hint: 'oc_/om_/ou_ 前缀是 OpenAPI ID，不能直接当数字用；oc_* 群可用群名或 OpenAPI 反查。'
       });
     }
-    const parsed = Number(text);
-    if (!Number.isSafeInteger(parsed)) {
-      throw new LarkAvatarResolutionError('ID_NOT_SAFE_INTEGER', `${label} 超出 JavaScript 安全整数范围：${text}`, {
-        hint: '该 ID 超过 2^53-1，用 number 会丢精度；需要网关提供字符串 ID 或分段存储方案。'
+    const id = BigInt(text);
+    if (id <= 0n || id > 9223372036854775807n) {
+      throw new LarkAvatarResolutionError('ID_OUT_OF_RANGE', `${label} 超出 int64 范围：${text}`, {
+        hint: '飞书 Web 数字 ID 必须是 1..2^63-1 的十进制整数。'
       });
     }
-    return parsed;
+    return id.toString();
   }
 
   private cached<T>(key: string, load: () => Promise<T>): Promise<T> {

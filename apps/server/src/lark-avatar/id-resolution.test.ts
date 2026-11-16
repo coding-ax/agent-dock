@@ -21,8 +21,10 @@ const chatInfo = (input: {
   type?: number;
   lastMessagePosition?: number;
   memberCount?: number;
+  openChatId?: string;
 }): LarkChatInfo => ({
   id: input.id,
+  ...(input.openChatId ? { openChatId: input.openChatId } : {}),
   name: input.name,
   type: input.type ?? 2,
   chatMode: 1,
@@ -167,8 +169,8 @@ describe('lark avatar id resolution', () => {
 
     const chat = await resolver.resolveChat('900001');
 
-    expect(chat).toMatchObject({ chatId: 900001, webChatId: '900001', type: 'unknown' });
-    expect(typeof chat.chatId).toBe('number');
+    expect(chat).toMatchObject({ chatId: '900001', webChatId: '900001', type: 'unknown' });
+    expect(typeof chat.chatId).toBe('string');
     expect(fake.calls.lookup).toBe(0);
   });
 
@@ -181,8 +183,77 @@ describe('lark avatar id resolution', () => {
 
     const chat = await resolver.resolveChat('oc_group');
 
-    expect(chat).toMatchObject({ chatId: 900001, webChatId: '900001', name: '测试群', type: 'group', memberCount: 8 });
+    expect(chat).toMatchObject({ chatId: '900001', webChatId: '900001', name: '测试群', type: 'group', memberCount: 8 });
     expect(fake.calls.lookup).toBe(1);
+  });
+
+  it('keeps 19-digit chat, root and user ids exact as strings', async () => {
+    const chatId = '7246718914305097756';
+    const userId = '7246718914305097757';
+    const rootId = '7246718914305097758';
+    const fake = fakeClient({
+      chats: [chatInfo({ id: chatId, name: '大 ID 群', type: 2, lastMessagePosition: 10 })],
+      chatters: [chatter({ id: userId, name: '大 ID 用户' })],
+      chatterAliases: { ou_big_user: userId },
+      messages: [incoming({ messageId: rootId, chatId, position: 9, fromId: userId, content: '根消息' })]
+    });
+    const resolver = makeResolver(fake.client);
+
+    const chat = await resolver.resolveChat(chatId);
+    expect(chat).toMatchObject({ chatId, webChatId: chatId, type: 'unknown' });
+    expect(chat.chatId).toBe(chatId);
+    expect(BigInt(chat.chatId)).toBe(BigInt(chatId));
+
+    await expect(resolver.resolveChat('大 ID 群')).resolves.toMatchObject({ chatId, name: '大 ID 群' });
+    await expect(resolver.resolveRoot(chat, rootId)).resolves.toBe(rootId);
+    await expect(resolver.resolveMentions(chat, [userId])).resolves.toEqual([{ userId, name: '大 ID 用户' }]);
+    await expect(resolver.resolveMentions(chat, ['ou_big_user'])).resolves.toEqual([{ userId, name: '大 ID 用户' }]);
+  });
+
+  it('rejects ids outside int64 instead of rounding them', async () => {
+    const resolver = makeResolver(fakeClient().client);
+    await expect(resolver.resolveChat('9223372036854775808')).rejects.toMatchObject({ code: 'ID_OUT_OF_RANGE' });
+    await expect(resolver.resolveChat('0000000000000000001')).resolves.toMatchObject({ chatId: '1' });
+  });
+
+  it('maps oc_* directly from the web chat list when openChatId is present', async () => {
+    const chatId = '7246718914305097756';
+    const fake = fakeClient({
+      chats: [chatInfo({ id: chatId, name: 'OC 直连群', openChatId: 'oc_direct' })]
+    });
+    const resolver = makeResolver(fake.client);
+
+    const chat = await resolver.resolveChat('oc_direct');
+    expect(chat).toMatchObject({ chatId, webChatId: chatId, openChatId: 'oc_direct', name: 'OC 直连群' });
+    expect(fake.calls.lookup).toBe(0);
+  });
+
+  it('falls back to OpenAPI name lookup for oc_* and caches the mapping', async () => {
+    const chatId = '7246718914305097756';
+    const fake = fakeClient({
+      chats: [chatInfo({ id: chatId, name: 'OpenAPI 群' })]
+    });
+    const openChatLookup = vi.fn(async () => ({ name: 'OpenAPI 群' }));
+    const resolver = makeResolver(fake.client, { openChatLookup });
+
+    await expect(resolver.resolveChat('oc_by_name')).resolves.toMatchObject({
+      chatId,
+      webChatId: chatId,
+      openChatId: 'oc_by_name',
+      name: 'OpenAPI 群'
+    });
+    await expect(resolver.resolveChat('oc_by_name')).resolves.toMatchObject({ chatId });
+    expect(openChatLookup).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives an actionable error when oc_* cannot be mapped', async () => {
+    const resolver = makeResolver(fakeClient().client, {
+      openChatLookup: vi.fn(async () => ({ name: '不存在的同名群' }))
+    });
+    const error = await captureError(resolver.resolveChat('oc_missing'));
+    expect(error.code).toBe('CHAT_NOT_FOUND');
+    expect(error.hint).toContain('没有同名群');
+    expect(error.hint).toContain('数字 chat_id');
   });
 
   it('resolves a unique exact chat name and a unique fuzzy name', async () => {
@@ -194,8 +265,8 @@ describe('lark avatar id resolution', () => {
     });
     const resolver = makeResolver(fake.client);
 
-    await expect(resolver.resolveChat('测试群')).resolves.toMatchObject({ chatId: 900001, name: '测试群' });
-    await expect(resolver.resolveChat('产品')).resolves.toMatchObject({ chatId: 900002, name: '产品讨论组' });
+    await expect(resolver.resolveChat('测试群')).resolves.toMatchObject({ chatId: '900001', name: '测试群' });
+    await expect(resolver.resolveChat('产品')).resolves.toMatchObject({ chatId: '900002', name: '产品讨论组' });
     expect(fake.calls.listChats).toBe(1);
   });
 
@@ -257,14 +328,16 @@ describe('lark avatar id resolution', () => {
       chats: [chatInfo({ id: 'oc_group', name: '测试群' })],
       chatAliases: { oc_group: 'oc_group' }
     }).client);
-    await expect(prefixedChat.resolveChat('oc_group')).rejects.toMatchObject({ code: 'ID_NOT_NUMERIC' });
+    const chatError = await captureError(prefixedChat.resolveChat('oc_group'));
+    expect(chatError.code).toBe('CHAT_NOT_FOUND');
+    expect(chatError.hint).toContain('openChatId');
 
     const prefixedMessage = makeResolver(fakeClient({
       messages: [incoming({ messageId: 'om_root', chatId: '900001', position: 1 })],
       messageAliases: { om_root: 'om_root' }
     }).client);
     const chat = await prefixedMessage.resolveChat('900001');
-    await expect(prefixedMessage.resolveRoot(chat, 'om_root')).rejects.toMatchObject({ code: 'ID_NOT_NUMERIC' });
+    await expect(prefixedMessage.resolveRoot(chat, 'om_root')).resolves.toBe('om_root');
 
     const prefixedUser = makeResolver(fakeClient({
       chatters: [chatter({ id: 'ou_user', name: '小肥鱼' })],
@@ -281,7 +354,7 @@ describe('lark avatar id resolution', () => {
     const resolver = makeResolver(fake.client);
     const chat = await resolver.resolveChat('900001');
 
-    await expect(resolver.resolveRoot(chat, 'om_root')).resolves.toBe(700001);
+    await expect(resolver.resolveRoot(chat, 'om_root')).resolves.toBe('700001');
     expect(fake.calls.messagesByIds).toBe(1);
   });
 
@@ -308,7 +381,7 @@ describe('lark avatar id resolution', () => {
     const resolver = makeResolver(fake.client);
     const chat = await resolver.resolveChat('oc_900001');
 
-    await expect(resolver.resolveRoot(chat, '部署')).resolves.toBe(700010);
+    await expect(resolver.resolveRoot(chat, '部署')).resolves.toBe('700010');
   });
 
   it('marks ambiguous and missing root keywords', async () => {
@@ -337,8 +410,8 @@ describe('lark avatar id resolution', () => {
     const resolver = makeResolver(fake.client);
     const chat = await resolver.resolveChat('900001');
 
-    await expect(resolver.resolveMentions(chat, ['ou_user'])).resolves.toEqual([{ userId: 5001, name: '小肥鱼' }]);
-    await expect(resolver.resolveMentions(chat, ['5001'])).resolves.toEqual([{ userId: 5001, name: '小肥鱼' }]);
+    await expect(resolver.resolveMentions(chat, ['ou_user'])).resolves.toEqual([{ userId: '5001', name: '小肥鱼' }]);
+    await expect(resolver.resolveMentions(chat, ['5001'])).resolves.toEqual([{ userId: '5001', name: '小肥鱼' }]);
   });
 
   it('resolves mentions by exact name, email and reports ambiguity', async () => {
@@ -363,10 +436,10 @@ describe('lark avatar id resolution', () => {
     expect(ambiguous.candidates).toHaveLength(2);
 
     await expect(resolver.resolveMentions(chat, ['other@example.com'])).resolves.toEqual([
-      { userId: 5003, name: '另一个人' }
+      { userId: '5003', name: '另一个人' }
     ]);
     await expect(resolver.resolveMentions(chat, ['另一个人'])).resolves.toEqual([
-      { userId: 5003, name: '另一个人' }
+      { userId: '5003', name: '另一个人' }
     ]);
     await expect(resolver.resolveMentions(chat, ['查无此人'])).rejects.toMatchObject({ code: 'USER_NOT_FOUND' });
   });
@@ -389,13 +462,13 @@ describe('lark avatar id resolution', () => {
     });
 
     expect(target).toEqual({
-      chatId: 900001,
-      rootId: 700001,
-      mentions: [{ userId: 5001, name: '小肥鱼' }]
+      chatId: '900001',
+      rootId: '700001',
+      mentions: [{ userId: '5001', name: '小肥鱼' }]
     });
-    expect(typeof target.chatId).toBe('number');
-    expect(typeof target.rootId).toBe('number');
-    expect(target.mentions.every(mention => typeof mention.userId === 'number')).toBe(true);
+    expect(typeof target.chatId).toBe('string');
+    expect(typeof target.rootId).toBe('string');
+    expect(target.mentions.every(mention => typeof mention.userId === 'string')).toBe(true);
   });
 });
 
@@ -454,9 +527,9 @@ describe('lark avatar service resolution wiring', () => {
       root: 'om_root',
       mentions: ['ou_user']
     })).resolves.toEqual({
-      chatId: 900001,
-      rootId: 700001,
-      mentions: [{ userId: 5001, name: '小肥鱼' }]
+      chatId: '900001',
+      rootId: '700001',
+      mentions: [{ userId: '5001', name: '小肥鱼' }]
     });
   });
 

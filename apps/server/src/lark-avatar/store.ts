@@ -3,9 +3,11 @@ import type {
   LarkAvatarCredentials,
   LarkAvatarDraft,
   LarkAvatarInboxItem,
+  LarkAvatarReactionTrigger,
   LarkAvatarState,
   LarkRegionName
 } from './types.js';
+import { normalizeReactionEmoji, routeFromUnknown } from './reaction-trigger.js';
 
 /**
  * 最近消息面板只用于回看刚刚发生的对话，不是归档。
@@ -20,6 +22,8 @@ export const MAX_DRAFT_ITEMS = 80;
  * 即使旧消息从展示面板淘汰，也必须在此表保留足够长的已处理记录。
  */
 export const MAX_SEEN_MESSAGES = 10_000;
+/** 表情触发账本只用于幂等与排障，保留最近若干条即可。 */
+export const MAX_REACTION_TRIGGERS = 500;
 
 export const AVATAR_SCHEMA = `
   CREATE TABLE IF NOT EXISTS avatar_state (
@@ -53,6 +57,13 @@ export const AVATAR_SCHEMA = `
     occurred_at INTEGER NOT NULL, seen_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS avatar_seen_messages_seen ON avatar_seen_messages(seen_at);
+  CREATE TABLE IF NOT EXISTS avatar_reaction_triggers (
+    key TEXT PRIMARY KEY, message_id TEXT NOT NULL, chat_id TEXT,
+    operator_id TEXT, operator_type TEXT, emoji TEXT NOT NULL, route TEXT NOT NULL,
+    state TEXT NOT NULL, reason TEXT, session_id TEXT, task_id TEXT, payload TEXT, action_time TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS avatar_reaction_triggers_seen ON avatar_reaction_triggers(created_at);
 `;
 
 export function avatarDatabasePath(databaseUrl: string): string {
@@ -92,6 +103,10 @@ const stateFromRow = (row: StateRow): LarkAvatarState => {
       replyInTopic: typeof parsed.replyInTopic === 'boolean' ? parsed.replyInTopic : true,
       replyMode: parsed.replyMode === 'quote' || parsed.replyMode === 'thread' ? parsed.replyMode : 'direct',
       emojiReactions: parsed.emojiReactions === true,
+      reactionTriggerEnabled: parsed.reactionTriggerEnabled === true,
+      reactionTriggerEmoji: normalizeReactionEmoji(parsed.reactionTriggerEmoji) ?? '',
+      reactionTriggerRoute: routeFromUnknown(parsed.reactionTriggerRoute) ?? 'ask',
+      reactionTriggerIgnoreBots: parsed.reactionTriggerIgnoreBots !== false,
       replySignature: typeof parsed.replySignature === 'string' ? parsed.replySignature : '',
       agentTimeoutSeconds: Number.isFinite(Number(parsed.agentTimeoutSeconds))
         ? Math.min(86_400, Math.max(0, Math.floor(Number(parsed.agentTimeoutSeconds))))
@@ -143,6 +158,24 @@ const draftFromRow = (row: StateRow): LarkAvatarDraft => ({
   ...(row.sent_at ? { sentAt: String(row.sent_at) } : {})
 });
 
+const reactionTriggerFromRow = (row: StateRow): LarkAvatarReactionTrigger => ({
+  key: String(row.key),
+  messageId: String(row.message_id),
+  ...(row.chat_id ? { chatId: String(row.chat_id) } : {}),
+  ...(row.operator_id ? { operatorId: String(row.operator_id) } : {}),
+  ...(row.operator_type ? { operatorType: String(row.operator_type) } : {}),
+  emoji: String(row.emoji),
+  route: routeFromUnknown(row.route) ?? 'ask',
+  state: String(row.state) as LarkAvatarReactionTrigger['state'],
+  ...(row.action_time ? { actionTime: String(row.action_time) } : {}),
+  ...(row.reason ? { reason: String(row.reason) } : {}),
+  ...(row.session_id ? { sessionId: String(row.session_id) } : {}),
+  ...(row.task_id ? { taskId: String(row.task_id) } : {}),
+  payload: parseJson(row.payload, {}),
+  createdAt: String(row.created_at),
+  updatedAt: String(row.updated_at)
+});
+
 const insertValues = (record: LarkAvatarInboxItem) => ({
   id: record.id, thread_key: record.threadKey, message_id: record.messageId,
   chat_id: record.chatId, chat_type: record.chatType, chat_name: record.chatName ?? null,
@@ -172,6 +205,9 @@ export class LarkAvatarStore {
     if (!draftColumns.some(column => column.name === 'reply_root_id')) this.sqlite.exec('ALTER TABLE avatar_drafts ADD COLUMN reply_root_id TEXT');
     if (!draftColumns.some(column => column.name === 'reply_quote')) this.sqlite.exec('ALTER TABLE avatar_drafts ADD COLUMN reply_quote INTEGER');
     if (!draftColumns.some(column => column.name === 'reply_thread_chat')) this.sqlite.exec('ALTER TABLE avatar_drafts ADD COLUMN reply_thread_chat INTEGER');
+    const reactionColumns = this.sqlite.pragma('table_info(avatar_reaction_triggers)') as Array<{ name: string }>;
+    // 旧库没有 action_time：补列后，历史失败记录仍可按「新 action_time」重试。
+    if (!reactionColumns.some(column => column.name === 'action_time')) this.sqlite.exec('ALTER TABLE avatar_reaction_triggers ADD COLUMN action_time TEXT');
     this.sqlite.exec(`
       INSERT OR IGNORE INTO avatar_seen_messages (message_id, chat_id, occurred_at, seen_at)
       SELECT message_id, chat_id, 0, CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -180,6 +216,7 @@ export class LarkAvatarStore {
     this.pruneInbox();
     this.pruneDrafts();
     this.pruneSeenMessages();
+    this.pruneReactionTriggers();
   }
 
   close() { this.sqlite.close(); }
@@ -373,6 +410,154 @@ export class LarkAvatarStore {
   draftBySentMessageId(messageId: string): LarkAvatarDraft | undefined {
     const row = this.sqlite.prepare('SELECT * FROM avatar_drafts WHERE sent_message_id = ? LIMIT 1').get(messageId) as StateRow | undefined;
     return row ? draftFromRow(row) : undefined;
+  }
+
+  /**
+   * 领取一次表情触发权：key 已存在时返回 false（同一用户+消息+emoji 只触发一次）。
+   * 去重和失败原因都落在同一张表里，重启后仍然有效。
+   */
+  recordReactionTrigger(trigger: LarkAvatarReactionTrigger): boolean {
+    return this.claimReactionTrigger(trigger) === 'claimed';
+  }
+
+  /**
+   * 领取结果：
+   * - claimed：本次调用拿到处理权；
+   * - duplicate：同一事件已处理/正在处理；
+   * - dispatch_uncertain：上次已经进入派发但进程失联，无法判断 Agent 轮次是否已开始。
+   *   这时**不能**自动重派（runtime 的 clientMessageId 去重只有 30 秒内存窗口），
+   *   只把记录标成失败，等用户重新加表情（新 action_time）再试。
+   */
+  claimReactionTrigger(trigger: LarkAvatarReactionTrigger): 'claimed' | 'duplicate' | 'dispatch_uncertain' {
+    const result = this.sqlite.prepare(`INSERT OR IGNORE INTO avatar_reaction_triggers
+      (key, message_id, chat_id, operator_id, operator_type, emoji, route, state,
+       reason, session_id, task_id, payload, action_time, created_at, updated_at)
+      VALUES (@key, @message_id, @chat_id, @operator_id, @operator_type, @emoji, @route, @state,
+       @reason, @session_id, @task_id, @payload, @action_time, @created_at, @updated_at)`).run({
+      key: trigger.key,
+      message_id: trigger.messageId,
+      chat_id: trigger.chatId ?? null,
+      operator_id: trigger.operatorId ?? null,
+      operator_type: trigger.operatorType ?? null,
+      emoji: trigger.emoji,
+      route: trigger.route,
+      state: trigger.state,
+      reason: trigger.reason ?? null,
+      session_id: trigger.sessionId ?? null,
+      task_id: trigger.taskId ?? null,
+      payload: JSON.stringify(trigger.payload),
+      action_time: trigger.actionTime ?? null,
+      created_at: trigger.createdAt,
+      updated_at: trigger.updatedAt
+    });
+    this.pruneReactionTriggers();
+    if (result.changes > 0) return 'claimed';
+
+    // 同一 key 已存在：成功/排队中的记录保持“只触发一次”；
+    // 失败或跳过的记录，如果用户重新加了一次表情（action_time 变化），允许再试。
+    // 进程在落账后、派发前崩溃会留下 pending；超过 2 分钟的 pending 视为中断，
+    // 允许飞书重投的同一事件（action_time 不变）重新领取，否则这条表情会被永久吞掉。
+    // dispatching 则不同：派发可能已经发生，自动重领会真的跑第二轮。
+    const existing = this.reactionTrigger(trigger.key);
+    if (!existing) return 'duplicate';
+    const stale = Date.now() - Date.parse(existing.updatedAt) > 2 * 60_000;
+    if (existing.state === 'dispatching' && stale) {
+      this.sqlite.prepare(`UPDATE avatar_reaction_triggers SET state = 'failed', reason = ?, updated_at = ? WHERE key = ?`)
+        .run(
+          `dispatch_uncertain: 上次派发后进程中断，无法确认 Agent 轮次是否已开始；请重新添加表情再试（${existing.updatedAt}）`,
+          trigger.updatedAt,
+          trigger.key
+        );
+      return 'dispatch_uncertain';
+    }
+    const stalePending = existing.state === 'pending' && stale;
+    if (stalePending) {
+      this.sqlite.prepare(`UPDATE avatar_reaction_triggers SET state = 'pending', route = ?, reason = NULL,
+        session_id = NULL, task_id = NULL, action_time = ?, updated_at = ? WHERE key = ?`)
+        .run(trigger.route, trigger.actionTime ?? existing.actionTime ?? null, trigger.updatedAt, trigger.key);
+      return 'claimed';
+    }
+    const retryable = existing.state === 'failed' || existing.state === 'ignored';
+    if (!retryable || !trigger.actionTime || trigger.actionTime === existing.actionTime) return 'duplicate';
+    this.sqlite.prepare(`UPDATE avatar_reaction_triggers SET state = 'pending', route = ?, reason = NULL,
+      session_id = NULL, task_id = NULL, action_time = ?, updated_at = ? WHERE key = ?`)
+      .run(trigger.route, trigger.actionTime, trigger.updatedAt, trigger.key);
+    return 'claimed';
+  }
+
+  /**
+   * 原子地把状态从期望值迁走（compare-and-swap）。
+   * 卡片双击、并发重投都用它抢占，避免“先读后写”让两个请求都认为自己拿到了处理权。
+   */
+  transitionReactionTrigger(
+    key: string,
+    from: LarkAvatarReactionTrigger['state'][],
+    to: LarkAvatarReactionTrigger['state'],
+    updatedAt: string
+  ): boolean {
+    if (!from.length) return false;
+    const placeholders = from.map(() => '?').join(', ');
+    const result = this.sqlite.prepare(`UPDATE avatar_reaction_triggers SET state = ?, updated_at = ?
+      WHERE key = ? AND state IN (${placeholders})`).run(to, updatedAt, key, ...from);
+    return result.changes > 0;
+  }
+
+  updateReactionTrigger(key: string, patch: {
+    state?: LarkAvatarReactionTrigger['state'];
+    route?: LarkAvatarReactionTrigger['route'];
+    reason?: string | undefined;
+    sessionId?: string | undefined;
+    taskId?: string | undefined;
+    payload?: Record<string, unknown>;
+    updatedAt: string;
+  }): LarkAvatarReactionTrigger | undefined {
+    const current = this.reactionTrigger(key);
+    if (!current) return undefined;
+    const next: LarkAvatarReactionTrigger = {
+      ...current,
+      ...(patch.state ? { state: patch.state } : {}),
+      ...(patch.route ? { route: patch.route } : {}),
+      ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
+      ...(patch.sessionId !== undefined ? { sessionId: patch.sessionId } : {}),
+      ...(patch.taskId !== undefined ? { taskId: patch.taskId } : {}),
+      ...(patch.payload !== undefined ? { payload: patch.payload } : {}),
+      updatedAt: patch.updatedAt
+    };
+    this.sqlite.prepare(`UPDATE avatar_reaction_triggers SET state = ?, route = ?, reason = ?, session_id = ?,
+      task_id = ?, payload = ?, updated_at = ? WHERE key = ?`).run(
+      next.state,
+      next.route,
+      next.reason ?? null,
+      next.sessionId ?? null,
+      next.taskId ?? null,
+      JSON.stringify(next.payload),
+      next.updatedAt,
+      key
+    );
+    return next;
+  }
+
+  reactionTrigger(key: string): LarkAvatarReactionTrigger | undefined {
+    const row = this.sqlite.prepare('SELECT * FROM avatar_reaction_triggers WHERE key = ?').get(key) as StateRow | undefined;
+    return row ? reactionTriggerFromRow(row) : undefined;
+  }
+
+  listReactionTriggers(limit = 50): LarkAvatarReactionTrigger[] {
+    const rows = this.sqlite.prepare(`SELECT * FROM avatar_reaction_triggers
+      ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(Math.min(MAX_REACTION_TRIGGERS, Math.max(1, limit))) as StateRow[];
+    return rows.map(reactionTriggerFromRow);
+  }
+
+  pruneReactionTriggers(limit = MAX_REACTION_TRIGGERS): number {
+    const count = Number((this.sqlite.prepare('SELECT count(*) AS count FROM avatar_reaction_triggers').get() as { count?: number } | undefined)?.count ?? 0);
+    const excess = count - limit;
+    if (excess <= 0) return 0;
+    const result = this.sqlite.prepare(`
+      DELETE FROM avatar_reaction_triggers WHERE key IN (
+        SELECT key FROM avatar_reaction_triggers ORDER BY created_at ASC, rowid ASC LIMIT ?
+      )
+    `).run(excess);
+    return result.changes;
   }
 
   listDrafts(state?: string): LarkAvatarDraft[] {

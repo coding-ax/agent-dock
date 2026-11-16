@@ -65,7 +65,10 @@ const makeClient = (input: {
   return { client, sent };
 };
 
-const buildApp = async (client: LarkProtocolClientLike = makeClient().client) => {
+const buildApp = async (
+  client: LarkProtocolClientLike = makeClient().client,
+  options: { allowReactionTest?: boolean } = {}
+) => {
   const store = new LarkAvatarStore(':memory:');
   stores.push(store);
   const service = new LarkAvatarService({
@@ -81,7 +84,7 @@ const buildApp = async (client: LarkProtocolClientLike = makeClient().client) =>
     clientFactory: () => client
   });
   const app = Fastify({ logger: false });
-  registerLarkAvatarRoutes(app, service);
+  registerLarkAvatarRoutes(app, service, options);
   return { app, service };
 };
 
@@ -116,16 +119,78 @@ describe('Lark avatar routes', () => {
       url: '/api/lark-avatar/config',
       payload: {
         region: 'feishu', triggerPrefix: '!ai', contextMessages: 6, listenChats: ['oc_1'],
+        reactionTriggerEnabled: true, reactionTriggerEmoji: '👍', reactionTriggerRoute: 'main', reactionTriggerIgnoreBots: false,
         agentId: 'claude', model: 'opus', reasoningEffort: 'high', workspace: '/tmp/avatar-work'
       }
     });
     expect(saved.statusCode).toBe(200);
     expect(saved.json().config).toMatchObject({
       region: 'feishu', triggerPrefix: '!ai', contextMessages: 6, listenChats: ['oc_1'],
+      reactionTriggerEnabled: true, reactionTriggerEmoji: 'THUMBSUP', reactionTriggerRoute: 'main', reactionTriggerIgnoreBots: false,
       agentId: 'claude', model: 'opus', reasoningEffort: 'high', workspace: '/tmp/avatar-work'
     });
     expect(saved.body).not.toContain('appSecret');
     expect(saved.body).not.toContain('cookies');
+  });
+
+  it('rejects invalid reaction settings and lists recent reaction triggers', async () => {
+    const { app } = await buildApp();
+    const badEmoji = await app.inject({
+      method: 'PUT', url: '/api/lark-avatar/config', payload: { reactionTriggerEmoji: '两个表情' }
+    });
+    expect(badEmoji.statusCode).toBe(400);
+    expect(badEmoji.json().error.code).toBe('INVALID_REACTION_EMOJI');
+
+    const badRoute = await app.inject({
+      method: 'PUT', url: '/api/lark-avatar/config', payload: { reactionTriggerRoute: 'somewhere' }
+    });
+    expect(badRoute.statusCode).toBe(400);
+    expect(badRoute.json().error.code).toBe('INVALID_REACTION_ROUTE');
+
+    const triggers = await app.inject({ method: 'GET', url: '/api/lark-avatar/reaction-triggers' });
+    expect(triggers.statusCode).toBe(200);
+    expect(triggers.json()).toEqual([]);
+  });
+
+  it('gates fake reaction injection to sandboxes and exposes diagnostics', async () => {
+    const { app } = await buildApp();
+    const hidden = await app.inject({ method: 'POST', url: '/api/lark-avatar/reaction-test', payload: { messageId: 'om_1', emojiType: 'THUMBSUP' } });
+    expect(hidden.statusCode).toBe(404);
+    const diagnostics = await app.inject({ method: 'GET', url: '/api/lark-avatar/reaction-diagnostics' });
+    expect(diagnostics.statusCode).toBe(200);
+    expect(diagnostics.json()).toEqual({ triggers: [] });
+  });
+
+  it('injects a fake reaction, then resolves the ask card route', async () => {
+    const { app, service } = await buildApp(makeClient().client, { allowReactionTest: true });
+    await service.saveConfig({
+      reactionTriggerEnabled: true,
+      reactionTriggerEmoji: 'THUMBSUP',
+      reactionTriggerRoute: 'ask',
+      listening: true
+    });
+    const injected = await app.inject({
+      method: 'POST',
+      url: '/api/lark-avatar/reaction-test',
+      payload: {
+        messageId: 'om_fake', emojiType: 'THUMBSUP', operatorId: 'ou_me',
+        operatorType: 'user', actionTime: '1000', chatId: 'oc_test', content: '把发布说明整理一下'
+      }
+    });
+    expect(injected.statusCode).toBe(200);
+    expect(injected.json()).toMatchObject({ ok: true, action: 'awaiting_route' });
+    expect(injected.json().diagnostics.lastEvent).toMatchObject({ outcome: 'awaiting_route:ask', chatId: 'oc_test' });
+    const trigger = injected.json().diagnostics.triggers[0];
+    expect(trigger).toMatchObject({ state: 'awaiting_route', emoji: 'THUMBSUP', messageId: 'om_fake' });
+
+    const routed = await app.inject({
+      method: 'POST',
+      url: '/api/lark-avatar/reaction-route-test',
+      payload: { triggerId: trigger.key, route: 'independent', operatorId: 'ou_me' }
+    });
+    expect(routed.statusCode).toBe(200);
+    expect(routed.json()).toMatchObject({ type: 'success', content: '已单独处理' });
+    expect(routed.json().diagnostics.lastEvent).toMatchObject({ outcome: 'route:independent', sessionId: 'ses_test' });
   });
 
   it('validates and persists pause and resume requests', async () => {
@@ -194,8 +259,8 @@ describe('Lark avatar routes', () => {
         ok: true,
         messageId: 'om_sent',
         chatId: '900001',
-        rootId: 555,
-        mentions: [{ userId: 42, name: '张三' }]
+        rootId: '555',
+        mentions: [{ userId: '42', name: '张三' }]
       });
       expect(fake.sent).toEqual([{
         chatId: '900001',
@@ -221,6 +286,31 @@ describe('Lark avatar routes', () => {
       expect(fake.sent[0]).toEqual({ chatId: '900001', text: '收到', rootId: '555' });
     });
 
+    it('accepts 19-digit chat, root and user ids as strings', async () => {
+      const fake = makeClient();
+      const { app } = await buildApp(fake.client);
+      await login(app);
+      const chatId = '7246718914305097756';
+      const rootId = '7246718914305097758';
+      const userId = '7246718914305097757';
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/send',
+        payload: { chat: chatId, text: `@${userId} 收到`, replyTo: rootId, inThread: true, at: [userId] }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        ok: true,
+        messageId: 'om_sent',
+        chatId,
+        rootId,
+        mentions: [{ userId, name: userId }]
+      });
+      expect(fake.sent[0]).toMatchObject({ chatId, rootId, mentions: [{ userId, content: userId }] });
+    });
+
     it('maps empty body and malformed fields to 400 INVALID_INPUT', async () => {
       const { app } = await buildApp();
       const empty = await app.inject({ method: 'POST', url: '/api/lark-avatar/send', payload: { chat: '900001', text: '   ' } });
@@ -236,7 +326,7 @@ describe('Lark avatar routes', () => {
       expect(badAt.json().error.code).toBe('INVALID_INPUT');
     });
 
-    it('maps missing login, missing chats, ambiguity and non-numeric ids to 401/404/409/400', async () => {
+    it('maps missing login, missing chats, ambiguity and unmappable oc ids to 401/404/409/404', async () => {
       const loggedOut = await buildApp();
       const unauthorized = await loggedOut.app.inject({
         method: 'POST',
@@ -282,8 +372,9 @@ describe('Lark avatar routes', () => {
         url: '/api/lark-avatar/send',
         payload: { chat: 'oc_alias', text: 'hi' }
       });
-      expect(invalid.statusCode).toBe(400);
-      expect(invalid.json().error.code).toBe('ID_NOT_NUMERIC');
+      expect(invalid.statusCode).toBe(404);
+      expect(invalid.json().error.code).toBe('CHAT_NOT_FOUND');
+      expect(invalid.json().error.hint).toContain('openChatId');
     });
   });
 });

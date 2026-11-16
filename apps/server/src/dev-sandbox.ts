@@ -56,7 +56,17 @@ export function sandboxPaths(repo: string, port: number): DevSandbox {
 const shimDir = (sandbox: DevSandbox) => join(sandbox.root, 'bin');
 
 export function sandboxEnv(sandbox: DevSandbox, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...base, HOME: sandbox.home, AGENTDOCK_DISABLE_LARK_LISTENER: 'true', AGENTDOCK_WEB_AUTH: 'off', agentdock_database: sandbox.database };
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    HOME: sandbox.home,
+    AGENTDOCK_DISABLE_LARK_LISTENER: 'true',
+    AGENTDOCK_WEB_AUTH: 'off',
+    // 只给隔离沙箱开 fake reaction 注入口；正式实例不会设置这个变量。
+    // SANDBOX 标记是硬前置：只带 ALLOW_REACTION_TEST 的正式实例不会注册这两个端点。
+    AGENTDOCK_DEV_SANDBOX: 'true',
+    AGENTDOCK_ALLOW_REACTION_TEST: 'true',
+    agentdock_database: sandbox.database
+  };
   env.PATH = [shimDir(sandbox), base.PATH].filter(Boolean).join(delimiter);
   // 这些是正式实例注入给当前 Agent 的：带进沙箱会让 session/group 类命令打到正式实例上。
   for (const key of ['agentdock_session_id', 'agentdock_group_tools_url', 'agentdock_group_tools_token']) delete env[key];

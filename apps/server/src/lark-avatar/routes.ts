@@ -1,10 +1,19 @@
 import type { FastifyInstance } from 'fastify';
 import { RuntimeError } from '@agent-dock/agent-dock-shared';
-import { LarkAvatarService } from './service.js';
+import { LarkAvatarService, type LarkReactionPort } from './service.js';
 import { LarkAvatarResolutionError, larkAvatarResolutionHttpStatus, type LarkChatMatchMode } from './id-resolution.js';
 import type { LarkRegionName } from './types.js';
+import type { LarkReactionRoute } from './reaction-trigger.js';
 
-export function registerLarkAvatarRoutes(app: FastifyInstance, service: LarkAvatarService) {
+export interface LarkAvatarRouteOptions {
+  /**
+   * 仅隔离沙箱开启：通过 HTTP 注入 fake reaction 事件，验证「加表情 → 轮次」链路。
+   * 正式实例必须保持关闭，避免本地脚本伪造触发。
+   */
+  allowReactionTest?: boolean;
+}
+
+export function registerLarkAvatarRoutes(app: FastifyInstance, service: LarkAvatarService, options: LarkAvatarRouteOptions = {}) {
   const handleError = (reply: { code(code: number): { send(value: unknown): unknown } }, error: unknown) => {
     if (error instanceof RuntimeError) return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
     if (error instanceof LarkAvatarResolutionError) {
@@ -23,7 +32,7 @@ export function registerLarkAvatarRoutes(app: FastifyInstance, service: LarkAvat
   app.get('/api/lark-avatar/status', async () => service.status());
   app.get('/api/lark-avatar/config', async () => service.publicState() ?? null);
   app.get('/api/lark-avatar/chats', async () => service.availableChats());
-  app.put<{ Body: { region?: LarkRegionName; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string } }>('/api/lark-avatar/config', async (request, reply) => {
+  app.put<{ Body: { region?: LarkRegionName; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: LarkReactionRoute; reactionTriggerIgnoreBots?: boolean; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string } }>('/api/lark-avatar/config', async (request, reply) => {
     try { return await service.saveConfig(request.body ?? {}); }
     catch (error) { return handleError(reply, error); }
   });
@@ -99,6 +108,85 @@ export function registerLarkAvatarRoutes(app: FastifyInstance, service: LarkAvat
   });
   app.get<{ Querystring: { state?: string; tier?: string } }>('/api/lark-avatar/inbox', async request =>
     service.inbox(request.query.state?.split(',').filter(Boolean), request.query.tier));
+  app.get<{ Querystring: { limit?: string } }>('/api/lark-avatar/reaction-triggers', async request => {
+    const requested = Number(request.query.limit);
+    const limit = Number.isFinite(requested) ? Math.min(100, Math.max(1, Math.floor(requested))) : 20;
+    return service.reactionTriggers(limit);
+  });
+  app.get<{ Querystring: { limit?: string } }>('/api/lark-avatar/reaction-diagnostics', async request => {
+    const requested = Number(request.query.limit);
+    const limit = Number.isFinite(requested) ? Math.min(100, Math.max(1, Math.floor(requested))) : 10;
+    await service.refreshReactionSourceStatus();
+    return service.reactionDiagnostics(limit);
+  });
+  app.post<{ Body: {
+    messageId?: string;
+    emojiType?: string;
+    operatorId?: string;
+    operatorType?: string;
+    actionTime?: string;
+    chatId?: string;
+    chatName?: string;
+    senderId?: string;
+    senderName?: string;
+    content?: string;
+  } }>('/api/lark-avatar/reaction-test', async (request, reply) => {
+    if (!options.allowReactionTest) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'reaction-test 只在隔离沙箱开启' } });
+    }
+    const body = request.body ?? {};
+    const messageId = body.messageId?.trim();
+    const emojiType = body.emojiType?.trim();
+    if (!messageId || !emojiType) {
+      return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'messageId 和 emojiType 必填' } });
+    }
+    const message = {
+      messageId,
+      chatId: body.chatId?.trim() || 'oc_test_chat',
+      chatName: body.chatName?.trim() || '测试群',
+      chatType: 'group',
+      senderId: body.senderId?.trim() || 'ou_test_sender',
+      senderName: body.senderName?.trim() || '测试用户',
+      content: body.content?.trim() || '表情触发测试消息',
+      messageType: 'text',
+      createTime: String(Date.now())
+    };
+    const port: LarkReactionPort = {
+      async getMessage(id) { return id === message.messageId ? message : undefined; },
+      async listContext() { return [message]; },
+      async sendAskCard(input) {
+        return { messageId: `om_test_card_${input.triggerId.replace(/[^A-Za-z0-9]/g, '').slice(-12)}` };
+      },
+      async updateAskCard() { /* fake 端口不更新真实卡片 */ }
+    };
+    const operatorType = body.operatorType === 'bot' || body.operatorType === 'app' || body.operatorType === 'user'
+      ? body.operatorType
+      : 'user';
+    const result = await service.handleReaction({
+      messageId,
+      emojiType,
+      ...(body.operatorId?.trim() ? { operatorId: body.operatorId.trim() } : { operatorId: 'ou_test_operator' }),
+      operatorType,
+      actionTime: body.actionTime?.trim() || String(Date.now())
+    }, port);
+    return { ...result, diagnostics: service.reactionDiagnostics(5) };
+  });
+  app.post<{ Body: { triggerId?: string; route?: string; operatorId?: string } }>('/api/lark-avatar/reaction-route-test', async (request, reply) => {
+    if (!options.allowReactionTest) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'reaction-route-test 只在隔离沙箱开启' } });
+    }
+    const result = await service.resolveReactionRoute({
+      value: {
+        action: 'avatar_reaction_route',
+        trigger_id: request.body?.triggerId ?? '',
+        route: request.body?.route ?? ''
+      },
+      ...(request.body?.operatorId ? { operatorId: request.body.operatorId } : {}),
+      authorize: () => true
+    });
+    if (!result) return reply.code(400).send({ error: { code: 'INVALID_INPUT', message: 'triggerId / route 不合法' } });
+    return { ...result, diagnostics: service.reactionDiagnostics(5) };
+  });
   app.post<{ Params: { id: string }; Body: { regenerate?: boolean } }>('/api/lark-avatar/inbox/:id/draft', async (request, reply) => {
     try { return await service.draftForItem(request.params.id, request.body?.regenerate === true); }
     catch (error) { return handleError(reply, error); }

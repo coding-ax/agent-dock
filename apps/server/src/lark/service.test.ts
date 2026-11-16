@@ -11,6 +11,62 @@ const configured = {
 };
 
 describe('Lark card service', () => {
+  it('sends a route-choice card with callback values and updates it afterwards', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ code: 0, tenant_access_token: 'token' }))
+      .mockResolvedValueOnce(response({ code: 0, data: { message_id: 'om_card', chat_id: 'oc_1' } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { message_id: 'om_card', chat_id: 'oc_1' } }));
+    const service = createLarkCardService(configured, fetcher);
+    const sent = await service.sendChoiceCard({
+      chatId: 'oc_1',
+      replyTo: 'om_target',
+      title: 'AI 替身 · 表情触发',
+      markdown: '这一轮交给谁？',
+      buttons: [
+        { action: 'avatar_reaction_route', label: '发到主会话', style: 'primary', value: { trigger_id: '8Jr5J_Ztv1NR-dnjlJTf6SHH', route: 'main' } },
+        { action: 'avatar_reaction_route', label: '单独处理', value: { trigger_id: '8Jr5J_Ztv1NR-dnjlJTf6SHH', route: 'independent' } }
+      ],
+      idempotencyKey: 'avatar-reaction-ask:8Jr5J_Ztv1NR-dnjlJTf6SHH'
+    });
+    expect(sent).toMatchObject({ messageId: 'om_card', chatId: 'oc_1' });
+    const [url, init] = fetcher.mock.calls[1] as unknown as [string, RequestInit];
+    expect(url).toContain('/open-apis/im/v1/messages/om_target/reply');
+    const body = JSON.parse(String(init.body)) as { msg_type: string; content: string; uuid: string };
+    expect(body.msg_type).toBe('interactive');
+    expect(body.uuid).toBe('avatar-reaction-ask:8Jr5J_Ztv1NR-dnjlJTf6SHH');
+    expect(body.uuid.length).toBeLessThanOrEqual(50);
+    expect(body.content).toContain('avatar_reaction_route');
+    expect(body.content).toContain('trigger_id');
+    expect(body.content).toContain('independent');
+
+    await service.updateChoiceCard({ messageId: 'om_card', text: '✅ 已发到主会话' });
+    const [patchUrl, patchInit] = fetcher.mock.calls[2] as unknown as [string, RequestInit];
+    expect(patchUrl).toContain('/open-apis/im/v1/messages/om_card');
+    expect(patchInit.method).toBe('PATCH');
+    expect(String(patchInit.body)).toContain('已发到主会话');
+  });
+
+  it('rejects an idempotency key that Feishu would refuse instead of sending it', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ code: 0, tenant_access_token: 'token' }))
+      .mockResolvedValueOnce(response({ code: 0, data: { message_id: 'om_card', chat_id: 'oc_1' } }));
+    const service = createLarkCardService(configured, fetcher);
+    const send = (idempotencyKey: string) => service.sendChoiceCard({
+      chatId: 'oc_1', replyTo: 'om_target', title: 'AI 替身 · 表情触发', markdown: '交给谁？',
+      buttons: [{ action: 'avatar_reaction_route', label: '发到主会话', value: { trigger_id: 'x', route: 'main' } }],
+      idempotencyKey
+    });
+
+    // 旧版把含 NUL 的 100 字符账本 key 直接当 uuid：飞书会拒绝，默认 ask 路由完全不可用。
+    await expect(send(`avatar-reaction-ask:om_target\u0000ou_me\u0000THUMBSUP`))
+      .rejects.toMatchObject({ code: 'INVALID_IDEMPOTENCY_KEY' });
+    await expect(send(`avatar-reaction-ask:${'x'.repeat(40)}`))
+      .rejects.toMatchObject({ code: 'INVALID_IDEMPOTENCY_KEY' });
+    // 41 字符以内的短 id 照常发送。
+    await expect(send(`avatar-reaction-ask:${'x'.repeat(24)}`)).resolves.toMatchObject({ messageId: 'om_card' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it.each(['token', 'body'])('bounds the complete lookup deadline when %s stalls', async phase => {
     vi.useFakeTimers();
     try {

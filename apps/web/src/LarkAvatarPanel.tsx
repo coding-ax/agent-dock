@@ -8,6 +8,9 @@ import {
   Pause, Play, RefreshCw, Search, Send, Settings2, ShieldCheck, Sparkles, UserRound, Users, Wifi, X
 } from 'lucide-react';
 import { CompactSelect } from './CompactSelect';
+import { ReactionEmojiPicker } from './ReactionEmojiPicker';
+import { reactionEmojiIsCustom, reactionEmojiPayload } from './lark-avatar-emoji';
+import { reactionOutcomeLabel, reactionSourceStatus, reactionStateLabel } from './lark-avatar-reaction-diagnostics';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { SuggestedValueInput } from './SuggestedValueInput';
 import { useToast } from './Toast';
@@ -301,6 +304,10 @@ export function LarkAvatarPanel() {
   const [replyInTopic, setReplyInTopic] = useState(true);
   const [replyMode, setReplyMode] = useState<'direct' | 'quote' | 'thread'>('direct');
   const [emojiReactions, setEmojiReactions] = useState(false);
+  const [reactionTriggerEnabled, setReactionTriggerEnabled] = useState(false);
+  const [reactionTriggerEmoji, setReactionTriggerEmoji] = useState('');
+  const [reactionTriggerRoute, setReactionTriggerRoute] = useState<'ask' | 'main' | 'independent'>('ask');
+  const [reactionTriggerIgnoreBots, setReactionTriggerIgnoreBots] = useState(true);
   const [replySignature, setReplySignature] = useState('');
   const [agentTimeoutSeconds, setAgentTimeoutSeconds] = useState(7_200);
   const [listenMode, setListenMode] = useState<'all' | 'selected'>('all');
@@ -334,6 +341,14 @@ export function LarkAvatarPanel() {
     staleTime: 20_000,
     refetchOnMount: 'always'
   });
+  const reactionDiagnostics = useQuery({
+    queryKey: ['lark-avatar-reaction-diagnostics'],
+    queryFn: () => api.larkAvatarReactionDiagnostics(8),
+    enabled: sessionReady && tab === 'settings',
+    staleTime: 5_000,
+    refetchInterval: tab === 'settings' ? 10_000 : false,
+    retry: false
+  });
 
   useEffect(() => {
     if (!config.data) return;
@@ -344,6 +359,10 @@ export function LarkAvatarPanel() {
     setReplyInTopic(config.data.config.replyInTopic);
     setReplyMode(config.data.config.replyMode);
     setEmojiReactions(config.data.config.emojiReactions);
+    setReactionTriggerEnabled(config.data.config.reactionTriggerEnabled ?? false);
+    setReactionTriggerEmoji(config.data.config.reactionTriggerEmoji ?? '');
+    setReactionTriggerRoute(config.data.config.reactionTriggerRoute ?? 'ask');
+    setReactionTriggerIgnoreBots(config.data.config.reactionTriggerIgnoreBots ?? true);
     setReplySignature(config.data.config.replySignature);
     setAgentTimeoutSeconds(config.data.config.agentTimeoutSeconds);
     setListenChats(config.data.config.listenChats);
@@ -371,6 +390,7 @@ export function LarkAvatarPanel() {
     void qc.invalidateQueries({ queryKey: ['lark-avatar-config'] });
     void qc.invalidateQueries({ queryKey: ['lark-avatar-inbox'] });
     void qc.invalidateQueries({ queryKey: ['lark-avatar-drafts'] });
+    void qc.invalidateQueries({ queryKey: ['lark-avatar-reaction-diagnostics'] });
   };
 
   const saveConfig = useMutation({
@@ -382,6 +402,10 @@ export function LarkAvatarPanel() {
       replyInTopic,
       replyMode,
       emojiReactions,
+      reactionTriggerEnabled,
+      ...reactionEmojiPayload(reactionTriggerEmoji),
+      reactionTriggerRoute,
+      reactionTriggerIgnoreBots,
       replySignature,
       agentTimeoutSeconds,
       listenChats: listenMode === 'all' ? [] : splitList(manualChatIds),
@@ -832,7 +856,7 @@ export function LarkAvatarPanel() {
                 </div>
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">随机表情回应</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">触发后先在原消息上加 2–3 个随机飞书表情，再开始生成回复。</p></div>
+                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">随机表情回应</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">触发后先在原消息上加 2–3 个随机飞书表情，再开始生成回复；加表情失败的原因会显示在下方排障卡片。</p></div>
                     <Switch size="small" aria-label="随机表情回应" checked={emojiReactions} onChange={setEmojiReactions}/>
                   </div>
                 </div>
@@ -858,6 +882,110 @@ export function LarkAvatarPanel() {
                 </label>
               </div>
               <div className="mt-3 rounded-xl bg-zinc-50 px-3.5 py-2.5 text-[11px] leading-5 text-zinc-500">你发送 <code className="rounded bg-white px-1 py-0.5 font-mono text-zinc-700">{triggerPrefix} 你的问题</code> 即触发；所有 AgentText 会直接以你的身份发回原会话。</div>
+            </section>
+
+            <section className="rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,.03)] sm:p-5">
+              <div className="flex items-start gap-3">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600"><Sparkles size={15}/></span>
+                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-[14px] font-semibold text-zinc-900">表情触发</h3><span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">Beta</span></div><p className="mt-1 text-[11px] leading-5 text-zinc-500">在飞书消息上添加一个指定表情，就会以这条消息为上下文开启一轮 Agent。和上面的「随机表情回应」是两个方向：那个是替身发出反馈，这个是替你发起任务。</p></div>
+              </div>
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">启用表情触发</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">关闭时不因 reaction 开轮次；事件仍会到达，排障卡片会显示「表情触发未启用」，随机表情回应不受影响。</p></div>
+                    <Switch size="small" aria-label="启用表情触发" checked={reactionTriggerEnabled} onChange={setReactionTriggerEnabled}/>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
+                    <span className="block text-[12px] font-medium text-zinc-800">触发 emoji</span>
+                    <ReactionEmojiPicker value={reactionTriggerEmoji} onChange={setReactionTriggerEmoji}/>
+                    {reactionEmojiIsCustom(reactionTriggerEmoji) && <p className="mt-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] leading-4 text-amber-700">当前值 <code className="font-mono">{reactionTriggerEmoji.trim()}</code> 不在常用集合里，保存会继续保留；也可以从列表里换一个。</p>}
+                    <p className="mt-1 text-[10px] leading-4 text-zinc-400">从常用飞书表情里选一个；已有配置如果不在列表，会显示为「当前配置」并保留。</p>
+                  </div>
+                  <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
+                    <p className="text-[12px] font-medium text-zinc-800">默认路由</p>
+                    <Segmented<'ask' | 'main' | 'independent'> value={reactionTriggerRoute} onChange={setReactionTriggerRoute} options={[{ value: 'ask', label: '先询问' }, { value: 'main', label: '主会话' }, { value: 'independent', label: '独立轮次' }]}/>
+                    <p className="mt-1 text-[10px] leading-4 text-zinc-400">询问：在飞书回一张卡片让你选；主会话：静默派活，不新增用户气泡；独立轮次：按消息/话题新开会话。</p>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">忽略机器人添加的表情</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">其他机器人/应用加的表情不触发；替身自己加的反馈表情始终排除。</p></div>
+                    <Switch size="small" aria-label="忽略机器人添加的表情" checked={reactionTriggerIgnoreBots} onChange={setReactionTriggerIgnoreBots}/>
+                  </div>
+                </div>
+                {reactionTriggerEnabled && !reactionTriggerEmoji.trim() && <p className="rounded-xl bg-amber-50 px-3.5 py-2.5 text-[11px] leading-5 text-amber-700">还没有填触发 emoji，保存后也不会触发。</p>}
+                <div className="rounded-xl bg-zinc-50 px-3.5 py-2.5 text-[11px] leading-5 text-zinc-500">
+                  reaction 事件由已配置的飞书机器人投递：机器人需要在目标会话里，并有消息读取权限。飞书只有 reaction 事件，没有 Pin 事件，所以 Pin 消息不会触发（Pin 只能走 OpenAPI 主动查询）。
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,.03)] sm:p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600"><CircleAlert size={15}/></span>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-[14px] font-semibold text-zinc-900">表情触发排障</h3>
+                    <p className="mt-1 text-[11px] leading-5 text-zinc-500">最近一次 reaction 事件和触发账本。事件到了但没开轮次时，这里会写清楚是没启用、emoji 不匹配、被去重，还是权限/主会话问题。</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => void reactionDiagnostics.refetch()} disabled={reactionDiagnostics.isFetching} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[11px] text-zinc-500 transition-colors hover:bg-zinc-100 disabled:opacity-40">
+                  <RefreshCw size={12} className={reactionDiagnostics.isFetching ? 'animate-spin' : ''}/>刷新
+                </button>
+              </div>
+              <div className="mt-4 space-y-2">
+                {(() => {
+                  const source = reactionSourceStatus(reactionDiagnostics.data?.source);
+                  return <div className={`rounded-xl border px-3.5 py-2.5 ${source.ok ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-200 bg-amber-50/50'}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className={`text-[11px] font-medium ${source.ok ? 'text-emerald-800' : 'text-amber-800'}`}>{source.label}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] ${source.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>事件通道</span>
+                    </div>
+                    <p className={`mt-1 break-all text-[10px] leading-4 ${source.ok ? 'text-emerald-700/80' : 'text-amber-700'}`}>{source.detail}</p>
+                  </div>;
+                })()}
+                {reactionDiagnostics.data?.lastOutboundReaction && (() => {
+                  const out = reactionDiagnostics.data.lastOutboundReaction!;
+                  const ok = out.failed.length === 0;
+                  return <div className={`rounded-xl border px-3.5 py-2.5 ${ok ? 'border-zinc-200' : 'border-red-200 bg-red-50/40'}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className={`text-[11px] font-medium ${ok ? 'text-zinc-700' : 'text-red-700'}`}>随机表情回应：成功 {out.succeeded.length}/{out.picked.length}</span>
+                      <span className="text-[10px] text-zinc-400">{fullTime(out.at)}</span>
+                    </div>
+                    <p className="mt-1 break-all font-mono text-[10px] leading-4 text-zinc-500">{out.messageId} · {out.picked.join(', ')}</p>
+                    {out.failed.length > 0 && <p className="mt-1 break-words text-[10px] leading-4 text-red-700">{out.failed.map(item => `${item.emoji}: ${item.error}`).join('；')}</p>}
+                  </div>;
+                })()}
+                {reactionDiagnostics.data?.lastEvent ? (() => {
+                  const event = reactionDiagnostics.data.lastEvent;
+                  return <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[12px] font-medium text-zinc-800">{reactionOutcomeLabel(event.outcome)}</span>
+                      <span className="text-[10px] text-zinc-400">{fullTime(event.at)}</span>
+                    </div>
+                    <p className="mt-1 break-all font-mono text-[10px] leading-4 text-zinc-500">{event.emojiType} · {event.operatorType ?? 'unknown'}/{event.operatorId ?? '?'} · {event.messageId}</p>
+                    {event.detail && <p className="mt-1 break-words text-[10px] leading-4 text-amber-700">原因：{event.detail}</p>}
+                    {(event.sessionId || event.taskId) && <p className="mt-1 break-all font-mono text-[10px] leading-4 text-zinc-400">{event.sessionId ? `session=${event.sessionId}` : ''} {event.taskId ? `task=${event.taskId}` : ''}</p>}
+                  </div>;
+                })() : <div className="rounded-xl border border-dashed border-zinc-200 px-3.5 py-3 text-[11px] leading-5 text-zinc-500">
+                  {(reactionDiagnostics.data?.triggers?.length ?? 0) > 0
+                    ? '本次进程启动后还没有收到新的 reaction 事件；下面是之前持久化的触发账本。'
+                    : '还没有收到 reaction 事件。'}
+                  {' '}若已在飞书加过表情：确认机器人已加入该会话、应用已订阅 <code className="rounded bg-zinc-100 px-1 font-mono text-[10px]">im.message.reaction.created_v1</code>、且替身监听没有暂停。
+                </div>}
+                {(reactionDiagnostics.data?.triggers?.length ?? 0) > 0 && <div className="overflow-hidden rounded-xl border border-zinc-200">
+                  <div className="grid grid-cols-[1fr_auto] gap-2 border-b border-zinc-100 bg-zinc-50/70 px-3 py-1.5 text-[10px] font-medium text-zinc-400"><span>最近账本</span><span>状态</span></div>
+                  {reactionDiagnostics.data!.triggers.slice(0, 5).map(trigger => <div key={trigger.key} className="grid grid-cols-[1fr_auto] items-start gap-2 border-b border-zinc-100 px-3 py-2 last:border-b-0">
+                    <div className="min-w-0">
+                      <p className="truncate text-[11px] text-zinc-700">{trigger.emoji} · {trigger.route} · {trigger.operatorType ?? 'unknown'}/{trigger.operatorId ?? '?'}</p>
+                      <p className="truncate font-mono text-[10px] text-zinc-400">{trigger.messageId}{trigger.reason ? ` · ${trigger.reason}` : ''}</p>
+                    </div>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] ${trigger.state === 'dispatched' ? 'bg-emerald-50 text-emerald-700' : trigger.state === 'failed' ? 'bg-red-50 text-red-700' : trigger.state === 'ignored' ? 'bg-zinc-100 text-zinc-500' : 'bg-amber-50 text-amber-700'}`}>{reactionStateLabel(trigger.state)}</span>
+                  </div>)}
+                </div>}
+              </div>
             </section>
 
             <section className="flex items-start gap-2.5 rounded-2xl border border-amber-200/70 bg-amber-50/60 p-4">
