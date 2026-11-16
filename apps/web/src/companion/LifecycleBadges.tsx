@@ -1,7 +1,7 @@
 import { Hourglass } from 'lucide-react';
 import type { AssistantLifecycleLight } from '../api';
 import { HoverTooltip } from '../HoverTooltip';
-import { generationLabel, handoffInvite, stageBlurb, stageLabel } from './lifecycle-model';
+import { generationLabel, handoffFlagVisible, handoffInvite, stageBlurb, stageLabel } from './lifecycle-model';
 import { useCompanionStore } from './companion-store';
 
 /**
@@ -17,10 +17,10 @@ export function StageChip({ lifecycle, role, compact = false }: { lifecycle?: As
   </HoverTooltip>;
 }
 
-/** 有交接提议摆在用户面前：角标「该交接了」，点开交接仪式。compact 只留沙漏图标（侧栏卡片）。 */
+/** 指标真到了交接档、有提议摆在用户面前：角标「该交接了」，点开交接仪式。用户自己提前发起的不算。 */
 export function HandoffFlag({ lifecycle, name, compact = false }: { lifecycle?: AssistantLifecycleLight; name: string; compact?: boolean }) {
   const handoff = lifecycle?.handoff;
-  if (!handoff || handoff.state !== 'proposed') return null;
+  if (!handoff || !handoffFlagVisible(handoff)) return null;
   return <HoverTooltip content={handoffInvite(lifecycle?.cat?.lifeStage, name)}>
     <button type="button" className="ui-handoff-flag" data-compact={compact || undefined} onClick={event => { event.stopPropagation(); useCompanionStore.getState().openCeremony(handoff.id); }} onKeyDown={event => event.stopPropagation()} aria-label="该交接了：打开交接仪式">
       <Hourglass size={10}/>{compact ? null : '该交接了'}

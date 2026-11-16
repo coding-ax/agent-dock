@@ -716,6 +716,39 @@ describe('lifecycle HTTP routes', () => {
     }
   });
 
+  it('lets an adult cat propose a handoff early without auto-confirming', async () => {
+    const h = harness();
+    const { main } = await adoptedWithNotes(h);
+    // 120 轮 / 交接档 600 → 0.16 分，刚进成年；远没到「该交接了」。
+    h.runtime.list(main.id).push(...Array.from({ length: 119 }, (_, index) => ({
+      id: `rt_filler_${index}`, sessionId: main.id, prompt: `第 ${index + 2} 轮`, status: 'completed' as const, createdAt: now(), updatedAt: now()
+    })));
+    const app = await appFor(h.service);
+    try {
+      const lifecycle = (await app.inject({ method: 'GET', url: '/api/assistant/lifecycle' })).json();
+      expect(lifecycle.cat).toMatchObject({ generation: 1, lifeStage: 'adult' });
+      expect(lifecycle.level).toBe('ok');
+
+      const proposed = await app.inject({ method: 'POST', url: '/api/assistant/handoff', payload: { reason: '想换一只猫试试' } });
+      expect(proposed.statusCode).toBe(200);
+      const handoff = proposed.json().handoff;
+      expect(handoff).toMatchObject({ state: 'proposed', trigger: 'user', reason: '想换一只猫试试', reasons: [] });
+
+      // 只提议、不自动确认：主会话和血缘都还是原来那只。
+      const state = (await app.inject({ method: 'GET', url: '/api/assistant/state' })).json();
+      expect(state.mainSessionId).toBe(main.id);
+      expect(state.lifecycle).toMatchObject({ cat: { generation: 1, lifeStage: 'adult' }, handoff: { id: handoff.id, state: 'proposed' } });
+      expect((await app.inject({ method: 'GET', url: '/api/assistant/lineage' })).json().lineage).toHaveLength(1);
+
+      // Agent 不能替用户点头，确认仍然只属于用户本人。
+      const agentConfirm = await app.inject({ method: 'POST', url: `/api/assistant/handoff/${handoff.id}/confirm`, payload: { from: main.id } });
+      expect(agentConfirm.statusCode).toBe(403);
+      expect((await app.inject({ method: 'GET', url: `/api/assistant/handoff/${handoff.id}` })).json().handoff.state).toBe('proposed');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('rejects dispatch, watches and plain notifications from the main session during a system round', async () => {
     const h = harness();
     const { main } = await adoptedWithNotes(h);

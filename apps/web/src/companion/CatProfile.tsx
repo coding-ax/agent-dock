@@ -3,10 +3,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Archive, Brush, Eye, Hourglass, LoaderCircle, RefreshCw, RotateCcw } from 'lucide-react';
 import { api, type AssistantLifecycle, type CatRecord, type LifecycleConfig, type MaintenanceRun } from '../api';
 import { sinceLabel } from './companion-model';
-import { useLifecycleOverview } from './useCompanion';
+import { useCompanion, useLifecycleOverview } from './useCompanion';
 import {
-  agePercent, formatMetricValue, formatReason, generationLabel, levelLabel, METRIC_KEYS, metricLabel, nextStage, outcomeLabel,
-  STAGE_FLOORS, stageBlurb, stageCatLabel, stageLabel
+  agePercent, earlyHandoffEntry, formatMetricValue, formatReason, generationLabel, levelLabel, METRIC_KEYS, metricLabel, nextStage,
+  outcomeLabel, proposeEarlyHandoff, STAGE_FLOORS, stageBlurb, stageCatLabel, stageLabel
 } from './lifecycle-model';
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败';
@@ -26,12 +26,14 @@ const thresholdDrafts = (config: LifecycleConfig): Drafts => Object.fromEntries(
  */
 export function CatProfile({ onOpenSession, onOpenCeremony }: { onOpenSession(id: string): void; onOpenCeremony(handoffId?: string): void }) {
   const qc = useQueryClient();
+  const info = useCompanion();
   const query = useLifecycleOverview();
   const overview: AssistantLifecycle | undefined = query.data;
   const [drafts, setDrafts] = useState<Drafts>({});
   const [syncedConfig, setSyncedConfig] = useState('');
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [confirmEarly, setConfirmEarly] = useState(false);
 
   // 服务端配置变了（保存成功或别处改了）才重置输入框；轮询拿到同样的配置不打断正在填的数。
   const configKey = overview ? JSON.stringify(overview.config) : '';
@@ -51,6 +53,12 @@ export function CatProfile({ onOpenSession, onOpenCeremony }: { onOpenSession(id
   const syncBot = useMutation({
     mutationFn: () => api.handoverSyncBot(),
     onSuccess: result => result.ok ? ok(result.message) : fail(new Error(result.message)),
+    onError: fail
+  });
+  // 提前交接只发起提议，不替用户确认；真正的执行仍要在仪式里点「开始交接」。
+  const earlyHandoff = useMutation({
+    mutationFn: () => proposeEarlyHandoff(() => api.assistantProposeHandoff({ reason: '你在小猫档案里提前发起交接（还没到老年）' })),
+    onSuccess: id => { setConfirmEarly(false); onOpenCeremony(id); },
     onError: fail
   });
 
@@ -77,6 +85,7 @@ export function CatProfile({ onOpenSession, onOpenCeremony }: { onOpenSession(id
   const proposal = overview.handoff?.state === 'proposed' ? overview.handoff : undefined;
   const runningHandoff = overview.handoff && overview.handoff.state !== 'proposed' ? overview.handoff : undefined;
   const lineage = [...overview.lineage].sort((a, b) => a.generation - b.generation);
+  const early = earlyHandoffEntry({ adopted: Boolean(cat), stage: cat?.lifeStage, handoff: overview.handoff, busy: info.busy });
 
   return <section aria-label="小猫档案" className="border-t border-zinc-100 px-4 py-3.5">
     <div className="flex flex-wrap items-center gap-2">
@@ -181,6 +190,23 @@ export function CatProfile({ onOpenSession, onOpenCeremony }: { onOpenSession(id
             </button>
           </li>)}
         </ul>
+      </div>}
+    </div>}
+
+    {early.visible && <div className="mt-4 border-t border-zinc-100 pt-2" data-testid="early-handoff-entry">
+      <p className="text-[11.5px] leading-5 text-zinc-400">{early.note}</p>
+      <button type="button" aria-expanded={early.mode === 'confirm' ? confirmEarly : undefined}
+        onClick={() => early.mode === 'progress' ? onOpenCeremony(overview.handoff?.id) : setConfirmEarly(value => !value)}
+        className="mt-0.5 text-[11.5px] text-zinc-500 underline decoration-zinc-300 underline-offset-2 hover:text-zinc-800">
+        {early.label}
+      </button>
+      {early.mode === 'confirm' && confirmEarly && <div role="group" aria-label="确认提前交接" className="mt-2 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-[12px] leading-5 text-zinc-600">
+        <p>现在只是发起提议，还要在交接仪式里再点一次「开始交接」才会执行。交接后当前主会话归档成只读，新猫接班。</p>
+        {info.busy && <p className="mt-0.5 text-amber-700">主会话这一轮还没结束；确认后如果还在忙，会提示你等这一轮结束。</p>}
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <button type="button" disabled={earlyHandoff.isPending} onClick={() => setConfirmEarly(false)} className="h-7 rounded-md px-2 text-[12px] text-zinc-500 hover:bg-zinc-200 disabled:opacity-40">再想想</button>
+          <button type="button" disabled={earlyHandoff.isPending} onClick={() => earlyHandoff.mutate()} className="h-7 rounded-md border border-zinc-300 bg-white px-2.5 text-[12px] font-medium text-zinc-800 hover:bg-zinc-100 disabled:opacity-40">{earlyHandoff.isPending ? '发起中…' : '发起交接提议'}</button>
+        </div>
       </div>}
     </div>}
   </section>;

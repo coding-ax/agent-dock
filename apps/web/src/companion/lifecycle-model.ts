@@ -1,5 +1,5 @@
 import type {
-  AssistantLifecycleLight, HandoffOutcome, HandoffState, HandoffStepRecord, HandoffTransfer, LifeStage, LifecycleLevel,
+  AssistantLifecycleLight, HandoffOutcome, HandoffState, HandoffStepRecord, HandoffSummary, HandoffTransfer, LifeStage, LifecycleLevel,
   LifecycleMetricKey, LifecycleReason
 } from '../api';
 import type { BubbleTone } from './companion-model';
@@ -141,6 +141,35 @@ export function handoffInvite(stage: LifeStage | undefined, name: string): strin
   if (stage === 'elder') return `${name}有点累了，要不要交接给下一代？`;
   if (stage === 'senior') return `${name}的记忆有点沉了，要不要交接？`;
   return `${name}觉得该交接一下了，看看？`;
+}
+
+/**
+ * 小猫档案底部的「提前交接…」入口：只要认领了猫就可见，不要求到老年。
+ * 已有一单未结束时先去进度；否则先展开一次确认，再只发起提议（绝不自动确认）。
+ */
+export function earlyHandoffEntry(input: {
+  adopted: boolean;
+  stage?: LifeStage;
+  handoff?: Pick<HandoffSummary, 'id' | 'state'> | null;
+  busy?: boolean;
+}): { visible: boolean; mode: 'progress' | 'confirm'; label: string; note: string } {
+  const open = input.handoff && !isCeremonyFinal(input.handoff.state) ? input.handoff : undefined;
+  const stage = input.stage ? stageLabel[input.stage] : '当前';
+  const note = `不用等到老年，${stage}阶段也可以主动交接${input.busy ? '；主会话这一轮还没结束，确认后要等它停下来' : ''}。`;
+  if (open) return { visible: input.adopted, mode: 'progress', label: open.state === 'proposed' ? '查看交接提议…' : '查看交接进度…', note };
+  return { visible: input.adopted, mode: 'confirm', label: '提前交接…', note };
+}
+
+/** 「该交接了」角标只属于指标越线的提议；用户自己提前发起的不打这个角标。 */
+export function handoffFlagVisible(handoff?: Pick<HandoffSummary, 'state' | 'trigger' | 'reasons'> | null): boolean {
+  if (!handoff || handoff.state !== 'proposed') return false;
+  return handoff.trigger === 'threshold' || handoff.reasons.some(reason => reason.level === 'handoff');
+}
+
+/** 「提前交接…」只发起提议：返回新的交接 id，确认仍由仪式里的「开始交接」完成。 */
+export async function proposeEarlyHandoff(propose: () => Promise<{ handoff: { id: string } }>): Promise<string> {
+  const result = await propose();
+  return result.handoff.id;
 }
 
 /* ---------- 系统轮次（整理 / 交接说明）在时间线上的样子 ---------- */

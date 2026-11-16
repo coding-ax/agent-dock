@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AssistantLifecycleLight, HandoffState, HandoffSummary, HandoffTransfer } from '../api';
 import {
-  agePercent, ceremonyPhase, ceremonySteps, diffLifecycle, formatMetricValue, formatReason, handoffInvite, isCeremonyFinal,
-  isCeremonyRunning, isLineageSource, isSystemRoundOrigin, lifecycleBubble, nextStage, stageBadge, STAGE_FLOORS, stageCatLabel,
-  systemRoundCopy, transferSummary
+  agePercent, ceremonyPhase, ceremonySteps, diffLifecycle, earlyHandoffEntry, formatMetricValue, formatReason, handoffFlagVisible,
+  handoffInvite, isCeremonyFinal, isCeremonyRunning, isLineageSource, isSystemRoundOrigin, LIFE_STAGES, lifecycleBubble, nextStage,
+  proposeEarlyHandoff, stageBadge, STAGE_FLOORS, stageCatLabel, systemRoundCopy, transferSummary
 } from './lifecycle-model';
 
 const summary = (patch: Partial<HandoffSummary> & { id: string; state: HandoffState }): HandoffSummary => ({
@@ -170,5 +170,43 @@ describe('system rounds on the timeline', () => {
     expect(isLineageSource('ses_old', 'ses_main', ['ses_old'])).toBe(true);
     expect(isLineageSource('ses_other', 'ses_main', ['ses_old'])).toBe(false);
     expect(isLineageSource(undefined, 'ses_main')).toBe(false);
+  });
+});
+
+describe('early handoff entry', () => {
+  it('stays visible in every life stage, not only in old age', () => {
+    for (const stage of LIFE_STAGES) {
+      const entry = earlyHandoffEntry({ adopted: true, stage });
+      expect(entry.visible).toBe(true);
+      expect(entry.mode).toBe('confirm');
+      expect(entry.label).toBe('提前交接…');
+      expect(entry.note).toContain('不用等到老年');
+    }
+    expect(earlyHandoffEntry({ adopted: false, stage: 'adult' }).visible).toBe(false);
+  });
+
+  it('shows the open handoff instead of asking again, and mentions a busy main session', () => {
+    expect(earlyHandoffEntry({ adopted: true, stage: 'adult', handoff: { id: 'h1', state: 'proposed' } }))
+      .toMatchObject({ mode: 'progress', label: '查看交接提议…' });
+    expect(earlyHandoffEntry({ adopted: true, stage: 'kitten', handoff: { id: 'h2', state: 'spawning' } }))
+      .toMatchObject({ mode: 'progress', label: '查看交接进度…' });
+    expect(earlyHandoffEntry({ adopted: true, stage: 'adult', handoff: { id: 'h3', state: 'done' } }).mode).toBe('confirm');
+    expect(earlyHandoffEntry({ adopted: true, stage: 'adult', busy: true }).note).toContain('等它停下来');
+  });
+
+  it('only proposes when the entry is used, leaving confirmation to the ceremony', async () => {
+    const propose = vi.fn(async () => ({ handoff: { id: 'ahand_early' } }));
+    await expect(proposeEarlyHandoff(propose)).resolves.toBe('ahand_early');
+    expect(propose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show 「该交接了」 for a user-initiated early proposal', () => {
+    expect(handoffFlagVisible(null)).toBe(false);
+    expect(handoffFlagVisible(summary({ id: 'h1', state: 'proposed' }))).toBe(false);
+    expect(handoffFlagVisible(summary({
+      id: 'h2', state: 'proposed', trigger: 'threshold',
+      reasons: [{ metric: 'rounds', level: 'handoff', value: 600, threshold: 600 }]
+    }))).toBe(true);
+    expect(handoffFlagVisible(summary({ id: 'h3', state: 'done', trigger: 'threshold' }))).toBe(false);
   });
 });
