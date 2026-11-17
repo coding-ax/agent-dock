@@ -9,10 +9,10 @@ import { WebBaseUrlInput } from './WebBaseUrlInput';
 import { KeyboardEvent, lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { useMount, useEventListener, useUpdateEffect, useLocalStorageState, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlarmClock, AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, GripVertical, Info, LoaderCircle, Menu, MessageSquare, PanelLeftOpen, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, StickyNote, Trash2, Wrench, X } from 'lucide-react';
+import { AlarmClock, AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MessageSquare, PanelLeftOpen, Pin, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, StickyNote, Trash2, Wrench, X } from 'lucide-react';
 import { Input, InputNumber, Select, Switch } from 'antd';
 import { defaultLarkTraceLimit, validateHighRiskPattern } from '@agent-dock/agent-dock-shared';
-import { api, WebAccessDeniedError, type Agent, type AssistantTask, type Session } from './api';
+import { api, WebAccessDeniedError, type Agent, type AssistantTask, type Project, type Session } from './api';
 import { canSaveHardGate, canToggleHardGate, resolveReasoningEffort, withSavedOption } from './lark-config-form';
 import { useDockStore, type PaneTabKind } from './store';
 import { PaneHost } from './PaneHost';
@@ -33,6 +33,8 @@ import { SessionTitleEditor } from './SessionTitleEditor';
 import { useSyncFormFromRemote } from './useSyncFormFromRemote';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { groupSessions, groupSessionsByTime, relativeTimeLabel, sameSessionTree, sessionActivityTime, sessionLabel } from './session-groups';
+import { mergeProjectGroups } from './project-groups';
+import { isProjectPinned, isSessionPinned, pinnedFirst, splitPinned } from './sidebar-pins';
 import { sessionPaneTab } from './pane-tab';
 import { useDocumentTitle } from './useDocumentTitle';
 import { EMPTY_ITEM_ORDER, applyOrder, moveInList, normalizeItemOrder, type SidebarItemOrder } from './sidebar-order';
@@ -43,6 +45,7 @@ import { AgentConfigDialog } from './AgentConfigDialog';
 import { AssistantSettingsDialog } from './AssistantSettingsDialog';
 import { HandoverDialog } from './HandoverDialog';
 import { ImportSessionDialog } from './ImportSessionDialog';
+import { ImportProjectDialog } from './ImportProjectDialog';
 import { SystemPromptDialog } from './SystemPromptDialog';
 import { ShareAppDialog } from './ShareAppDialog';
 import { AutostartToggle } from './AutostartToggle';
@@ -453,6 +456,7 @@ function SessionRow({ session, agent, botName, parentLabel, active, drag, noteOf
       : sideChat ? <MessageSquare size={12} aria-label="侧边会话" className="shrink-0 text-zinc-400"/> : null}
     {/* 行内不再放任何操作图标：重命名和归档都收进右键/长按菜单，避免 hover 时堆一排按钮。 */}
     <SessionTitleEditor session={session} label={primary} nameClassName="min-w-0 flex-1 truncate text-[14px]" editRequest={renameRequest}/>
+    {session.pinnedAt && <Pin size={11} aria-label="已置顶" className="shrink-0 fill-current text-amber-500"/>}
     <span className="flex shrink-0 items-center justify-end">{trailing}</span>
   </div>;
   // 信息卡一律往右弹：锚点是**整行**（宽度铺满侧栏），而卡片有 320px 宽、十来行高，
@@ -487,6 +491,7 @@ export default function App() {
   // 因此根容器不能带 style prop——React 不管辖内联样式，重渲染才不会覆盖上面的赋值。
   const shellRef = useVisualViewportShell<HTMLDivElement>();
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api.agents(), enabled: !webDenied }); const sessions = useQuery({ queryKey: ['sessions'], queryFn: api.sessions, enabled: !webDenied, refetchInterval: webDenied ? false : 2_000, refetchIntervalInBackground: true }); const larkConfig = useQuery({ queryKey: ['lark-config'], queryFn: api.larkConfig, enabled: !webDenied, refetchInterval: webDenied ? false : 5_000 }); const systemCapabilities = useQuery({ queryKey: ['system-capabilities'], queryFn: api.systemCapabilities, enabled: !webDenied }); const assistantState = useAssistantState(!webDenied);
+  const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects, enabled: !webDenied, refetchInterval: webDenied ? false : 30_000 });
   // 地址栏 → store：首次挂载读一次；浏览器前进/后退再读一次。
   const applyUrlToStore = () => {
     const match = window.location.pathname.match(/^\/sessions\/([^/]+)$/);
@@ -508,6 +513,7 @@ export default function App() {
   const visibleSessions = useMemo(() => sortedSessions.filter(session => session.id !== assistantState.data?.mainSessionId && !session.archivedAt && (sessionFilter === 'all' || sessionFilter === 'local' ? sessionFilter === 'all' || session.source !== 'lark' : session.source === 'lark' && session.sourceId?.startsWith(`${sessionFilter}:`))), [sortedSessions, sessionFilter, assistantState.data?.mainSessionId]);
   const archivedSessions = useMemo(() => sortedSessions.filter(session => session.archivedAt), [sortedSessions]);
   const workspaceGroups = useMemo(() => groupSessions(visibleSessions, agents.data ?? []), [visibleSessions, agents.data]);
+  const { pinned: pinnedSessions, rest: unpinnedSessions } = useMemo(() => splitPinned(visibleSessions, isSessionPinned), [visibleSessions]);
   const mainSessionId = assistantState.data?.mainSessionId ?? undefined;
   // 工作区 / Agent / 会话 三层的手动排序覆盖，持久化。
   const [itemOrder, setItemOrder] = useLocalStorageState<SidebarItemOrder>('agentdock:sidebar-item-order', { defaultValue: EMPTY_ITEM_ORDER });
@@ -521,6 +527,19 @@ export default function App() {
       sessions: applyOrder(group.sessions, order.sessions[`${workspace.cwd}\0${group.agentId}`], session => session.id)
     }))
   })), [workspaceGroups, order]);
+  /**
+   * 项目视图 = 会话派生出的工作区 + 已登记但没有会话的导入项目。
+   * 所有分组仍套用既有手动排序；置顶只把分组提到最前，组内顺序不动。
+   */
+  const baseProjectGroups = useMemo(() => {
+    const orderedByCwd = new Map(orderedGroups.map(group => [group.cwd, group]));
+    return applyOrder(mergeProjectGroups(workspaceGroups, projects.data ?? []), order.workspaces, group => group.cwd)
+      .map(group => {
+        const ordered = orderedByCwd.get(group.cwd);
+        return ordered ? { ...group, agents: ordered.agents } : group;
+      });
+  }, [workspaceGroups, orderedGroups, projects.data, order.workspaces]);
+  const orderedProjectGroups = useMemo(() => pinnedFirst(baseProjectGroups, isProjectPinned), [baseProjectGroups]);
   // 手动排序是否真的在生效：比较渲染结果，陈旧 id 不算数（否则按钮会一直挂着）。
   const manualOrder = useMemo(() => !sameSessionTree(workspaceGroups, orderedGroups), [workspaceGroups, orderedGroups]);
   // 侧栏默认按时间分组；「项目」视图复用 groupSessions 的工作区树。选择持久化。
@@ -689,6 +708,17 @@ export default function App() {
     },
     onError: () => setCreatingPair(undefined)
   });
+  /** 会话置顶只改时间视图；项目置顶只改项目视图，两个 mutation 分开而不是共用一个开关。 */
+  const toggleSessionPin = useMutation({
+    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) => api.setSessionPinned(id, pinned),
+    onSuccess: updated => qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === updated.id ? { ...item, ...updated } : item)),
+    onError: error => setActionError(error instanceof Error ? error.message : String(error))
+  });
+  const toggleProjectPin = useMutation({
+    mutationFn: ({ cwd, pinned }: { cwd: string; pinned: boolean }) => api.setProjectPinned(cwd, pinned),
+    onSuccess: updated => qc.setQueryData<Project[]>(['projects'], current => current?.map(item => item.cwd === updated.cwd ? { ...item, ...updated } : item)),
+    onError: error => setActionError(error instanceof Error ? error.message : String(error))
+  });
 
   // ---- 小猫（主会话）的导航：侧栏卡片、右缘、首页、便签都通过它跳转 ----
   const goAdopt = useMemoizedFn(() => {
@@ -762,7 +792,8 @@ export default function App() {
   // 落点即目标原槽位。保存当前渲染出来的整层 id 顺序（不是只存被拖的那个），
   // 这样「拖过一次」就等于把这一层钉死，之后新增的项再从最前浮上来。
   const reorderWorkspaces = (from: string, to: string) => setItemOrder(current => {
-    const ids = orderedGroups.map(workspace => workspace.cwd);
+    // 用未按置顶分组的顺序保存，避免「置顶」把用户拖出来的相对位置写进持久化排序。
+    const ids = baseProjectGroups.map(workspace => workspace.cwd);
     return { ...normalizeItemOrder(current), workspaces: moveInList(ids, from, to) };
   });
   const reorderAgents = (cwd: string, from: string, to: string) => setItemOrder(current => {
@@ -809,19 +840,28 @@ export default function App() {
           </div>
         </div>
       </div>
+      {sidebarGroupingMode === 'project' && <div className="mt-1 min-w-[268px] px-2">
+        <button type="button" onClick={() => openAppDialog('project-import')} className="flex h-7 w-full items-center gap-1.5 rounded-md border border-dashed border-zinc-300 px-2 text-[12px] font-medium text-zinc-600 transition-colors hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><FolderPlus size={12}/>导入项目</button>
+      </div>}
       {/* 来源筛选从一张大卡片收成搜索框右侧的图标 + 一行「来源：… ✕」标签；不选时不占地方。 */}
       {sessionFilter !== 'all' && <div className="mt-1 flex min-w-[268px] items-center gap-1.5 px-3.5"><div className="flex h-6 min-w-0 flex-1 items-center gap-1 rounded-md bg-zinc-100 px-2 text-[12px] text-zinc-600"><span className="min-w-0 flex-1 truncate">来源：{sessionFilter === 'local' ? '本地' : `飞书 · ${larkConfig.data?.bots.find(bot => bot.appId === sessionFilter)?.name ?? '机器人'}`}</span><button type="button" aria-label="清除来源筛选" onClick={() => setSessionFilter('all')} className="grid h-4 w-4 shrink-0 place-items-center rounded text-zinc-400 transition-colors hover:bg-zinc-200 hover:text-zinc-700"><X size={12}/></button></div></div>}
       <div className="mt-1 flex min-h-0 min-w-[268px] flex-1 flex-col px-2">
         {sessions.isLoading
           ? <div className="space-y-1 px-2 pt-1"><div className="h-[34px] ui-skeleton rounded-lg bg-zinc-200/70"/><div className="h-[34px] ui-skeleton rounded-lg bg-zinc-200/50"/><div className="h-[34px] ui-skeleton rounded-lg bg-zinc-200/40"/></div>
-          : visibleSessions.length
+          : (sidebarGroupingMode === 'project' ? orderedProjectGroups.length > 0 : visibleSessions.length > 0)
             ? <div className="min-h-0 flex-1 overflow-y-auto pb-2">
               {sidebarGroupingMode === 'time'
-                ? groupSessionsByTime(visibleSessions).map(group => <section key={group.key} className="mb-2">
-                    <div className="flex h-7 items-center px-2 text-[12px] font-medium text-zinc-400">{group.label}</div>
-                    {group.sessions.map(session => renderSessionRow(session, sessionDrag(session.id)))}
-                  </section>)
-                : orderedGroups.map(workspace => {
+                ? <>
+                    {pinnedSessions.length > 0 && <section className="mb-2">
+                      <div className="flex h-7 items-center gap-1 px-2 text-[12px] font-medium text-amber-600"><Pin size={11} className="fill-current"/>置顶</div>
+                      {pinnedSessions.map(session => renderSessionRow(session, sessionDrag(session.id)))}
+                    </section>}
+                    {groupSessionsByTime(unpinnedSessions).map(group => <section key={group.key} className="mb-2">
+                      <div className="flex h-7 items-center px-2 text-[12px] font-medium text-zinc-400">{group.label}</div>
+                      {group.sessions.map(session => renderSessionRow(session, sessionDrag(session.id)))}
+                    </section>)}
+                  </>
+                : orderedProjectGroups.map(workspace => {
                   const collapsed = collapsedWorkspaces.has(workspace.cwd);
                   const workspaceDrag = itemDrag('workspaces', workspace.cwd, reorderWorkspaces);
                   const busyCount = workspace.agents.reduce((count, group) => count + group.sessions.filter(session => busyStates.has(session.state)).length, 0);
@@ -830,12 +870,14 @@ export default function App() {
                       {collapsed ? <ChevronRight size={12} className="shrink-0 text-zinc-400"/> : <ChevronDown size={12} className="shrink-0 text-zinc-400"/>}
                       <Folder size={12} className="shrink-0 text-zinc-400"/>
                       <HoverTooltipText content={workspace.cwd} className="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-600">{workspace.label}</HoverTooltipText>
+                      {workspace.missing && <span title="路径不可用（可能已被删除或移动）" aria-label="项目路径不可用"><AlertTriangle size={11} className="shrink-0 text-amber-500"/></span>}
+                      <button type="button" title={workspace.pinnedAt ? '取消置顶项目' : '置顶项目'} aria-label={workspace.pinnedAt ? '取消置顶项目' : '置顶项目'} aria-pressed={Boolean(workspace.pinnedAt)} onClick={event => { event.stopPropagation(); toggleProjectPin.mutate({ cwd: workspace.cwd, pinned: !workspace.pinnedAt }); }} className={`grid h-5 w-5 shrink-0 place-items-center rounded transition-all hover:bg-zinc-200 hover:text-zinc-800 focus:opacity-100 max-md:opacity-100 ${workspace.pinnedAt ? 'text-amber-500 opacity-100' : 'text-zinc-400 opacity-0 group-hover:opacity-100'}`}><Pin size={11} className={workspace.pinnedAt ? 'fill-current' : ''}/></button>
                       {busyCount > 0 && <span className="ui-status-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"/>}
                       <span role="button" tabIndex={-1} onClick={event => { event.stopPropagation(); const rect = (event.currentTarget as HTMLElement).getBoundingClientRect(); setAgentPicker({ cwd: workspace.cwd, top: rect.bottom + 4, left: Math.min(rect.left, window.innerWidth - 224) }); }} className="grid h-5 w-5 shrink-0 place-items-center rounded text-zinc-400 opacity-0 transition-opacity hover:bg-zinc-200 hover:text-zinc-800 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100"><Plus size={12}/></span>
                       <GripVertical size={11} className="shrink-0 cursor-grab text-zinc-300 opacity-0 transition-opacity group-hover:opacity-100"/>
                       <span className="shrink-0 text-[12px] tabular-nums text-zinc-400">{workspace.agents.reduce((count, group) => count + group.sessions.length, 0)}</span>
                     </div>
-                    {!collapsed && <div className="ml-1.5 border-l border-zinc-200 pl-1">{workspace.agents.map(group => {
+                    {!collapsed && <div className="ml-1.5 border-l border-zinc-200 pl-1">{workspace.agents.length ? workspace.agents.map(group => {
                       const groupKey = `${workspace.cwd}\0${group.agentId}`;
                       const agentCollapsed = collapsedAgentGroups.has(groupKey);
                       const agentDrag = itemDrag(`agents:${workspace.cwd}`, group.agentId, (from, to) => reorderAgents(workspace.cwd, from, to));
@@ -856,11 +898,15 @@ export default function App() {
                           {(group.sideChats.get(session.id) ?? []).map(child => renderSessionRow(child, sessionDrag(child.id)))}
                         </div>)}</div>}
                       </div>;
-                    })}</div>}
+                    }) : <div className="px-2 py-1.5 text-[12px] text-zinc-400">还没有会话，点上面的 + 新建</div>}</div>}
                   </div>;
                 })}
             </div>
-            : <div className="px-3 py-6 text-xs leading-5 text-zinc-500">当前分类暂无会话。</div>}
+            : <div className="px-3 py-6 text-xs leading-5 text-zinc-500">
+                {sidebarGroupingMode === 'project'
+                  ? <div className="space-y-2"><p>还没有导入项目。</p><button type="button" onClick={() => openAppDialog('project-import')} className="inline-flex h-7 items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2.5 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50"><FolderPlus size={12}/>导入项目</button></div>
+                  : '当前分类暂无会话。'}
+              </div>}
       </div>
       {/* 两个入口都开弹窗：归档列表早先挂在会话树最底部，点了要滚到底才看得见，看起来像点不开。 */}
       <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onAssistant={openAssistantSettings} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
@@ -914,6 +960,7 @@ export default function App() {
         onClose={() => setSessionMenu(undefined)}
         onRename={() => { setSessionMenu(undefined); setRenameRequest(current => ({ sessionId: session.id, nonce: (current?.nonce ?? 0) + 1 })); }}
         onArchive={() => { setSessionMenu(undefined); quickArchiveController.open(session.id); }}
+        onTogglePin={() => { setSessionMenu(undefined); toggleSessionPin.mutate({ id: session.id, pinned: !session.pinnedAt }); }}
         onNotice={text => copyToast.show(text, 'info')}
       />;
     })()}
@@ -937,6 +984,14 @@ export default function App() {
       share: <ShareAppDialog onClose={closeAppDialog}/>,
       archived: <ArchivedSessionsDialog sessions={archivedSessions} agents={agents.data ?? []} mainSessionId={mainSessionId} onClose={closeAppDialog} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
       import: <ImportSessionDialog agents={agents.data ?? []} onClose={closeAppDialog} onImported={session => selectSession(session.id)}/>,
+      'project-import': <ImportProjectDialog onClose={closeAppDialog} onImported={(project, duplicate) => {
+        closeAppDialog();
+        setSidebarGrouping('project');
+        setSidebarCollapsed(false);
+        setSidebarOpen(false);
+        // 重复导入不造第二条记录，用全局 toast 明确告诉用户点的是哪一个。
+        if (duplicate) copyToast.show(`项目已存在：${project.cwd}`, 'info');
+      }}/>,
       search: <SessionSearchDialog agents={agents.data ?? []} sessions={sessions.data ?? []} onClose={closeAppDialog} onOpen={session => { closeAppDialog(); selectSession(session.id); }}/>
     }}/>
     {(() => {

@@ -43,8 +43,22 @@ describe('processing row keeps its place while tools come and go', () => {
     expect(slots(html)).toBe(0);
   });
 
+  it('keeps elapsed time visible when a tool replaces the processing row', () => {
+    const html = panel([group([tool('c1', 'running')])]);
+    expect(html).not.toContain('处理中');
+    expect(html).toContain('已用时');
+  });
+
   it('never reserves the row once the turn is over', () => {
     expect(slots(panel([group([tool('c1', 'completed')])], false))).toBe(0);
+  });
+
+  it('still shows elapsed time after finishing without any recorded steps', () => {
+    const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(ActivityPanel, {
+      groups: [], ongoing: false, sessionId: 's1', modelLabel: 'Claude',
+      startedAt: '2026-01-01T00:00:00.000Z', completedAt: '2026-01-01T00:08:00.000Z'
+    })));
+    expect(html).toContain('已处理 8 分钟');
   });
 });
 

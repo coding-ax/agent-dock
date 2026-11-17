@@ -19,19 +19,21 @@ describe('SendTimeHint', () => {
     vi.useRealTimers();
   });
 
-  it('is absolutely positioned and carries the stored timestamp without taking its own tab stop', () => {
+  it('is absolutely positioned with breathing room and a left-aligned text edge', () => {
     const html = renderToStaticMarkup(createElement(SendTimeHint, { timestamp }));
     expect(html).toContain('ui-send-time');
     expect(html).toContain('absolute');
-    expect(html).toContain('-bottom-3');
+    expect(html).toContain('-bottom-7');
+    expect(html).toContain('py-0.5');
+    expect(html).toContain('left-0');
     expect(html).toContain(`dateTime="${timestamp}"`);
     expect(html).toContain('tabindex="-1"');
     expect(html).toContain(`>发送 ${formatSendTime(timestamp)}</time>`);
   });
 
   it('aligns the user bubble hint to the right edge', () => {
-    expect(renderToStaticMarkup(createElement(SendTimeHint, { timestamp, align: 'right' }))).toContain('right-1');
-    expect(renderToStaticMarkup(createElement(SendTimeHint, { timestamp }))).toContain('left-1');
+    expect(renderToStaticMarkup(createElement(SendTimeHint, { timestamp, align: 'right' }))).toContain('right-0');
+    expect(renderToStaticMarkup(createElement(SendTimeHint, { timestamp }))).toContain('left-0');
   });
 
   it('labels a finished turn separately from the send time', () => {
@@ -55,6 +57,7 @@ describe('SendTimeHint', () => {
     expect(html).toContain('data-timeline-turn="turn-1"');
     expect(html).toContain('tabindex="0"');
     expect(html).toContain('role="group"');
+    expect(html).toContain('mb-10');
     expect(html).toContain('aria-label="完成于 2026-11-12 21:50:00"');
   });
 

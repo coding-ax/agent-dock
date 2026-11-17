@@ -5,6 +5,9 @@ import { formatSendTime, formatSendTimeTitle, formatUserMessageTime } from './se
  * 轮次末尾的时间角标。
  *
  * 绝对定位挂在片段下方：不参与布局，所以悬停时出现、移开后隐藏都不会让时间线跳动。
+ * 角标高 16px，文字左边缘与本轮内容左边缘重合，往上 12px 离开本轮内容；
+ * 轮次容器在带时间时改用 40px 轮间距（mb-10），角标占 16px 后上下各余 12px，
+ * 不贴卡片也不挤下一条消息。
  * 桌面端靠悬停或键盘聚焦出现；触摸设备没有 hover，CSS 让它常驻成一行小字（见 index.css）。
  */
 export const SendTimeHint = memo(function SendTimeHint({ timestamp, align = 'left', kind = '发送' }: { timestamp: string; align?: 'left' | 'right'; kind?: '发送' | '完成' }) {
@@ -14,7 +17,7 @@ export const SendTimeHint = memo(function SendTimeHint({ timestamp, align = 'lef
     dateTime={timestamp}
     title={`${kind}于 ${formatSendTimeTitle(timestamp)}`}
     tabIndex={-1}
-    className={`ui-send-time absolute -bottom-3 ${align === 'right' ? 'right-1' : 'left-1'} z-10 select-none whitespace-nowrap rounded bg-canvas/85 px-1 text-[11px] leading-3 tabular-nums text-zinc-500 outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50`}
+    className={`ui-send-time absolute -bottom-7 ${align === 'right' ? 'right-0' : 'left-0'} z-10 select-none whitespace-nowrap py-0.5 text-[11px] leading-3 tabular-nums text-zinc-500 outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50`}
   >{kind} {timeText}</time>;
 });
 
@@ -40,7 +43,7 @@ export const TimelineTurn = memo(function TimelineTurn({ turnId, time, children 
   const title = time ? formatSendTimeTitle(time.timestamp) : '';
   const kind = time?.kind ?? '发送';
   return <div
-    className={`relative ${time ? 'ui-send-time-row focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/40 focus-visible:ring-offset-4 focus-visible:ring-offset-canvas' : ''}`}
+    className={`relative ${time ? 'ui-send-time-row mb-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/40 focus-visible:ring-offset-4 focus-visible:ring-offset-canvas' : ''}`}
     data-timeline-turn={turnId}
     {...(time ? { tabIndex: 0, role: 'group', 'aria-label': `${kind}于 ${title}` } : {})}
   >

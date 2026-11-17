@@ -10,10 +10,10 @@ import { sessionUrl } from './session-url';
  */
 
 export const CONTEXT_MENU_WIDTH = 240;
-export const CONTEXT_MENU_HEIGHT = 296;
+export const CONTEXT_MENU_HEIGHT = 336;
 const CONTEXT_MENU_GAP = 8;
 
-export type SessionContextMenuAction = 'rename' | 'copy-link' | 'copy-id' | 'copy-title' | 'copy-info' | 'archive';
+export type SessionContextMenuAction = 'rename' | 'pin' | 'copy-link' | 'copy-id' | 'copy-title' | 'copy-info' | 'archive';
 
 export type SessionContextMenuItem = { kind: 'item'; action: SessionContextMenuAction; label: string; value?: string; danger?: boolean };
 export type SessionContextMenuEntry = SessionContextMenuItem | { kind: 'separator' };
@@ -46,6 +46,7 @@ export function sessionContextMenuEntries(session: Session, options: { agentName
   const title = sessionLabel(session, options.agentName);
   return [
     { kind: 'item', action: 'rename', label: '重命名会话' },
+    { kind: 'item', action: 'pin', label: session.pinnedAt ? '取消置顶' : '置顶会话' },
     { kind: 'separator' },
     { kind: 'item', action: 'copy-link', label: '复制会话链接', value: sessionLink(session.id, options.origin) },
     { kind: 'item', action: 'copy-id', label: '复制会话 ID', value: session.id },

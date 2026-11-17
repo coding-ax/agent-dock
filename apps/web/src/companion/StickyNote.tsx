@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronUp, Clock, ExternalLink, ListChecks, LoaderCircle, MessageCircleHeart, PanelRightOpen, Play, RotateCcw, Trash2 } from 'lucide-react';
 import { api, type Agent, type AssistantReview, type AssistantTask } from '../api';
 import { AgentIcon } from '../AgentIcon';
+import { elapsedText, resolveElapsed } from '../elapsed';
 import { workspaceLabel } from '../session-groups';
+import { useElapsedNow } from '../useElapsedNow';
 import { noteTilt, noteTone, noteToneLabel, sinceLabel, tapeTilt } from './companion-model';
 import { burst, prefersReducedMotion } from './effects';
 import { useCompanionNav } from './useCompanion';
@@ -104,6 +106,12 @@ export const StickyNote = memo(function StickyNote({ task, index, expanded, high
   };
 
   const live = task.state === 'running';
+  // 便签上一直显示耗时：排队看等了多久，进行中每秒递增，待验收/已完成定格在执行结束。
+  // 父级 now 每 30 秒推一次，实时部分由这里的定时器补齐。
+  const initialElapsed = resolveElapsed(task, now);
+  const clockNow = useElapsedNow(initialElapsed.live, initialElapsed.phase === 'running' ? 1_000 : 30_000);
+  const elapsed = resolveElapsed(task, clockNow);
+  const elapsedValue = elapsedText(elapsed);
   const since = sinceLabel(closed ? task.closedAt ?? task.updatedAt : task.updatedAt, now);
   const style = { '--tilt': `${noteTilt(task.id)}deg`, '--tape-tilt': `${tapeTilt(task.id)}deg` } as CSSProperties;
   const actionLabelPrefix = `便签「${task.title}」`;
@@ -126,7 +134,7 @@ export const StickyNote = memo(function StickyNote({ task, index, expanded, high
           <span className="ui-note-dot"/>
           <span className="truncate">{noteToneLabel[tone]}{task.round > 0 ? ` · 返工 ${task.round} 次` : ''}</span>
           {/* 盖了章的便签右上角留给印章，时间挪到底下那行。 */}
-          {since && !closed && <span className="ml-auto shrink-0 font-normal text-zinc-500">{since}</span>}
+          {elapsedValue && !closed && <span className="ml-auto shrink-0 font-normal tabular-nums text-zinc-500" title={since ? `最后活动 ${since}` : undefined}>{elapsedValue}</span>}
         </span>
         <span className="ui-note-title">{task.title}</span>
         {live && <span className="ui-note-progress" aria-hidden="true"/>}
@@ -134,7 +142,7 @@ export const StickyNote = memo(function StickyNote({ task, index, expanded, high
           {task.doneWhen.length > 0 && <span className="inline-flex items-center gap-1"><ListChecks size={11}/>{task.doneWhen.length} 条标准</span>}
           {task.expectMinutes ? <span className="inline-flex items-center gap-1"><Clock size={11}/>约 {task.expectMinutes} 分钟</span> : null}
           {(agent || task.agentId) && <span className="inline-flex min-w-0 items-center gap-1"><AgentIcon agentId={task.agentId} agentName={agent?.name} size={11}/><span className="truncate">{agent?.name ?? task.agentId}</span></span>}
-          {closed && since && <span className="shrink-0">{since}</span>}
+          {closed && elapsedValue && <span className="shrink-0 tabular-nums" title={since ? `完成于 ${since}` : undefined}>{elapsedValue}</span>}
         </span>
       </button>
       <div className="ui-note-details" aria-hidden={!expanded} inert={!expanded}>

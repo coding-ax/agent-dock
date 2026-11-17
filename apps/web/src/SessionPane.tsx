@@ -10,6 +10,7 @@ import { TimelineTurn } from './SendTimeHint';
 import { Composer } from './Composer';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { AgentIcon } from './AgentIcon';
+import { elapsedText, resolveElapsed } from './elapsed';
 import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, parsePromptToDraft, queuedImageThumbnailUrl, type ComposerReference } from './composer-utils';
 import { useTimelineAutoScroll } from './useTimelineAutoScroll';
 import { useHealOnFocus } from './useHealOnFocus';
@@ -20,6 +21,7 @@ import { stateLabels, stateTone, busyStates } from './session-states';
 import { ConfirmDialog, IconButton } from './ui-controls';
 import { openAppDialog } from './dialog-store';
 import { larkSessionAppLink } from './lark-session-link';
+import { fetchTaskSnapshot, mergeTaskSnapshots, upsertTask } from './task-snapshots';
 import { sessionLabel, workspaceLabel } from './session-groups';
 import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
 import { useDockStore, type PaneKind } from './store';
@@ -32,6 +34,7 @@ import { useCompanionStore } from './companion/companion-store';
 import { sessionPaneTab } from './pane-tab';
 import { clearSessionDraft, getBrowserDraftStorage, loadSessionDraft, MAX_DRAFT_CHARS, saveSessionDraft } from './session-drafts';
 import { useSessionDraftWriter } from './use-session-draft';
+import { useElapsedNow } from './useElapsedNow';
 
 /** 主会话输入框的占位：单独成组件，小猫改名时只重渲染这一小块，不拖着整条时间线。 */
 function CompanionPlaceholder() {
@@ -159,7 +162,13 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     },
     enabled: true
   });
-  const tasks = useQuery({ queryKey: ['tasks', session.id], queryFn: () => api.tasks(session.id), refetchInterval: 2_000, refetchIntervalInBackground: true });
+  // 轮询请求可能先发出、后返回，把已经切成 running 的任务又写回 queued（见 task-snapshots.ts）。
+  const tasks = useQuery({
+    queryKey: ['tasks', session.id],
+    queryFn: () => fetchTaskSnapshot(() => qc.getQueryData<Task[]>(['tasks', session.id]), () => api.tasks(session.id)),
+    refetchInterval: 2_000,
+    refetchIntervalInBackground: true
+  });
   const systemCapabilities = useQuery({ queryKey: ['system-capabilities'], queryFn: api.systemCapabilities, staleTime: 300_000 });
   const outputLabel = session.model ?? agent?.name ?? session.agentId ?? 'Agent';
   const models = useQuery({ queryKey: agentModelsQueryKey(session.agentId, session.model, session.sshHost), queryFn: () => loadAgentModels(session.agentId, session.model, false, session.sshHost), enabled: !session.archivedAt, initialData: () => session.sshHost ? undefined : readCachedAgentModels(session.agentId, session.model), initialDataUpdatedAt: 0, refetchOnMount: 'always', staleTime: 60_000 });
@@ -169,6 +178,22 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const composerContext = useMemo(() => contextStatsFromEvents(events.data), [events.data]);
   const advertisedCommands = useMemo(() => commandsFromEvents(events.data), [events.data]);
   const sessionBusy = busyStates.has(session.state);
+  // 会话头部一直显示「本轮」耗时：任务完成后仍按最后一次运行时间定格。
+  // 旧记录没有 startedAt 时由 elapsed.ts 退化到 createdAt，并标「约」。
+  const latestRuntimeTask = useMemo(() => [...(tasks.data ?? [])]
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .at(-1), [tasks.data]);
+  const headerElapsedTick = useElapsedNow(
+    latestRuntimeTask?.status === 'running' || latestRuntimeTask?.status === 'queued',
+    latestRuntimeTask?.status === 'running' ? 1_000 : 30_000
+  );
+  const headerElapsed = latestRuntimeTask
+    ? elapsedText(resolveElapsed({
+        state: latestRuntimeTask.status,
+        createdAt: latestRuntimeTask.createdAt,
+        updatedAt: latestRuntimeTask.updatedAt
+      }, headerElapsedTick))
+    : undefined;
   // 标题栏时钟上的高亮：只算启用中的。和弹窗共用同一个缓存键，弹窗里的增删改会自动刷新这里。
   const schedules = useQuery({ queryKey: ['schedules', session.id], queryFn: () => api.schedules(session.id), enabled: !session.archivedAt, staleTime: 30_000 });
   const activeSchedules = schedules.data?.filter(item => item.enabled).length ?? 0;
@@ -214,8 +239,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
         clearSessionDraft(getBrowserDraftStorage(), session.id);
       }
       const existing = qc.getQueryData<Task[]>(['tasks', session.id])?.find(task => task.id === result.task.id);
-      const task = existing && existing.status !== 'queued' ? existing : result.task;
-      qc.setQueryData<Task[]>(['tasks', session.id], current => [...(current ?? []).filter(item => item.id !== task.id), task]);
+      const task = existing ? mergeTaskSnapshots([existing], [result.task])[0]! : result.task;
+      qc.setQueryData<Task[]>(['tasks', session.id], current => upsertTask(current, task));
       // 提交时以为会马上执行，服务端却说前面还有任务（别处的消息、定时任务抢先一步）：改进面板。
       // 留在时间线里的话，前面那一轮的输出会全挂到这条气泡下面。
       const queuedAhead = (result.task as Task & { queuedAhead?: number }).queuedAhead ?? 0;
@@ -287,6 +312,12 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     enabled: events.isSuccess,
     runId: session.runId,
     queryClient: qc,
+    onReconnect: () => {
+      // 断线期间漏掉的 task 事件不会补发：重连后立刻重取任务，并把本轮事件自愈一遍。
+      void tasks.refetch();
+      healNextFetch.current = true;
+      void events.refetch();
+    },
     onSidecarEvent: event => {
       // 改名（用户手改 / Agent 推来）也是走 status 事件的，和 model / reasoningEffort 同一个通道。
       // title 为 null 表示这一档没有名字（回落链的另一档接手），所以显式赋 null 而不是跳过。
@@ -294,7 +325,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       if (event.type === 'status' && Object.hasOwn(stateLabels, event.data.state)) qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, state: event.data.state, ...(typeof event.data.model === 'string' ? { model: event.data.model } : {}), ...(typeof event.data.reasoningEffort === 'string' ? { reasoningEffort: event.data.reasoningEffort } : {}) } : item));
       if (event.type === 'task' && event.data.task) {
         const task = event.data.task as Task;
-        qc.setQueryData<Task[]>(['tasks', session.id], current => [...(current ?? []).filter(item => item.id !== task.id), task]);
+        qc.setQueryData<Task[]>(['tasks', session.id], current => upsertTask(current, task));
         // SSE 可能比 send 响应先到：这里同样认领、并在任务开始后把乐观消息标成 settled。
         setOptimisticMessages(current => bindOptimisticTask(current, task));
       }
@@ -386,6 +417,10 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             <span className="min-w-0 truncate">{agent?.name ?? session.agentId}</span>
             <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>
             <span className="shrink-0">{stateLabels[session.state] ?? session.state}</span>
+            {headerElapsed && <>
+              <span className="shrink-0 text-zinc-300">·</span>
+              <span className="shrink-0 tabular-nums" title="本轮执行耗时；刷新或重连后按服务端时间重新计算">{headerElapsed}</span>
+            </>}
             <span className="shrink-0 text-zinc-300">·</span>
             <span title={session.cwd} className="min-w-0 truncate">{workspaceLabel(session.cwd)}</span>
             {session.sshHost && <span title={`通过 SSH 在 ${session.sshHost} 上运行`} className="shrink-0 rounded border border-sky-200 bg-sky-50 px-1 py-px text-[12px] font-medium leading-4 text-sky-700">SSH · {session.sshHost}</span>}

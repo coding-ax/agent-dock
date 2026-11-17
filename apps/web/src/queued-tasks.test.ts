@@ -30,6 +30,52 @@ describe('queued task panel visibility', () => {
     expect(waitingQueuedTasks(tasks, true)).toEqual([]);
   });
 
+  it('keeps a started prompt out of the panel when a stale poll brings back its queued snapshot', () => {
+    // 真实现场：send 后任务先 queued（Agent 冷启动约 2.5s），SSE 已推 running，
+    // 但更早发出的 tasks 轮询这时才返回 queued，把缓存写回去。乐观消息已经 settled，
+    // 不再参与 inTimeline 过滤——面板于是和正在跑的那一轮同时显示同一条消息。
+    const createdAt = '2026-01-01T00:00:01.000Z';
+    const settled: OptimisticMessage = { id: 'local-1', prompt: 'p', createdAt, placement: 'timeline', taskId: 't2', settled: true };
+    const staleQueued = { ...task('t2', 'queued', createdAt), prompt: 'p' };
+    const tasks = [task('t1', 'running'), staleQueued];
+    expect(waitingQueuedTasks(tasks, true, [settled])).toEqual([]);
+    // 正常的 running 快照下：面板为空，时间线里那一轮恰好出现一次。
+    const started = [task('t1', 'running'), { ...staleQueued, status: 'running', updatedAt: '2026-01-01T00:00:02.000Z' }];
+    const rows = buildTimeline([], started, [settled]).filter(item => item.data.role === 'user' && item.data.text === 'p');
+    expect(rows).toHaveLength(1);
+    expect(waitingQueuedTasks(started, true, [settled])).toEqual([]);
+  });
+
+  it('walks the reported sequence end to end: send → running → late queued poll → refresh', () => {
+    // 复刻截图：会话空闲时发送（气泡进时间线），Agent 冷启动期间任务还是 queued，
+    // 2.5 秒后 SSE 推 running，紧接着一次更早发出的 tasks 轮询把 queued 写回缓存。
+    const createdAt = '2026-01-01T00:00:00.000Z';
+    const prompt = '我们处理中的任务为什么不能一直看到执行耗时？';
+    const optimistic: OptimisticMessage = { id: 'local-1', prompt, createdAt, placement: 'timeline' };
+    const queued = { ...task('t1', 'queued', createdAt), prompt };
+    const running = { ...queued, status: 'running', updatedAt: '2026-01-01T00:00:03.000Z' };
+    const userRows = (tasks: Task[], messages: OptimisticMessage[]) =>
+      buildTimeline([], tasks, messages).filter(item => item.data.role === 'user' && item.data.text === prompt);
+
+    // t0 刚提交：面板不列（气泡已在时间线）。
+    expect(waitingQueuedTasks([queued], false, [optimistic])).toEqual([]);
+    expect(userRows([queued], [optimistic])).toHaveLength(1);
+
+    // t1 SSE running：乐观消息 settled，面板和时间线都只留时间线这一处。
+    const settled = bindOptimisticTask([optimistic], running);
+    expect(settled[0]!.settled).toBe(true);
+    expect(waitingQueuedTasks([running], true, settled)).toEqual([]);
+    expect(userRows([running], settled)).toHaveLength(1);
+
+    // t2 迟到的轮询把 queued 写回缓存：修复前这里会变成「时间线已用时 + 面板排队中」两处。
+    expect(waitingQueuedTasks([queued], true, settled)).toEqual([]);
+    expect(userRows([queued], settled)).toHaveLength(0);
+
+    // t3 刷新：乐观消息是组件内 state，不持久化；只按服务端快照渲染。
+    expect(waitingQueuedTasks([running], true, [])).toEqual([]);
+    expect(userRows([running], [])).toHaveLength(1);
+  });
+
   it('tolerates a missing task list', () => {
     expect(waitingQueuedTasks(undefined, true)).toEqual([]);
     expect(waitingQueuedTasks(undefined, false)).toEqual([]);

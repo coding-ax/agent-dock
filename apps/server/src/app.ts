@@ -398,6 +398,29 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     return { agentId: agent.id, agentName: agent.name, ...result };
   });
   app.get('/api/sessions', async () => runtime.listSessions());
+  /**
+   * 项目视图的持久化列表。`exists` 是展示层信息：导入过的目录可能被删除或移动，
+   * 置顶项仍然留在列表里并带警告，而不是静默消失。会话启动时也会 ensure，
+   * 所以历史工作目录即使没导入过也在这里。
+   */
+  app.get('/api/projects', async () => Promise.all((await runtime.listProjects()).map(async project => ({
+    ...project,
+    exists: await stat(project.cwd).then(info => info.isDirectory()).catch(() => false)
+  }))));
+  // 只登记项目路径，不执行命令；路径校验（绝对路径 / 存在 / 是目录 / 读写权限）在 runtime 内。
+  app.post<{ Body: { path?: string } }>('/api/projects', async request => runtime.registerProject(request.body?.path));
+  // 项目 id 含绝对路径，不适合放在 URL 里，统一用 body 传 cwd。
+  app.patch<{ Body: { cwd?: string; pinned?: boolean } }>('/api/projects/pin', async request => {
+    const cwd = typeof request.body?.cwd === 'string' ? request.body.cwd.trim() : '';
+    if (!cwd) throw new RuntimeError('PROJECT_PATH_REQUIRED', '缺少项目路径', 400);
+    if (typeof request.body?.pinned !== 'boolean') throw new RuntimeError('INVALID_PIN', 'pinned 必须是布尔值', 400);
+    return runtime.setProjectPinned(cwd, request.body.pinned);
+  });
+  // 会话置顶只影响「时间」视图；项目置顶只影响「项目」视图，两套互不干扰。
+  app.post<{ Params: { id: string }; Body: { pinned?: boolean } }>('/api/sessions/:id/pin', async request => {
+    if (typeof request.body?.pinned !== 'boolean') throw new RuntimeError('INVALID_PIN', 'pinned 必须是布尔值', 400);
+    return runtime.setSessionPinned(request.params.id, request.body.pinned);
+  });
   // 只透传白名单字段：resumeSessionId / importTurns 只能由 /api/sessions/import 生成，
   // import、lark 来源由各自入口建会话，不能被普通建会话请求冒充。
   app.post<{ Body: { agentId: string; cwd?: string; model?: string; reasoningEffort?: string; systemPrompt?: string; source?: string; sourceId?: string } }>('/api/sessions', async request => {

@@ -132,20 +132,5 @@ export function toolActionLabel(presentation: ReturnType<typeof toolPresentation
   return `${prefix}调用${presentation.label}`;
 }
 
-export function elapsedMilliseconds(startedAt?: string, completedAt?: string, now = Date.now()) {
-  if (!startedAt) return;
-  const start = Date.parse(startedAt);
-  const end = completedAt ? Date.parse(completedAt) : now;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return;
-  return end - start;
-}
-
-export function formatElapsed(milliseconds?: number) {
-  if (milliseconds === undefined) return;
-  if (milliseconds < 1_000) return `${Math.max(1, Math.round(milliseconds))} 毫秒`;
-  const totalSeconds = Math.round(milliseconds / 1_000);
-  if (totalSeconds < 60) return `${totalSeconds} 秒`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return seconds ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
-}
+// 耗时计算与格式化统一放在 elapsed.ts；这里保留旧导出，避免时间线调用点大改。
+export { elapsedMilliseconds, formatElapsed } from './elapsed';

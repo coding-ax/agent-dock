@@ -154,6 +154,11 @@ export interface Session {
   customTitle?: string | null;
   /** Agent 通过 ACP `session_info_update` 推来的名字。原样留着，供清除自定义名后回退。 */
   agentTitle?: string | null;
+  /**
+   * 置顶时间。非空即置顶，只在「时间」视图里生效；与项目的置顶互相独立。
+   * 归档时自动清空，归档会话不能再被置顶。
+   */
+  pinnedAt?: string | null;
 }
 
 /**
@@ -210,6 +215,11 @@ export interface SessionRepository {
   save(session: Session): Promise<void>;
   /** 会话名的唯一写入口。按列定向更新，未传的档位保持原值。 */
   saveTitles(id: string, patch: { customTitle?: string | null; agentTitle?: string | null; updatedAt?: string }): Promise<void>;
+  /**
+   * 置顶状态唯一写入口。与 saveTitles 同理：整行 save 的入参可能是过期快照，
+   * 让置顶走窄路径，才不会被正在跑的会话收尾时覆盖回 null。
+   */
+  savePinned(id: string, pinnedAt: string | null): Promise<void>;
 }
 export interface TaskRecord { id: string; sessionId: string; prompt: string; /** 实际提交给 ACP Agent 的本轮文本；旧任务或未执行任务为空。 */ sentPrompt?: string | null; /** 本轮最终输出（该轮最后一条 assistant 文本）；未跑完判定流程的轮次为空。 */ finalText?: string | null; status: string; /** 任务来源；`injected` 表示 daemon 注入的督办消息，网页不渲染成用户气泡。 */ origin?: string | null; createdAt: string; updatedAt: string }
 export interface TaskRepository { save(task: TaskRecord): Promise<void>; listBySession(sessionId: string): Promise<TaskRecord[]>; firstPromptBySessions(sessionIds: string[]): Promise<Record<string, string>> }
@@ -331,6 +341,34 @@ export interface ArtifactRepository {
   saveError(sessionId: string, message: string, details?: unknown): Promise<void>;
 }
 
+/**
+ * 项目登记表。既是「项目」视图的持久化来源，也让用户导入的、还没有会话的目录
+ * 能立刻出现在列表里。id 固定为 `local:<real cwd>`，同路径天然去重。
+ */
+export interface ProjectRecord {
+  id: string;
+  machineId?: string | null;
+  name: string;
+  cwd: string;
+  /** 非空即置顶。只影响「项目」视图，与会话置顶互相独立。 */
+  pinnedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectRepository {
+  list(): Promise<ProjectRecord[]>;
+  get(id: string): Promise<ProjectRecord | undefined>;
+  getByCwd(cwd: string): Promise<ProjectRecord | undefined>;
+  /**
+   * 会话启动时登记工作目录。已存在时只刷新 updatedAt，**不碰 pinnedAt / name**，
+   * 否则每次开会话都会把用户置顶或改过的名字冲掉。
+   */
+  ensure(cwd: string): Promise<ProjectRecord>;
+  save(project: ProjectRecord): Promise<void>;
+  setPinned(id: string, pinnedAt: string | null): Promise<void>;
+}
+
 export interface RepositoryBundle {
   agents: AgentRepository;
   sessions: SessionRepository;
@@ -340,6 +378,7 @@ export interface RepositoryBundle {
   channelMappings: ChannelMappingRepository;
   schedules: ScheduleRepository;
   artifacts: ArtifactRepository;
+  projects: ProjectRepository;
   close(): void;
 }
 

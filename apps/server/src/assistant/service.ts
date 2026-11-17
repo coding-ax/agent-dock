@@ -5,6 +5,7 @@ import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { now, RuntimeError, type RepositoryBundle, type Session, type SessionInterruptIntent } from '@agent-dock/agent-dock-shared';
 import { resolveLoginShell } from '../terminal-manager.js';
 import { AssistantStore } from './store.js';
+import { beginTaskRun, finishTaskRun } from './timing.js';
 import { AssistantLifecycle } from './lifecycle-service.js';
 import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER, isHandoffExecuting } from './lifecycle.js';
 import { LarkAvatarResolutionError, larkAvatarResolutionHttpStatus } from '../lark-avatar/id-resolution.js';
@@ -434,6 +435,7 @@ export class AssistantService {
     if (event.state === 'failed' || event.state === 'interrupted') {
       if (task.state !== 'needs_user') {
         task.state = 'needs_user';
+        finishTaskRun(task);
         this.store.saveTask(task);
         if (event.state === 'interrupted' && isIntentionalInterrupt(event.interruptIntent)) {
           this.signal('interrupted', task.title, '侧边会话被主动打断，等待你决定返工/取消/验收', task.id, event.sessionId);
@@ -448,6 +450,7 @@ export class AssistantService {
         // runtime 对「轮次内失败」的会话会回收成 idle 并带上 error，好让同一会话继续接活；
         // 这不是正常完成，仍要按失败督办，否则真实崩溃会被误报成待验收。
         task.state = event.error ? 'needs_user' : 'review';
+        finishTaskRun(task);
         this.store.saveTask(task);
         if (event.error) this.signal('failed', task.title, `侧边会话失败：${event.error}`, task.id, event.sessionId);
         else this.signal('review', task.title, '侧边会话这一轮结束，等待验收', task.id, event.sessionId);
@@ -517,6 +520,7 @@ export class AssistantService {
       if (session.state === 'failed' || session.state === 'interrupted') {
         if (task.state !== 'needs_user') {
           task.state = 'needs_user';
+          finishTaskRun(task);
           this.store.saveTask(task);
           if (session.state === 'interrupted' && isIntentionalInterrupt(session.interruptIntent)) {
             this.signal('interrupted', task.title, '侧边会话被主动打断，等待你决定返工/取消/验收', task.id, task.sessionId);
@@ -528,6 +532,7 @@ export class AssistantService {
       }
       if ((session.state === 'idle' || session.state === 'completed') && task.state === 'running') {
         task.state = session.error ? 'needs_user' : 'review';
+        finishTaskRun(task);
         this.store.saveTask(task);
         if (session.error) this.signal('failed', task.title, `侧边会话失败：${session.error}`, task.id, task.sessionId);
         else this.signal('review', task.title, '侧边会话这一轮结束，等待验收', task.id, task.sessionId);
@@ -584,6 +589,7 @@ export class AssistantService {
       await this.runtime.dispatch(session.id, buildTaskPrompt(task));
     } catch (error) {
       task.state = 'needs_user';
+      finishTaskRun(task);
       this.store.saveTask(task);
       throw error;
     }
@@ -640,6 +646,7 @@ export class AssistantService {
     if (reasoningEffort) task.reasoningEffort = reasoningEffort;
     task.plan = false;
     task.state = 'running';
+    beginTaskRun(task);
     this.store.saveTask(task);
     await this.nameSession(session.id, task.title);
     await this.runtime.dispatch(session.id, buildTaskPrompt(task));
@@ -665,29 +672,34 @@ export class AssistantService {
     this.store.addReview(id, verdict, checks, note);
     if (verdict === 'accepted') {
       task.state = 'closed'; task.outcome = 'accepted'; task.closedAt = now();
+      finishTaskRun(task);
       this.store.saveTask(task);
       return task;
     }
     if (verdict === 'cancelled') {
       task.state = 'closed'; task.outcome = 'cancelled'; task.closedAt = now();
+      finishTaskRun(task);
       this.store.saveTask(task);
       if (task.sessionId) await this.runtime.stop(task.sessionId).catch(() => undefined);
       return task;
     }
     if (verdict === 'needs_user') {
       task.state = 'needs_user';
+      finishTaskRun(task);
       this.store.saveTask(task);
       return task;
     }
     // rework：最多 2 轮，第 3 次自动转 needs_user
     if (task.round >= 2) {
       task.state = 'needs_user';
+      finishTaskRun(task);
       this.store.saveTask(task);
       return task;
     }
     if (!task.sessionId) throw new Error('事项没有关联的侧边会话，无法返工');
     task.round += 1;
     task.state = 'running';
+    beginTaskRun(task);
     this.store.saveTask(task);
     const gaps = checks.filter(check => !check.met).map(check => `- ${check.criterion}${check.evidence ? `：${check.evidence}` : ''}`).join('\n');
     await this.runtime.dispatch(task.sessionId, [
@@ -713,7 +725,10 @@ export class AssistantService {
     const mainId = this.requireMain();
     if (task.archivedAt) this.store.unarchiveTasks([id], now());
     if (task.state === 'closed') task.round += 1;
+    const wasRunning = task.state === 'running';
     task.state = 'running';
+    // 进行中补要求不会中断当前这一轮，不能把本轮起点重置成现在；只有从验收/停止/关闭恢复才重开一轮。
+    if (!wasRunning) beginTaskRun(task);
     task.outcome = undefined;
     task.closedAt = undefined;
     task.notes = [task.notes, `续做要求：${request}`].filter(Boolean).join('\n');
@@ -750,6 +765,7 @@ export class AssistantService {
       await this.runtime.dispatch(session.id, message, mode);
     } catch (error) {
       task.state = 'needs_user';
+      finishTaskRun(task);
       this.store.saveTask(task);
       throw error;
     }
@@ -763,6 +779,7 @@ export class AssistantService {
     if (kind === 'done') {
       if (task.state === 'running') {
         task.state = 'review';
+        finishTaskRun(task);
         this.store.saveTask(task);
       }
       this.signal('review', task.title, detail || '侧边会话报告完成', task.id, fromSessionId);
@@ -776,6 +793,7 @@ export class AssistantService {
     const task = this.store.getTask(id);
     if (!task) throw new Error(`事项不存在：${id}`);
     task.state = 'closed'; task.outcome = 'cancelled'; task.closedAt = now();
+    finishTaskRun(task);
     if (reason) task.notes = `${task.notes}\n取消原因：${reason}`.trim();
     this.store.saveTask(task);
     if (task.sessionId) await this.runtime.stop(task.sessionId).catch(() => undefined);

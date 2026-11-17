@@ -60,10 +60,11 @@ describe('会话信息文本', () => {
 });
 
 describe('菜单项', () => {
-  it('重命名在前；复制项之后是危险色的归档，且归档最后', () => {
+  it('重命名、置顶在前；复制项之后是危险色的归档，且归档最后', () => {
     const entries = sessionContextMenuEntries(session, { agentName: 'Codex', origin: 'http://127.0.0.1:4399' });
     expect(entries.map(entry => entry.kind === 'item' ? entry.label : '---')).toEqual([
       '重命名会话',
+      '置顶会话',
       '---',
       '复制会话链接',
       '复制会话 ID',
@@ -75,6 +76,11 @@ describe('菜单项', () => {
     const archive = entries.at(-1);
     expect(archive).toMatchObject({ kind: 'item', action: 'archive', danger: true });
     expect(entries.at(-2)).toEqual({ kind: 'separator' });
+  });
+
+  it('已置顶的会话，菜单项变成「取消置顶」', () => {
+    const entries = sessionContextMenuEntries({ ...session, pinnedAt: '2026-11-17T10:00:00.000Z' }, { agentName: 'Codex', origin: 'http://127.0.0.1:4399' });
+    expect(entries.find(entry => entry.kind === 'item' && entry.action === 'pin')).toMatchObject({ label: '取消置顶' });
   });
 
   it('每个复制项拿到对应的值，归档项没有值', () => {

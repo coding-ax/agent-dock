@@ -194,10 +194,15 @@ export function waitingQueuedTasks(tasks: Task[] | undefined, sessionBusy: boole
   const list = (tasks ?? []).filter(task => !task.origin || !hiddenOrigins.has(task.origin));
   const live = optimisticMessages.filter(message => !message.settled);
   const claimed = claimedTaskIds(optimisticMessages);
-  const matched = live.map(message => ({ message, task: matchOptimisticTask(message, list, claimed) }));
-  const inTimeline = new Set(matched.flatMap(({ message, task }) => message.placement === 'timeline' && task ? [task.id] : []));
+  const all = optimisticMessages.map(message => ({ message, task: matchOptimisticTask(message, list, claimed) }));
+  const matched = all.filter(({ message }) => !message.settled);
+  // settled 表示这条消息的任务已经离开 queued（见 bindOptimisticTask）：它的气泡/任务行已经在时间线里了。
+  // 这时如果 tasks 缓存里还留着这份 queued 快照（轮询先发后至、或断线漏掉 task 事件），
+  // 面板就会和正在跑的那一轮同时显示同一条消息——「上面 loading，下面排队中」。
+  const started = new Set(all.flatMap(({ message, task }) => message.settled && task ? [task.id] : []));
+  const inTimeline = new Set(all.flatMap(({ message, task }) => message.placement === 'timeline' && task ? [task.id] : []));
   const inPanel = new Set(matched.flatMap(({ message, task }) => message.placement === 'queue' && task ? [task.id] : []));
-  const queued = list.filter(task => task.status === 'queued' && !inTimeline.has(task.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const queued = list.filter(task => task.status === 'queued' && !inTimeline.has(task.id) && !started.has(task.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const visible = sessionBusy || !queued.length || inPanel.has(queued[0]!.id) ? queued : queued.slice(1);
   const pending = matched.flatMap(({ message, task }): QueuedTask[] => message.placement === 'queue' && !task
     ? [{ id: message.id, sessionId: '', prompt: message.prompt, status: 'queued', createdAt: message.createdAt, updatedAt: message.createdAt, pending: true }]

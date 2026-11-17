@@ -41,6 +41,14 @@ export interface AssistantTask {
   outcome?: AssistantTaskOutcome;
   createdAt: string;
   updatedAt: string;
+  /** 第一次真正开工的时间；计划卡在开工前没有这个字段。 */
+  startedAt?: string;
+  /** 当前这一轮开工的时间；返工/续做会重新开始，用来排除验收和等待时间。 */
+  runStartedAt?: string;
+  /** 最近一次执行结束的时间；之后进入待验收、需要你或关闭都保持不变。 */
+  completedAt?: string;
+  /** 已经结束的各轮执行时长之和（不含排队、待验收和返工之间的等待）。 */
+  activeMs?: number;
   closedAt?: string;
   /** 已关闭便签被折叠进归档区的时间；归档只读、可取出，不删除。 */
   archivedAt?: string;

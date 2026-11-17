@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { DesktopUpdateApi } from './desktop-update';
+import type { DesktopProjectsApi } from './desktop-projects';
 
 /**
  * 桌面壳的局域网访问开关。
@@ -18,7 +19,7 @@ type DesktopNetworkApi = {
 
 declare global {
   interface Window {
-    agentdockDesktop?: { update?: DesktopUpdateApi; network?: DesktopNetworkApi };
+    agentdockDesktop?: { update?: DesktopUpdateApi; network?: DesktopNetworkApi; projects?: DesktopProjectsApi };
   }
 }
 

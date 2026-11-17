@@ -2,9 +2,9 @@ import type Database from 'better-sqlite3';
 import { and, asc, desc, eq, gt, inArray, isNotNull, lt, lte } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { openDatabase, type NativeBindingFallback } from './native.js';
-import type { AgentConfig, AgentEvent, RepositoryBundle, ScheduleRecord, ScheduleRunRecord, Session, TaskRecord } from '@agent-dock/agent-dock-shared';
+import type { AgentConfig, AgentEvent, ProjectRecord, RepositoryBundle, ScheduleRecord, ScheduleRunRecord, Session, TaskRecord } from '@agent-dock/agent-dock-shared';
 import { agentConfigs, channelMappings, configs, errors, events, machines, permissionRequests, projects, scheduleRuns, schedules, sessions, tasks, toolCalls } from './schema.js';
 export * from './native.js';
 export * from './schema.js';
@@ -79,8 +79,8 @@ export function createRepositories(filename: string, options: { nativeFallback?:
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS agent_configs (id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS machines (id TEXT PRIMARY KEY, name TEXT NOT NULL, metadata TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, machine_id TEXT, name TEXT NOT NULL, cwd TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, state TEXT NOT NULL, interrupt_intent TEXT, cwd TEXT NOT NULL, model TEXT, reasoning_effort TEXT, system_prompt TEXT, permission_mode TEXT DEFAULT 'full-trust', source TEXT, source_id TEXT, ssh_host TEXT, archived_at TEXT, protocol TEXT, last_message_at TEXT, custom_title TEXT, agent_title TEXT, run_id TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, machine_id TEXT, name TEXT NOT NULL, cwd TEXT NOT NULL, pinned_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, state TEXT NOT NULL, interrupt_intent TEXT, cwd TEXT NOT NULL, model TEXT, reasoning_effort TEXT, system_prompt TEXT, permission_mode TEXT DEFAULT 'full-trust', source TEXT, source_id TEXT, ssh_host TEXT, archived_at TEXT, protocol TEXT, last_message_at TEXT, custom_title TEXT, agent_title TEXT, pinned_at TEXT, run_id TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, prompt TEXT NOT NULL, sent_prompt TEXT, final_text TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, type TEXT NOT NULL, timestamp TEXT NOT NULL, data TEXT NOT NULL, raw TEXT);
     CREATE UNIQUE INDEX IF NOT EXISTS events_session_seq ON events(session_id, sequence);
@@ -114,6 +114,10 @@ export function createRepositories(filename: string, options: { nativeFallback?:
   // 存下来会和这套回退链打架。旧库补 ALTER，历史行保持 NULL，行为不变。
   if (!sessionColumns.some(column => column.name === 'custom_title')) sqlite.exec('ALTER TABLE sessions ADD COLUMN custom_title TEXT');
   if (!sessionColumns.some(column => column.name === 'agent_title')) sqlite.exec('ALTER TABLE sessions ADD COLUMN agent_title TEXT');
+  // 置顶：只增列，旧库补 ALTER，历史行保持 NULL（未置顶），行为与旧版一致。
+  if (!sessionColumns.some(column => column.name === 'pinned_at')) sqlite.exec('ALTER TABLE sessions ADD COLUMN pinned_at TEXT');
+  const projectColumns = sqlite.pragma('table_info(projects)') as Array<{ name: string }>;
+  if (!projectColumns.some(column => column.name === 'pinned_at')) sqlite.exec('ALTER TABLE projects ADD COLUMN pinned_at TEXT');
   const taskColumns = sqlite.pragma('table_info(tasks)') as Array<{ name: string }>;
   if (!taskColumns.some(column => column.name === 'sent_prompt')) sqlite.exec('ALTER TABLE tasks ADD COLUMN sent_prompt TEXT');
   // 本轮最终输出。runtime 每轮结尾本来就为了判成败算出了这段文本，落库后轨迹面板不必
@@ -154,7 +158,8 @@ export function createRepositories(filename: string, options: { nativeFallback?:
        * 会话名因此只走 `saveTitles()` 这条窄路径，任何整行 save 都不可能把它冲掉。
        */
       async save(s) {
-        const { customTitle: _customTitle, agentTitle: _agentTitle, ...row } = s;
+        // 会话名与置顶都只走各自的窄写入口：这里的 s 可能是过期内存快照。
+        const { customTitle: _customTitle, agentTitle: _agentTitle, pinnedAt: _pinnedAt, ...row } = s;
         db.insert(sessions).values(row).onConflictDoUpdate({ target: sessions.id, set: row }).run();
       },
       /**
@@ -163,6 +168,9 @@ export function createRepositories(filename: string, options: { nativeFallback?:
        */
       async saveTitles(id, patch) {
         db.update(sessions).set({ ...patch, updatedAt: patch.updatedAt ?? new Date().toISOString() }).where(eq(sessions.id, id)).run();
+      },
+      async savePinned(id, pinnedAt) {
+        db.update(sessions).set({ pinnedAt }).where(eq(sessions.id, id)).run();
       }
     },
     tasks: {
@@ -363,10 +371,28 @@ export function createRepositories(filename: string, options: { nativeFallback?:
       }
     },
     artifacts: {
-      async ensureLocalProject(cwd) { const time = new Date().toISOString(); db.insert(machines).values({ id: 'local', name: 'Local machine', metadata: '{}', createdAt: time, updatedAt: time }).onConflictDoNothing().run(); db.insert(projects).values({ id: `local:${cwd}`, machineId: 'local', name: cwd.split('/').filter(Boolean).at(-1) ?? cwd, cwd, createdAt: time, updatedAt: time }).onConflictDoUpdate({ target: projects.id, set: { cwd, updatedAt: time } }).run(); },
+      async ensureLocalProject(cwd) { const time = new Date().toISOString(); db.insert(machines).values({ id: 'local', name: 'Local machine', metadata: '{}', createdAt: time, updatedAt: time }).onConflictDoNothing().run(); db.insert(projects).values({ id: `local:${cwd}`, machineId: 'local', name: basename(cwd) || cwd, cwd, createdAt: time, updatedAt: time }).onConflictDoUpdate({ target: projects.id, set: { cwd, updatedAt: time } }).run(); },
       async saveToolCall(sessionId, data) { const time = new Date().toISOString(); db.insert(toolCalls).values({ id: `${sessionId}:${data.id}`, sessionId, data: JSON.stringify(data), createdAt: data.startedAt ?? time, updatedAt: time }).onConflictDoUpdate({ target: toolCalls.id, set: { data: JSON.stringify(data), updatedAt: time } }).run(); },
       async savePermission(sessionId, data) { const time = new Date().toISOString(); db.insert(permissionRequests).values({ id: `${sessionId}:${data.id}`, sessionId, status: data.status, data: JSON.stringify(data), createdAt: time, updatedAt: time }).onConflictDoUpdate({ target: permissionRequests.id, set: { status: data.status, data: JSON.stringify(data), updatedAt: time } }).run(); },
       async saveError(sessionId, message, details) { db.insert(errors).values({ id: `error:${crypto.randomUUID()}`, sessionId, message, details: details === undefined ? undefined : JSON.stringify(details), createdAt: new Date().toISOString() }).run(); }
+    },
+    projects: {
+      async list() { return db.select().from(projects).orderBy(asc(projects.createdAt)).all() as ProjectRecord[]; },
+      async get(id) { return db.select().from(projects).where(eq(projects.id, id)).get() as ProjectRecord | undefined; },
+      async getByCwd(cwd) { return db.select().from(projects).where(eq(projects.cwd, cwd)).get() as ProjectRecord | undefined; },
+      /**
+       * 登记（或刷新）一个工作目录。id 由 cwd 派生，同路径只有一条；
+       * onConflictDoUpdate 刻意不写 name / pinnedAt，会话启动不能冲掉用户的选择。
+       */
+      async ensure(cwd) {
+        const time = new Date().toISOString();
+        const id = `local:${cwd}`;
+        db.insert(machines).values({ id: 'local', name: 'Local machine', metadata: '{}', createdAt: time, updatedAt: time }).onConflictDoNothing().run();
+        db.insert(projects).values({ id, machineId: 'local', name: basename(cwd) || cwd, cwd, createdAt: time, updatedAt: time }).onConflictDoUpdate({ target: projects.id, set: { updatedAt: time } }).run();
+        return (await db.select().from(projects).where(eq(projects.id, id)).get()) as ProjectRecord;
+      },
+      async save(project) { db.insert(projects).values(project).onConflictDoUpdate({ target: projects.id, set: project }).run(); },
+      async setPinned(id, pinnedAt) { db.update(projects).set({ pinnedAt, updatedAt: new Date().toISOString() }).where(eq(projects.id, id)).run(); }
     },
     close() { sqlite.close(); }
   };

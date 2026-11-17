@@ -20,6 +20,7 @@ export const ASSISTANT_SCHEMA = `
     state TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 0,
     session_id TEXT, agent_id TEXT, cwd TEXT, model TEXT, reasoning_effort TEXT,
     plan INTEGER NOT NULL DEFAULT 0, outcome TEXT,
+    started_at TEXT, run_started_at TEXT, completed_at TEXT, active_ms INTEGER,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT
   );
   CREATE INDEX IF NOT EXISTS assistant_tasks_session ON assistant_tasks(session_id);
@@ -98,6 +99,7 @@ type TaskRow = {
   state: string; round: number; session_id: string | null; agent_id: string | null; cwd: string | null;
   model: string | null; reasoning_effort: string | null;
   plan: number; outcome: string | null; created_at: string; updated_at: string; closed_at: string | null;
+  started_at?: string | null; run_started_at?: string | null; completed_at?: string | null; active_ms?: number | null;
   archived_at?: string | null; archive_batch_id?: string | null; restored_at?: string | null;
 };
 
@@ -114,6 +116,10 @@ const taskFromRow = (row: TaskRow): AssistantTask => ({
   plan: row.plan === 1,
   ...(row.outcome ? { outcome: row.outcome as AssistantTaskOutcome } : {}),
   createdAt: row.created_at, updatedAt: row.updated_at,
+  ...(row.started_at ? { startedAt: row.started_at } : {}),
+  ...(row.run_started_at ? { runStartedAt: row.run_started_at } : {}),
+  ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+  ...(row.active_ms === null || row.active_ms === undefined ? {} : { activeMs: row.active_ms }),
   ...(row.closed_at ? { closedAt: row.closed_at } : {}),
   ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
   ...(row.archive_batch_id ? { archiveBatchId: row.archive_batch_id } : {}),
@@ -185,6 +191,11 @@ export class AssistantStore {
     if (!columns.has('archived_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN archived_at TEXT');
     if (!columns.has('archive_batch_id')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN archive_batch_id TEXT');
     if (!columns.has('restored_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN restored_at TEXT');
+    // 耗时展示：开工/本轮开始/完成时间和已累计执行时长。旧记录留空，前端按 createdAt 兜底。
+    if (!columns.has('started_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN started_at TEXT');
+    if (!columns.has('run_started_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN run_started_at TEXT');
+    if (!columns.has('completed_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN completed_at TEXT');
+    if (!columns.has('active_ms')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN active_ms INTEGER');
     // lark_reply 草稿要记住 chat/replyTo/inThread/at：旧库补一列 JSON，github 草稿不受影响。
     const draftColumns = new Set((this.sqlite.prepare('PRAGMA table_info(assistant_drafts)').all() as Array<{ name: string }>).map(column => column.name));
     if (!draftColumns.has('payload')) this.sqlite.exec('ALTER TABLE assistant_drafts ADD COLUMN payload TEXT');
@@ -234,18 +245,20 @@ export class AssistantStore {
     model?: string; reasoningEffort?: string; plan?: boolean;
   }): AssistantTask {
     const stamp = now();
+    const state = input.state ?? 'running';
     const task: AssistantTask = {
       id: makeId('atask'), title: input.title, notes: input.notes ?? '',
       doneWhen: input.doneWhen ?? [],
       ...(input.expectMinutes === undefined ? {} : { expectMinutes: input.expectMinutes }),
-      state: input.state ?? 'running', round: 0,
+      state, round: 0,
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.agentId ? { agentId: input.agentId } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       plan: input.plan ?? false,
-      createdAt: stamp, updatedAt: stamp
+      createdAt: stamp, updatedAt: stamp,
+      ...(state === 'running' ? { startedAt: stamp, runStartedAt: stamp, activeMs: 0 } : {})
     };
     this.saveTask(task);
     return task;
@@ -254,20 +267,27 @@ export class AssistantStore {
   saveTask(task: AssistantTask) {
     task.updatedAt = now();
     this.sqlite.prepare(`INSERT INTO assistant_tasks
-      (id, title, notes, done_when, expect_minutes, state, round, session_id, agent_id, cwd, model, reasoning_effort, plan, outcome, created_at, updated_at, closed_at)
-      VALUES (@id, @title, @notes, @doneWhen, @expectMinutes, @state, @round, @sessionId, @agentId, @cwd, @model, @reasoningEffort, @plan, @outcome, @createdAt, @updatedAt, @closedAt)
+      (id, title, notes, done_when, expect_minutes, state, round, session_id, agent_id, cwd, model, reasoning_effort, plan, outcome,
+       started_at, run_started_at, completed_at, active_ms, created_at, updated_at, closed_at)
+      VALUES (@id, @title, @notes, @doneWhen, @expectMinutes, @state, @round, @sessionId, @agentId, @cwd, @model, @reasoningEffort, @plan, @outcome,
+       @startedAt, @runStartedAt, @completedAt, @activeMs, @createdAt, @updatedAt, @closedAt)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title, notes = excluded.notes, done_when = excluded.done_when,
         expect_minutes = excluded.expect_minutes, state = excluded.state, round = excluded.round,
         session_id = excluded.session_id, agent_id = excluded.agent_id, cwd = excluded.cwd,
         model = excluded.model, reasoning_effort = excluded.reasoning_effort,
-        plan = excluded.plan, outcome = excluded.outcome, updated_at = excluded.updated_at,
+        plan = excluded.plan, outcome = excluded.outcome,
+        started_at = excluded.started_at, run_started_at = excluded.run_started_at,
+        completed_at = excluded.completed_at, active_ms = excluded.active_ms,
+        updated_at = excluded.updated_at,
         closed_at = excluded.closed_at`).run({
       id: task.id, title: task.title, notes: task.notes, doneWhen: JSON.stringify(task.doneWhen),
       expectMinutes: task.expectMinutes ?? null, state: task.state, round: task.round,
       sessionId: task.sessionId ?? null, agentId: task.agentId ?? null, cwd: task.cwd ?? null,
       model: task.model ?? null, reasoningEffort: task.reasoningEffort ?? null,
       plan: task.plan ? 1 : 0, outcome: task.outcome ?? null,
+      startedAt: task.startedAt ?? null, runStartedAt: task.runStartedAt ?? null,
+      completedAt: task.completedAt ?? null, activeMs: task.activeMs ?? null,
       createdAt: task.createdAt, updatedAt: task.updatedAt, closedAt: task.closedAt ?? null
     });
   }

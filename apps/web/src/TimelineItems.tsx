@@ -237,6 +237,8 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
 
   // 进行中：不套外壳，每一步按输出顺序平铺，正文正常展示。
   if (ongoing) return <section aria-live="polite" aria-label={`${modelLabel} 执行过程`} className="my-3">
+    {/* 当前有思考/工具/正文在跑时，「处理中」占位行不显示；耗时挪到过程区右上角，仍然每秒刷新。 */}
+    {!idle && elapsed && <div className="mb-1 flex justify-end pr-1 text-[11px] tabular-nums text-zinc-400">已用时 {elapsed}</div>}
     <ActivitySteps steps={steps} ongoing replay={replay} sessionId={sessionId} reservePending={reservePending} pending={idle} pendingLabel={`处理中${elapsed ? ` · ${elapsed}` : ''}`}/>
   </section>;
 
@@ -255,6 +257,11 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
         <ChevronRight size={13} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>
       </button>
       <Disclosure open={open}><div className="pb-1 pt-1"><ActivitySteps steps={steps} ongoing={false} replay sessionId={sessionId}/></div></Disclosure>
+    </div>}
+    {steps.length === 0 && elapsed && <div className="ui-timeline-item my-3 flex min-h-8 items-center gap-2 text-[13px] text-zinc-500">
+      <StatusIcon size={14} className={`shrink-0 ${statusTone}`}/>
+      <span className="whitespace-nowrap">已处理 {elapsed}</span>
+      {statusText && <span className={`text-[12px] ${statusTone}`}>{statusText}</span>}
     </div>}
     {missingFinal && <div role="status" className="ui-timeline-item my-4 flex items-center gap-2 text-[13px] text-zinc-500">{failed ? <CircleX size={14} className="text-red-500"/> : interrupted ? <CircleStop size={14} className="text-zinc-400"/> : <MessageSquare size={14} className={incomplete ? 'text-amber-500' : 'text-zinc-400'}/>}<span>{missingFinalText}</span></div>}
   </>;

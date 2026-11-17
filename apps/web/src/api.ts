@@ -52,7 +52,9 @@ export type LarkAvatarLoginState = 'idle' | 'starting' | 'waiting' | 'scanned' |
 export type LarkAvatarLoginSnapshot = { state: LarkAvatarLoginState; message: string; region: LarkAvatarRegion; qrContent?: string; attempt: number; expiresAt?: string };
 export type LarkAvatarInboxItem = { id: string; threadKey: string; chatId: string; chatType: string; chatName?: string; chatAvatarUrl?: string; senderId?: string; senderName?: string; senderAvatarUrl?: string; title: string; summary?: string; tier: 'action' | 'fyi' | 'noise'; state: 'new' | 'handled'; occurredAt: string; receivedAt: string };
 export type LarkAvatarDraft = { id: string; itemId?: string; threadKey?: string; target: string; replyRootId?: string; replyQuote?: boolean; replyThreadChat?: boolean; body: string; state: 'pending' | 'sent' | 'failed' | 'discarded'; sentMessageId?: string; attempts: number; lastError?: string; createdAt: string; updatedAt: string; sentAt?: string };
-export type Session = { id: string; agentId: string; state: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null };
+export type Session = { id: string; agentId: string; state: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null; /** 非空即置顶；只影响「时间」视图。 */ pinnedAt?: string | null };
+export type Project = { id: string; machineId?: string | null; name: string; cwd: string; pinnedAt?: string | null; exists: boolean; createdAt: string; updatedAt: string };
+export type RegisterProjectResult = { project: Project; created: boolean };
 export type AutostartStatus = { supported: boolean; enabled: boolean; reason?: string; plistPath?: string; entrypoint?: string };
 export type KeepAwakeStatus = { supported: boolean; enabled: boolean; keepDisplay: boolean; reason?: string };
 export type SelfUpdateStatus = { currentVersion: string; distTag: string; latestVersion?: string; updateAvailable: boolean; canUpdate: boolean; updating: boolean; runtime?: 'daemon' | 'desktop' | 'foreground'; lastError?: string; checkedAt?: number; checkError?: string };
@@ -82,6 +84,10 @@ export type AssistantTask = {
   state: AssistantTaskState; round: number; sessionId?: string; agentId?: string; cwd?: string;
   model?: string; reasoningEffort?: string;
   plan: boolean; outcome?: 'accepted' | 'cancelled'; createdAt: string; updatedAt: string; closedAt?: string;
+  /** 第一次开工 / 当前这一轮开工 / 最近一次执行结束的时间。旧服务端没有这些字段。 */
+  startedAt?: string; runStartedAt?: string; completedAt?: string;
+  /** 已结束各轮的执行时长之和，不含排队、验收等待和返工间隔。 */
+  activeMs?: number;
   /** 已关闭便签被折叠进归档区：只读、可取出，不是删除。 */
   archivedAt?: string; archiveBatchId?: string;
 };
@@ -328,7 +334,7 @@ export const api = {
     })();
     return () => controller.abort();
   },
-  agentModels: (id: string, model?: string, refresh = false, sshHost?: string) => json<AgentModelsResult>(agentModelsUrl(id, model, refresh, sshHost)), sessions: () => json<Session[]>('/api/sessions'), events: (id: string, after?: number) => json<DockEvent[]>(`/api/sessions/${id}/events?compact=thinking${after ? `&after=${after}` : ''}`), rawEvents: (id: string, before?: number) => json<DockEvent[]>(`/api/sessions/${id}/events?limit=200${before ? `&before=${before}` : ''}`), tasks: (id: string) => json<Task[]>(`/api/sessions/${id}/tasks`), sessionRecord: (id: string) => json<SessionRecord>(`/api/sessions/${id}/record`),
+  agentModels: (id: string, model?: string, refresh = false, sshHost?: string) => json<AgentModelsResult>(agentModelsUrl(id, model, refresh, sshHost)), sessions: () => json<Session[]>('/api/sessions'), projects: () => json<Project[]>('/api/projects'), importProject: (path: string) => json<RegisterProjectResult>('/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) }), setProjectPinned: (cwd: string, pinned: boolean) => json<Project>('/api/projects/pin', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd, pinned }) }), setSessionPinned: (id: string, pinned: boolean) => json<Session>(`/api/sessions/${id}/pin`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pinned }) }), events: (id: string, after?: number) => json<DockEvent[]>(`/api/sessions/${id}/events?compact=thinking${after ? `&after=${after}` : ''}`), rawEvents: (id: string, before?: number) => json<DockEvent[]>(`/api/sessions/${id}/events?limit=200${before ? `&before=${before}` : ''}`), tasks: (id: string) => json<Task[]>(`/api/sessions/${id}/tasks`), sessionRecord: (id: string) => json<SessionRecord>(`/api/sessions/${id}/record`),
   /** 轮次锚点图：只回边界与过程条数，不回事件体。面板整个生命周期只请求一次。 */
   sessionTurns: (id: string) => json<{ turns: TurnRange[] }>(`/api/sessions/${id}/turns`),
   /** 单轮事件体（已合并分片）。带上 after/before 可以免掉服务端那一次锚点扫描。 */

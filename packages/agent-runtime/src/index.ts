@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, RepositoryBundle, Session, SessionInterruptIntent, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
+import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, Session, SessionInterruptIntent, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
+import { basename } from 'node:path';
+import { resolveProjectPath } from './project-path.js';
 import { agentConfigSchema, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 export type { AgentConfig };
 import { AcpxAdapter, describeAcpError, wrapAgentForSsh, type NormalizedDriverEvent } from '@agent-dock/agent-dock-acp-client';
@@ -449,6 +451,56 @@ export class AgentDockRuntime {
     return this.withTitle(session, firstPrompts[id]);
   }
   getSession(id: string) { return this.repos.sessions.get(id); }
+  /** 置顶/取消置顶一个会话。归档会话只读：不允许再置顶，归档时也会自动清掉。 */
+  async setSessionPinned(id: string, pinned: boolean): Promise<Session> {
+    const session = await this.repos.sessions.get(id);
+    if (!session) throw new RuntimeError('SESSION_NOT_FOUND', `Unknown session: ${id}`, 404);
+    if (pinned && session.archivedAt) throw new RuntimeError('SESSION_ARCHIVED', '归档会话不能置顶', 409);
+    if (pinned && session.pinnedAt) return this.titledSession(session);
+    const pinnedAt = pinned ? now() : null;
+    await this.repos.sessions.savePinned(id, pinnedAt);
+    return this.titledSession({ ...session, pinnedAt });
+  }
+  /** 项目视图的持久化列表。路径是否仍然存在由路由层补充，存储里不做文件系统探测。 */
+  listProjects(): Promise<ProjectRecord[]> {
+    return this.repos.projects.list();
+  }
+  /**
+   * 登记用户导入的项目。路径统一 realpath（`~` 展开、相对路径拒绝、macOS /private 别名归一），
+   * 已存在则原样返回并标记 created=false，前端可据此提示「已存在」而不是造出第二条。
+   */
+  async registerProject(rawPath: unknown): Promise<{ project: ProjectRecord; created: boolean }> {
+    const cwd = await resolveProjectPath(rawPath);
+    const existing = await this.repos.projects.getByCwd(cwd);
+    if (existing) return { project: existing, created: false };
+    const time = now();
+    const project: ProjectRecord = {
+      id: `local:${cwd}`,
+      machineId: 'local',
+      name: basename(cwd) || cwd,
+      cwd,
+      pinnedAt: null,
+      createdAt: time,
+      updatedAt: time
+    };
+    await this.repos.projects.save(project);
+    return { project, created: true };
+  }
+  /**
+   * 项目置顶。先按原样查，查不到再归一化——即使目录已被删除/移走，用户仍能取消置顶，
+   * 不会因为「路径不存在」把一个旧置顶项永久钉在列表顶部。
+   */
+  async setProjectPinned(cwd: string, pinned: boolean): Promise<ProjectRecord> {
+    let project = await this.repos.projects.getByCwd(cwd);
+    if (!project) {
+      const normalized = await resolveProjectPath(cwd);
+      project = await this.repos.projects.getByCwd(normalized);
+    }
+    if (!project) throw new RuntimeError('PROJECT_NOT_FOUND', `项目不存在：${cwd}`, 404);
+    const pinnedAt = pinned ? (project.pinnedAt ?? now()) : null;
+    await this.repos.projects.setPinned(project.id, pinnedAt);
+    return { ...project, pinnedAt, updatedAt: now() };
+  }
   /**
    * 把算好的标题贴到会话上。三级全空时**不加字段**，而不是加一个空串——
    * `sessionLabel()` 判的是真值，空串和缺字段在渲染层等价，但空串会污染 JSON 输出。
@@ -732,7 +784,7 @@ export class AgentDockRuntime {
     const session: Session = { id: makeId('ses'), agentId: agent.id, state: 'created', cwd: configured.cwd!, model: configured.model, reasoningEffort: configured.reasoningEffort, permissionMode: configured.permissionMode, source: input.source, sourceId: input.sourceId, ...(input.sshHost ? { sshHost: input.sshHost } : {}), protocol: capability.protocol, runId: makeId('run'), createdAt: now(), updatedAt: now(), systemPrompt: configured.systemPrompt };
     // 显式传入的 systemPrompt 优先：主会话/侧边会话要写自己的提示词，不能被默认种子覆盖。
     if (!input.systemPrompt && this.options.createSystemPrompt) session.systemPrompt = this.options.createSystemPrompt(session);
-    await this.repos.artifacts.ensureLocalProject(session.cwd);
+    await this.repos.projects.ensure(session.cwd);
     await this.repos.sessions.save(session);
     // 导入历史必须先于任何状态事件落库：时间线按 sequence 排序，先写历史才能让「过去」
     // 出现在「正在启动」之前。这里不 emit status，交给下面正常的启动流程。
@@ -1181,6 +1233,9 @@ export class AgentDockRuntime {
     stopped.archivedAt = now();
     stopped.updatedAt = stopped.archivedAt;
     await this.repos.sessions.save(stopped);
+    // 归档会从列表里消失，置顶就没有意义；顺带避免「归档后重新出现时还钉在顶部」。
+    await this.repos.sessions.savePinned(id, null);
+    stopped.pinnedAt = null;
     return stopped;
   }
   async restart(id: string) { const { session } = await this.active(id); await this.stop(id); const agent = await this.repos.agents.get(session.agentId); if (!agent) throw new RuntimeError('AGENT_NOT_FOUND', 'Agent config was removed', 404); session.runId = makeId('run'); session.error = undefined; const configured = this.configureAgentForSession(agent, session); const driver = this.factory(configured, session.protocol!, this.onDriverEvent(session), code => { if (code) void this.saveState(session, 'failed', `Agent exited with code ${code}`); }, session.id, this.resumeOptions(session)); this.drivers.set(id, driver); await this.saveState(session, 'starting'); await driver.start(); await this.saveState(session, 'idle'); return session; }

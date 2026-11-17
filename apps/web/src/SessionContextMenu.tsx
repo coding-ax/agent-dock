@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Archive, ClipboardList, Fingerprint, Link2, Pencil, Type } from 'lucide-react';
+import { Archive, ClipboardList, Fingerprint, Link2, Pencil, Pin, Type } from 'lucide-react';
 import type { Session } from './api';
 import { copyText, placeContextMenu, sessionContextMenuEntries, CONTEXT_MENU_HEIGHT, CONTEXT_MENU_WIDTH, type ContextMenuPoint, type SessionContextMenuItem } from './session-context-menu';
 import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
 
 const icons = {
   rename: Pencil,
+  pin: Pin,
   'copy-link': Link2,
   'copy-id': Fingerprint,
   'copy-title': Type,
@@ -21,7 +22,7 @@ const icons = {
  * 尺寸算一次，layout effect 量到真实高度后再算一次，保证贴右/贴底时翻转且不闪。
  * 复制失败不关菜单，直接展开一个已选中的只读文本框让用户手动复制。
  */
-export function SessionContextMenu({ session, agentName, point, origin, anchor, onClose, onRename, onArchive, onNotice }: {
+export function SessionContextMenu({ session, agentName, point, origin, anchor, onClose, onRename, onArchive, onTogglePin, onNotice }: {
   session: Session;
   agentName?: string;
   point: ContextMenuPoint;
@@ -30,6 +31,7 @@ export function SessionContextMenu({ session, agentName, point, origin, anchor, 
   onClose(): void;
   onRename(): void;
   onArchive(): void;
+  onTogglePin(): void;
   onNotice(text: string): void;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -118,6 +120,11 @@ export function SessionContextMenu({ session, agentName, point, origin, anchor, 
     if (item.action === 'archive') {
       close();
       onArchive();
+      return;
+    }
+    if (item.action === 'pin') {
+      close();
+      onTogglePin();
       return;
     }
     void runCopy(item);

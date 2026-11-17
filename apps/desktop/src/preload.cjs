@@ -45,4 +45,10 @@ const network = {
   setLanAccess: enabled => ipcRenderer.invoke('agentdock:desktop-network:set-lan-access', enabled)
 };
 
-contextBridge.exposeInMainWorld('agentdockDesktop', { update, network });
+const projects = {
+  // 目录选择器只有 macOS 走原生 dialog；其他桌面端由网页退化成手输绝对路径。
+  platform: process.platform,
+  pickDirectory: () => ipcRenderer.invoke('agentdock:desktop-projects:pick-directory')
+};
+
+contextBridge.exposeInMainWorld('agentdockDesktop', { update, network, projects });

@@ -5,6 +5,18 @@ import type { DockEvent } from './api';
 import { mergeEventBatch } from './event-buffer';
 
 /**
+ * 把 EventSource 的 open 回调折成「只在重连时通知」：第一次 open 是正常建连，
+ * 之后每次 open 都说明断线后自动重连成功，中间的事件可能漏了。
+ */
+export function createReconnectNotifier(notify: () => void): () => void {
+  let connectedBefore = false;
+  return () => {
+    if (connectedBefore) notify();
+    connectedBefore = true;
+  };
+}
+
+/**
  * 订阅某个 Session 的 SSE 事件流，并按帧合批写入 ['events', sessionId] 缓存。
  *
  * 为什么要合批：流式输出是 token 级的（真实会话 6960 条事件里 5661 条是 thinking），
@@ -25,11 +37,17 @@ export function useBufferedEventStream(options: {
   runId: string | undefined;
   queryClient: QueryClient;
   onSidecarEvent(event: DockEvent): void;
+  /**
+   * 断线后 EventSource 自动重连成功时调用。断线期间漏掉的 task/status 事件不会补发，
+   * 调用方需要重取一次任务列表（必要时再自愈本轮事件），不能只等下一次轮询。
+   */
+  onReconnect?(): void;
 }) {
-  const { sessionId, enabled, runId, queryClient, onSidecarEvent } = options;
+  const { sessionId, enabled, runId, queryClient, onSidecarEvent, onReconnect } = options;
   // 回调每次 render 都是新引用，直接进依赖会把 SSE 连接反复重建；
   // useMemoizedFn 给出稳定引用且始终读到最新闭包。
   const sidecar = useMemoizedFn(onSidecarEvent);
+  const reconnect = useMemoizedFn(onReconnect ?? (() => undefined));
 
   // 这里保留 useEffect：订阅 EventSource 属于「与 React 外部系统同步」，是 Effect 的
   // 正当用途，ahooks 没有语义更贴切的封装（useRequest / useMount 都不匹配长连接生命周期）。
@@ -39,6 +57,8 @@ export function useBufferedEventStream(options: {
     const cached = queryClient.getQueryData<DockEvent[]>(queryKey) ?? [];
     const after = cached.reduce((sequence, event) => Math.max(sequence, event.sequence), 0);
     const stream = new EventSource(`/api/sessions/${sessionId}/stream?after=${after}`);
+    const onOpen = createReconnectNotifier(reconnect);
+    stream.addEventListener('open', onOpen);
     // 访问门拒绝（401/403）后立刻断开：否则 EventSource 会按浏览器内置退避无限重连，
     // 凭证不会凭空恢复，重连只是持续制造 401。拒绝事件由 api 层 fetch 统一派发。
     const closeOnDenied = () => stream.close();
@@ -69,6 +89,7 @@ export function useBufferedEventStream(options: {
     for (const name of ['text','thinking','tool_call','tool_result','permission_request','status','task','error','completed','raw_terminal']) stream.addEventListener(name, receive as EventListener);
     return () => {
       window.removeEventListener('agentdock:web-access-denied', closeOnDenied);
+      stream.removeEventListener('open', onOpen);
       if (frame) cancelAnimationFrame(frame);
       // 收尾时把残余事件写进**本次订阅的** queryKey：sessionId 变化时这个 cleanup
       // 先于新 effect 执行，闭包里的 queryKey 仍指向旧会话，不会串台。

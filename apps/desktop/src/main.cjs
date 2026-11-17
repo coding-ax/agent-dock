@@ -283,6 +283,21 @@ function registerNetworkIpc() {
   });
 }
 
+/**
+ * 导入项目用的系统目录选择器。只有 macOS 桌面壳提供；浏览器、Windows、Linux
+ * 继续用网页里的「手输绝对路径」。这里只把选中的路径交回渲染进程，登记动作
+ * 仍由网页调用 daemon 的 /api/projects 完成，壳本身不写数据库、不执行命令。
+ */
+function registerProjectIpc() {
+  ipcMain.handle('agentdock:desktop-projects:pick-directory', async () => {
+    if (process.platform !== 'darwin') return { supported: false, canceled: true };
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const options = { title: '选择项目文件夹', properties: ['openDirectory', 'createDirectory'] };
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+    return { supported: true, canceled: result.canceled, path: result.filePaths[0] };
+  });
+}
+
 async function checkUpdatesFromMenu() {
   if (!state.updater) return;
   const next = await state.updater.check();
@@ -720,6 +735,7 @@ async function boot() {
   installMenu();
   registerUpdateIpc();
   registerNetworkIpc();
+  registerProjectIpc();
   setUpdater();
   const win = createWindow();
   try {
