@@ -322,6 +322,10 @@ export function LarkAvatarPanel() {
   const [search, setSearch] = useState('');
   const [composer, setComposer] = useState('');
   const [draftBodies, setDraftBodies] = useState<Record<string, string>>({});
+  // 排障区每 10 秒自动刷新，只有时间戳变化时很难看出手动刷新有没有生效；
+  // 这里给按钮加一次性反馈（刷新中 / 已刷新 / 刷新失败），并保持按钮宽度不变。
+  const [refreshState, setRefreshState] = useState<'idle' | 'refreshing' | 'done' | 'failed'>('idle');
+  const refreshFeedbackTimer = useRef<number | null>(null);
   const toast = useToast();
   const messagesRef = useRef<HTMLDivElement>(null);
   const autoOpened = useRef(false);
@@ -349,6 +353,23 @@ export function LarkAvatarPanel() {
     refetchInterval: tab === 'settings' ? 10_000 : false,
     retry: false
   });
+  useEffect(() => () => {
+    if (refreshFeedbackTimer.current !== null) window.clearTimeout(refreshFeedbackTimer.current);
+  }, []);
+  const refreshDiagnostics = async () => {
+    if (refreshFeedbackTimer.current !== null) window.clearTimeout(refreshFeedbackTimer.current);
+    setRefreshState('refreshing');
+    try {
+      const result = await reactionDiagnostics.refetch();
+      setRefreshState(result.isError ? 'failed' : 'done');
+    } catch {
+      setRefreshState('failed');
+    }
+    refreshFeedbackTimer.current = window.setTimeout(() => {
+      refreshFeedbackTimer.current = null;
+      setRefreshState('idle');
+    }, 2_000);
+  };
 
   useEffect(() => {
     if (!config.data) return;
@@ -931,10 +952,21 @@ export function LarkAvatarPanel() {
                     <p className="mt-1 text-[11px] leading-5 text-zinc-500">最近一次 reaction 事件和触发账本。事件到了但没开轮次时，这里会写清楚是没启用、emoji 不匹配、被去重，还是权限/主会话问题。</p>
                   </div>
                 </div>
-                <button type="button" onClick={() => void reactionDiagnostics.refetch()} disabled={reactionDiagnostics.isFetching} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[11px] text-zinc-500 transition-colors hover:bg-zinc-100 disabled:opacity-40">
-                  <RefreshCw size={12} className={reactionDiagnostics.isFetching ? 'animate-spin' : ''}/>刷新
+                <button
+                  type="button"
+                  onClick={() => void refreshDiagnostics()}
+                  disabled={refreshState === 'refreshing'}
+                  title={refreshState === 'failed'
+                    ? `刷新失败：${errorText(reactionDiagnostics.error) || '请稍后重试'}`
+                    : reactionDiagnostics.dataUpdatedAt
+                      ? `上次更新 ${fullTime(new Date(reactionDiagnostics.dataUpdatedAt).toISOString())}`
+                      : '刷新排障数据'}
+                  className={`inline-flex h-8 min-w-[84px] shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-[11px] transition-colors disabled:opacity-40 ${refreshState === 'failed' ? 'text-red-600 hover:bg-red-50' : 'text-zinc-500 hover:bg-zinc-100'}`}>
+                  <RefreshCw size={12} className={refreshState === 'refreshing' ? 'animate-spin' : ''}/>
+                  {refreshState === 'refreshing' ? '刷新中' : refreshState === 'failed' ? '刷新失败' : refreshState === 'done' ? '已刷新' : '刷新'}
                 </button>
               </div>
+              {reactionDiagnostics.isError && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[10px] leading-4 text-red-700">排障数据读取失败：{errorText(reactionDiagnostics.error) || '请稍后重试'}</p>}
               <div className="mt-4 space-y-2">
                 {(() => {
                   const source = reactionSourceStatus(reactionDiagnostics.data?.source);
@@ -980,7 +1012,7 @@ export function LarkAvatarPanel() {
                   {reactionDiagnostics.data!.triggers.slice(0, 5).map(trigger => <div key={trigger.key} className="grid grid-cols-[1fr_auto] items-start gap-2 border-b border-zinc-100 px-3 py-2 last:border-b-0">
                     <div className="min-w-0">
                       <p className="truncate text-[11px] text-zinc-700">{trigger.emoji} · {trigger.route} · {trigger.operatorType ?? 'unknown'}/{trigger.operatorId ?? '?'}</p>
-                      <p className="truncate font-mono text-[10px] text-zinc-400">{trigger.messageId}{trigger.reason ? ` · ${trigger.reason}` : ''}</p>
+                      <p className="break-all font-mono text-[10px] leading-4 text-zinc-400">{trigger.messageId}{trigger.reason ? ` · ${trigger.reason}` : ''}</p>
                     </div>
                     <span className={`rounded-full px-2 py-0.5 text-[10px] ${trigger.state === 'dispatched' ? 'bg-emerald-50 text-emerald-700' : trigger.state === 'failed' ? 'bg-red-50 text-red-700' : trigger.state === 'ignored' ? 'bg-zinc-100 text-zinc-500' : 'bg-amber-50 text-amber-700'}`}>{reactionStateLabel(trigger.state)}</span>
                   </div>)}

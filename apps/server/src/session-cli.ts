@@ -149,7 +149,7 @@ export async function runSessionList(options: SessionCliOptions = {}): Promise<s
   try {
     const sessions = await repos.sessions.list();
     if (options.json) return JSON.stringify(sessions, null, 2) + '\n';
-    return formatSessionList(sessions.map(({ id, agentId, state, cwd, updatedAt }) => ({ id, agentId, state, cwd, updatedAt })));
+    return formatSessionList(sessions.map(({ id, agentId, state, cwd, updatedAt, interruptIntent }) => ({ id, agentId, state, cwd, updatedAt, ...(interruptIntent ? { interruptIntent } : {}) })));
   } finally {
     repos.close();
   }

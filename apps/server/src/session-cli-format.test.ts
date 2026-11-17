@@ -102,10 +102,12 @@ describe('session-cli transcript formatting', () => {
   it('lists sessions one per line with stable fields', () => {
     const output = formatSessionList([
       { id: 'ses_1', agentId: 'claude', state: 'idle', cwd: '/tmp/a', updatedAt: '2026-09-17T00:00:00Z' },
-      { id: 'ses_2', agentId: 'codex', state: 'running_tool', cwd: '/tmp/b', updatedAt: '2026-09-17T01:00:00Z' }
+      { id: 'ses_2', agentId: 'codex', state: 'running_tool', cwd: '/tmp/b', updatedAt: '2026-09-17T01:00:00Z' },
+      { id: 'ses_3', agentId: 'codex', state: 'interrupted', interruptIntent: 'user', cwd: '/tmp/c', updatedAt: '2026-09-17T02:00:00Z' }
     ]);
     expect(output).toContain('ses_1  [idle]  agent=claude  cwd=/tmp/a');
     expect(output).toContain('ses_2  [running_tool]  agent=codex  cwd=/tmp/b');
+    expect(output).toContain('ses_3  [interrupted（用户主动停止）]  agent=codex  cwd=/tmp/c');
     expect(formatSessionList([])).toBe('暂无会话。\n');
   });
 

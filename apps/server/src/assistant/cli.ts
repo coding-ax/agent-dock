@@ -55,6 +55,9 @@ function formatHuman(value: unknown): string {
 }
 
 function formatTask(task: Record<string, unknown>): string {
+  const userStopped = task.lastStopReason === 'user_stopped'
+    && Number(task.stopCount ?? 0) > Number(task.resumedStopCount ?? 0);
+  const state = task.plan ? '计划待确认' : userStopped ? '用户已停止' : task.state;
   const execution = [
     `Agent：${task.agentId ?? '开工时继承主会话'}`,
     `目录：${task.cwd ?? '开工时继承主会话'}`,
@@ -63,7 +66,8 @@ function formatTask(task: Record<string, unknown>): string {
   ].join('  ');
   const lines = [
     `${task.id}  ${task.title}`,
-    `状态：${task.plan ? '计划待确认' : task.state}  返工：${task.round} 轮${task.sessionId ? `  会话：${task.sessionId}` : ''}`,
+    `状态：${state}  返工：${task.round} 轮${task.sessionId ? `  会话：${task.sessionId}` : ''}`,
+    userStopped ? `停止：用户主动停止 ${task.stopCount ?? 0} 次${task.lastStoppedAt ? ` · ${task.lastStoppedAt}` : ''}（等用户明确说「继续」）` : '',
     execution,
     `验收标准：${Array.isArray(task.doneWhen) ? (task.doneWhen as string[]).map((item, index) => `\n  ${index + 1}. ${item}`).join('') : ''}`,
     task.notes ? `说明：${task.notes}` : ''
@@ -73,7 +77,11 @@ function formatTask(task: Record<string, unknown>): string {
 
 function formatTasks(tasks: Array<Record<string, unknown>>): string {
   if (!tasks.length) return '没有事项。';
-  return tasks.map(task => `${task.id}  [${task.plan ? 'plan' : task.state}]${task.archivedAt ? '  [已归档]' : ''}  ${task.title}${task.sessionId ? `  ${task.sessionId}` : ''}`).join('\n');
+  return tasks.map(task => {
+    const userStopped = task.lastStopReason === 'user_stopped'
+      && Number(task.stopCount ?? 0) > Number(task.resumedStopCount ?? 0);
+    return `${task.id}  [${task.plan ? 'plan' : userStopped ? '用户已停止' : task.state}]${task.archivedAt ? '  [已归档]' : ''}  ${task.title}${task.sessionId ? `  ${task.sessionId}` : ''}`;
+  }).join('\n');
 }
 
 function formatWatch(watch: Record<string, unknown>): string {

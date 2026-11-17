@@ -8,9 +8,9 @@ import {
   computeAgeScore, computeLevels, countRounds, decideLifecycleAction, emptyAlertState, extractFileRefs, handoffOutcome,
   handoffVisibleText, isHandoffExecuting, isHandoffOpen, latestContextPercent, lifeStageFor, lifecycleMetricKeys, maintenanceVisibleText,
   normalizeAlertState, normalizeLifecycleConfig, overallLevel, planTransfers, reasonsFor, recoveryAction, renderHandoffBriefing, serializeLifecycleConfig,
-  STAGE_POLICY, stageCatLabel, stageLabel, stageProgress,
+  resolveHandoffSuccessorConfig, STAGE_POLICY, stageCatLabel, stageLabel, stageProgress,
   type ArchiveBatch, type ArchiveSource, type CatRecord, type HandoffRecord, type HandoffStep, type HandoffStepRecord,
-  type HandoffTrigger, type LifecycleAlertState, type LifecycleConfig, type LifecycleConfigPatch, type LifecycleMetrics,
+  type HandoffAgentOption, type HandoffSuccessorConfig, type HandoffTrigger, type LifecycleAlertState, type LifecycleConfig, type LifecycleConfigPatch, type LifecycleMetrics,
   type MaintenanceRun, type MetricReason, type TransferRecord
 } from './lifecycle.js';
 
@@ -43,6 +43,8 @@ export interface LifecycleHost {
   nameSession(sessionId: string, title: string): Promise<void>;
   mainSystemPrompt(): string;
   normalizeName(value: unknown): string | undefined;
+  /** 校验接班配置用：Agent 是否存在、可用模型和思考深度。 */
+  agentCatalog(agentId: string): Promise<HandoffAgentOption | undefined>;
 }
 
 export interface AssistantLifecycleOptions {
@@ -388,7 +390,7 @@ export class AssistantLifecycle {
     return {
       id: record.id, state: record.state, outcome: record.outcome ?? null, trigger: record.trigger, reason: record.reason ?? null,
       reasons: record.reasons, fromSessionId: record.fromSessionId, toSessionId: record.toSessionId ?? null,
-      successorName: record.successorName ?? null, error: record.error ?? null,
+      successorName: record.successorName ?? null, successorConfig: record.successorConfig ?? null, error: record.error ?? null,
       createdAt: record.createdAt, confirmedAt: record.confirmedAt ?? null, completedAt: record.completedAt ?? null
     };
   }
@@ -618,22 +620,62 @@ export class AssistantLifecycle {
 
   listHandoffs() { return this.store.listHandoffs(50).map(record => this.handoffSummary(record)); }
 
+  /**
+   * 解析并校验接班配置：不传覆盖时逐字段继承旧会话；传了就查 Agent 目录和模型/思考深度。
+   * 错误统一成 400，方便网页在发起前就提示，而不是等到 spawning 才回滚。
+   */
+  private async resolveSuccessor(fromSession: Session, overrides?: HandoffSuccessorConfig): Promise<HandoffSuccessorConfig> {
+    const from = {
+      agentId: fromSession.agentId,
+      ...(fromSession.model ? { model: fromSession.model } : {}),
+      ...(fromSession.reasoningEffort ? { reasoningEffort: fromSession.reasoningEffort } : {})
+    };
+    const hasOverride = overrides && (overrides.agentId !== undefined || overrides.model !== undefined || overrides.reasoningEffort !== undefined);
+    try {
+      if (!hasOverride) return resolveHandoffSuccessorConfig({ from, catalog: [] });
+      const agentId = overrides.agentId?.trim() || fromSession.agentId;
+      const option = await this.host.agentCatalog(agentId);
+      if (!option) throw new Error(`Agent 不存在：${agentId}`);
+      return resolveHandoffSuccessorConfig({ from, overrides, catalog: [option] });
+    } catch (error) {
+      throw new RuntimeError('INVALID_HANDOFF_CONFIG', errorMessage(error), 400);
+    }
+  }
+
+  private successorOverrides(input: { agentId?: string; model?: string; reasoningEffort?: string }): HandoffSuccessorConfig | undefined {
+    if (input.agentId === undefined && input.model === undefined && input.reasoningEffort === undefined) return undefined;
+    return {
+      ...(input.agentId !== undefined ? { agentId: input.agentId.trim() } : {}),
+      ...(input.model !== undefined ? { model: input.model.trim() } : {}),
+      ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort.trim() } : {})
+    };
+  }
+
   /** 提议交接。同一时刻只有一单：已有未结束的直接返回它（幂等）。 */
-  async proposeHandoff(input: { trigger: HandoffTrigger; reason?: string; name?: string; reasons?: MetricReason[] }): Promise<HandoffRecord> {
+  async proposeHandoff(input: {
+    trigger: HandoffTrigger; reason?: string; name?: string; reasons?: MetricReason[];
+    agentId?: string; model?: string; reasoningEffort?: string;
+  }): Promise<HandoffRecord> {
     const open = this.store.openHandoff();
     if (open) return open;
     const mainId = this.host.mainSessionId();
     if (!mainId) throw new RuntimeError('INVALID_ASSISTANT_INPUT', '还没有指定主会话', 400);
     const collected = await this.collectMetrics(true);
     if (!collected) throw new RuntimeError('INVALID_ASSISTANT_INPUT', '主会话不存在', 400);
+    const fromSession = await this.repos.sessions.get(mainId);
+    if (!fromSession) throw new RuntimeError('INVALID_ASSISTANT_INPUT', '主会话不存在', 400);
     const config = this.getConfig();
     const name = input.name === undefined ? undefined : this.host.normalizeName(input.name);
+    const overrides = this.successorOverrides(input);
+    // 没改配置就不落 successorConfig：确认时再按旧会话当时的值逐项继承，保持加选择器前的行为。
+    const successorConfig = overrides ? await this.resolveSuccessor(fromSession, overrides) : undefined;
     const stamp = now();
     const record: HandoffRecord = {
       id: makeId('ahand'), state: 'proposed', trigger: input.trigger,
       ...(input.reason?.trim() ? { reason: input.reason.trim().slice(0, 300) } : {}),
       fromCatId: collected.cat.id, fromSessionId: mainId,
       successorName: name ?? collected.cat.name,
+      ...(successorConfig ? { successorConfig } : {}),
       metrics: collected.metrics,
       reasons: input.reasons ?? reasonsFor(collected.metrics, config, [...lifecycleMetricKeys]).filter(reason => reason.level === 'handoff'),
       steps: [], createdAt: stamp, updatedAt: stamp
@@ -661,7 +703,7 @@ export class AssistantLifecycle {
    * 用户确认后开始执行。仪式在后台跑（新建会话可能要十几秒），立即返回当前进度；
    * 网页和 CLI 轮询 `GET /handoff/:id` 看步骤。重复确认只返回进度，不会执行两次。
    */
-  async confirmHandoff(id: string, input: { name?: string } = {}) {
+  async confirmHandoff(id: string, input: { name?: string; agentId?: string; model?: string; reasoningEffort?: string } = {}) {
     const record = this.store.getHandoff(id);
     if (!record) throw new RuntimeError('HANDOFF_NOT_FOUND', `交接不存在：${id}`, 404);
     if (record.state !== 'proposed') {
@@ -674,11 +716,24 @@ export class AssistantLifecycle {
       throw conflict('HANDOFF_STALE', '主会话已经换了，这张交接提议作废了');
     }
     if (await this.isMainBusy(mainId)) throw conflict('MAIN_BUSY', '主会话正在忙（这一轮还没结束或有排队消息），等它停下来再交接');
+    const fromSession = await this.repos.sessions.get(mainId);
+    if (!fromSession) throw conflict('HANDOFF_STALE', '旧主会话不存在，这张交接提议作废了');
+    const overrides = this.successorOverrides(input);
+    const base = record.successorConfig ?? {
+      agentId: fromSession.agentId,
+      ...(fromSession.model ? { model: fromSession.model } : {}),
+      ...(fromSession.reasoningEffort ? { reasoningEffort: fromSession.reasoningEffort } : {})
+    } as HandoffSuccessorConfig;
+    const successorConfig = await this.resolveSuccessor(
+      { ...fromSession, agentId: base.agentId ?? fromSession.agentId, ...(base.model ? { model: base.model } : {}), ...(base.reasoningEffort ? { reasoningEffort: base.reasoningEffort } : {}) },
+      overrides
+    );
     const name = input.name === undefined ? undefined : this.host.normalizeName(input.name);
     if (!this.store.compareAndSetHandoffState(id, 'proposed', 'confirmed')) return this.getHandoff(id);
     const confirmed = this.store.getHandoff(id)!;
     confirmed.confirmedAt = now();
     if (name) confirmed.successorName = name;
+    confirmed.successorConfig = successorConfig;
     this.store.saveHandoff(confirmed);
     this.executingHandoffId = id;
     this.execution = this.executeHandoff(id)
@@ -746,13 +801,18 @@ export class AssistantLifecycle {
       this.store.saveHandoff({ ...this.store.getHandoff(id)!, package: pkg, metrics });
       this.markStep(id, 'packing', `交接包：${pkg.openTasks.length} 件事项、${pkg.watches.length} 个 watch、${pkg.pendingDrafts.length} 份草稿`);
 
-      // ---- spawning：继承 Agent / 模型 / 思考深度 / 目录 / 名字
+      // ---- spawning：用确认时的接班配置（没改就是继承）新建会话；目录始终沿用旧会话
       current = 'spawning';
       this.advance(id, 'spawning');
-      const session = await this.runtime.start({
-        agentId: fromSession.agentId, cwd: fromSession.cwd,
+      const target = record.successorConfig ?? {
+        agentId: fromSession.agentId,
         ...(fromSession.model ? { model: fromSession.model } : {}),
-        ...(fromSession.reasoningEffort ? { reasoningEffort: fromSession.reasoningEffort } : {}),
+        ...(fromSession.reasoningEffort ? { reasoningEffort: fromSession.reasoningEffort } : {})
+      };
+      const session = await this.runtime.start({
+        agentId: target.agentId!, cwd: fromSession.cwd,
+        ...(target.model ? { model: target.model } : {}),
+        ...(target.reasoningEffort ? { reasoningEffort: target.reasoningEffort } : {}),
         source: 'assistant-main', systemPrompt: this.host.mainSystemPrompt()
       });
       this.store.saveHandoff({ ...this.store.getHandoff(id)!, toSessionId: session.id });

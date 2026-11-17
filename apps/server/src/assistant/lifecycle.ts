@@ -38,6 +38,24 @@ export interface CatRecord {
 
 export interface HandoffStepRecord { step: HandoffStep | 'rollback' | 'recovery'; at: string; ok: boolean; detail?: string }
 
+/** 接班配置：不传的字段沿用旧猫的配置；换 Agent 时模型/思考深度默认取新 Agent 的默认值。 */
+export interface HandoffSuccessorConfig {
+  agentId?: string;
+  model?: string;
+  reasoningEffort?: string;
+}
+
+/** 校验接班配置所需的 Agent 能力快照（模型列表来自 ACP 发现或 extraModels）。 */
+export interface HandoffAgentOption {
+  id: string;
+  name: string;
+  disabled?: boolean;
+  defaultModel?: string;
+  models: string[];
+  defaultReasoningEffort?: string;
+  reasoningEfforts: string[];
+}
+
 export interface HandoffRecord {
   id: string;
   state: HandoffState;
@@ -49,6 +67,8 @@ export interface HandoffRecord {
   toCatId?: string;
   toSessionId?: string;
   successorName?: string;
+  /** 记录最终要用的 Agent / 模型 / 思考深度；旧记录没有时按旧猫继承。 */
+  successorConfig?: HandoffSuccessorConfig;
   metrics: Partial<LifecycleMetrics>;
   reasons: MetricReason[];
   package?: HandoffPackage;
@@ -619,6 +639,49 @@ export const handoffOutcomeLabel: Record<HandoffOutcome, string> = {
   partial: '部分失败',
   needs_confirmation: '需要你确认'
 };
+
+/**
+ * 解析接班配置。没有任何覆盖时逐字段继承旧主会话（连 Agent 目录都不查）；
+ * 一旦指定了 Agent / 模型 / 思考深度，就必须能在目录里找到并属于该 Agent。
+ */
+export function resolveHandoffSuccessorConfig(input: {
+  from: { agentId: string; model?: string; reasoningEffort?: string };
+  overrides?: HandoffSuccessorConfig;
+  catalog: HandoffAgentOption[];
+}): HandoffSuccessorConfig {
+  const overrides = input.overrides ?? {};
+  const hasOverride = overrides.agentId !== undefined || overrides.model !== undefined || overrides.reasoningEffort !== undefined;
+  if (!hasOverride) {
+    return {
+      agentId: input.from.agentId,
+      ...(input.from.model ? { model: input.from.model } : {}),
+      ...(input.from.reasoningEffort ? { reasoningEffort: input.from.reasoningEffort } : {})
+    };
+  }
+  const agentId = overrides.agentId?.trim() || input.from.agentId;
+  const option = input.catalog.find(item => item.id === agentId);
+  if (!option) throw new Error(`Agent 不存在：${agentId}`);
+  if (option.disabled) throw new Error(`Agent 已停用：${option.name}`);
+  const sameAgent = agentId === input.from.agentId;
+  // 显式选择才算「用户要的模型」，必须存在于目录；继承来的模型只沿用，不重新校验。
+  // 旧模型可能已经从 ACP 的 /models 结果里消失，用户只改思考深度时不应该因此 400。
+  const modelExplicit = overrides.model !== undefined && overrides.model.trim() !== '';
+  const model = overrides.model !== undefined
+    ? overrides.model.trim() || undefined
+    : sameAgent ? input.from.model : option.defaultModel;
+  if (modelExplicit && model && !option.models.includes(model)) throw new Error(`${option.name} 不支持模型：${model}`);
+  const reasoningEffort = overrides.reasoningEffort !== undefined
+    ? overrides.reasoningEffort.trim() || undefined
+    : sameAgent ? input.from.reasoningEffort : option.defaultReasoningEffort;
+  if (reasoningEffort && option.reasoningEfforts.length && !option.reasoningEfforts.includes(reasoningEffort)) {
+    throw new Error(`${option.name} 不支持思考深度：${reasoningEffort}`);
+  }
+  return {
+    agentId,
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {})
+  };
+}
 
 /* ---------- 便签交接计划 ---------- */
 

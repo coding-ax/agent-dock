@@ -6,7 +6,10 @@ import {
 } from './lifecycle.js';
 
 export interface LifecycleCliOptions { json?: boolean; from?: string }
-export interface HandoffCliOptions extends LifecycleCliOptions { yes?: boolean; name?: string; reason?: string; wait?: string }
+export interface HandoffCliOptions extends LifecycleCliOptions {
+  yes?: boolean; name?: string; reason?: string; wait?: string;
+  agent?: string; model?: string; reasoning?: string;
+}
 export interface MaintenanceRunCliOptions extends LifecycleCliOptions { reason?: string }
 export interface MaintenanceConfigCliOptions extends LifecycleCliOptions {
   auto?: boolean; autoHandoff?: boolean; foldAfterHours?: string; maxRunsPerDay?: string; set?: string[];
@@ -59,12 +62,14 @@ function reasonsLine(reasons: unknown): string {
 export function formatHandoff(handoff: Json): string {
   const fromCat = handoff.fromCat as Json | null | undefined;
   const toCat = handoff.toCat as Json | null | undefined;
+  const successorConfig = handoff.successorConfig as Json | null | undefined;
   const lines = [
     `交接 ${text(handoff.id)}  [${stateLine(handoff)}]`,
     `发起：${triggerLabel[text(handoff.trigger)] ?? text(handoff.trigger)}${handoff.reason ? `  原因：${text(handoff.reason)}` : ''}`,
     reasonsLine(handoff.reasons) ? `越线：${reasonsLine(handoff.reasons)}` : '',
     `前任：${fromCat ? `第 ${text(fromCat.generation)} 代${text(fromCat.name)}  ` : ''}${text(handoff.fromSessionId)}${handoff.state === 'done' ? '（已归档，只读）' : ''}`,
-    `继任：${toCat ? `第 ${text(toCat.generation)} 代` : ''}${text(handoff.successorName) || '（沿用名字）'}${handoff.toSessionId ? `  ${text(handoff.toSessionId)}` : ''}`
+    `继任：${toCat ? `第 ${text(toCat.generation)} 代` : ''}${text(handoff.successorName) || '（沿用名字）'}${handoff.toSessionId ? `  ${text(handoff.toSessionId)}` : ''}`,
+    successorConfig ? `配置：${text(successorConfig.agentId)}${successorConfig.model ? ` · ${text(successorConfig.model)}` : ''}${successorConfig.reasoningEffort ? ` · ${text(successorConfig.reasoningEffort)}` : ''}` : ''
   ];
   const steps = Array.isArray(handoff.steps) ? handoff.steps as Json[] : [];
   if (steps.length) {
@@ -205,6 +210,9 @@ export async function runMainHandoff(options: HandoffCliOptions): Promise<string
   const proposed = await callDaemon<{ handoff: Json }>(daemon(), '/api/assistant/handoff', 'POST', {
     ...(options.reason?.trim() ? { reason: options.reason.trim() } : {}),
     ...(options.name?.trim() ? { name: options.name.trim() } : {}),
+    ...(options.agent?.trim() ? { agentId: options.agent.trim() } : {}),
+    ...(options.model?.trim() ? { model: options.model.trim() } : {}),
+    ...(options.reasoning?.trim() ? { reasoningEffort: options.reasoning.trim() } : {}),
     ...from
   });
   let handoff = proposed.handoff;
@@ -216,6 +224,9 @@ export async function runMainHandoff(options: HandoffCliOptions): Promise<string
     try {
       handoff = (await callDaemon<{ handoff: Json }>(daemon(), `/api/assistant/handoff/${encodeURIComponent(id)}/confirm`, 'POST', {
         ...(options.name?.trim() ? { name: options.name.trim() } : {}),
+        ...(options.agent?.trim() ? { agentId: options.agent.trim() } : {}),
+        ...(options.model?.trim() ? { model: options.model.trim() } : {}),
+        ...(options.reasoning?.trim() ? { reasoningEffort: options.reasoning.trim() } : {}),
         ...from
       })).handoff;
     } catch (error) {

@@ -12,8 +12,8 @@ describe('lifecycle CLI', () => {
     };
     const run = (args: string[]) => createCliProgram('0.0.0', handlers).parseAsync(['node', 'agent-dock', ...args]);
 
-    await run(['main', 'handoff', '--yes', '--name', '豆豆', '--reason', '太满了']);
-    expect(handlers.mainHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ yes: true, name: '豆豆', reason: '太满了' }));
+    await run(['main', 'handoff', '--yes', '--name', '豆豆', '--reason', '太满了', '--agent', 'codex', '--model', 'gpt-5-codex', '--reasoning', 'high']);
+    expect(handlers.mainHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ yes: true, name: '豆豆', reason: '太满了', agent: 'codex', model: 'gpt-5-codex', reasoning: 'high' }));
     await run(['main', 'handoff']);
     expect(handlers.mainHandoff.mock.lastCall?.[0].yes).toBeUndefined();
     await run(['main', 'handoff', 'show', 'ahand_1', '--json']);
@@ -54,6 +54,10 @@ describe('lifecycle CLI', () => {
     expect(text).toContain('越线：上下文用量 92%/90%');
     expect(text).toContain('前任：第 1 代团子  ses_old（已归档，只读）');
     expect(text).toContain('继任：第 2 代豆豆  ses_new');
+    expect(formatHandoff({
+      id: 'ahand_3', state: 'proposed', trigger: 'user', fromSessionId: 'ses_old', successorName: '豆豆',
+      successorConfig: { agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'high' }, steps: [], transfers: []
+    })).toContain('配置：codex · gpt-5-codex · high');
     expect(text).toContain('✓ 打包交接包 · 交接包：1 件事项');
     expect(text).toContain('[待你确认] 草稿 GitHub 评论 → o/r#1（adraft_1）');
     expect(text).toContain('notes unarchive --batch aarch_1');

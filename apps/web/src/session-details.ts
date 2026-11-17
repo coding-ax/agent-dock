@@ -1,6 +1,6 @@
 import type { Session } from './api';
 import { isScheduledSession } from './schedule-view';
-import { stateLabels, stateTone } from './session-states';
+import { sessionStateLabel, stateTone } from './session-states';
 
 /**
  * 会话行 hover 卡片的数据来源。
@@ -80,7 +80,7 @@ export function sessionTitleSourceLabel(session: Pick<Session, 'titleSource'>): 
 }
 
 /** 状态文案与色点。已归档压过 state——归档行是只读的，再说「思考中」会误导。 */
-export function sessionStatusLabel(session: Pick<Session, 'state' | 'archivedAt'>): { text: string; tone: string } {
+export function sessionStatusLabel(session: Pick<Session, 'state' | 'archivedAt'> & { interruptIntent?: Session['interruptIntent'] }): { text: string; tone: string } {
   if (session.archivedAt) return { text: '已归档', tone: 'bg-zinc-400' };
-  return { text: stateLabels[session.state] ?? session.state, tone: stateTone[session.state] ?? 'bg-zinc-400' };
+  return { text: sessionStateLabel(session.state, session.interruptIntent), tone: stateTone[session.state] ?? 'bg-zinc-400' };
 }

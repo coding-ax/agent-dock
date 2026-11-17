@@ -52,7 +52,7 @@ export type LarkAvatarLoginState = 'idle' | 'starting' | 'waiting' | 'scanned' |
 export type LarkAvatarLoginSnapshot = { state: LarkAvatarLoginState; message: string; region: LarkAvatarRegion; qrContent?: string; attempt: number; expiresAt?: string };
 export type LarkAvatarInboxItem = { id: string; threadKey: string; chatId: string; chatType: string; chatName?: string; chatAvatarUrl?: string; senderId?: string; senderName?: string; senderAvatarUrl?: string; title: string; summary?: string; tier: 'action' | 'fyi' | 'noise'; state: 'new' | 'handled'; occurredAt: string; receivedAt: string };
 export type LarkAvatarDraft = { id: string; itemId?: string; threadKey?: string; target: string; replyRootId?: string; replyQuote?: boolean; replyThreadChat?: boolean; body: string; state: 'pending' | 'sent' | 'failed' | 'discarded'; sentMessageId?: string; attempts: number; lastError?: string; createdAt: string; updatedAt: string; sentAt?: string };
-export type Session = { id: string; agentId: string; state: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null; /** 非空即置顶；只影响「时间」视图。 */ pinnedAt?: string | null };
+export type Session = { id: string; agentId: string; state: string; interruptIntent?: 'user' | 'agent_cancelled' | 'daemon_restart'; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null; /** 非空即置顶；只影响「时间」视图。 */ pinnedAt?: string | null };
 export type Project = { id: string; machineId?: string | null; name: string; cwd: string; pinnedAt?: string | null; exists: boolean; createdAt: string; updatedAt: string };
 export type RegisterProjectResult = { project: Project; created: boolean };
 export type AutostartStatus = { supported: boolean; enabled: boolean; reason?: string; plistPath?: string; entrypoint?: string };
@@ -90,6 +90,9 @@ export type AssistantTask = {
   activeMs?: number;
   /** 已关闭便签被折叠进归档区：只读、可取出，不是删除。 */
   archivedAt?: string; archiveBatchId?: string;
+  /** 用户主动停止的累计次数与原因；用于在界面上区分停止、失败和被动中断。 */
+  stopCount?: number; lastStopReason?: 'user_stopped' | 'failed' | 'interrupted' | 'timeout';
+  lastStoppedAt?: string; lastResumedAt?: string; resumedStopCount?: number;
 };
 export type AssistantWatch = {
   id: string; ownerSessionId: string; name: string; command: string; cwd?: string;
@@ -132,9 +135,11 @@ export type CatRecord = {
 };
 export type HandoffState = 'proposed' | 'confirmed' | 'packing' | 'spawning' | 'transferring' | 'switching' | 'retiring' | 'briefing' | 'done' | 'rolling_back' | 'rolled_back' | 'cancelled';
 export type HandoffOutcome = 'succeeded' | 'partial' | 'needs_confirmation';
+export type HandoffSuccessorConfig = { agentId?: string; model?: string; reasoningEffort?: string };
 export type HandoffSummary = {
   id: string; state: HandoffState; outcome: HandoffOutcome | null; trigger: 'user' | 'threshold' | 'agent'; reason: string | null; reasons: LifecycleReason[];
-  fromSessionId: string; toSessionId: string | null; successorName: string | null; error: string | null; createdAt: string; confirmedAt: string | null; completedAt: string | null;
+  fromSessionId: string; toSessionId: string | null; successorName: string | null; successorConfig?: HandoffSuccessorConfig | null;
+  error: string | null; createdAt: string; confirmedAt: string | null; completedAt: string | null;
 };
 export type HandoffTransfer = { id: string; handoffId: string; kind: 'task' | 'watch' | 'draft'; itemId: string; title: string; status: 'transferred' | 'needs_confirmation' | 'failed' | 'reverted'; detail?: string; createdAt: string; updatedAt: string };
 export type HandoffStepRecord = { step: string; at: string; ok: boolean; detail?: string };
@@ -373,7 +378,8 @@ export const api = {
   larkAvatarStatus: () => json<LarkAvatarStatus>('/api/lark-avatar/status'),
   larkAvatarConfig: () => json<LarkAvatarConfigRecord | null>('/api/lark-avatar/config'),
   larkAvatarChats: () => json<LarkAvatarChatSummary[]>('/api/lark-avatar/chats'),
-  larkAvatarReactionDiagnostics: (limit = 10) => json<LarkAvatarReactionDiagnostics>(`/api/lark-avatar/reaction-diagnostics?limit=${Math.min(100, Math.max(1, Math.floor(limit)))}`),
+  // 排障页每 10 秒轮询一次；明确禁用 HTTP 缓存，手动刷新才能拿到新账本。
+  larkAvatarReactionDiagnostics: (limit = 10) => json<LarkAvatarReactionDiagnostics>(`/api/lark-avatar/reaction-diagnostics?limit=${Math.min(100, Math.max(1, Math.floor(limit)))}`, { cache: 'no-store' }),
   saveLarkAvatarConfig: (body: { region?: LarkAvatarRegion; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: 'ask' | 'main' | 'independent'; reactionTriggerIgnoreBots?: boolean; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string }) => json<LarkAvatarConfigRecord>('/api/lark-avatar/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   startLarkAvatarLogin: (region: LarkAvatarRegion) => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/qr', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ region }) }),
   larkAvatarLoginStatus: () => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/status'),
@@ -413,9 +419,9 @@ export const api = {
   assistantNotify: (body: { text: string; ask?: boolean; urgent?: boolean }) => json<{ id: string; sent?: boolean }>('/api/assistant/notify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   assistantLifecycle: () => json<AssistantLifecycle>('/api/assistant/lifecycle', undefined, true),
   assistantHandoff: (id: string) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}`),
-  assistantProposeHandoff: (body: { reason?: string; name?: string } = {}) => json<{ handoff: HandoffView }>('/api/assistant/handoff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantProposeHandoff: (body: { reason?: string; name?: string; agentId?: string; model?: string; reasoningEffort?: string } = {}) => json<{ handoff: HandoffView }>('/api/assistant/handoff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   /** 网页调用不带 from：确认只能由用户本人做，服务端对带 from 的确认一律 403。 */
-  assistantConfirmHandoff: (id: string, body: { name?: string } = {}) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantConfirmHandoff: (id: string, body: { name?: string; agentId?: string; model?: string; reasoningEffort?: string } = {}) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   assistantCancelHandoff: (id: string) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}/cancel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
   assistantResendHandoff: (id: string) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}/resend`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
   assistantRunMaintenance: (body: { reason?: string } = {}) => json<{ run: MaintenanceRun }>('/api/assistant/maintenance/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),

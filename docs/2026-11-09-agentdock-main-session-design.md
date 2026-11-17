@@ -52,11 +52,15 @@
 
 **做什么**
 
-- daemon 订阅 runtime 的全局状态事件，并有 30 秒扫描兜底，把侧边会话状态转成三类信号：
+- daemon 订阅 runtime 的全局状态事件，并有 30 秒扫描兜底，把侧边会话状态转成五类信号：
   - `review`：侧边会话这一轮结束（`idle` / `completed`），等主会话验收。
   - `needs_you`：等权限确认（`waiting_for_permission`）、卡住超时（`stalled`）、侧边会话主动 `task report --kind question|blocked`。
-  - `failed`：`failed` / `interrupted`。
+  - `failed`：真实失败（Agent 崩溃、非 0 退出、未返回最终输出）和超时；意外中断也归到这里。
+  - `interrupted`：不是用户操作的被动中断（例如 Agent 自己报告 cancelled）。
+  - `user_stopped`：用户亲手点停止/中断。它不是失败、不是待验收；主会话只能汇报现状，等用户明确说「继续」。
 - 信号按事项和类型节流，15 秒合并窗口；多个信号合并成一条「📋 督办 · N 个事项有变化」注入主会话。
+- 只有 `user_stopped` 时注入的是「⏸ 用户已停止」普通通知，不走验收督办文案；同一事项 10 分钟内重复停止只记账、不再注入，避免「用户停止 → 主会话重启 → 用户再停止」的循环。
+- 用户停止后，事项记录 `stopCount` / `lastStopReason` / `lastStoppedAt`；主会话若尝试用 `task append`、`task start` 或 `review --verdict rework` 自动重启，daemon 会拒绝并提示等用户明确说「继续」。
 - 注入消息带 `origin=injected`：网页时间线渲染成一行可展开的灰色系统提示，不是用户气泡；注入轮不转发飞书。
 - `thinking` / `running_tool` 等中间状态不产生信号，不逐条唤醒主会话。
 
@@ -114,21 +118,18 @@
 - `draft send` 后评论出现且只出现一次；再次 `draft send` 不新增评论。
 - `draft discard` 后状态 `discarded`，不能发送。
 
-### 1.8 通知与静默时段
+### 1.8 通知
 
 **做什么**
 
 - 主会话用 `agent-dock notify "..."` 推送到绑定的飞书会话；`--ask` 表示需要用户回复，`--urgent` 表示紧急。
-- 静默时段默认**关闭**；开启后起止时间由用户设置（网页「主会话与督办」或 `agent-dock settings quiet-hours --enabled --start 22:30 --end 07:15`）。
-- 静默时段内普通通知进入待发送队列，到结束时间后由 30 秒扫描补发；`--urgent` 立即发送。
 - 没有绑定飞书会话时，通知记录为失败但不会阻塞主会话。
+- **已下线（2026-11-17）**：静默时段 / 免打扰队列已移除，`notify` 一律立即发送；`--urgent` 仅表示紧急通知（系统轮次里也放行）。
 
 **验证**
 
 - 默认设置下 `notify` 立即发送。
-- 开启静默时段并把窗口设为当前时间：普通 `notify` 返回 `delayed: true`，飞书无消息；`notify --urgent` 立即到达。
-- 关闭静默时段后，待发送队列在下一次扫描补发。
-- 网页设置里的开关和起止时间保存后，`GET /api/assistant/settings` 返回相同值。
+- 旧数据库里残留的 `assistant.quietHours` 不影响启动，也不会延迟通知。
 
 ### 1.9 权限边界
 
@@ -164,6 +165,30 @@
 - 侧边会话完成后 30 秒内主会话收到督办；主会话 `task show`/`session show` 核对后 `task review --verdict accepted`，事项变 `closed`，回复里给出验收证据。
 - 侧边会话在侧栏的标题等于事项标题，而不是 Agent 自动生成的泛化标题。
 - 督办注入本身不会再触发 `<agentdock-superagent>` 派活。
+
+### 1.11 既有事项延续判定（2026-11-18）
+
+**做什么**
+
+- `classifyMainTurn` 在派活前先判断用户是不是在延续已有事项，命中就返回 `append`，主会话按【既有事项延续】处理，不再 `task start` 新开便签。
+- 判定分三档：
+  - 消息里直接出现 `atask_...` 事项 ID。
+  - 强信号词：`打回 / 返工 / 继续 / 补充 / 刚才那个 / 还是那个 / 那个…问题 / 这个…prompt / 现在咱们的 prompt 怎么写 / 你是怎么做的` 等。
+  - 弱信号组合：「指代」（那个 / 刚才 / 上面 / 之前 / 上次）+「追问」（怎么写 / 为什么 / 如何 / 是不是 / 在哪里）同时出现，也算延续。
+- 命中后注入的 `<agentdock-superagent>` 明确写「本轮禁止 `task start` 新开便签」，并要求先 `task show`/`session show` 找到原事项；只是追问就只读回答，要改/补才 `append` 或 `rework`。
+- 拿不准是不是延续时，先 `task list` 列候选问用户，不再默认派活。
+
+**行为变化**
+
+- 以前「现在咱们的 prompt 是怎么写的？」这类带指代的追问会被当成新任务派活；现在默认按延续原事项处理。
+- 「拿不准时默认派活」改为「拿不准先列候选问用户」；确认是新事才派活。
+- 误判为延续时，主会话会先只读确认并可能反问；用户明确说「新开一张/另外一个问题/重新派」即可回到新开便签。
+
+**验证**
+
+- `classifyMainTurn('还是那个主会话的问题，你是怎么做的？')` 返回 `append`；`classifyMainTurn('在吗？')` 返回 `delegate`。
+- 对主会话发「现在这个 prompt 是怎么写的？」：只读 `task list`/`task show` 后回答，不新增事项。
+- 对主会话发「新开一张：另一个问题」：正常 `task start`。
 
 ## 2. 明确不做（本期）
 

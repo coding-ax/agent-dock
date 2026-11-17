@@ -72,13 +72,14 @@ describe('SendTimeHint', () => {
 });
 
 describe('UserMessageTime', () => {
-  it('is always visible next to the bubble and includes a date qualifier', () => {
+  it('carries a date qualifier for the bubble time, leaving visibility to the message row CSS', () => {
     const recent = new Date();
     recent.setHours(12, 0, 0, 0);
     const timestamp = recent.toISOString();
     const html = renderToStaticMarkup(createElement(UserMessageTime, { timestamp }));
     expect(html).toContain('ui-user-send-time');
     expect(html).not.toContain('ui-send-time');
+    // 绝对定位在消息行上，时间本身仍是普通行内文本。
     expect(html).not.toContain('absolute');
     expect(html).toContain('发送 今天 12:00');
     expect(html).toContain(`dateTime="${timestamp}"`);

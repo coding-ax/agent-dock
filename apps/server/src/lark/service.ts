@@ -513,6 +513,49 @@ export const larkIdentityPermissionHelp = (error?: unknown, appId?: string) => {
   return `**无法解析发送人身份，Agent 已停止本轮执行。**${detail}\n\n请为机器人开通以下资源点：\n- API：\`GET /open-apis/contact/v3/users/:open_id\`\n- 权限：\`contact:contact.base:readonly\`（通讯录基本信息）\n- 权限：\`contact:user.base:readonly\`（用户基本信息）\n- 权限：\`contact:user.email:readonly\`（用户邮箱信息）\n- 数据权限：应用通讯录可见范围必须包含当前发送人${consoleUrl}${permissionUrl}`;
 };
 
+export type LarkChoiceCardInput = {
+  title: string;
+  markdown: string;
+  buttons: Array<{
+    action: string;
+    label: string;
+    style?: 'primary' | 'default' | 'danger';
+    value?: Record<string, unknown>;
+  }>;
+};
+
+/** 卡片 2.0 的纯正文 + 按钮卡片；单独导出，便于用飞书 CardKit 做结构校验。 */
+export function buildChoiceCard(input: LarkChoiceCardInput) {
+  return {
+    schema: '2.0',
+    config: { update_multi: true, width_mode: 'default', summary: { content: input.title } },
+    header: { template: 'blue', title: { tag: 'plain_text', content: input.title } },
+    body: {
+      direction: 'vertical',
+      elements: [
+        { tag: 'markdown', content: input.markdown },
+        // 卡片 2.0 没有 1.0 的 action 容器；按钮必须直接放进 body 或 column_set。
+        // 之前套了 action 容器，飞书返回 230099「Failed to create card content」，询问卡片全部发不出去。
+        ...(input.buttons.length ? [{
+          tag: 'column_set',
+          flex_mode: 'none',
+          horizontal_spacing: '8px',
+          columns: input.buttons.map(button => ({
+            tag: 'column',
+            width: 'auto',
+            elements: [{
+              tag: 'button',
+              text: { tag: 'plain_text', content: button.label },
+              type: button.style ?? 'default',
+              behaviors: [{ type: 'callback', value: { action: button.action, ...(button.value ?? {}) } }]
+            }]
+          }))
+        }] : [])
+      ]
+    }
+  };
+}
+
 type Fetch = typeof globalThis.fetch;
 
 export class LarkCardService {
@@ -574,41 +617,14 @@ export class LarkCardService {
    * 发送一张只有正文和按钮的轻量卡片（用于 AI 替身表情触发的「这一轮交给谁」）。
    * 不复用 buildLarkCard：那张卡带任务状态、耗时和 trace 链接，不适合做一次性选择。
    */
-  async sendChoiceCard(input: {
+  async sendChoiceCard(input: LarkChoiceCardInput & {
     chatId: string;
     replyTo?: string;
-    title: string;
-    markdown: string;
-    buttons: Array<{
-      action: string;
-      label: string;
-      style?: 'primary' | 'default' | 'danger';
-      value?: Record<string, unknown>;
-    }>;
     idempotencyKey?: string;
   }): Promise<LarkMessageResult> {
     const chatId = required(input.chatId, 'chatId');
     if (!chatId.startsWith('oc_')) throw new LarkServiceError('INVALID_CHAT_ID', 'chatId must start with oc_', 400);
-    const card = {
-      schema: '2.0',
-      config: { update_multi: true, width_mode: 'default', summary: { content: input.title } },
-      header: { template: 'blue', title: { tag: 'plain_text', content: input.title } },
-      body: {
-        direction: 'vertical',
-        elements: [
-          { tag: 'markdown', content: input.markdown },
-          {
-            tag: 'action',
-            actions: input.buttons.map(button => ({
-              tag: 'button',
-              text: { tag: 'plain_text', content: button.label },
-              type: button.style ?? 'default',
-              behaviors: [{ type: 'callback', value: { action: button.action, ...(button.value ?? {}) } }]
-            }))
-          }
-        ]
-      }
-    };
+    const card = buildChoiceCard(input);
     const replyTo = input.replyTo?.trim();
     // 飞书 im/v1/messages 的 uuid 上限 50 字符且不接受控制字符；超限时直接报错，
     // 不要静默发出去再被网关拒绝（默认 ask 路由曾因此完全不可用）。

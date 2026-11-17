@@ -17,7 +17,7 @@ import { useHealOnFocus } from './useHealOnFocus';
 import { useBufferedEventStream } from './useBufferedEventStream';
 import { healBoundary, mergeEventBatch, replaceEventTail } from './event-buffer';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
-import { stateLabels, stateTone, busyStates } from './session-states';
+import { sessionStateLabel, stateLabels, stateTone, busyStates } from './session-states';
 import { ConfirmDialog, IconButton } from './ui-controls';
 import { openAppDialog } from './dialog-store';
 import { larkSessionAppLink } from './lark-session-link';
@@ -322,7 +322,15 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       // 改名（用户手改 / Agent 推来）也是走 status 事件的，和 model / reasoningEffort 同一个通道。
       // title 为 null 表示这一档没有名字（回落链的另一档接手），所以显式赋 null 而不是跳过。
       if (event.type === 'status' && 'title' in event.data) qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, title: event.data.title ?? undefined, titleSource: event.data.titleSource ?? undefined } : item));
-      if (event.type === 'status' && Object.hasOwn(stateLabels, event.data.state)) qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, state: event.data.state, ...(typeof event.data.model === 'string' ? { model: event.data.model } : {}), ...(typeof event.data.reasoningEffort === 'string' ? { reasoningEffort: event.data.reasoningEffort } : {}) } : item));
+      if (event.type === 'status' && Object.hasOwn(stateLabels, event.data.state)) qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? {
+        ...item,
+        state: event.data.state,
+        ...(Object.hasOwn(event.data, 'interruptIntent')
+          ? { interruptIntent: typeof event.data.interruptIntent === 'string' ? event.data.interruptIntent : undefined }
+          : event.data.state !== 'interrupted' ? { interruptIntent: undefined } : {}),
+        ...(typeof event.data.model === 'string' ? { model: event.data.model } : {}),
+        ...(typeof event.data.reasoningEffort === 'string' ? { reasoningEffort: event.data.reasoningEffort } : {})
+      } : item));
       if (event.type === 'task' && event.data.task) {
         const task = event.data.task as Task;
         qc.setQueryData<Task[]>(['tasks', session.id], current => upsertTask(current, task));
@@ -416,7 +424,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             <AgentIcon agentId={session.agentId} agentName={agent?.name} size={13}/>
             <span className="min-w-0 truncate">{agent?.name ?? session.agentId}</span>
             <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>
-            <span className="shrink-0">{stateLabels[session.state] ?? session.state}</span>
+            <span className="shrink-0">{sessionStateLabel(session.state, session.interruptIntent)}</span>
             {headerElapsed && <>
               <span className="shrink-0 text-zinc-300">·</span>
               <span className="shrink-0 tabular-nums" title="本轮执行耗时；刷新或重连后按服务端时间重新计算">{headerElapsed}</span>

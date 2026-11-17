@@ -3,6 +3,11 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { reactionEmojiRows, reactionEmojiSelection } from './lark-avatar-emoji';
 
+/** 页面/面板滚动时收起菜单；菜单自己的滚动不能触发收起，否则列表一滚就消失。 */
+export function shouldCloseEmojiMenuOnScroll(menu: Pick<HTMLElement, 'contains'> | null, target: EventTarget | null): boolean {
+  return !(menu && target && menu.contains(target as Node));
+}
+
 /** 只读的选项列表；单独导出便于用 renderToStaticMarkup 做渲染测试。 */
 export function ReactionEmojiOptionList({ value, onPick }: {
   value: string;
@@ -70,14 +75,17 @@ export function ReactionEmojiPicker({ value, onChange }: {
       setOpen(false);
     };
     const close = () => setOpen(false);
+    const onScroll = (event: Event) => {
+      if (shouldCloseEmojiMenuOnScroll(menu.current, event.target)) close();
+    };
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
     document.addEventListener('pointerdown', dismiss);
-    window.addEventListener('scroll', close, true);
+    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', close);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('pointerdown', dismiss);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', close);
       document.removeEventListener('keydown', onKey);
     };
@@ -119,7 +127,7 @@ export function ReactionEmojiPicker({ value, onChange }: {
     {open && createPortal(<div
       ref={menu}
       style={style}
-      className="ui-popover overflow-y-auto rounded-xl border border-zinc-200 bg-white shadow-[0_16px_48px_rgba(0,0,0,.16)]"
+      className="ui-popover overscroll-contain overflow-y-auto rounded-xl border border-zinc-200 bg-white shadow-[0_16px_48px_rgba(0,0,0,.16)]"
     >
       <ReactionEmojiOptionList value={value} onPick={code => { onChange(code); setOpen(false); }}/>
     </div>, document.body)}

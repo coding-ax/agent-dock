@@ -5,8 +5,8 @@ import {
   emptyAlertState, extractFileRefs, formatReason, HANDOFF_BRIEFING_MARKER, handoffOutcome, handoffVisibleText,
   isHandoffExecuting, isHandoffOpen, latestContextPercent, lifeStageFor, MAINTENANCE_MARKER, maintenanceVisibleText,
   metricLevel, normalizeAlertState, normalizeLifecycleConfig, overallLevel, parseThresholdAssignments, planTransfers,
-  reasonsFor, recoveryAction, renderHandoffBriefing, serializeLifecycleConfig, stageProgress,
-  type BuildHandoffPackageInput, type LifecycleDecisionInput, type LifecycleMetrics
+  reasonsFor, recoveryAction, renderHandoffBriefing, resolveHandoffSuccessorConfig, serializeLifecycleConfig, stageProgress,
+  type BuildHandoffPackageInput, type HandoffAgentOption, type LifecycleDecisionInput, type LifecycleMetrics
 } from './lifecycle.js';
 
 const NOW = Date.parse('2026-11-12T12:00:00.000Z');
@@ -276,6 +276,43 @@ describe('handoff state machine', () => {
     expect(handoffOutcome([{ status: 'transferred' }, { status: 'needs_confirmation' }], true)).toBe('needs_confirmation');
     expect(handoffOutcome([{ status: 'failed' }, { status: 'needs_confirmation' }], true)).toBe('partial');
     expect(handoffOutcome([{ status: 'transferred' }], false)).toBe('partial');
+  });
+});
+
+describe('handoff successor config', () => {
+  const from = { agentId: 'claude', model: 'opus', reasoningEffort: 'high' };
+  const claude: HandoffAgentOption = {
+    id: 'claude', name: 'Claude', defaultModel: 'sonnet', models: ['sonnet'],
+    defaultReasoningEffort: 'medium', reasoningEfforts: ['low', 'medium', 'high']
+  };
+  const codex: HandoffAgentOption = {
+    id: 'codex', name: 'Codex', defaultModel: 'gpt-5-codex', models: ['gpt-5-codex'],
+    defaultReasoningEffort: 'medium', reasoningEfforts: ['low', 'medium', 'high']
+  };
+
+  it('inherits every field verbatim without touching the catalog when nothing is overridden', () => {
+    expect(resolveHandoffSuccessorConfig({ from, catalog: [] })).toEqual(from);
+  });
+
+  it('keeps an inherited model that is gone from the catalog when only the reasoning effort changes', () => {
+    // 旧模型 opus 已不在 Claude 的 /models 里；用户只改了思考深度，不能因此 400。
+    expect(resolveHandoffSuccessorConfig({ from, overrides: { reasoningEffort: 'low' }, catalog: [claude] }))
+      .toEqual({ agentId: 'claude', model: 'opus', reasoningEffort: 'low' });
+  });
+
+  it('still rejects a model the user explicitly picked outside the catalog', () => {
+    expect(() => resolveHandoffSuccessorConfig({ from, overrides: { model: 'opus' }, catalog: [claude] }))
+      .toThrow('Claude 不支持模型：opus');
+  });
+
+  it('uses the new Agent default model instead of carrying the old Agent model', () => {
+    expect(resolveHandoffSuccessorConfig({ from, overrides: { agentId: 'codex' }, catalog: [claude, codex] }))
+      .toEqual({ agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'medium' });
+  });
+
+  it('validates an explicit reasoning effort against the Agent options', () => {
+    expect(() => resolveHandoffSuccessorConfig({ from, overrides: { reasoningEffort: 'ultra' }, catalog: [claude] }))
+      .toThrow('Claude 不支持思考深度：ultra');
   });
 });
 

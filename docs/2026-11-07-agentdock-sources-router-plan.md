@@ -643,7 +643,7 @@ P0 默认用 **GitHub Issues** 作为第一个 Source。理由是 webhook 签名
 
 - 支持多个 Source 指向同一个 Case，例如 GitHub issue + CI + 飞书讨论。
 - 支持按 SLA、优先级、负责人自动升级。
-- 支持 Watch 组合条件、静默时段、批量摘要。
+- 支持 Watch 组合条件、批量摘要。
 - 验收：跨源事件进入同一 Case 时间线；SLA 到期只升级一次。
 
 #### T16 多 Router、团队与成本

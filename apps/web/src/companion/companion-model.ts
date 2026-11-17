@@ -277,11 +277,11 @@ export function parseSupervisionDetail(detail: string): SupervisionItem[] {
 }
 
 export const supervisionKindLabel: Record<string, string> = {
-  review: '待验收', needs_you: '需要你', failed: '出错了', interrupted: '已打断'
+  review: '待验收', needs_you: '需要你', failed: '出错了', interrupted: '已打断', user_stopped: '用户停止'
 };
 
 export const supervisionKindTone: Record<string, NoteTone> = {
-  review: 'review', needs_you: 'needs', failed: 'needs', interrupted: 'interrupted'
+  review: 'review', needs_you: 'needs', failed: 'needs', interrupted: 'interrupted', user_stopped: 'cancelled'
 };
 
 /**
@@ -290,5 +290,11 @@ export const supervisionKindTone: Record<string, NoteTone> = {
  */
 export function supervisionChipTone(kind: string, taskTone?: NoteTone): NoteTone {
   if (kind === 'interrupted') return 'interrupted';
+  if (kind === 'user_stopped') return 'cancelled';
   return taskTone ?? supervisionKindTone[kind] ?? 'plan';
+}
+
+/** 全是用户停止信号时是普通通知，不是验收督办。 */
+export function supervisionNoticeMode(kinds: string[]): 'supervision' | 'notice' {
+  return kinds.length > 0 && kinds.every(kind => kind === 'user_stopped') ? 'notice' : 'supervision';
 }

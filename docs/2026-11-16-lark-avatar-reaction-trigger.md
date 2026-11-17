@@ -8,7 +8,7 @@
 
 ## 0. 结论
 
-1. 主会话现有的「静默触发表情」是**网页时间线**能力：点消息旁的表情，前端 `claimSilentTrigger` 去重，`api.send(..., 'emoji')` 派活；`origin=emoji` 让时间线不渲染用户气泡。它不读取飞书 reaction。
+1. 主会话原有的「静默触发表情」（**已于 2026-11-17 下线**）是**网页时间线**能力：点消息旁的表情，前端 `claimSilentTrigger` 去重，`api.send(..., 'emoji')` 派活；`origin=emoji` 让时间线不渲染用户气泡。它不读取飞书 reaction。
 2. lark-avatar 原有的 `emojiReactions` 是**出站反馈**：`/ai` 触发后替身自己在原消息上加 2–3 个随机表情，和「用表情触发 Agent」方向相反。本次新增独立的 `reactionTrigger*` 配置，不复用这个开关。
 3. 飞书官方有 `im.message.reaction.created_v1` / `deleted_v1` 事件；**没有 Pin 事件**。Pin 只有 OpenAPI（`im/v1/pins`），只能主动查询，不能实时触发。因此本次按 reaction 实现，Pin 明确不支持实时触发。
 4. reaction 事件只带 `message_id`、`reaction_type.emoji_type`、`operator_type`、`user_id`/`app_id`、`action_time`；**不含 chat_id 和正文**。所以正文、聊天、上下文和询问卡片由事件来源（当前是已配置的飞书机器人 OpenAPI）按 `message_id` 补齐。
@@ -19,6 +19,8 @@
 ## 1. 现状调研
 
 ### 1.1 主会话「静默触发表情」
+
+> 2026-11-17 更新：网页端「静默触发表情」已下线（设置项、时间线入口和前端账本均已移除）。以下 1.1 仅作历史记录；飞书 reaction 触发仍沿用 `origin=emoji` 语义，因此时间线继续不为这类轮次渲染用户气泡。
 
 | 位置 | 行为 |
 | --- | --- |

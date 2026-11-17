@@ -6,7 +6,7 @@ import type {
 } from './types.js';
 import type {
   ArchiveBatch, ArchiveSource, CatRecord, CatState, HandoffOutcome, HandoffPackage, HandoffRecord, HandoffState,
-  HandoffStepRecord, HandoffTrigger, LifeStage, LifecycleMetrics, MaintenanceRun, MaintenanceState, MetricReason,
+  HandoffStepRecord, HandoffSuccessorConfig, HandoffTrigger, LifeStage, LifecycleMetrics, MaintenanceRun, MaintenanceState, MetricReason,
   TransferKind, TransferRecord, TransferStatus
 } from './lifecycle.js';
 
@@ -20,6 +20,7 @@ export const ASSISTANT_SCHEMA = `
     state TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 0,
     session_id TEXT, agent_id TEXT, cwd TEXT, model TEXT, reasoning_effort TEXT,
     plan INTEGER NOT NULL DEFAULT 0, outcome TEXT,
+    stop_count INTEGER NOT NULL DEFAULT 0, last_stop_reason TEXT, last_stopped_at TEXT, last_resumed_at TEXT, resumed_stop_count INTEGER,
     started_at TEXT, run_started_at TEXT, completed_at TEXT, active_ms INTEGER,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT
   );
@@ -65,7 +66,7 @@ export const ASSISTANT_SCHEMA = `
   CREATE TABLE IF NOT EXISTS assistant_handoffs (
     id TEXT PRIMARY KEY, state TEXT NOT NULL, outcome TEXT, trigger TEXT NOT NULL, reason TEXT,
     from_cat_id TEXT NOT NULL, from_session_id TEXT NOT NULL, to_cat_id TEXT, to_session_id TEXT,
-    successor_name TEXT, metrics TEXT NOT NULL DEFAULT '{}', reasons TEXT NOT NULL DEFAULT '[]',
+    successor_name TEXT, successor_config TEXT, metrics TEXT NOT NULL DEFAULT '{}', reasons TEXT NOT NULL DEFAULT '[]',
     package TEXT, archive_batch_id TEXT, briefing_task_id TEXT, steps TEXT NOT NULL DEFAULT '[]', error TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, confirmed_at TEXT, completed_at TEXT
   );
@@ -101,6 +102,8 @@ type TaskRow = {
   plan: number; outcome: string | null; created_at: string; updated_at: string; closed_at: string | null;
   started_at?: string | null; run_started_at?: string | null; completed_at?: string | null; active_ms?: number | null;
   archived_at?: string | null; archive_batch_id?: string | null; restored_at?: string | null;
+  stop_count?: number | null; last_stop_reason?: string | null; last_stopped_at?: string | null; last_resumed_at?: string | null;
+  resumed_stop_count?: number | null;
 };
 
 const taskFromRow = (row: TaskRow): AssistantTask => ({
@@ -123,7 +126,12 @@ const taskFromRow = (row: TaskRow): AssistantTask => ({
   ...(row.closed_at ? { closedAt: row.closed_at } : {}),
   ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
   ...(row.archive_batch_id ? { archiveBatchId: row.archive_batch_id } : {}),
-  ...(row.restored_at ? { restoredAt: row.restored_at } : {})
+  ...(row.restored_at ? { restoredAt: row.restored_at } : {}),
+  stopCount: row.stop_count ?? 0,
+  ...(row.last_stop_reason ? { lastStopReason: row.last_stop_reason as AssistantTask['lastStopReason'] } : {}),
+  ...(row.last_stopped_at ? { lastStoppedAt: row.last_stopped_at } : {}),
+  ...(row.last_resumed_at ? { lastResumedAt: row.last_resumed_at } : {}),
+  ...(row.resumed_stop_count === null || row.resumed_stop_count === undefined ? {} : { resumedStopCount: row.resumed_stop_count })
 });
 
 type WatchRow = {
@@ -191,6 +199,11 @@ export class AssistantStore {
     if (!columns.has('archived_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN archived_at TEXT');
     if (!columns.has('archive_batch_id')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN archive_batch_id TEXT');
     if (!columns.has('restored_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN restored_at TEXT');
+    if (!columns.has('stop_count')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN stop_count INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('last_stop_reason')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN last_stop_reason TEXT');
+    if (!columns.has('last_stopped_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN last_stopped_at TEXT');
+    if (!columns.has('last_resumed_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN last_resumed_at TEXT');
+    if (!columns.has('resumed_stop_count')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN resumed_stop_count INTEGER');
     // 耗时展示：开工/本轮开始/完成时间和已累计执行时长。旧记录留空，前端按 createdAt 兜底。
     if (!columns.has('started_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN started_at TEXT');
     if (!columns.has('run_started_at')) this.sqlite.exec('ALTER TABLE assistant_tasks ADD COLUMN run_started_at TEXT');
@@ -199,6 +212,9 @@ export class AssistantStore {
     // lark_reply 草稿要记住 chat/replyTo/inThread/at：旧库补一列 JSON，github 草稿不受影响。
     const draftColumns = new Set((this.sqlite.prepare('PRAGMA table_info(assistant_drafts)').all() as Array<{ name: string }>).map(column => column.name));
     if (!draftColumns.has('payload')) this.sqlite.exec('ALTER TABLE assistant_drafts ADD COLUMN payload TEXT');
+    // 交接仪式可以在确认时换 Agent / 模型 / 思考深度：旧库补一列 JSON，历史记录按继承处理。
+    const handoffColumns = new Set((this.sqlite.prepare('PRAGMA table_info(assistant_handoffs)').all() as Array<{ name: string }>).map(column => column.name));
+    if (!handoffColumns.has('successor_config')) this.sqlite.exec('ALTER TABLE assistant_handoffs ADD COLUMN successor_config TEXT');
   }
 
   /** 多步写入要么全成要么全不成（交接回滚、归档批次）。 */
@@ -256,7 +272,7 @@ export class AssistantStore {
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
-      plan: input.plan ?? false,
+      plan: input.plan ?? false, stopCount: 0,
       createdAt: stamp, updatedAt: stamp,
       ...(state === 'running' ? { startedAt: stamp, runStartedAt: stamp, activeMs: 0 } : {})
     };
@@ -268,8 +284,10 @@ export class AssistantStore {
     task.updatedAt = now();
     this.sqlite.prepare(`INSERT INTO assistant_tasks
       (id, title, notes, done_when, expect_minutes, state, round, session_id, agent_id, cwd, model, reasoning_effort, plan, outcome,
+       stop_count, last_stop_reason, last_stopped_at, last_resumed_at, resumed_stop_count,
        started_at, run_started_at, completed_at, active_ms, created_at, updated_at, closed_at)
       VALUES (@id, @title, @notes, @doneWhen, @expectMinutes, @state, @round, @sessionId, @agentId, @cwd, @model, @reasoningEffort, @plan, @outcome,
+       @stopCount, @lastStopReason, @lastStoppedAt, @lastResumedAt, @resumedStopCount,
        @startedAt, @runStartedAt, @completedAt, @activeMs, @createdAt, @updatedAt, @closedAt)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title, notes = excluded.notes, done_when = excluded.done_when,
@@ -277,6 +295,9 @@ export class AssistantStore {
         session_id = excluded.session_id, agent_id = excluded.agent_id, cwd = excluded.cwd,
         model = excluded.model, reasoning_effort = excluded.reasoning_effort,
         plan = excluded.plan, outcome = excluded.outcome,
+        stop_count = excluded.stop_count, last_stop_reason = excluded.last_stop_reason,
+        last_stopped_at = excluded.last_stopped_at, last_resumed_at = excluded.last_resumed_at,
+        resumed_stop_count = excluded.resumed_stop_count,
         started_at = excluded.started_at, run_started_at = excluded.run_started_at,
         completed_at = excluded.completed_at, active_ms = excluded.active_ms,
         updated_at = excluded.updated_at,
@@ -286,6 +307,9 @@ export class AssistantStore {
       sessionId: task.sessionId ?? null, agentId: task.agentId ?? null, cwd: task.cwd ?? null,
       model: task.model ?? null, reasoningEffort: task.reasoningEffort ?? null,
       plan: task.plan ? 1 : 0, outcome: task.outcome ?? null,
+      stopCount: task.stopCount ?? 0, lastStopReason: task.lastStopReason ?? null,
+      lastStoppedAt: task.lastStoppedAt ?? null, lastResumedAt: task.lastResumedAt ?? null,
+      resumedStopCount: task.resumedStopCount ?? null,
       startedAt: task.startedAt ?? null, runStartedAt: task.runStartedAt ?? null,
       completedAt: task.completedAt ?? null, activeMs: task.activeMs ?? null,
       createdAt: task.createdAt, updatedAt: task.updatedAt, closedAt: task.closedAt ?? null
@@ -520,19 +544,20 @@ export class AssistantStore {
   saveHandoff(record: HandoffRecord) {
     record.updatedAt = now();
     this.sqlite.prepare(`INSERT INTO assistant_handoffs
-      (id, state, outcome, trigger, reason, from_cat_id, from_session_id, to_cat_id, to_session_id, successor_name, metrics, reasons,
+      (id, state, outcome, trigger, reason, from_cat_id, from_session_id, to_cat_id, to_session_id, successor_name, successor_config, metrics, reasons,
        package, archive_batch_id, briefing_task_id, steps, error, created_at, updated_at, confirmed_at, completed_at)
-      VALUES (@id, @state, @outcome, @trigger, @reason, @fromCatId, @fromSessionId, @toCatId, @toSessionId, @successorName, @metrics, @reasons,
+      VALUES (@id, @state, @outcome, @trigger, @reason, @fromCatId, @fromSessionId, @toCatId, @toSessionId, @successorName, @successorConfig, @metrics, @reasons,
        @package, @archiveBatchId, @briefingTaskId, @steps, @error, @createdAt, @updatedAt, @confirmedAt, @completedAt)
       ON CONFLICT(id) DO UPDATE SET
         state = excluded.state, outcome = excluded.outcome, reason = excluded.reason, to_cat_id = excluded.to_cat_id,
-        to_session_id = excluded.to_session_id, successor_name = excluded.successor_name, metrics = excluded.metrics,
+        to_session_id = excluded.to_session_id, successor_name = excluded.successor_name, successor_config = excluded.successor_config, metrics = excluded.metrics,
         reasons = excluded.reasons, package = excluded.package, archive_batch_id = excluded.archive_batch_id,
         briefing_task_id = excluded.briefing_task_id, steps = excluded.steps, error = excluded.error,
         updated_at = excluded.updated_at, confirmed_at = excluded.confirmed_at, completed_at = excluded.completed_at`).run({
       id: record.id, state: record.state, outcome: record.outcome ?? null, trigger: record.trigger, reason: record.reason ?? null,
       fromCatId: record.fromCatId, fromSessionId: record.fromSessionId, toCatId: record.toCatId ?? null, toSessionId: record.toSessionId ?? null,
-      successorName: record.successorName ?? null, metrics: JSON.stringify(record.metrics), reasons: JSON.stringify(record.reasons),
+      successorName: record.successorName ?? null, successorConfig: record.successorConfig ? JSON.stringify(record.successorConfig) : null,
+      metrics: JSON.stringify(record.metrics), reasons: JSON.stringify(record.reasons),
       package: record.package ? JSON.stringify(record.package) : null, archiveBatchId: record.archiveBatchId ?? null,
       briefingTaskId: record.briefingTaskId ?? null, steps: JSON.stringify(record.steps), error: record.error ?? null,
       createdAt: record.createdAt, updatedAt: record.updatedAt, confirmedAt: record.confirmedAt ?? null, completedAt: record.completedAt ?? null
@@ -639,6 +664,7 @@ type HandoffRow = {
   id: string; state: string; outcome: string | null; trigger: string; reason: string | null;
   from_cat_id: string; from_session_id: string; to_cat_id: string | null; to_session_id: string | null;
   successor_name: string | null; metrics: string; reasons: string; package: string | null; archive_batch_id: string | null;
+  successor_config: string | null;
   briefing_task_id: string | null; steps: string; error: string | null; created_at: string; updated_at: string;
   confirmed_at: string | null; completed_at: string | null;
 };
@@ -654,6 +680,7 @@ const handoffFromRow = (row: HandoffRow): HandoffRecord => {
     ...(row.to_cat_id ? { toCatId: row.to_cat_id } : {}),
     ...(row.to_session_id ? { toSessionId: row.to_session_id } : {}),
     ...(row.successor_name ? { successorName: row.successor_name } : {}),
+    ...(parseJson<HandoffSuccessorConfig | null>(row.successor_config, null) ? { successorConfig: parseJson<HandoffSuccessorConfig>(row.successor_config, {}) } : {}),
     metrics: parseJson<Partial<LifecycleMetrics>>(row.metrics, {}),
     reasons: parseJson<MetricReason[]>(row.reasons, []),
     ...(pkg ? { package: pkg } : {}),

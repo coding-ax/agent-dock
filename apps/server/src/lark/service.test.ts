@@ -38,6 +38,13 @@ describe('Lark card service', () => {
     expect(body.content).toContain('avatar_reaction_route');
     expect(body.content).toContain('trigger_id');
     expect(body.content).toContain('independent');
+    // 卡片 2.0 不支持 1.0 的 action 容器；套上它飞书会返回 230099「Failed to create card content」。
+    const card = JSON.parse(body.content) as { schema: string; body: { elements: Array<Record<string, any>> } };
+    expect(card.schema).toBe('2.0');
+    expect(card.body.elements.map(element => element.tag)).not.toContain('action');
+    const buttonRow = card.body.elements.find(element => element.tag === 'column_set');
+    expect(buttonRow?.columns.flatMap((column: Record<string, any>) => column.elements).map((element: Record<string, any>) => element.tag))
+      .toEqual(['button', 'button']);
 
     await service.updateChoiceCard({ messageId: 'om_card', text: '✅ 已发到主会话' });
     const [patchUrl, patchInit] = fetcher.mock.calls[2] as unknown as [string, RequestInit];

@@ -54,7 +54,7 @@ import { SessionPane } from './SessionPane';
 import { TerminalPanel } from './TerminalPanel';
 import { FileExplorerPanel } from './FileExplorerPanel';
 import { RawLogPanel } from './RawLogPanel';
-import { busyStates, stateLabels, stateTextTone, stateTone } from './session-states';
+import { busyStates, sessionStateLabel, stateTextTone, stateTone } from './session-states';
 import { ConfirmDialog, IconButton, SettingRow } from './ui-controls';
 import { HoverTooltip, HoverTooltipText, TooltipProvider } from './HoverTooltip';
 import { SessionHoverCard } from './SessionHoverCard';
@@ -374,9 +374,9 @@ type ItemDrag = { dragging: boolean; over: boolean; props: HTMLAttributes<HTMLDi
 function SessionStateIndicator({ session, size = 12 }: { session: Session; size?: number }) {
   // 「等待授权」是卡在等人，不是在推进：给静态橙点，转圈会让人以为它在自己跑。
   if (busyStates.has(session.state) && session.state !== 'waiting_for_permission') {
-    return <LoaderCircle size={size} aria-label={stateLabels[session.state]} className={`shrink-0 animate-spin ${stateTextTone[session.state] ?? 'text-zinc-400'}`}/>;
+    return <LoaderCircle size={size} aria-label={sessionStateLabel(session.state, session.interruptIntent)} className={`shrink-0 animate-spin ${stateTextTone[session.state] ?? 'text-zinc-400'}`}/>;
   }
-  return <span aria-label={stateLabels[session.state]} className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>;
+  return <span aria-label={sessionStateLabel(session.state, session.interruptIntent)} className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>;
 }
 
 function SessionRow({ session, agent, botName, parentLabel, active, drag, noteOf, renameRequest, onClick, onOpenContextMenu }: { session: Session; agent?: Agent; botName?: string; /** 侧边会话的父会话显示名，供 hover 卡片点出来处。 */ parentLabel?: string; active: boolean; /** 传入即表示这一行可拖拽：项目树里用于排序，时间列表里只用于拖到副屏。 */ drag?: ItemDrag; /** 小猫（主会话）派出的侧边会话：行首换成便签图标，悬停提示是谁派的。 */ noteOf?: string; /** 右键菜单发起改名的请求号。 */ renameRequest?: number; onClick(): void; onOpenContextMenu(point: { x: number; y: number }, anchor: HTMLElement): void }) {

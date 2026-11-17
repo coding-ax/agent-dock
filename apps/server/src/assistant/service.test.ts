@@ -6,6 +6,7 @@ import { createRepositories } from '@agent-dock/agent-dock-storage';
 import { now, type RepositoryBundle } from '@agent-dock/agent-dock-shared';
 import {
   AssistantService, buildMainSystemPrompt, buildSuperagentDirective, classifyMainTurn,
+  shouldSuppressStopSignal,
   type AssistantServiceOptions
 } from './service.js';
 import { AssistantStore } from './store.js';
@@ -56,6 +57,18 @@ function harness(overrides: Partial<Pick<AssistantServiceOptions, 'sendLarkReply
   services.push(service);
   return { repos, service, runtime, listeners, notify };
 }
+
+describe('user-stop suppression window', () => {
+  it('only suppresses a repeat stop inside the 10 minute window', () => {
+    const base = Date.parse('2026-11-18T08:00:00.000Z');
+    const recent = new Date(base - 60_000).toISOString();
+    const longAgo = new Date(base - 11 * 60_000).toISOString();
+    expect(shouldSuppressStopSignal(1, recent, base)).toBe(false);
+    expect(shouldSuppressStopSignal(2, undefined, base)).toBe(false);
+    expect(shouldSuppressStopSignal(2, recent, base)).toBe(true);
+    expect(shouldSuppressStopSignal(2, longAgo, base)).toBe(false);
+  });
+});
 
 describe('AssistantService', () => {
   it('injects a full snapshot first and only changed sections afterwards', async () => {
@@ -122,7 +135,10 @@ describe('AssistantService', () => {
     expect(prompt).toContain('第一个工具调用必须是 `agent-dock task start`');
     expect(prompt).toContain('禁止调用 Bash、Read、Grep、Glob、数据库客户端、浏览器');
     expect(prompt).toContain('工作区里的 AGENTS.md');
-    expect(prompt).toContain('唯一例外：用户在本轮明确说');
+    expect(prompt).toContain('唯一允许自己动手的例外');
+    expect(prompt).toContain('两者冲突时以延续规则为准');
+    expect(prompt).toContain('冲突裁决');
+    expect(prompt).toContain('本轮就禁止用 `task start` 新开便签');
   });
 
   it('teaches the main session the orchestration commands, examples and delegation criteria', () => {
@@ -138,7 +154,8 @@ describe('AssistantService', () => {
       expect(prompt).toContain(command);
     }
     expect(prompt).toContain('什么情况该派活 / 不该派活');
-    expect(prompt).toContain('拿不准时默认派活');
+    expect(prompt).toContain('拿不准是不是延续已有事项时');
+    expect(prompt).toContain('列出候选问用户');
     expect(prompt).toContain('【常用示例】');
     expect(prompt).toContain('--check "验收标准=met:证据"');
     expect(prompt).toContain('--mode queue');
@@ -172,7 +189,7 @@ describe('AssistantService', () => {
     ];
     for (const prompt of prompts) {
       expect(classifyMainTurn(prompt)).toBe('delegate');
-      expect(buildSuperagentDirective(prompt)).toContain('第一个工具调用必须是 `agent-dock task start`');
+      expect(buildSuperagentDirective(prompt)).toContain('这一轮的第一个工具调用才是 `agent-dock task start`');
       expect(buildSuperagentDirective(prompt)).toContain('工作区 AGENTS.md');
     }
   });
@@ -201,14 +218,22 @@ describe('AssistantService', () => {
       'atask_1234abcd-1111-2222-3333-444455556666 打回：缺少测试证据',
       '这个便签补充一下：只改登录页',
       '好了 可以删掉那个了，删掉一下包',
-      '你还记得我前面有没有跟你提到过飞书消息发送？需要调研下实现方式。'
+      '你还记得我前面有没有跟你提到过飞书消息发送？需要调研下实现方式。',
+      '还是那个主会话的问题，现在咱们的 prompt 是怎么写的啊？怎么感觉还是很喜欢去开新会话，而不是在对应会话追加？你是怎么做的？',
+      '还是那个主会话的问题，你是怎么做的？',
+      '现在这个 prompt 是怎么写的？',
+      '现在咱们的 prompt 是怎么写的？'
     ];
     for (const prompt of prompts) expect(classifyMainTurn(prompt)).toBe('append');
     const typed = buildSuperagentDirective(prompts[2]!);
     expect(typed).toContain('agent-dock task show atask_1234abcd-1111-2222-3333-444455556666');
     expect(typed).toContain('agent-dock task append');
-    expect(typed).toContain('不要 `agent-dock task start` 新开便签');
-    expect(typed).not.toContain('第一个工具调用必须是 `agent-dock task start`');
+    expect(typed).toContain('本轮禁止 `agent-dock task start` 新开便签');
+    expect(typed).toContain('覆盖上面的「第一个工具调用必须 task start」');
+    expect(typed).not.toContain('1. 你这一轮的第一个工具调用必须是 `agent-dock task start`');
+    const question = buildSuperagentDirective('还是那个主会话的问题，你是怎么做的？');
+    expect(question).toContain('只是问「现在怎么写的/你是怎么做的/为什么」');
+    expect(question).toContain('agent-dock session show');
     const untyped = buildSuperagentDirective('继续把刚才那个改完');
     expect(untyped).toContain('agent-dock task list');
     expect(untyped).toContain('列出候选问用户');
@@ -439,7 +464,7 @@ describe('AssistantService', () => {
     expect(await service.composePrompt(main, `[飞书群工具说明]\n\n${review[3] as string}`)).not.toContain('<agentdock-superagent>');
   });
 
-  it('reports an explicit interrupt as interrupted, never as failed', async () => {
+  it('reports an explicit user stop as user_stopped, never as failed or review', async () => {
     const { repos, service, runtime } = harness();
     await service.initialize();
     const main = await mainSession(repos);
@@ -450,11 +475,32 @@ describe('AssistantService', () => {
     await service.flushNow();
 
     const injected = runtime.dispatch.mock.calls.at(-1)!;
-    expect(injected[3]).toContain('[interrupted]');
-    expect(injected[3]).toContain('侧边会话被主动打断');
+    expect(injected[1]).toContain('用户已停止');
+    expect(injected[1]).not.toContain('督办');
+    expect(injected[3]).toContain('[user_stopped]');
+    expect(injected[3]).toContain('用户主动停止了侧边会话');
+    expect(injected[3]).toContain('不要自动重启/重新派活');
+    expect(injected[3]).not.toContain('督办信号');
     expect(injected[3]).not.toContain('[failed]');
-    // 会话确实停了，事项仍需要主会话决定返工/取消/验收。
-    expect(service.getTask(task.id)?.state).toBe('needs_user');
+    expect(injected[3]).not.toContain('[review]');
+    expect(service.getTask(task.id)).toMatchObject({ state: 'needs_user', stopCount: 1, lastStopReason: 'user_stopped' });
+  });
+
+  it('keeps passive agent cancellation as interrupted', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: 'Agent 自己取消', doneWhen: ['给出证据'], agentId: 'claude' });
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'interrupted', interruptIntent: 'agent_cancelled' });
+    await service.flushNow();
+
+    const injected = runtime.dispatch.mock.calls.at(-1)!;
+    expect(injected[3]).toContain('[interrupted]');
+    expect(injected[3]).toContain('被动中断');
+    expect(injected[3]).not.toContain('[failed]');
+    expect(service.getTask(task.id)?.lastStopReason).toBe('interrupted');
   });
 
   it('keeps real failures as failed signals', async () => {
@@ -471,7 +517,24 @@ describe('AssistantService', () => {
     expect(injected[3]).toContain('[failed]');
     expect(injected[3]).toContain('Agent exited with code 17');
     expect(injected[3]).not.toContain('[interrupted]');
+    expect(injected[3]).not.toContain('[user_stopped]');
     expect(service.getTask(task.id)?.state).toBe('needs_user');
+  });
+
+  it('keeps timeouts as failed supervision while recording the timeout reason', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '超时任务', doneWhen: ['给出证据'], agentId: 'claude' });
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'failed', error: '等待 Agent 响应超过 60000ms，本轮任务已中断' });
+    await service.flushNow();
+
+    const injected = runtime.dispatch.mock.calls.at(-1)!;
+    expect(injected[3]).toContain('[failed]');
+    expect(injected[3]).toContain('侧边会话超时');
+    expect(service.getTask(task.id)?.lastStopReason).toBe('timeout');
   });
 
   it('reports a crashed turn recovered to idle+error as failed, not review', async () => {
@@ -507,7 +570,7 @@ describe('AssistantService', () => {
     expect(injected[3]).not.toContain('[interrupted]');
   });
 
-  it('scan reports an explicit interrupt as interrupted', async () => {
+  it('scan reports an explicit user stop as user_stopped', async () => {
     const { repos, service, runtime } = harness();
     await service.initialize();
     const main = await mainSession(repos);
@@ -520,7 +583,7 @@ describe('AssistantService', () => {
     });
     await service.scan();
     await service.flushNow();
-    expect(runtime.dispatch.mock.calls.at(-1)![3]).toContain('[interrupted]');
+    expect(runtime.dispatch.mock.calls.at(-1)![3]).toContain('[user_stopped]');
     expect(runtime.dispatch.mock.calls.at(-1)![3]).not.toContain('[failed]');
   });
 
@@ -557,6 +620,59 @@ describe('AssistantService', () => {
     expect(runtime.dispatch.mock.calls.at(-1)![3]).toContain('[failed]');
     expect(runtime.dispatch.mock.calls.at(-1)![3]).toContain('Agent exited with code 17');
     expect(runtime.dispatch.mock.calls.at(-1)![3]).not.toContain('[review]');
+  });
+
+  it('suppresses repeated user-stop supervision and records each stop', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '反复停止', doneWhen: ['给出证据'], agentId: 'claude' });
+    const dispatchesBeforeStop = runtime.dispatch.mock.calls.length;
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'interrupted', interruptIntent: 'user' });
+    await service.flushNow();
+    expect(runtime.dispatch.mock.calls.length).toBe(dispatchesBeforeStop + 1);
+    const context = await service.composePrompt(main, '现在怎么样');
+    expect(context).toContain('用户已停止');
+    expect(context).toContain('已停止 1 次');
+
+    // 用户明确说继续后才恢复；恢复后再次停止属于重复停止，不再注入第二条督办。
+    await service.appendTask(task.id, '用户说继续，接着做');
+    expect(service.getTask(task.id)).toMatchObject({ state: 'running', resumedStopCount: 1 });
+    const dispatchesAfterResume = runtime.dispatch.mock.calls.length;
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'interrupted', interruptIntent: 'user' });
+    await service.flushNow();
+    expect(runtime.dispatch.mock.calls.length).toBe(dispatchesAfterResume);
+    expect(service.getTask(task.id)).toMatchObject({ state: 'needs_user', stopCount: 2, lastStopReason: 'user_stopped' });
+  });
+
+  it('refuses to restart a user-stopped task without an explicit continuation', async () => {
+    const { repos, service } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '停止后不许自动重启', doneWhen: ['给出证据'], agentId: 'claude' });
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'interrupted', interruptIntent: 'user' });
+    await service.flushNow();
+
+    await expect(service.appendTask(task.id, '再补充一点要求')).rejects.toThrow(/用户主动停止/);
+    await expect(service.reviewTask(task.id, 'rework', [{ criterion: '给出证据', met: false }])).rejects.toThrow(/用户主动停止/);
+    await expect(service.startTask({ title: '停止后不许自动重启', doneWhen: ['给出证据'], agentId: 'claude' })).rejects.toThrow(/用户主动停止/);
+
+    const resumed = await service.appendTask(task.id, '用户明确说继续，接着做');
+    expect(resumed.state).toBe('running');
+    expect(resumed.lastResumedAt).toBeTruthy();
+    expect(service.listTasks()).toHaveLength(1);
+  });
+
+  it('tells the main session never to auto-restart a user-stopped task', () => {
+    const prompt = buildMainSystemPrompt();
+    expect(prompt).toContain('【用户主动停止】');
+    expect(prompt).toContain('禁止自动 `task append`、`task start`、`task review --verdict rework`');
+    expect(prompt).toContain('必须等用户明确说「继续」');
+    expect(buildSuperagentDirective('继续那个事项')).toContain('lastStopReason=user_stopped');
   });
 
   it('never delegates an injected review signal when other layers prefix the prompt', async () => {
@@ -730,5 +846,29 @@ describe('AssistantService', () => {
     await expect(service.sendDraft(malformed.id)).rejects.toThrow(/GitHub 目标格式/);
     expect(service.getDraft(malformed.id)?.attempts).toBe(0);
     expect(postGithubComment).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps 19-digit lark draft ids as strings', async () => {
+    const sendLarkReply = vi.fn(async () => ({ messageId: 'om_lark_big' }));
+    const { service } = harness({ sendLarkReply });
+    const chat = '7246718914305097756';
+    const replyTo = '7246718914305097758';
+    const at = '7246718914305097757';
+    const draft = service.createDraft({
+      channel: 'lark_reply',
+      target: chat,
+      body: `@${at} 收到`,
+      payload: { chat, replyTo, inThread: true, at: [at] }
+    });
+
+    await expect(service.sendDraft(draft.id)).resolves.toMatchObject({ state: 'sent' });
+    expect(sendLarkReply).toHaveBeenCalledWith({
+      chat,
+      text: `@${at} 收到`,
+      replyTo,
+      inThread: true,
+      at: [at]
+    });
+    expect(service.getDraft(draft.id)?.payload).toEqual({ chat, replyTo, inThread: true, at: [at] });
   });
 });

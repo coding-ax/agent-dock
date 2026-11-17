@@ -88,13 +88,18 @@ export interface SessionSummary {
   state: string;
   cwd: string;
   updatedAt: string;
+  interruptIntent?: Session['interruptIntent'];
 }
 
 export function formatSessionList(sessions: SessionSummary[]): string {
   if (!sessions.length) return '暂无会话。\n';
   return sessions.map(session =>
-    `${session.id}  [${session.state}]  agent=${session.agentId}  cwd=${session.cwd}  updated=${session.updatedAt}`
+    `${session.id}  [${sessionStateText(session.state, session.interruptIntent)}]  agent=${session.agentId}  cwd=${session.cwd}  updated=${session.updatedAt}`
   ).join('\n') + '\n';
+}
+
+function sessionStateText(state: string, interruptIntent?: Session['interruptIntent']) {
+  return state === 'interrupted' && interruptIntent === 'user' ? 'interrupted（用户主动停止）' : state;
 }
 
 export function sessionHeader(session: Session, tasks: TaskRecord[]): string {
@@ -105,7 +110,7 @@ export function sessionHeader(session: Session, tasks: TaskRecord[]): string {
     `会话：${session.id}`,
     `Agent：${session.agentId}${session.model ? `（模型 ${session.model}）` : ''}`,
     `工作目录：${session.cwd}`,
-    `状态：${session.state}`,
+    `状态：${sessionStateText(session.state, session.interruptIntent)}`,
     `创建：${session.createdAt}`,
     ...(tasks.length ? [`任务：`, ...taskLines] : [])
   ].join('\n') + '\n';

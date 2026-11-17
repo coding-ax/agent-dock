@@ -94,6 +94,16 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
   .ui-send-time-row:focus-within .ui-send-time,
   .ui-send-time:focus { opacity: 1; pointer-events: auto; }
 }
+/* 用户消息的发送时间：桌面端跟着整条消息悬停/聚焦出现；触摸屏没有 hover，保持常驻。
+   桌面端让整行绝对定位，不占气泡下方的布局高度，出现/消失都不会让后续消息跳动。 */
+.ui-user-send-time { opacity: 1; }
+@media (hover: hover) and (pointer: fine) {
+  .ui-user-send-time-slot { position: absolute; top: 100%; right: 0; z-index: 10; }
+  .ui-user-send-time { opacity: 0; pointer-events: none; transition: opacity 120ms ease-out; }
+  .ui-user-send-time-row:hover .ui-user-send-time,
+  .ui-user-send-time-row:focus-within .ui-user-send-time,
+  .ui-user-send-time:focus { opacity: 1; pointer-events: auto; }
+}
 /* 横向滚动必须放在真实的 div 包裹层上：直接给 table 设 display:block + overflow-x:auto 时，
    table 内部会生成匿名 table 盒，iOS WebKit 下其固有宽度会撑破 max-width，溢出一路传到
    时间线滚动容器，表现成整页横滑而不是表格内部滚动。包裹层见 MarkdownContent 的 table 覆盖。 */

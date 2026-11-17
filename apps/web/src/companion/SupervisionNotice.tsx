@@ -1,6 +1,6 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Bot, ChevronDown, ClipboardList } from 'lucide-react';
-import { noteTilt, noteTone, parseSupervisionDetail, supervisionChipTone, supervisionKindLabel, supervisionKindTone } from './companion-model';
+import { noteTilt, noteTone, parseSupervisionDetail, supervisionChipTone, supervisionKindLabel, supervisionKindTone, supervisionNoticeMode } from './companion-model';
 import { supervisionSystemRoundCopy } from './supervision-notice-copy';
 import { useCompanion } from './useCompanion';
 import { useCompanionStore } from './companion-store';
@@ -11,7 +11,10 @@ import { useCompanionStore } from './companion-store';
  */
 export function SupervisionNotice({ text, detail, timestamp }: { text?: string; detail: string; timestamp?: string }) {
   const items = useMemo(() => parseSupervisionDetail(detail), [detail]);
-  const system = supervisionSystemRoundCopy();
+  const noticeMode = supervisionNoticeMode(items.map(item => item.kind));
+  const system = noticeMode === 'notice'
+    ? { title: '系统通知 · 用户停止', badge: '系统通知', description: '用户主动停止了侧边会话；这不是失败，也不是待验收' }
+    : supervisionSystemRoundCopy();
   const { tasks } = useCompanion();
   const [open, setOpen] = useState(false);
   const time = timestamp ? new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
@@ -28,8 +31,8 @@ export function SupervisionNotice({ text, detail, timestamp }: { text?: string; 
     </div>
     <div className="mt-3 flex items-center gap-2 text-[12.5px] text-zinc-600">
       <ClipboardList size={14} className="shrink-0 text-zinc-500"/>
-      <span className="font-semibold text-zinc-700">督办</span>
-      <span className="min-w-0 truncate">{items.length ? `${items.length} 条新动静，小猫正在处理` : (text ?? '').replace(/^📋\s*/, '')}</span>
+      <span className="font-semibold text-zinc-700">{noticeMode === 'notice' ? '通知' : '督办'}</span>
+      <span className="min-w-0 truncate">{items.length ? (noticeMode === 'notice' ? '用户已停止，等用户明确说「继续」' : `${items.length} 条新动静，小猫正在处理`) : (text ?? '').replace(/^(📋|⏸)\s*/, '')}</span>
       {time && <span className="ml-auto shrink-0 text-[11px] tabular-nums text-zinc-400">{time}</span>}
     </div>
     {items.length > 0 && <div className="mt-2.5 flex flex-wrap gap-2">

@@ -4,8 +4,15 @@ export type AssistantTaskState = (typeof assistantTaskStates)[number];
 export const assistantTaskOutcomes = ['accepted', 'cancelled'] as const;
 export type AssistantTaskOutcome = (typeof assistantTaskOutcomes)[number];
 
-export const assistantSignalKinds = ['review', 'needs_you', 'failed', 'interrupted'] as const;
+export const assistantSignalKinds = ['review', 'needs_you', 'failed', 'interrupted', 'user_stopped'] as const;
 export type AssistantSignalKind = (typeof assistantSignalKinds)[number];
+
+/**
+ * 侧边轮次结束但没进入验收的原因。`user_stopped` 是用户点停止/中断，
+ * 不是失败；其余两类用于区分真实失败与被动中断。
+ */
+export const assistantStopReasons = ['user_stopped', 'failed', 'interrupted', 'timeout'] as const;
+export type AssistantStopReason = (typeof assistantStopReasons)[number];
 
 export const watchModes = ['once', 'repeat'] as const;
 export type WatchMode = (typeof watchModes)[number];
@@ -55,6 +62,15 @@ export interface AssistantTask {
   archiveBatchId?: string;
   /** 用户亲手从归档区取出的时间：之后的自动折叠（整理轮次、交接）不再收它，手动归档不受限。 */
   restoredAt?: string;
+  /** 用户主动停止的累计次数；只统计 user_stopped，用于识别反复停止。 */
+  stopCount?: number;
+  /** 最近一次非验收结束的原因。 */
+  lastStopReason?: AssistantStopReason;
+  lastStoppedAt?: string;
+  /** 用户明确说「继续」后恢复的时间；早于 lastStoppedAt 时仍视为停止状态。 */
+  lastResumedAt?: string;
+  /** 恢复时的 stopCount 快照：只有在那之后又发生停止，才重新视为用户停止。 */
+  resumedStopCount?: number;
 }
 
 export interface TaskReviewRecord {

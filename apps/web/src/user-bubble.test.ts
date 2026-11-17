@@ -26,12 +26,17 @@ describe('user bubble sending state', () => {
     expect(render(userText(false))).not.toContain('发送中');
   });
 
-  it('shows the stored send time visibly under the bubble, not only on hover', () => {
+  it('keeps the send time under the bubble for hover reveal, with touch devices still seeing it', () => {
     const html = render(userText(false));
+    expect(html).toContain('ui-user-send-time-row');
+    expect(html).toContain('ui-user-send-time-slot');
     expect(html).toContain('ui-user-send-time');
     expect(html).toContain(`发送 ${formatUserMessageTime(userText(false).timestamp)}`);
-    // 气泡时间不能复用轮末的 hover 角标，否则触摸屏上仍然看不到。
+    // 气泡时间不复用轮末角标：桌面端悬停显示，触摸屏仍靠 CSS 常驻。
     expect(html).not.toContain('ui-send-time"');
+    const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
+    expect(css).toMatch(/\.ui-user-send-time-row:hover \.ui-user-send-time/);
+    expect(css).toMatch(/\.ui-user-send-time-slot\s*\{[^}]*position:\s*absolute/);
   });
 
   it('lets long links wrap instead of overflowing the bubble', () => {

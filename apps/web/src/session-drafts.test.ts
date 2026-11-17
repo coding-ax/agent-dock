@@ -219,6 +219,23 @@ describe('session drafts', () => {
     expect(loadSessionDraft(storage, 'a')).toBe('第二条还没发');
   });
 
+  it('treats a queued send like an immediate one: no residue, and a newer draft survives', () => {
+    vi.useFakeTimers();
+    const storage = memoryStorage();
+    const writer = createSessionDraftWriter({ storage, delayMs: 400 });
+
+    // 会话忙时走的是「排队发送」；提交用的是编辑器 getValue 快照，清空的也是编辑器本身。
+    // 发送前那次防抖（400ms）可能还没落盘，发送成功必须让它失效，不能把已发送文本写回来。
+    writer.write('a', '排队发送的第一条');
+    writer.cancel();
+    clearSessionDraft(storage, 'a');
+
+    // 发送后紧接着输入的第二条（尚未发）要继续落盘，且不能和第一条串位。
+    writer.write('a', '紧接着输入的第二条');
+    vi.advanceTimersByTime(400);
+    expect(loadSessionDraft(storage, 'a')).toBe('紧接着输入的第二条');
+  });
+
   it('flushes the old session before writing the next one', () => {
     vi.useFakeTimers();
     const storage = memoryStorage();

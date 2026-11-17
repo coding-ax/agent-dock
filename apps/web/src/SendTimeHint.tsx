@@ -22,8 +22,8 @@ export const SendTimeHint = memo(function SendTimeHint({ timestamp, align = 'lef
 });
 
 /**
- * 用户消息的发送时间。跟着气泡常驻，不依赖悬停：
- * 触摸设备和桌面都能直接看到，日期口径见 formatUserMessageTime。
+ * 用户消息的发送时间。桌面端靠悬停整条消息或键盘聚焦出现；
+ * 触摸设备没有 hover，CSS 让它常驻。日期口径见 formatUserMessageTime。
  */
 export const UserMessageTime = memo(function UserMessageTime({ timestamp }: { timestamp: string }) {
   const label = formatUserMessageTime(timestamp);

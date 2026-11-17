@@ -59,12 +59,12 @@ node apps/server/dist/cli.js dev up     # 隔离沙箱，默认 http://127.0.0.1
 - [ ] `draft send` 只发一条评论；重复 send 不重复发。
 - [ ] `draft discard` 后不能发送。
 
-## 7. 通知与静默时段
+## 7. 通知
 
-- [ ] 默认 `quietHours.enabled=false`，`notify` 立即发送。
-- [ ] 开启静默时段并覆盖当前时间后，普通 `notify` 返回 `delayed: true`，`--urgent` 立即发送。
-- [ ] 网页设置的开关和起止时间保存后，`GET /api/assistant/settings` 返回相同值。
-- [ ] 关闭静默时段后，待发送通知在下一轮扫描补发。
+- [ ] `notify` 立即发送；没有绑定飞书会话时记录为失败但不阻塞主会话。
+- [ ] `--urgent` 在系统轮次里也放行。
+
+> 静默时段 / 免打扰队列已于 2026-11-17 下线，原清单中的 `quietHours`、`delayed: true`、`GET /api/assistant/settings` 相关条目作废。
 
 ## 8. 权限
 
@@ -80,7 +80,7 @@ node apps/server/dist/cli.js dev up     # 隔离沙箱，默认 http://127.0.0.1
 - [ ] 侧边会话完成 → 一条注入督办，事项 `review`。
 - [ ] 两次返工后第 3 次转 `needs_user`；验收通过关闭。
 - [ ] watch 条件满足只触发一次。
-- [ ] 静默时段默认关闭；开启后普通通知延迟，紧急通知绕过。
+- [x] 旧库残留 `assistant.quietHours` / `assistant.silentEmoji` 时仍可启动，且不会延迟通知。
 
 ## 10. 交付时回报
 

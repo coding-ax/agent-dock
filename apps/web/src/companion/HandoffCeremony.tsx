@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, CircleAlert, CircleCheck, Dices, Eye, LoaderCircle, PawPrint, RefreshCw, RotateCcw, Send, X } from 'lucide-react';
-import { api, type HandoffView, type LifecycleReason } from '../api';
+import { ArrowRight, ChevronDown, CircleAlert, CircleCheck, Dices, Eye, LoaderCircle, PawPrint, RefreshCw, RotateCcw, Send, X } from 'lucide-react';
+import { api, type Agent, type AgentModel, type HandoffSuccessorConfig, type HandoffView, type LifecycleReason } from '../api';
+import { CompactSelect } from '../CompactSelect';
+import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from '../model-cache';
 import { useModalFocusTrap } from '../useModalFocusTrap';
 import { Kitten } from './Kitten';
 import { pickKittenName } from './companion-model';
@@ -39,6 +41,8 @@ function CeremonyDialog({ initialId }: { initialId?: string }) {
 
   const [handoffId, setHandoffId] = useState<string | undefined>(initialId ?? info.lifecycle?.handoff?.id);
   const [name, setName] = useState(info.name);
+  const [successor, setSuccessor] = useState<HandoffSuccessorConfig>({});
+  const [customized, setCustomized] = useState(false);
   const [error, setError] = useState<string>();
   const [syncNotice, setSyncNotice] = useState<{ ok: boolean; message: string }>();
   const overview = useLifecycleOverview();
@@ -54,6 +58,34 @@ function CeremonyDialog({ initialId }: { initialId?: string }) {
   });
   const handoff: HandoffView | undefined = detail.data?.handoff ?? (handoffId ? undefined : overview.data?.handoff ?? undefined);
   const phase = ceremonyPhase(handoff?.state);
+  const currentAgentId = handoff?.fromCat?.agentId ?? overview.data?.cat?.agentId ?? info.mainSession?.agentId ?? '';
+  const agentId = successor.agentId ?? currentAgentId;
+  const agentChanged = Boolean(agentId && currentAgentId && agentId !== currentAgentId);
+  const agentsQuery = useQuery({ queryKey: ['agents'], queryFn: () => api.agents(), enabled: phase === 'invite', staleTime: 60_000 });
+  const modelsQuery = useQuery({
+    queryKey: agentModelsQueryKey(agentId),
+    queryFn: () => loadAgentModels(agentId),
+    enabled: phase === 'invite' && Boolean(agentId),
+    initialData: () => agentId ? readCachedAgentModels(agentId) : undefined,
+    initialDataUpdatedAt: 0,
+    staleTime: 60_000
+  });
+  const model = successor.model !== undefined
+    ? successor.model
+    : agentChanged ? modelsQuery.data?.defaultModel ?? '' : overview.data?.cat?.model ?? info.mainSession?.model ?? '';
+  const reasoningEffort = successor.reasoningEffort !== undefined
+    ? successor.reasoningEffort
+    : agentChanged ? modelsQuery.data?.defaultReasoningEffort ?? '' : overview.data?.cat?.reasoningEffort ?? info.mainSession?.reasoningEffort ?? '';
+
+  // 拿到交接/档案时把当前配置填进选择器；用户改过之后不再被轮询覆盖。
+  useEffect(() => {
+    if (customized) return;
+    const cat = overview.data?.cat;
+    const source: HandoffSuccessorConfig | undefined = handoff?.successorConfig
+      ?? (cat ? { ...(cat.agentId ? { agentId: cat.agentId } : {}), ...(cat.model ? { model: cat.model } : {}), ...(cat.reasoningEffort ? { reasoningEffort: cat.reasoningEffort } : {}) } : undefined);
+    if (!source) return;
+    setSuccessor(current => JSON.stringify(current) === JSON.stringify(source) ? current : source);
+  }, [customized, handoff?.successorConfig, overview.data?.cat]);
 
   // 仪式结束：主会话、便签、会话列表都变了，刷新一遍。
   const finalState = isCeremonyFinal(handoff?.state) ? handoff?.state : undefined;
@@ -72,9 +104,10 @@ function CeremonyDialog({ initialId }: { initialId?: string }) {
   const start = useMutation({
     mutationFn: async () => {
       const trimmed = name.trim();
-      const proposal = handoff?.state === 'proposed' ? handoff : (await api.assistantProposeHandoff({ reason: '你在网页上发起了交接仪式' })).handoff;
+      const config = customized ? { agentId, model, reasoningEffort } : {};
+      const proposal = handoff?.state === 'proposed' ? handoff : (await api.assistantProposeHandoff({ reason: '你在网页上发起了交接仪式', ...config })).handoff;
       setHandoffId(proposal.id);
-      return (await api.assistantConfirmHandoff(proposal.id, trimmed && trimmed !== info.name ? { name: trimmed } : {})).handoff;
+      return (await api.assistantConfirmHandoff(proposal.id, { ...(trimmed && trimmed !== info.name ? { name: trimmed } : {}), ...config })).handoff;
     },
     onSuccess: view => { setError(undefined); refresh(view); },
     onError: value => setError(errorText(value))
@@ -100,6 +133,10 @@ function CeremonyDialog({ initialId }: { initialId?: string }) {
   const oldStage = handoff?.fromCat?.lifeStage ?? info.stage ?? 'adult';
   const generation = handoff?.fromCat?.generation ?? info.generation ?? 1;
   const successorName = handoff?.successorName ?? (name.trim() || info.name);
+  const agentOptions = (agentsQuery.data ?? []).filter(agent => !agent.disabled);
+  const pickAgent = (next: string) => { setCustomized(true); setSuccessor({ agentId: next }); };
+  const pickModel = (next: string) => { setCustomized(true); setSuccessor(current => ({ ...current, agentId: current.agentId ?? agentId, model: next })); };
+  const pickReasoning = (next: string) => { setCustomized(true); setSuccessor(current => ({ ...current, agentId: current.agentId ?? agentId, reasoningEffort: next })); };
   const busy = start.isPending || isCeremonyRunning(handoff?.state);
 
   return <div className="ui-overlay fixed inset-0 z-[70] grid place-items-center bg-zinc-950/35 p-2 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) close(); }}>
@@ -120,6 +157,17 @@ function CeremonyDialog({ initialId }: { initialId?: string }) {
           name={name}
           onName={setName}
           currentName={info.name}
+          agents={agentOptions}
+          models={modelsQuery.data?.models ?? []}
+          reasoningEfforts={modelsQuery.data?.reasoningEfforts ?? []}
+          agentId={agentId}
+          model={model}
+          reasoningEffort={reasoningEffort}
+          customized={customized}
+          modelsLoading={modelsQuery.isFetching}
+          onAgent={pickAgent}
+          onModel={pickModel}
+          onReasoning={pickReasoning}
         />}
         {phase !== 'invite' && handoff && <ProgressBody handoff={handoff} phase={phase}/>}
         {error && <div className="mt-3 flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[12px] leading-5 text-red-700"><CircleAlert size={14} className="mt-0.5 shrink-0"/>{error}</div>}
@@ -185,7 +233,18 @@ function CeremonyStage({ phase, oldStage, oldName, newName, generation }: { phas
   </div>;
 }
 
-function InviteBody({ speech, reasons, trigger, note, name, onName, currentName }: { speech: string; reasons: LifecycleReason[]; trigger?: HandoffView['trigger']; note?: string; name: string; onName(value: string): void; currentName: string }) {
+function InviteBody({
+  speech, reasons, trigger, note, name, onName, currentName,
+  agents, models, reasoningEfforts, agentId, model, reasoningEffort, customized, modelsLoading,
+  onAgent, onModel, onReasoning
+}: {
+  speech: string; reasons: LifecycleReason[]; trigger?: HandoffView['trigger']; note?: string; name: string; onName(value: string): void; currentName: string;
+  agents: Agent[]; models: AgentModel[]; reasoningEfforts: AgentModel[]; agentId: string; model: string; reasoningEffort: string;
+  customized: boolean; modelsLoading: boolean; onAgent(value: string): void; onModel(value: string): void; onReasoning(value: string): void;
+}) {
+  const agentLabel = agents.find(agent => agent.id === agentId)?.name ?? (agentId || '当前 Agent');
+  const modelLabel = model || '默认模型';
+  const reasoningLabel = reasoningEffort || '默认强度';
   return <div className="mt-4 flex flex-col gap-3 text-[13px] leading-6 text-zinc-700">
     <p className="ui-speech !m-0 self-center">{speech}</p>
     <section>
@@ -199,7 +258,7 @@ function InviteBody({ speech, reasons, trigger, note, name, onName, currentName 
       <h3 className="text-[12px] font-semibold text-zinc-500">交接会做什么</h3>
       <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[12.5px] text-zinc-600">
         <li>旧主会话归档成只读：对话、事件、便签、草稿、watch、文件索引一条不删。</li>
-        <li>新猫继承 Agent / 模型 / 工作目录，拿着交接包接班；交接说明是系统轮次，不冒充你说话。</li>
+        <li>新猫默认继承 Agent / 模型 / 思考深度 / 工作目录，也可以在「接班配置」里换；交接说明是系统轮次，不冒充你说话。</li>
         <li>没做完的事项、watch、待确认草稿转给新猫；已完成的便签折叠进归档区，随时能取出。</li>
         <li>任何一步失败都会自动回滚，旧主会话不会丢。</li>
       </ul>
@@ -210,6 +269,36 @@ function InviteBody({ speech, reasons, trigger, note, name, onName, currentName 
       <button type="button" onClick={() => onName(pickKittenName(name.trim() || currentName))} aria-label="随机换一个名字" title="随机换一个名字" className="ui-dice grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"><Dices size={15}/></button>
       {name.trim() === currentName && <span className="text-[11.5px] text-zinc-400">沿用原来的名字</span>}
     </label>
+    <details className="group rounded-lg border border-zinc-200 bg-zinc-50/70 px-2.5 py-2" data-testid="successor-config">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[12px] font-semibold text-zinc-600">
+        <ChevronDown size={13} className="shrink-0 transition-transform group-open:rotate-180"/>
+        <span className="shrink-0">接班配置</span>
+        <span className="truncate font-normal text-zinc-400">· {agentLabel} · {modelLabel} · {reasoningLabel}</span>
+      </summary>
+      <p className="mt-1 text-[11.5px] leading-5 text-zinc-500">只影响新主会话，旧会话仍归档只读；不改就沿用当前配置。{modelsLoading ? ' 正在读取可选模型…' : ''}</p>
+      <div className="mt-1.5 grid gap-2">
+        <label className="grid gap-1">
+          <span className="text-[11.5px] font-medium text-zinc-500">Agent</span>
+          <CompactSelect size="sm" value={agentId} placeholder="选择 Agent" disabledText="没有可用 Agent"
+            options={agents.map(agent => ({ value: agent.id, label: agent.name, agentId: agent.id }))} onChange={onAgent}/>
+        </label>
+        <label className="grid gap-1">
+          <span className="text-[11.5px] font-medium text-zinc-500">模型</span>
+          <CompactSelect size="sm" value={model} placeholder="Agent 默认模型" disabledText="该 Agent 暂未提供模型"
+            options={[{ value: '', label: 'Agent 默认模型' }, ...models.map(item => ({ value: item.id, label: item.name, meta: item.id }))]}
+            onChange={onModel}/>
+        </label>
+        <label className="grid gap-1">
+          <span className="text-[11.5px] font-medium text-zinc-500">思考深度</span>
+          <CompactSelect size="sm" value={reasoningEffort} placeholder="Agent 默认强度" disabledText="该 Agent 暂未提供可选强度"
+            options={[{ value: '', label: 'Agent 默认强度' }, ...reasoningEfforts.map(item => ({ value: item.id, label: item.name }))]}
+            onChange={onReasoning}/>
+        </label>
+      </div>
+      <p className={`mt-1.5 text-[11.5px] ${customized ? 'text-amber-700' : 'text-zinc-400'}`}>
+        {customized ? `新主会话将使用 ${agentLabel} · ${modelLabel} · ${reasoningLabel}。` : '未改动时逐项继承当前小猫。'}
+      </p>
+    </details>
   </div>;
 }
 

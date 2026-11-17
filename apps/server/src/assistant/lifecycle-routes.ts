@@ -41,19 +41,30 @@ export function registerLifecycleRoutes(app: FastifyInstance, assistant: Assista
 
   app.get<{ Params: { id: string } }>('/api/assistant/handoff/:id', async request => ({ handoff: lifecycle.getHandoff(request.params.id) }));
 
-  app.post<{ Body: { reason?: string; name?: string; from?: string } }>('/api/assistant/handoff', async request => {
+  app.post<{ Body: { reason?: string; name?: string; agentId?: string; model?: string; reasoningEffort?: string; from?: string } }>('/api/assistant/handoff', async request => {
     const body = request.body ?? {};
     assertMainOrUser(assistant, body.from);
     const reason = optionalText(body.reason);
     const name = optionalText(body.name);
-    const record = await lifecycle.proposeHandoff({ trigger: body.from ? 'agent' : 'user', ...(reason ? { reason } : {}), ...(name ? { name } : {}) });
+    const successor = {
+      ...(body.agentId !== undefined ? { agentId: body.agentId } : {}),
+      ...(body.model !== undefined ? { model: body.model } : {}),
+      ...(body.reasoningEffort !== undefined ? { reasoningEffort: body.reasoningEffort } : {})
+    };
+    const record = await lifecycle.proposeHandoff({ trigger: body.from ? 'agent' : 'user', ...(reason ? { reason } : {}), ...(name ? { name } : {}), ...successor });
     return { handoff: lifecycle.getHandoff(record.id) };
   });
 
-  app.post<{ Params: { id: string }; Body: { name?: string; from?: string } }>('/api/assistant/handoff/:id/confirm', async request => {
+  app.post<{ Params: { id: string }; Body: { name?: string; agentId?: string; model?: string; reasoningEffort?: string; from?: string } }>('/api/assistant/handoff/:id/confirm', async request => {
     assertUser(request.body?.from, '交接');
     const name = optionalText(request.body?.name);
-    return { handoff: await lifecycle.confirmHandoff(request.params.id, name ? { name } : {}) };
+    const body = request.body ?? {};
+    const successor = {
+      ...(body.agentId !== undefined ? { agentId: body.agentId } : {}),
+      ...(body.model !== undefined ? { model: body.model } : {}),
+      ...(body.reasoningEffort !== undefined ? { reasoningEffort: body.reasoningEffort } : {})
+    };
+    return { handoff: await lifecycle.confirmHandoff(request.params.id, { ...(name ? { name } : {}), ...successor }) };
   });
 
   app.post<{ Params: { id: string }; Body: { from?: string } }>('/api/assistant/handoff/:id/cancel', async request => {

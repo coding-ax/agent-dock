@@ -30,7 +30,7 @@
 
 1. 旧主会话**归档为只读**（`runtime.archive`：先停 driver，再写 `archivedAt`）。它的事件、轮次、标题全部保留，网页可以打开查看，`agent-dock session show <旧id>` 可以读。
 2. 事项、草稿、watch 都存在 assistant 库里，不随会话删除；交接只改「归属」，不删行。
-3. 新建一个 `assistant-main` 会话，**继承**旧会话的 Agent、模型、思考深度、工作目录和猫的名字（可在仪式里给新猫另起名）。
+3. 新建一个 `assistant-main` 会话，默认**继承**旧会话的 Agent、模型、思考深度、工作目录和猫的名字；确认步骤的「接班配置」可以换 Agent / 模型 / 思考深度（见 1.4），工作目录仍沿用旧会话，名字也可以另起。
 4. 新会话通过**交接包**获得旧会话的关键上下文。交接包以一轮 `origin=handoff` 的系统轮次送达：
    - 时间线上渲染成「🐾 交接说明」卡片，**不是用户气泡**；
    - 发给 Agent 的正文开头明确写「这是 daemon 生成的交接包，不是用户消息」；
@@ -75,7 +75,7 @@
 | `proposed` | 触发：用户手动（网页按钮 / `main handoff`）、阈值（`handoff` 档）、或主会话自己提议。界面显示邀请，**等用户确认**。 | 用户可「再陪我一阵」→ `cancelled` |
 | `confirmed` | 用户确认。主会话正在忙（thinking/running_tool/等权限/有排队）时拒绝确认，返回「等这一轮结束再交接」。 | — |
 | `packing` | 生成交接包（纯数据，可复现），落库。 | 回滚 |
-| `spawning` | `runtime.start` 新建 `assistant-main` 会话，继承配置。 | 回滚 |
+| `spawning` | `runtime.start` 新建 `assistant-main` 会话，使用确认时解析好的 Agent / 模型 / 思考深度；没改就继承旧会话。 | 回滚 |
 | `transferring` | 便签交接（1.2），每个条目写 `assistant_transfers`；已关闭事项折叠进归档批次。 | 回滚：watch 改回、归档批次撤销、transfer 标 `reverted` |
 | `switching` | 主会话指针切到新会话，新猫写入血缘（`generation+1`、幼猫）。 | 回滚：指针改回旧会话，新猫标 `aborted` |
 | `retiring` | 归档旧主会话（**提交点**），旧猫 `retired`。 | 回滚（旧会话此时尚未归档，安全） |
@@ -94,6 +94,16 @@
 **崩溃恢复**：daemon 启动时扫描未结束的交接。提交点之前（packing…retiring）的一律回滚；`briefing` 的标成 `done(partial)`，提示重发。
 
 **确认必须来自用户**：带 `from`（即 Agent 环境里执行）的 `confirm` 一律 403，Agent 只能 `propose`。网页按钮和普通终端（无 `agentdock_session_id`）才能确认。
+
+### 1.4 接班配置（Agent / 模型 / 思考深度）
+
+`POST /api/assistant/handoff`（propose）和 `POST /api/assistant/handoff/:id/confirm` 都接受可选的 `agentId`、`model`、`reasoningEffort`；CLI 对应 `main handoff --agent <id> --model <id> --reasoning <level>`。规则：
+
+- **不传就继承**：三个字段都没传时，不写 `successor_config`，连 Agent 目录都不用查；确认时按旧主会话当前值逐字段沿用 Agent / 模型 / 思考深度和工作目录，行为与加选择器之前完全一致。
+- **换 Agent**：`agentId` 必须存在于 Agent 目录且未停用；模型没指定时用新 Agent 的默认模型，思考深度没指定时用新 Agent 的默认强度。不会把旧 Agent 的模型硬套到新 Agent 上。
+- **校验模型与强度**：只有用户**显式选择**的模型才必须在 `/api/agents/:id/models` 结果（ACP 发现或 `extraModels`）里；继承来的模型只沿用、不重新校验（它可能已经从目录消失，不能因为「只改了思考深度」就 400）。思考深度同理：显式选择的必须在 Agent 上报的可选值里；Agent 没上报可选值时只做非空校验。
+- **解析结果落库**：`assistant_handoffs.successor_config` 保存最终配置，血缘里的新猫和新建会话记录实际使用的 `agent_id/model/reasoning_effort`，三者一致。
+- 校验失败返回 400 `INVALID_HANDOFF_CONFIG`，不会生成半成品提议，也不会自动确认；确认仍只接受用户本人。
 
 ---
 
@@ -341,7 +351,7 @@ agent-dock notes unarchive (--batch <id> | --task <id>...)
 | 系统轮次锚点 | `packages/agent-runtime/src/index.ts`：`maintenance` / `handoff` 轮次的锚点事件带 `detail`（完整指令），和 `injected` 一样（`packages/shared` 没有改） |
 | 网页：模型与数据 | `apps/web/src/companion/lifecycle-model.ts`（含 `isSystemRoundOrigin`）、`useCompanion.ts`（`useLifecycleOverview`）、`companion-store.ts`（仪式开关）、`api.ts` |
 | 网页：组件 | `HandoffCeremony.tsx`（仪式弹窗）、`CatProfile.tsx`（小猫档案）、`ArchiveShelf.tsx`（归档区）、`LifecycleNotices.tsx`（整理 / 交接说明卡片）、`LifecycleBadges.tsx`（阶段徽标、「该交接了」角标）、`lifecycle.css`、`Kitten.tsx`、`CompanionLayer.tsx`（冒泡与事件反应）、`CompanionCard.tsx`、`CompanionHeader.tsx`、`CompanionEdge.tsx`、`HomeStage.tsx`、`StickyDrawer.tsx`、`AssistantSettingsDialog.tsx`、`App.tsx` |
-| 网页：时间线 | `TimelineItems.tsx`（系统轮次卡片，不渲染用户气泡）、`timeline.ts`（展开指令）、`silent-trigger.ts`、`SessionPane.tsx`（系统轮次不进排队条） |
+| 网页：时间线 | `TimelineItems.tsx`（系统轮次卡片，不渲染用户气泡）、`timeline.ts`（展开指令与 `origin=emoji` 兼容常量）、`SessionPane.tsx`（系统轮次不进排队条） |
 | 单测 | `apps/server/src/assistant/lifecycle.test.ts`（29）、`lifecycle-service.test.ts`（20）、`lifecycle-cli.test.ts`（3）、`apps/web/src/companion/lifecycle-model.test.ts`（16） |
 
 ## 8. 验证记录（2026-11-12）

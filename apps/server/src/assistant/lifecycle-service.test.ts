@@ -110,6 +110,62 @@ async function adoptedWithNotes(h: ReturnType<typeof harness>) {
 }
 
 describe('main-session handoff ceremony', () => {
+  it('blocks archiving the active main session, allows retired/normal sessions, and restores a wrongly archived main', async () => {
+    const h = harness();
+    const { main } = await adoptedWithNotes(h);
+    const side = await h.runtime.start({ agentId: 'codex', source: 'side-chat', sourceId: main.id });
+
+    await expect(h.service.assertSessionArchivable(main.id)).rejects.toMatchObject({ code: 'MAIN_SESSION_NEEDS_HANDOFF', statusCode: 409 });
+    await expect(h.service.assertSessionArchivable(side.id)).resolves.toBeUndefined();
+
+    // 走完交接后，旧主会话已经归档；再调用归档判定是幂等放行，不会把历史会话锁得更死。
+    const proposal = await h.lifecycle.proposeHandoff({ trigger: 'user' });
+    await h.lifecycle.confirmHandoff(proposal.id, { name: '豆豆' });
+    await h.lifecycle.settle();
+    expect((await h.repos.sessions.get(main.id))?.archivedAt).toBeTruthy();
+    await expect(h.service.assertSessionArchivable(main.id)).resolves.toBeUndefined();
+
+    // 模拟旧版本留下的坏状态：当前主会话指针还指着已归档会话。
+    const current = h.service.mainSessionId!;
+    await h.runtime.archive(current);
+    expect((await h.repos.sessions.get(current))?.archivedAt).toBeTruthy();
+    await expect(h.service.assertSessionArchivable(current)).resolves.toBeUndefined();
+    // 前任不能借恢复接口复活，避免血缘和只读语义被破坏。
+    await expect(h.service.restoreMainSession(main.id)).rejects.toMatchObject({ code: 'MAIN_SESSION_RESTORE_UNAVAILABLE' });
+
+    const restored = await h.service.restoreMainSession();
+    expect(restored.restored).toBe(true);
+    expect(restored.session).toMatchObject({ id: current, state: 'idle' });
+    expect(restored.session.archivedAt).toBeFalsy();
+    expect(h.runtime.restart).toHaveBeenCalledWith(current);
+  });
+
+  it('injects the latest maintenance summary into the successor briefing once, never back into the predecessor', async () => {
+    const h = harness();
+    const { main } = await adoptedWithNotes(h);
+    const run = await h.lifecycle.runMaintenance({ trigger: 'manual', reason: '交接前先总结' });
+    const task = h.runtime.list(main.id).find(item => item.id === run.runtimeTaskId)!;
+    task.status = 'completed';
+    task.finalText = '这一代的主线：登录问题已修完，发版等用户拍板。';
+    await h.lifecycle.checkMaintenanceCompletion();
+    expect(h.lifecycle.latestLetter(h.lifecycle.lineage()[0]!.id)?.summary).toContain('登录问题已修完');
+
+    const proposal = await h.lifecycle.proposeHandoff({ trigger: 'user' });
+    await h.lifecycle.confirmHandoff(proposal.id, { name: '豆豆' });
+    await h.lifecycle.settle();
+
+    const briefing = h.runtime.dispatch.mock.calls.find(call => call[5] === 'handoff')!;
+    expect(briefing[0]).toBe(h.service.mainSessionId);
+    expect(briefing[3]).toContain('【前任的整理摘要');
+    expect(briefing[3]).toContain('登录问题已修完');
+    // 只送到接班会话一次：旧主会话没有收到交接说明，后续用户轮次也不会重复注入。
+    expect(h.runtime.dispatch.mock.calls.filter(call => call[5] === 'handoff')).toHaveLength(1);
+    expect(h.runtime.dispatch.mock.calls.filter(call => call[0] === main.id && call[5] === 'handoff')).toHaveLength(0);
+    const successor = await h.service.getMainSession();
+    const nextTurn = await h.service.composePrompt(successor!, '继续', undefined);
+    expect(nextTurn).not.toContain('登录问题已修完');
+  });
+
   it('archives the old main session, hands everything to a new kitten, and briefs it as a system round', async () => {
     const h = harness();
     const { main, running, plan, done, watch, draft } = await adoptedWithNotes(h);
@@ -745,6 +801,163 @@ describe('lifecycle HTTP routes', () => {
       expect(agentConfirm.statusCode).toBe(403);
       expect((await app.inject({ method: 'GET', url: `/api/assistant/handoff/${handoff.id}` })).json().handoff.state).toBe('proposed');
     } finally {
+      await app.close();
+    }
+  });
+
+  it('applies an explicitly changed Agent / model / reasoning and records it on the session and lineage', async () => {
+    const h = harness();
+    const { main } = await adoptedWithNotes(h);
+    const catalog = vi.spyOn(h.service, 'handoffAgentCatalog').mockImplementation(async id => id === 'codex' ? {
+      id: 'codex', name: 'Codex', defaultModel: 'gpt-5-codex', models: ['gpt-5-codex', 'gpt-5'],
+      defaultReasoningEffort: 'medium', reasoningEfforts: ['low', 'medium', 'high']
+    } : undefined);
+    const app = await appFor(h.service);
+    try {
+      const proposed = await app.inject({
+        method: 'POST', url: '/api/assistant/handoff',
+        payload: { agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'high', reason: '换 Codex 继续' }
+      });
+      expect(proposed.statusCode).toBe(200);
+      const handoff = proposed.json().handoff;
+      expect(handoff).toMatchObject({ state: 'proposed', successorConfig: { agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'high' } });
+      expect(catalog).toHaveBeenCalledWith('codex');
+
+      // 确认时再传一次（网页在自定义配置时会这样做），仍只由用户本人触发。
+      const confirmed = await app.inject({
+        method: 'POST', url: `/api/assistant/handoff/${handoff.id}/confirm`,
+        payload: { agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'high', name: '豆豆' }
+      });
+      expect(confirmed.statusCode).toBe(200);
+      await h.lifecycle.settle();
+
+      const state = (await app.inject({ method: 'GET', url: '/api/assistant/state' })).json();
+      const newMain = state.mainSessionId;
+      expect(newMain).not.toBe(main.id);
+      const session = await h.repos.sessions.get(newMain);
+      const [oldCat, newCat] = (await app.inject({ method: 'GET', url: '/api/assistant/lineage' })).json().lineage;
+      expect(session).toMatchObject({ agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'high', cwd: '/work/dock' });
+      expect(newCat).toMatchObject({
+        generation: 2, name: '豆豆', state: 'active', agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'high', cwd: '/work/dock'
+      });
+      expect(oldCat).toMatchObject({ generation: 1, state: 'retired', agentId: 'claude', model: 'opus', reasoningEffort: 'high' });
+      expect((await app.inject({ method: 'GET', url: `/api/assistant/handoff/${handoff.id}` })).json().handoff)
+        .toMatchObject({ state: 'done', successorConfig: { agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'high' } });
+    } finally {
+      catalog.mockRestore();
+      await app.close();
+    }
+  });
+
+  it('lets confirm override an inherited successor config', async () => {
+    const h = harness();
+    const { main } = await adoptedWithNotes(h);
+    const catalog = vi.spyOn(h.service, 'handoffAgentCatalog').mockResolvedValue({
+      id: 'codex', name: 'Codex', defaultModel: 'gpt-5-codex', models: ['gpt-5-codex'],
+      defaultReasoningEffort: 'medium', reasoningEfforts: ['low', 'medium', 'high']
+    });
+    const app = await appFor(h.service);
+    try {
+      const proposed = await app.inject({ method: 'POST', url: '/api/assistant/handoff', payload: {} });
+      const handoff = proposed.json().handoff;
+      expect(handoff.successorConfig).toBeNull();
+      const confirmed = await app.inject({
+        method: 'POST', url: `/api/assistant/handoff/${handoff.id}/confirm`,
+        payload: { agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'medium' }
+      });
+      expect(confirmed.statusCode).toBe(200);
+      await h.lifecycle.settle();
+      const state = (await app.inject({ method: 'GET', url: '/api/assistant/state' })).json();
+      expect(state.mainSessionId).not.toBe(main.id);
+      expect(await h.repos.sessions.get(state.mainSessionId)).toMatchObject({ agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'medium' });
+    } finally {
+      catalog.mockRestore();
+      await app.close();
+    }
+  });
+
+  it('inherits the old Agent / model / reasoning / cwd exactly when no successor config is given', async () => {
+    const h = harness();
+    const { main } = await adoptedWithNotes(h);
+    const app = await appFor(h.service);
+    try {
+      const oldSession = await h.repos.sessions.get(main.id);
+      const inherited = { agentId: oldSession!.agentId, model: oldSession!.model, reasoningEffort: oldSession!.reasoningEffort, cwd: oldSession!.cwd };
+      const proposed = await app.inject({ method: 'POST', url: '/api/assistant/handoff', payload: {} });
+      const handoff = proposed.json().handoff;
+      expect(handoff.successorConfig).toBeNull();
+      expect((await app.inject({ method: 'POST', url: `/api/assistant/handoff/${handoff.id}/confirm`, payload: {} })).statusCode).toBe(200);
+      await h.lifecycle.settle();
+      expect((await app.inject({ method: 'GET', url: `/api/assistant/handoff/${handoff.id}` })).json().handoff.successorConfig)
+        .toEqual({ agentId: 'claude', model: 'opus', reasoningEffort: 'high' });
+      const state = (await app.inject({ method: 'GET', url: '/api/assistant/state' })).json();
+      expect(state.mainSessionId).not.toBe(main.id);
+      // 没有覆盖值时，新会话逐项等于旧会话，连没有显式指定的字段也不凭空补默认值。
+      expect(await h.repos.sessions.get(state.mainSessionId)).toMatchObject(inherited);
+      const newCat = (await app.inject({ method: 'GET', url: '/api/assistant/lineage' })).json().lineage.at(-1);
+      expect(newCat).toMatchObject(inherited);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects an unknown Agent, a model from another Agent, and an illegal reasoning level', async () => {
+    const h = harness();
+    await adoptedWithNotes(h);
+    const catalog = vi.spyOn(h.service, 'handoffAgentCatalog').mockImplementation(async id => id === 'codex' ? {
+      id: 'codex', name: 'Codex', defaultModel: 'gpt-5-codex', models: ['gpt-5-codex'], reasoningEfforts: ['low', 'high']
+    } : undefined);
+    const app = await appFor(h.service);
+    try {
+      const missing = await app.inject({ method: 'POST', url: '/api/assistant/handoff', payload: { agentId: 'nope' } });
+      expect(missing.statusCode).toBe(400);
+      expect(missing.json().error).toMatchObject({ code: 'INVALID_HANDOFF_CONFIG' });
+      expect(missing.json().error.message).toContain('Agent 不存在');
+
+      const badModel = await app.inject({ method: 'POST', url: '/api/assistant/handoff', payload: { agentId: 'codex', model: 'sonnet' } });
+      expect(badModel.statusCode).toBe(400);
+      expect(badModel.json().error.message).toContain('不支持模型');
+
+      const badEffort = await app.inject({ method: 'POST', url: '/api/assistant/handoff', payload: { agentId: 'codex', model: 'gpt-5-codex', reasoningEffort: 'ultra' } });
+      expect(badEffort.statusCode).toBe(400);
+      expect(badEffort.json().error.message).toContain('不支持思考深度');
+      expect((await app.inject({ method: 'GET', url: '/api/assistant/handoffs' })).json().handoffs).toHaveLength(0);
+    } finally {
+      catalog.mockRestore();
+      await app.close();
+    }
+  });
+
+  it('accepts a reasoning-only change when the inherited model is gone from the Agent catalog', async () => {
+    const h = harness();
+    const { main } = await adoptedWithNotes(h);
+    // 旧主会话是 claude/opus；目录里只剩 sonnet，模拟 opus 已从 /models 消失。
+    const catalog = vi.spyOn(h.service, 'handoffAgentCatalog').mockImplementation(async id => id === 'claude' ? {
+      id: 'claude', name: 'Claude', defaultModel: 'sonnet', models: ['sonnet'],
+      defaultReasoningEffort: 'medium', reasoningEfforts: ['low', 'medium', 'high']
+    } : undefined);
+    const app = await appFor(h.service);
+    try {
+      const proposed = await app.inject({
+        method: 'POST', url: '/api/assistant/handoff',
+        payload: { reasoningEffort: 'low', reason: '只调思考深度' }
+      });
+      expect(proposed.statusCode).toBe(200);
+      const handoff = proposed.json().handoff;
+      // 模型是继承来的，不重新校验；思考深度是用户选的，按选择生效。
+      expect(handoff).toMatchObject({ state: 'proposed', successorConfig: { agentId: 'claude', model: 'opus', reasoningEffort: 'low' } });
+
+      const confirmed = await app.inject({
+        method: 'POST', url: `/api/assistant/handoff/${handoff.id}/confirm`,
+        payload: { reasoningEffort: 'low' }
+      });
+      expect(confirmed.statusCode).toBe(200);
+      await h.lifecycle.settle();
+      const state = (await app.inject({ method: 'GET', url: '/api/assistant/state' })).json();
+      expect(state.mainSessionId).not.toBe(main.id);
+      expect(await h.repos.sessions.get(state.mainSessionId)).toMatchObject({ agentId: 'claude', model: 'opus', reasoningEffort: 'low' });
+    } finally {
+      catalog.mockRestore();
       await app.close();
     }
   });
