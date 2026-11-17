@@ -86,9 +86,11 @@ function ServerUpdateNotice({ enabled }: { enabled: boolean }) {
     </div>}
     <div className="flex h-8 items-center gap-1 text-[12px]">
       <HoverTooltip content={data.currentVersion}><span className="min-w-0 truncate">AgentDock <span className="font-mono">{shortVersion(data.currentVersion)}</span></span></HoverTooltip>
-      {!showBanner && <HoverTooltip content={check.isPending ? '正在检查更新' : '检查更新'}>
-        <button type="button" aria-label="检查更新" disabled={check.isPending} onClick={() => check.mutate()} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-400 transition-colors duration-150 hover:bg-white hover:text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 disabled:pointer-events-none"><RefreshCw size={13} strokeWidth={2} className={check.isPending ? 'animate-spin text-zinc-500' : ''}/></button>
-      </HoverTooltip>}
+      {/* 有更新提示时也要保留手动检查：服务端缓存 30 分钟，刚发完版时横幅上的版本号
+          可能已经过期，没有这个入口就只能等缓存自然失效。 */}
+      <HoverTooltip content={updating ? '升级进行中' : check.isPending ? '正在检查更新' : '检查更新'}>
+        <button type="button" aria-label="检查更新" disabled={check.isPending || updating} onClick={() => check.mutate()} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-400 transition-colors duration-150 hover:bg-white hover:text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 disabled:pointer-events-none"><RefreshCw size={13} strokeWidth={2} className={check.isPending ? 'animate-spin text-zinc-500' : ''}/></button>
+      </HoverTooltip>
     </div>
     {/* 侧边栏带 transform，内部的 fixed 会以侧边栏为包含块只盖住它自己；弹窗和 toast 挂到 body 才能全屏。 */}
     {createPortal(<>
