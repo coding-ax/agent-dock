@@ -172,6 +172,26 @@ export async function proposeEarlyHandoff(propose: () => Promise<{ handoff: { id
   return result.handoff.id;
 }
 
+/**
+ * 主会话顶部的小「退休」入口：只在主会话显示，不抢眼；有未结束的交接时点开就是进度。
+ */
+export function retireEntry(input: { isMain: boolean; handoff?: Pick<HandoffSummary, 'id' | 'state'> | null }): {
+  visible: boolean; label: string; progress: boolean; handoffId?: string;
+} {
+  const open = input.handoff && !isCeremonyFinal(input.handoff.state) ? input.handoff : undefined;
+  return {
+    visible: input.isMain,
+    label: open ? (open.state === 'proposed' ? '交接待确认' : '交接进度') : '退休',
+    progress: Boolean(open),
+    ...(open ? { handoffId: open.id } : {})
+  };
+}
+
+/** 退休入口点击后只打开现有仪式；没有进行中的交接就让仪式自己发起提议。 */
+export function openRetireCeremony(entry: { handoffId?: string }, open: (handoffId?: string) => void): void {
+  open(entry.handoffId);
+}
+
 /* ---------- 系统轮次（整理 / 交接说明）在时间线上的样子 ---------- */
 
 export type SystemRoundOrigin = 'maintenance' | 'handoff';

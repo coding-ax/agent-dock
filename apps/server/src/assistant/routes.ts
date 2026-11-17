@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { RuntimeError } from '@agent-dock/agent-dock-shared';
 import type { AssistantService } from './service.js';
-import type { DraftRecord, QuietHours, TaskCheck } from './types.js';
+import type { DraftRecord, TaskCheck } from './types.js';
 import { registerLifecycleRoutes } from './lifecycle-routes.js';
 
 type TaskBody = {
@@ -11,40 +11,12 @@ type TaskBody = {
 
 const bad = (message: string) => new RuntimeError('INVALID_ASSISTANT_INPUT', message, 400);
 
-const emojiSegmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl
-  ? new Intl.Segmenter('zh', { granularity: 'grapheme' })
-  : undefined;
-
-/** 与网页端同一条规则：空串关闭，否则必须正好是一个 emoji。 */
-function normalizeSilentEmoji(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  if (typeof value !== 'string') throw bad('静默触发表情必须是单个 emoji');
-  const text = value.trim();
-  if (!text) return '';
-  const graphemes = emojiSegmenter
-    ? [...emojiSegmenter.segment(text)].map(part => part.segment)
-    : Array.from(text);
-  const emojiLike = /\p{Extended_Pictographic}/u.test(text)
-    || /^[\u{1F1E6}-\u{1F1FF}]{2}$/u.test(text)
-    || /\u20E3/u.test(text);
-  if (graphemes.length !== 1 || !emojiLike) throw bad('静默触发表情必须是单个 emoji');
-  return text;
-}
-
 /** CLI 传了 from 就必须是主会话；网页调用不带 from，由本地 Web 凭证保护。 */
 function assertMain(assistant: AssistantService, from?: string) {
   const main = assistant.mainSessionId;
   if (!main) throw bad('还没有指定主会话');
   if (from && from !== main) throw new RuntimeError('FORBIDDEN', '只有主会话能执行这个操作', 403);
   return main;
-}
-
-/** CLI 传了 from 才要求它必须是主会话；网页设置不强依赖「已经认领小猫」。 */
-function assertSettingsCaller(assistant: AssistantService, from?: string) {
-  if (!from) return;
-  const main = assistant.mainSessionId;
-  if (!main) throw bad('还没有指定主会话');
-  if (from !== main) throw new RuntimeError('FORBIDDEN', '只有主会话能执行这个操作', 403);
 }
 
 export function registerAssistantRoutes(app: FastifyInstance, assistant: AssistantService) {
@@ -76,6 +48,12 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
     throw bad('sessionId 或 agentId 必填');
   });
 
+  // 旧版本允许直接归档主会话，导致指针停在只读会话上。网页和 CLI 都用这条恢复。
+  app.post<{ Body: { sessionId?: string } }>('/api/assistant/main/restore', async request => {
+    const sessionId = request.body?.sessionId?.trim() || undefined;
+    return assistant.restoreMainSession(sessionId);
+  });
+
   // 给小猫改名：同时改主会话标题，下一轮快照把新名字告诉主会话。
   app.put<{ Body: { name?: string; from?: string } }>('/api/assistant/companion', async request => {
     assertMain(assistant, request.body?.from);
@@ -91,37 +69,10 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
     return { ok: true };
   });
 
-  app.get('/api/assistant/settings', async () => ({
-    mainSessionId: assistant.mainSessionId ?? null,
-    quietHours: assistant.getQuietHours(),
-    silentEmoji: assistant.getSilentEmoji()
-  }));
-
-  app.put<{ Body: { quietHours?: Partial<QuietHours>; silentEmoji?: string | null; from?: string } }>('/api/assistant/settings', async request => {
-    assertSettingsCaller(assistant, request.body?.from);
-    const body = request.body ?? {};
-    const hasQuietHours = body.quietHours !== undefined;
-    const hasSilentEmoji = Object.hasOwn(body, 'silentEmoji');
-    if (!hasQuietHours && !hasSilentEmoji) throw bad('quietHours 或 silentEmoji 至少填一个');
-    const quietHours = hasQuietHours
-      ? assistant.setQuietHours({
-        enabled: body.quietHours?.enabled === true,
-        start: body.quietHours?.start ?? '23:00',
-        end: body.quietHours?.end ?? '08:00'
-      })
-      : assistant.getQuietHours();
-    const silentEmoji = hasSilentEmoji
-      ? assistant.setSilentEmoji(normalizeSilentEmoji(body.silentEmoji))
-      : assistant.getSilentEmoji();
-    return { quietHours, silentEmoji };
-  });
-
   app.get('/api/assistant/state', async () => ({
     mainSessionId: assistant.mainSessionId ?? null,
     mainSession: (await assistant.getMainSession()) ?? null,
     companion: (await assistant.getCompanion()) ?? null,
-    quietHours: assistant.getQuietHours(),
-    silentEmoji: assistant.getSilentEmoji(),
     tasks: assistant.listTasks(),
     watches: assistant.listWatches(),
     drafts: assistant.listDrafts(),
@@ -158,10 +109,16 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
     return body.plan === true ? { task: assistant.planTask(input) } : { task: await assistant.startTask(input) };
   });
 
-  app.post<{ Params: { id: string }; Body: { from?: string } }>('/api/assistant/tasks/:id/start', async request => {
+  app.post<{ Params: { id: string }; Body: { from?: string; agentId?: string; cwd?: string; model?: string; reasoningEffort?: string } }>('/api/assistant/tasks/:id/start', async request => {
     assertMain(assistant, request.body?.from);
     await assistant.lifecycle.assertNoSystemRound(request.body?.from, '让计划卡开工');
-    return { task: await assistant.startPlannedTask(request.params.id) };
+    const body = request.body ?? {};
+    return { task: await assistant.startPlannedTask(request.params.id, {
+      ...(body.agentId?.trim() ? { agentId: body.agentId.trim() } : {}),
+      ...(body.cwd?.trim() ? { cwd: body.cwd.trim() } : {}),
+      ...(body.model?.trim() ? { model: body.model.trim() } : {}),
+      ...(body.reasoningEffort?.trim() ? { reasoningEffort: body.reasoningEffort.trim() } : {})
+    }) };
   });
 
   app.post<{ Params: { id: string }; Body: { verdict?: string; checks?: TaskCheck[]; note?: string; from?: string } }>('/api/assistant/tasks/:id/review', async request => {

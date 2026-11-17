@@ -895,7 +895,7 @@ export function renderHandoffBriefing(pkg: HandoffPackage): string {
   if (pkg.recentTurns.length) {
     lines.push('', '【前任最近几轮对话（节选）】');
     for (const turn of pkg.recentTurns) {
-      lines.push(`- ${turn.origin === 'injected' ? '督办' : turn.origin === 'emoji' ? '静默轮次' : '用户'}：${turn.prompt}`);
+      lines.push(`- ${turn.origin === 'injected' ? '督办' : turn.origin === 'emoji' ? '表情触发轮次' : '用户'}：${turn.prompt}`);
       if (turn.reply) lines.push(`  ${p.name}：${turn.reply}`);
     }
   }

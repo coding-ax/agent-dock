@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { callDaemon, requireDaemon, sourceSessionId } from '../session-cli.js';
-import type { QuietHours, TaskCheck } from './types.js';
+import type { TaskCheck } from './types.js';
+import { resolveCwdArgument } from './cwd.js';
 
 export interface AssistantCliOptions { json?: boolean; from?: string }
 export interface TaskStartCliOptions extends AssistantCliOptions {
@@ -22,7 +23,6 @@ export interface WatchAddCliOptions extends AssistantCliOptions {
 }
 export interface NotifyCliOptions extends AssistantCliOptions { ask?: boolean; urgent?: boolean }
 export interface MainCliOptions extends AssistantCliOptions { agent?: string; cwd?: string; model?: string; reasoningEffort?: string; name?: string }
-export interface SettingsCliOptions extends AssistantCliOptions { enabled?: boolean; off?: boolean; start?: string; end?: string }
 export interface DraftCreateCliOptions extends AssistantCliOptions {
   channel?: string; target?: string; bodyFile?: string; task?: string;
   chat?: string; replyTo?: string; inThread?: boolean; at?: string[];
@@ -124,8 +124,16 @@ function parseCheck(value: string): TaskCheck {
 }
 
 export async function runTaskStart(taskId: string | undefined, options: TaskStartCliOptions): Promise<string> {
+  const cwd = options.cwd ? resolveCwdArgument(options.cwd) : undefined;
   if (taskId) {
-    const result = await callDaemon(daemon(), `/api/assistant/tasks/${encodeURIComponent(taskId)}/start`, 'POST', { ...fromFields(options.from) });
+    // 计划卡开工时也允许显式覆盖执行配置；不传则沿用登记时的值。
+    const result = await callDaemon(daemon(), `/api/assistant/tasks/${encodeURIComponent(taskId)}/start`, 'POST', {
+      ...(options.agent ? { agentId: options.agent } : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(options.model ? { model: options.model } : {}),
+      ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+      ...fromFields(options.from)
+    });
     return print(result, options.json);
   }
   const title = options.title?.trim();
@@ -137,7 +145,7 @@ export async function runTaskStart(taskId: string | undefined, options: TaskStar
     title, ...(notes ? { notes } : {}), doneWhen,
     ...(options.expectMinutes ? { expectMinutes: Number(options.expectMinutes) } : {}),
     ...(options.agent ? { agentId: options.agent } : {}),
-    ...(options.cwd ? { cwd: options.cwd } : {}),
+    ...(cwd ? { cwd } : {}),
     ...(options.model ? { model: options.model } : {}),
     ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     plan: options.plan === true,
@@ -266,18 +274,10 @@ export async function runMainClear(options: AssistantCliOptions): Promise<string
   return print(await callDaemon(daemon(), '/api/assistant/main', 'DELETE', { ...fromFields(options.from) }), options.json);
 }
 
-export async function runSettingsGet(options: AssistantCliOptions): Promise<string> {
-  return print(await callDaemon(daemon(), '/api/assistant/settings', 'GET'), options.json);
-}
-
-export async function runSettingsQuietHours(options: SettingsCliOptions): Promise<string> {
-  const current = await callDaemon<{ quietHours: QuietHours }>(daemon(), '/api/assistant/settings', 'GET');
-  const quiet: QuietHours = {
-    enabled: options.off === true ? false : options.enabled === true,
-    start: options.start ?? current.quietHours.start,
-    end: options.end ?? current.quietHours.end
-  };
-  return print(await callDaemon(daemon(), '/api/assistant/settings', 'PUT', { quietHours: quiet, ...fromFields(options.from) }), options.json);
+/** 旧版本把主会话归档后的补救：解除归档并重新拉起 driver。 */
+export async function runMainRestore(sessionId: string | undefined, options: AssistantCliOptions): Promise<string> {
+  const body = sessionId?.trim() ? { sessionId: sessionId.trim() } : {};
+  return print(await callDaemon(daemon(), '/api/assistant/main/restore', 'POST', body), options.json);
 }
 
 export async function runDraftCreate(options: DraftCreateCliOptions): Promise<string> {

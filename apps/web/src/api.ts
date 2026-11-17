@@ -96,7 +96,6 @@ export type AssistantDraft = {
   state: 'pending' | 'sent' | 'failed' | 'discarded'; idempotencyKey: string; attempts: number;
   lastError?: string; createdBy?: string; createdAt: string; sentAt?: string;
 };
-export type AssistantQuietHours = { enabled: boolean; start: string; end: string };
 /** 主会话在界面上的形象：认领回家的小猫。旧服务端没有这个字段。 */
 export type AssistantCompanion = { name: string; adoptedAt: string };
 export type AssistantReview = {
@@ -104,7 +103,7 @@ export type AssistantReview = {
   checks: Array<{ criterion: string; met: boolean; evidence?: string }>; note?: string; createdAt: string;
 };
 export type AssistantState = {
-  mainSessionId: string | null; mainSession: Session | null; companion?: AssistantCompanion | null; quietHours: AssistantQuietHours; silentEmoji: string;
+  mainSessionId: string | null; mainSession: Session | null; companion?: AssistantCompanion | null;
   tasks: AssistantTask[]; watches: AssistantWatch[]; drafts: AssistantDraft[];
   /** 小猫的一生（代数、阶段、交接提议、整理轮次）。旧服务端没有这个字段。 */
   lifecycle?: AssistantLifecycleLight | null;
@@ -395,7 +394,6 @@ export const api = {
   assistantRenameCompanion: (name: string) => json<{ companion: AssistantCompanion }>('/api/assistant/companion', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }),
   assistantTask: (id: string) => json<{ task: AssistantTask; reviews?: AssistantReview[] }>(`/api/assistant/tasks/${encodeURIComponent(id)}`, undefined, true),
   assistantClearMain: () => json<{ ok: boolean }>('/api/assistant/main', { method: 'DELETE' }),
-  assistantSaveSettings: (body: { quietHours?: AssistantQuietHours; silentEmoji?: string | null }) => json<{ quietHours: AssistantQuietHours; silentEmoji: string }>('/api/assistant/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   assistantStartTask: (body: { title: string; notes?: string; doneWhen: string[]; expectMinutes?: number; agentId?: string; cwd?: string; model?: string; plan?: boolean }) => json<{ task: AssistantTask }>('/api/assistant/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   assistantStartPlanned: (id: string) => json<{ task: AssistantTask }>(`/api/assistant/tasks/${encodeURIComponent(id)}/start`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
   assistantReviewTask: (id: string, body: { verdict: 'accepted' | 'rework' | 'needs_user' | 'cancelled'; checks?: Array<{ criterion: string; met: boolean; evidence?: string }>; note?: string }) => json<{ task: AssistantTask }>(`/api/assistant/tasks/${encodeURIComponent(id)}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
@@ -406,7 +404,7 @@ export const api = {
   assistantCreateDraft: (body: { channel: 'github_comment' | 'lark_reply'; target: string; body: string; taskId?: string }) => json<{ draft: AssistantDraft }>('/api/assistant/drafts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   assistantSendDraft: (id: string) => json<{ draft: AssistantDraft }>(`/api/assistant/drafts/${encodeURIComponent(id)}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
   assistantDiscardDraft: (id: string) => json<{ draft: AssistantDraft }>(`/api/assistant/drafts/${encodeURIComponent(id)}/discard`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
-  assistantNotify: (body: { text: string; ask?: boolean; urgent?: boolean }) => json<{ id: string; delayed: boolean; sent?: boolean }>('/api/assistant/notify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  assistantNotify: (body: { text: string; ask?: boolean; urgent?: boolean }) => json<{ id: string; sent?: boolean }>('/api/assistant/notify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   assistantLifecycle: () => json<AssistantLifecycle>('/api/assistant/lifecycle', undefined, true),
   assistantHandoff: (id: string) => json<{ handoff: HandoffView }>(`/api/assistant/handoff/${encodeURIComponent(id)}`),
   assistantProposeHandoff: (body: { reason?: string; name?: string } = {}) => json<{ handoff: HandoffView }>('/api/assistant/handoff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
@@ -419,6 +417,8 @@ export const api = {
   assistantNotesArchive: () => json<{ batches: ArchiveBatch[]; tasks: AssistantTask[] }>('/api/assistant/notes/archive', undefined, true),
   assistantArchiveNotes: (body: { taskIds?: string[]; closedBeforeHours?: number; reason?: string }) => json<{ batch: ArchiveBatch | null; archived: number }>('/api/assistant/notes/archive', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   assistantUnarchiveNotes: (body: { batchId?: string; taskIds?: string[] }) => json<{ restored: string[]; batch?: ArchiveBatch }>('/api/assistant/notes/unarchive', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  /** 旧版本误归档主会话后的恢复：解除归档并重新启动。 */
+  assistantRestoreMain: (sessionId?: string) => json<{ session: Session; restored: boolean }>('/api/assistant/main/restore', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sessionId ? { sessionId } : {}) }),
   // 登录接口不走 json()：密码错误是普通失败，不能触发全局「访问被拒」事件。
   authStatus: async (): Promise<{ passwordEnabled: boolean }> => {
     const response = await fetch('/api/auth/status');

@@ -8,6 +8,7 @@ import { verifyWebToken, webAccessCookieName } from './web-access.js';
 import { buildApp, RECORD_EVENT_LIMIT, TURN_EVENT_BYTE_LIMIT, TURN_EVENT_ROW_LIMIT } from './app.js';
 import { ShareLinkService } from './share-link.js';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
+import { RuntimeError } from '@agent-dock/agent-dock-shared';
 import { larkBotsConfigKey, larkCredentialsConfigKey } from './lark/config.js';
 
 const apps: any[] = [];
@@ -444,6 +445,27 @@ describe('HTTP API boundary', () => {
     expect((await app.inject({ method: 'POST', url: '/api/sessions/s1/archive' })).statusCode).toBe(200);
     expect((await app.inject({ method: 'PUT', url: '/api/sessions/s1/permission-mode', payload: { mode: 'ask' } })).statusCode).toBe(404);
     expect(runtime.start).toHaveBeenCalledWith({ agentId: 'mock', model: 'model-selected-in-web', reasoningEffort: 'high' }); expect(runtime.dispatch).toHaveBeenCalledWith('s1', 'hello', 'queue'); expect(runtime.setModel).toHaveBeenCalledWith('s1', 'model-b'); expect(runtime.setReasoningEffort).toHaveBeenCalledWith('s1', 'high'); expect(runtime.cancelQueued).toHaveBeenCalledWith('s1', 't1'); expect(runtime.updateQueued).toHaveBeenCalledWith('s1', 't1', 'edited'); expect(runtime.steerQueued).toHaveBeenCalledWith('s1', 't1'); expect(runtime.stop).toHaveBeenCalledOnce();
+  });
+
+  it('blocks archiving the active main session before touching Runtime, but leaves normal sessions alone', async () => {
+    const session = { id: 'ses_main', agentId: 'mock', state: 'idle', cwd: '/tmp', runId: 'r1', createdAt: '', updatedAt: '' };
+    const runtime: any = { archive: vi.fn(async () => ({ ...session, archivedAt: 'now' })) };
+    const assistant: any = {
+      assertSessionArchivable: vi.fn(async (id: string) => {
+        if (id === 'ses_main') throw new RuntimeError('MAIN_SESSION_NEEDS_HANDOFF', '先交接再归档', 409);
+      })
+    };
+    const app = await buildApp(runtime, { assistant }); apps.push(app);
+
+    const blocked = await app.inject({ method: 'POST', url: '/api/sessions/ses_main/archive' });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().error).toEqual({ code: 'MAIN_SESSION_NEEDS_HANDOFF', message: '先交接再归档' });
+    expect(runtime.archive).not.toHaveBeenCalled();
+
+    const allowed = await app.inject({ method: 'POST', url: '/api/sessions/ses_side/archive' });
+    expect(allowed.statusCode).toBe(200);
+    expect(assistant.assertSessionArchivable).toHaveBeenCalledWith('ses_side');
+    expect(runtime.archive).toHaveBeenCalledWith('ses_side');
   });
 
   it('passes clientMessageId through so replayed sends can be deduped', async () => {

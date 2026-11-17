@@ -2,6 +2,9 @@ import type { DockEvent, Task } from './api';
 import { busyStates } from './session-states';
 import { agentWarningPrefix, isAgentStreamErrorText, isCarriedOverToolCall, isTurnActivity, pickFinalAssistantEntry, stripAgentStreamErrorSuffix } from '@agent-dock/agent-dock-shared';
 
+/** 表情触发的轮次（飞书 reaction；也用于兼容历史静默触发记录）：没有用户气泡。 */
+export const EMOJI_TRIGGER_ORIGIN = 'emoji';
+
 export type TimelineEvent = DockEvent & { data: DockEvent['data'] & { role?: 'user' | 'assistant' } };
 /**
  * 刚提交、还没在服务端开始执行的消息。
@@ -186,7 +189,7 @@ export function timelineRowKey(event: TimelineEvent, rowKeys: ReadonlyMap<string
 const NO_HIDDEN_ORIGINS: ReadonlySet<string> = new Set();
 
 export function waitingQueuedTasks(tasks: Task[] | undefined, sessionBusy: boolean, optimisticMessages: OptimisticMessage[] = EMPTY_OPTIMISTIC, hiddenOrigins: ReadonlySet<string> = NO_HIDDEN_ORIGINS): QueuedTask[] {
-  // 静默轮次也走同一个 queue，但它不是用户可见的待发送消息：不能出现在「等待发送」面板里，
+  // 表情触发的轮次也走同一个 queue，但它不是用户可见的待发送消息：不能出现在「等待发送」面板里，
   // 否则完整 prompt 会暴露并可被编辑/取消。过滤要发生在判断队首之前，隐藏项仍占着队列位置。
   const list = (tasks ?? []).filter(task => !task.origin || !hiddenOrigins.has(task.origin));
   const live = optimisticMessages.filter(message => !message.settled);

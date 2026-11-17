@@ -45,6 +45,7 @@ export const ASSISTANT_SCHEMA = `
     created_at TEXT NOT NULL, sent_at TEXT
   );
   CREATE INDEX IF NOT EXISTS assistant_drafts_state ON assistant_drafts(state, created_at);
+  -- 静默时段已下线：历史 state='pending' 的通知行原样保留，不再读取或补发。
   CREATE TABLE IF NOT EXISTS assistant_notifications (
     id TEXT PRIMARY KEY, text TEXT NOT NULL, ask INTEGER NOT NULL DEFAULT 0,
     urgent INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL,
@@ -397,21 +398,11 @@ export class AssistantStore {
     });
   }
 
-  addNotification(text: string, ask: boolean, urgent: boolean, state: 'sent' | 'pending' | 'failed') {
+  addNotification(text: string, ask: boolean, urgent: boolean, state: 'sent' | 'failed') {
     const id = makeId('anotify');
     this.sqlite.prepare('INSERT INTO assistant_notifications (id, text, ask, urgent, state, created_at, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(id, text, ask ? 1 : 0, urgent ? 1 : 0, state, now(), state === 'sent' ? now() : null);
     return id;
-  }
-
-  listPendingNotifications(): Array<{ id: string; text: string; ask: boolean; urgent: boolean; createdAt: string }> {
-    return (this.sqlite.prepare("SELECT id, text, ask, urgent, created_at FROM assistant_notifications WHERE state = 'pending' ORDER BY created_at").all() as Array<{
-      id: string; text: string; ask: number; urgent: number; created_at: string;
-    }>).map(row => ({ id: row.id, text: row.text, ask: row.ask === 1, urgent: row.urgent === 1, createdAt: row.created_at }));
-  }
-
-  markNotificationSent(id: string) {
-    this.sqlite.prepare("UPDATE assistant_notifications SET state = 'sent', sent_at = ? WHERE id = ?").run(now(), id);
   }
 
   // ---- 归档区：已关闭便签折叠进批次，只读、可取出 ----

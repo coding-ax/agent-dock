@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { absoluteActivityTime, describeActivityTime, sessionActivityRow, sessionSourceLabel, sessionStatusLabel } from './session-details';
+import { absoluteActivityTime, describeActivityTime, sessionActivityRow, sessionSourceLabel, sessionStatusLabel, sessionTitleSourceLabel } from './session-details';
 
 // 用本地时间构造再转 ISO：断言里的小时数就成了本地钟点，不随跑测试的时区漂。
 const at = (y: number, mo: number, d: number, h = 0, mi = 0, s = 0) => new Date(y, mo - 1, d, h, mi, s).toISOString();
@@ -73,6 +73,15 @@ describe('sessionSourceLabel', () => {
   it('导入的外部会话与本地会话', () => {
     expect(sessionSourceLabel({ source: 'import' })).toBe('导入的外部会话');
     expect(sessionSourceLabel({})).toBe('本地');
+  });
+});
+
+describe('sessionTitleSourceLabel', () => {
+  it('只给用户改名和 Agent 起名标注，prompt 默认来源不占位', () => {
+    expect(sessionTitleSourceLabel({ titleSource: 'user' })).toBe('你起的名字');
+    expect(sessionTitleSourceLabel({ titleSource: 'agent' })).toBe('Agent 起的名字');
+    expect(sessionTitleSourceLabel({ titleSource: 'prompt' })).toBeUndefined();
+    expect(sessionTitleSourceLabel({})).toBeUndefined();
   });
 });
 

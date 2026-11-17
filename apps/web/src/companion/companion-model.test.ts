@@ -132,6 +132,8 @@ describe('mood and status', () => {
     expect(companionStatus({ mainState: 'idle', counts: countNotes([task({ id: 'n', state: 'needs_user' })]), mood: 'alert' })).toBe('1 件事等你拍板');
     expect(companionStatus({ mainState: 'idle', counts: countNotes([task({ id: 'p', state: 'review', plan: true })]), mood: 'idle' })).toBe('1 张计划等你点头');
     expect(companionStatus({ mainState: 'idle', counts: countNotes([]), mood: 'sleepy' })).toBe('打盹中');
+    // 旧版本误归档主会话：不能再显示成普通打盹，要明说需要恢复。
+    expect(companionStatus({ mainState: 'stopped', archived: true, counts: countNotes([task({ id: 'r' })]), mood: 'sleepy' })).toBe('被归档了，需要恢复');
     expect(companionStatus({ counts: countNotes([]), mood: 'curious' })).toBe('等你来认领');
     // 刚认领、刚改名的开心不是验收通过。
     expect(companionStatus({ mainState: 'idle', counts: countNotes([]), mood: 'happy', recent: 'cheer' })).toBe('开心地摇尾巴');

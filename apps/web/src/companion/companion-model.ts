@@ -176,9 +176,11 @@ export function deriveMood(input: MoodInput): KittenMood {
   return 'idle';
 }
 
-export function companionStatus(input: { mainState?: string; counts: NoteCounts; mood: KittenMood; recent?: RecentKind }): string {
-  const { mainState, counts, mood, recent } = input;
+export function companionStatus(input: { mainState?: string; archived?: boolean; counts: NoteCounts; mood: KittenMood; recent?: RecentKind }): string {
+  const { mainState, archived, counts, mood, recent } = input;
   if (!mainState) return '等你来认领';
+  // 旧版本允许直接归档主会话：这里必须先说清楚主会话已冻结，否则只显示「打盹中」会误导。
+  if (archived) return '被归档了，需要恢复';
   if (mainState === 'starting') return '醒来中…';
   if (mainState === 'waiting_for_permission') return '在等你授权';
   if (counts.needsUser > 0) return `${counts.needsUser} 件事等你拍板`;

@@ -509,7 +509,12 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   for (const action of ['interrupt', 'pause', 'resume', 'stop', 'restart'] as const) {
     app.post<{ Params: { id: string } }>(`/api/sessions/:id/${action}`, async request => { const result = await runtime[action](request.params.id); return result ?? { ok: true }; });
   }
-  app.post<{ Params: { id: string } }>('/api/sessions/:id/archive', async request => runtime.archive(request.params.id));
+  // 当前主会话不允许直接归档：只打 archivedAt 会让主会话指针停在只读会话上，
+  // 之后既不能对话也不能交接。判定在 AssistantService，前端另有引导提示。
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/archive', async request => {
+    await options.assistant?.assertSessionArchivable(request.params.id);
+    return runtime.archive(request.params.id);
+  });
   app.post<{ Params: { id: string; permissionId: string }; Body: { approved: boolean } }>('/api/sessions/:id/permissions/:permissionId', async request => runtime.resolvePermission(request.params.id, request.params.permissionId, request.body.approved));
   app.get<{ Params: { id: string }; Querystring: { after?: string; before?: string; compact?: string; limit?: string } }>('/api/sessions/:id/events', async (request, reply) => {
     if (request.query.limit !== undefined) {

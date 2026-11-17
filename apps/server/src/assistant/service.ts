@@ -6,11 +6,12 @@ import { now, RuntimeError, type RepositoryBundle, type Session, type SessionInt
 import { resolveLoginShell } from '../terminal-manager.js';
 import { AssistantStore } from './store.js';
 import { AssistantLifecycle } from './lifecycle-service.js';
-import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER } from './lifecycle.js';
+import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER, isHandoffExecuting } from './lifecycle.js';
 import { LarkAvatarResolutionError, larkAvatarResolutionHttpStatus } from '../lark-avatar/id-resolution.js';
+import { validateCwd } from './cwd.js';
 import type {
   AssistantSignal, AssistantSignalKind, AssistantTask, CompanionProfile, DraftRecord,
-  NotifyInput, QuietHours, TaskCheck, TaskReviewRecord, WatchRecord
+  NotifyInput, TaskCheck, TaskReviewRecord, WatchRecord
 } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -20,14 +21,11 @@ const defaultPostGithubComment = async (input: { owner: string; repo: string; nu
   ], { timeout: 30_000 });
 };
 const MAIN_SESSION_KEY = 'assistant.main';
-const QUIET_HOURS_KEY = 'assistant.quietHours';
-const SILENT_EMOJI_KEY = 'assistant.silentEmoji';
 const COMPANION_KEY = 'assistant.companion';
 /** 没起名就认领（CLI `main set`、旧版本建的主会话）时的默认名字。 */
 export const DEFAULT_COMPANION_NAME = '小A同学';
 const MAX_COMPANION_NAME = 16;
 const SNAPSHOT_HASH_KEY = 'assistant.snapshot.hashes';
-const DEFAULT_QUIET_HOURS: QuietHours = { enabled: false, start: '23:00', end: '08:00' };
 const SIGNAL_THROTTLE_MS: Record<AssistantSignalKind, number> = {
   review: 10 * 60_000,
   needs_you: 2 * 60_000,
@@ -159,8 +157,21 @@ export class AssistantService {
 
   async initialize() {
     this.mainSessionIdValue = (await this.repos.config.get(MAIN_SESSION_KEY))?.trim() || undefined;
+    this.warnLegacySettings();
     await this.refreshMainSystemPrompt();
     await this.lifecycle.initialize();
+  }
+
+  /**
+   * 静默时段/静默触发表情已下线。旧库里的设置行保留原样，启动时只提示一次，
+   * 不参与解析，也不能因为旧字段让 daemon 起不来。
+   */
+  private warnLegacySettings() {
+    const legacy = ['assistant.quietHours', 'assistant.silentEmoji', 'assistant.silentTriggerEmoji']
+      .filter(key => this.store.getSetting(key) !== undefined);
+    if (legacy.length) {
+      this.log.warn(`检测到已下线的设置 ${legacy.join('、')}，已忽略；旧值保留但不再生效。`);
+    }
   }
 
   /**
@@ -206,6 +217,69 @@ export class AssistantService {
   }
 
   async listSessions() { return this.repos.sessions.list(); }
+
+  /**
+   * 归档前的硬拦。当前主会话在岗时不能直接归档：归档只会停掉 driver 并写 archivedAt，
+   * 不会清掉主会话指针，之后既不能继续对话，也不能发起交接（交接会拒绝已归档的前任）。
+   * 已退休/已解除的主会话、以及普通会话照常允许。
+   */
+  async assertSessionArchivable(sessionId: string) {
+    if (sessionId !== this.mainSessionIdValue) return;
+    const session = await this.repos.sessions.get(sessionId);
+    // 已经归档过的再点一次是幂等 no-op，不报错。
+    if (!session || session.archivedAt) return;
+    const cat = this.store.findCatBySession(sessionId, ['active', 'retired', 'released', 'aborted']);
+    if (cat && cat.state !== 'active') return;
+    throw new RuntimeError(
+      'MAIN_SESSION_NEEDS_HANDOFF',
+      '这是当前主会话，不能直接归档：归档后无法继续对话，也无法再发起交接。请先点「退休并交接」，交接完成后旧主会话会自动归档；如果只是想停下，可以在设置里「让它休息」。',
+      409
+    );
+  }
+
+  /**
+   * 历史修复：旧版本允许直接归档主会话，结果主会话指针还指着只读会话，页面只剩
+   * 「已永久归档」而没有任何恢复入口。这里解除当前主会话的归档并重新拉起 driver；
+   * 只允许恢复当前主会话，已接班的前任保持只读，避免把血缘弄乱。
+   */
+  async restoreMainSession(sessionId?: string) {
+    const target = sessionId?.trim() || this.mainSessionIdValue;
+    if (!target) throw new RuntimeError('NO_MAIN_SESSION', '还没有指定主会话，没有可恢复的会话', 400);
+    if (target !== this.mainSessionIdValue) {
+      throw new RuntimeError('MAIN_SESSION_RESTORE_UNAVAILABLE', '只有当前主会话可以恢复；已经交接退休的前任保持只读。', 409);
+    }
+    this.lifecycle.assertIdle();
+    const open = this.store.openHandoff();
+    if (open && open.fromSessionId === target && isHandoffExecuting(open.state)) {
+      throw new RuntimeError('HANDOFF_IN_PROGRESS', '这个主会话正在执行交接，等它结束再恢复', 409);
+    }
+    const session = await this.repos.sessions.get(target);
+    if (!session) throw new RuntimeError('SESSION_NOT_FOUND', `会话不存在：${target}`, 404);
+
+    let changed = false;
+    if (session.archivedAt) {
+      // 存库走整行 upsert，undefined 会被 drizzle 当作「不更新这一列」，必须显式写 null 才能清掉。
+      (session as unknown as { archivedAt?: string | null }).archivedAt = null;
+      session.state = 'stopped';
+      session.updatedAt = now();
+      await this.repos.sessions.save(session);
+      changed = true;
+    }
+    // 归档时 stop 已经把 driver 收掉了；只清标记的话输入框仍不可用，所以要真正重启。
+    if (session.state === 'stopped' || session.state === 'failed') {
+      try {
+        await this.runtime.restart(target);
+      } catch (error) {
+        // 已解除归档但启动失败：保留可重试状态，不再把它重新锁成归档。
+        throw new RuntimeError('MAIN_SESSION_RESTORE_FAILED', `已解除归档，但主会话没能重新启动：${error instanceof Error ? error.message : String(error)}。修好 Agent 后可再点一次恢复。`, 503);
+      }
+      changed = true;
+    }
+    this.snapshotFull = true;
+    await this.refreshMainSystemPrompt();
+    await this.lifecycle.ensureCat();
+    return { session: (await this.repos.sessions.get(target)) ?? session, restored: changed };
+  }
 
   /**
    * `lineage: false` 只给交接仪式用：仪式自己写血缘（新猫 generation+1），
@@ -283,40 +357,6 @@ export class AssistantService {
     await this.nameSession(mainId, normalized);
     this.lifecycle.renameActiveCat(normalized);
     return profile;
-  }
-
-  getQuietHours(): QuietHours {
-    const raw = this.store.getSetting(QUIET_HOURS_KEY);
-    if (!raw) return { ...DEFAULT_QUIET_HOURS };
-    try {
-      const parsed = JSON.parse(raw) as Partial<QuietHours>;
-      return {
-        enabled: parsed.enabled === true,
-        start: typeof parsed.start === 'string' ? parsed.start : DEFAULT_QUIET_HOURS.start,
-        end: typeof parsed.end === 'string' ? parsed.end : DEFAULT_QUIET_HOURS.end
-      };
-    } catch { return { ...DEFAULT_QUIET_HOURS }; }
-  }
-
-  setQuietHours(input: QuietHours) {
-    const normalized: QuietHours = {
-      enabled: input.enabled === true,
-      start: normalizeClock(input.start, DEFAULT_QUIET_HOURS.start),
-      end: normalizeClock(input.end, DEFAULT_QUIET_HOURS.end)
-    };
-    this.store.setSetting(QUIET_HOURS_KEY, JSON.stringify(normalized));
-    return normalized;
-  }
-
-  /** 静默触发表情；空串表示关闭。只存一个已规范化的 emoji，校验在 HTTP 入口完成。 */
-  getSilentEmoji(): string {
-    return (this.store.getSetting(SILENT_EMOJI_KEY) ?? '').trim();
-  }
-
-  setSilentEmoji(value: string): string {
-    const normalized = value.trim();
-    this.store.setSetting(SILENT_EMOJI_KEY, normalized);
-    return normalized;
   }
 
   /**
@@ -498,7 +538,6 @@ export class AssistantService {
       }
     }
     await this.scanWatches();
-    await this.flushPendingNotifications();
     // 自动检测：到整理档开整理轮次，到交接档提议交接；同一档只处理一次。
     await this.lifecycle.scan().catch(error => this.log.warn(`生命周期扫描失败：${error instanceof Error ? error.message : String(error)}`));
   }
@@ -514,9 +553,12 @@ export class AssistantService {
   async startTask(input: StartTaskInput): Promise<AssistantTask> {
     const mainId = this.requireMain();
     const main = await this.repos.sessions.get(mainId);
+    // 显式 --cwd 只在这里校验一次：不存在/不是目录/不可读直接 400，
+    // 不要先建一个 running 事项再让 Agent 在错误目录里失败。
+    const explicitCwd = validateCwd(input.cwd);
     // 默认完整继承主会话的配置（Agent / 模型 / 思考深度 / 工作目录）；
     // 主会话可以为每个任务单独覆盖成任意值，包括别的 Agent 和别的工作区。
-    const { agentId, cwd, model, reasoningEffort } = this.resolveTaskConfig(main, input);
+    const { agentId, cwd, model, reasoningEffort } = this.resolveTaskConfig(main, { ...input, cwd: explicitCwd });
     const session = await this.runtime.start({
       agentId,
       ...(cwd ? { cwd } : {}),
@@ -550,6 +592,7 @@ export class AssistantService {
 
   planTask(input: PlanTaskInput): AssistantTask {
     this.requireMain();
+    const cwd = validateCwd(input.cwd);
     return this.store.createTask({
       title: input.title,
       ...(input.notes ? { notes: input.notes } : {}),
@@ -557,21 +600,31 @@ export class AssistantService {
       ...(input.expectMinutes === undefined ? {} : { expectMinutes: input.expectMinutes }),
       state: 'review',
       ...(input.agentId ? { agentId: input.agentId } : {}),
-      ...(input.cwd ? { cwd: input.cwd } : {}),
+      ...(cwd ? { cwd } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       plan: true
     });
   }
 
-  async startPlannedTask(id: string): Promise<AssistantTask> {
+  async startPlannedTask(
+    id: string,
+    overrides: { agentId?: string; cwd?: string; model?: string; reasoningEffort?: string } = {}
+  ): Promise<AssistantTask> {
     const task = this.store.getTask(id);
     if (!task) throw new Error(`事项不存在：${id}`);
     if (!task.plan) throw new Error('这个事项不是计划卡');
     if (task.state === 'closed') throw new Error('事项已关闭');
     const mainId = this.requireMain();
     const main = await this.repos.sessions.get(mainId);
-    const { agentId, cwd, model, reasoningEffort } = this.resolveTaskConfig(main, task);
+    // 计划卡里的目录也可能在建卡后消失；开工前再校验一次。显式覆盖优先。
+    const explicitCwd = validateCwd(overrides.cwd ?? task.cwd);
+    const { agentId, cwd, model, reasoningEffort } = this.resolveTaskConfig(main, {
+      agentId: overrides.agentId ?? task.agentId,
+      cwd: explicitCwd,
+      model: overrides.model ?? task.model,
+      reasoningEffort: overrides.reasoningEffort ?? task.reasoningEffort
+    });
     const session = await this.runtime.start({
       agentId,
       ...(cwd ? { cwd } : {}),
@@ -673,7 +726,7 @@ export class AssistantService {
     let session = task.sessionId ? await this.repos.sessions.get(task.sessionId) : undefined;
     if (!session || session.archivedAt) {
       const main = await this.repos.sessions.get(mainId);
-      const { agentId, cwd, model, reasoningEffort } = this.resolveTaskConfig(main, task);
+      const { agentId, cwd, model, reasoningEffort } = this.resolveTaskConfig(main, { ...task, cwd: validateCwd(task.cwd) });
       session = await this.runtime.start({
         agentId,
         ...(cwd ? { cwd } : {}),
@@ -918,14 +971,9 @@ export class AssistantService {
   async notify(input: NotifyInput) {
     const text = input.text.trim();
     if (!text) throw new Error('通知内容不能为空');
-    const quiet = this.getQuietHours();
-    if (quiet.enabled && !input.urgent && isInQuietHours(quiet)) {
-      const id = this.store.addNotification(text, input.ask === true, false, 'pending');
-      return { id, delayed: true, quietHours: quiet };
-    }
     const sent = await this.sendNotification(text, input.ask === true);
     const id = this.store.addNotification(text, input.ask === true, input.urgent === true, sent ? 'sent' : 'failed');
-    return { id, delayed: false, sent };
+    return { id, sent };
   }
 
   private async sendNotification(text: string, ask: boolean): Promise<boolean> {
@@ -934,15 +982,6 @@ export class AssistantService {
     catch (error) {
       this.log.warn(`通知推送失败：${error instanceof Error ? error.message : String(error)}`);
       return false;
-    }
-  }
-
-  private async flushPendingNotifications() {
-    const quiet = this.getQuietHours();
-    if (quiet.enabled && isInQuietHours(quiet)) return;
-    for (const pending of this.store.listPendingNotifications()) {
-      const sent = await this.sendNotification(pending.text, pending.ask);
-      if (sent) this.store.markNotificationSent(pending.id);
     }
   }
 
@@ -986,7 +1025,7 @@ export function buildMainSystemPrompt(): string {
     '- 取消：`agent-dock task cancel <任务ID> --reason "..."`；只在事项确实不该继续时用。',
     '- 侧边会话：`agent-dock session show <会话ID>` 读实际输出；`agent-dock session send <会话ID> "补充要求" --mode queue` 追加要求，紧急时 `--mode interrupt`。',
     '- 监控：`agent-dock watch add --name "CI 绿了" --command "..." --every 5m`；脚本 exit 0 表示条件满足，适合等外部状态，不适合代替一次性排查。',
-    '- 通知：`agent-dock notify "..." --ask` 让用户拍板；紧急且需要绕过免打扰时加 `--urgent`。',
+    '- 通知：`agent-dock notify "..." --ask` 让用户拍板；紧急通知加 `--urgent`（系统轮次里也放行）。',
     '- 草稿：`agent-dock draft create --channel github_comment|lark_reply --target "..." --body-file <文件>` 先写草稿，用户确认后用 `agent-dock draft send <草稿ID>` 发送。',
     '- 状态：`agent-dock status --json` 只用于回答 daemon 是否在运行；不要把它当作任务进度查询或派活前的调研。',
     '- 以上参数不确定时用 `agent-dock task|session|watch|notify|draft|status -h` 查，不要猜。',
@@ -1145,29 +1184,6 @@ export function normalizeCompanionName(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = [...value.replace(/\s+/g, ' ').trim()].slice(0, MAX_COMPANION_NAME).join('').trim();
   return normalized || undefined;
-}
-
-function normalizeClock(value: string, fallback: string): string {
-  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return fallback;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return fallback;
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-}
-
-function isInQuietHours(quiet: QuietHours): boolean {
-  const current = new Date();
-  const minutes = current.getHours() * 60 + current.getMinutes();
-  const start = clockMinutes(quiet.start);
-  const end = clockMinutes(quiet.end);
-  if (start === end) return false;
-  return start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
-}
-
-function clockMinutes(value: string): number {
-  const [hour, minute] = value.split(':').map(Number);
-  return (hour ?? 0) * 60 + (minute ?? 0);
 }
 
 function stallMinutes(expectMinutes?: number): number {

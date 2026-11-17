@@ -121,7 +121,7 @@ export function useCompanion(): CompanionInfo {
       counts,
       pendingDrafts: (drafts ?? []).filter(draft => draft.state === 'pending').length,
       mood,
-      status: lifecycle?.maintenance && !isMainBusy(mainState) ? '在收拾便签和记忆' : companionStatus({ mainState, counts, mood, ...(recent ? { recent: recent.kind } : {}) }),
+      status: lifecycle?.maintenance && !isMainBusy(mainState) ? '在收拾便签和记忆' : companionStatus({ mainState, archived: Boolean(mainSession?.archivedAt), counts, mood, ...(recent ? { recent: recent.kind } : {}) }),
       busy: isMainBusy(mainState),
       archivedTasks,
       ...(lifecycle ? { lifecycle } : {}),

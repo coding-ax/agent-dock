@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { buildPrompt, commandsFromEvents, contextStatsFromEvents, filterAgentModels, getModelReadiness, isHomeDirectory, parsePromptToDraft, queuedImageThumbnailUrl, replaceSlashQuery, shouldDismissComposerPanel, slashQuery, workspaceBasename, workspaceLabel } from './composer-utils';
+import { buildPrompt, commandsFromEvents, composerSubmitValue, contextStatsFromEvents, filterAgentModels, getModelReadiness, isHomeDirectory, parsePromptToDraft, queuedImageThumbnailUrl, replaceSlashQuery, shouldDismissComposerPanel, slashQuery, workspaceBasename, workspaceLabel } from './composer-utils';
+
+describe('composer submit snapshot', () => {
+  it('prefers the live editor value over the debounced controlled state', () => {
+    // 打字后 200ms 内按 Enter：state 还停在上一拍，编辑器已经是完整内容。
+    expect(composerSubmitValue('第二条完整内容', '第一条')).toBe('第二条完整内容');
+    // 第一次发送后 state 已清空，第二次快速输入同样不能被旧 state 覆盖。
+    expect(composerSubmitValue('第二条', '')).toBe('第二条');
+  });
+
+  it('falls back to state only when the editor is not mounted yet', () => {
+    expect(composerSubmitValue(undefined, '草稿恢复内容')).toBe('草稿恢复内容');
+    expect(composerSubmitValue(null, '')).toBe('');
+    expect(composerSubmitValue('', '旧内容')).toBe('');
+  });
+});
 
 describe('composer references', () => {
   it('never emits a leading slash, which the CLI would read as a slash command', () => {

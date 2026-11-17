@@ -1,10 +1,10 @@
 import { ExitGate } from './ExitGate';
-import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Square, Archive, X, RefreshCw, ScrollText, MoreHorizontal } from 'lucide-react';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Square, Archive, X, RefreshCw, RotateCcw, ScrollText, MoreHorizontal } from 'lucide-react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type DockEvent, type Session, type Task } from './api';
-import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, groupTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, turnTimeBadge, waitingQueuedTasks, type OptimisticMessage, type TimelineEvent } from './timeline';
+import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, EMOJI_TRIGGER_ORIGIN, groupTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, turnTimeBadge, waitingQueuedTasks, type OptimisticMessage } from './timeline';
 import { ActivityPanel, TimelineItem } from './TimelineItems';
 import { TimelineTurn } from './SendTimeHint';
 import { Composer } from './Composer';
@@ -26,12 +26,12 @@ import { useDockStore, type PaneKind } from './store';
 import { createOptimisticMessageId } from './optimistic-message-id';
 import { createClientMessageId } from './client-message-id';
 import { useToast } from './Toast';
-import { CompanionHeader, CompanionHeaderNotes, CompanionWelcome, useMainSessionId } from './companion/CompanionHeader';
+import { CompanionHeader, CompanionHeaderNotes, CompanionWelcome, RetireButton, useMainSessionId } from './companion/CompanionHeader';
 import { useCompanion } from './companion/useCompanion';
 import { useCompanionStore } from './companion/companion-store';
-import { useSilentEmoji } from './SilentTrigger';
-import { buildSilentPrompt, claimSilentTrigger, releaseSilentTrigger, SILENT_TRIGGER_ORIGIN, type SilentTriggerTarget } from './silent-trigger';
 import { sessionPaneTab } from './pane-tab';
+import { clearSessionDraft, getBrowserDraftStorage, loadSessionDraft, MAX_DRAFT_CHARS, saveSessionDraft } from './session-drafts';
+import { useSessionDraftWriter } from './use-session-draft';
 
 /** 主会话输入框的占位：单独成组件，小猫改名时只重渲染这一小块，不拖着整条时间线。 */
 function CompanionPlaceholder() {
@@ -40,9 +40,9 @@ function CompanionPlaceholder() {
 }
 
 type SendMode = 'queue' | 'interrupt';
-/** 静默轮次不能出现在「等待发送」面板：它不是用户可编辑的消息。 */
+/** 表情触发的轮次不能出现在「等待发送」面板：它不是用户可编辑的消息。 */
 // 整理轮次和交接说明是系统轮次：排队时也不进「等待发送」，免得完整指令被当成用户消息编辑或取消。
-const HIDDEN_QUEUE_ORIGINS: ReadonlySet<string> = new Set([SILENT_TRIGGER_ORIGIN, 'maintenance', 'handoff']);
+const HIDDEN_QUEUE_ORIGINS: ReadonlySet<string> = new Set([EMOJI_TRIGGER_ORIGIN, 'maintenance', 'handoff']);
 
 /**
  * 会话标题栏的副屏开关。空副屏里直接展示可打开的面板类型。
@@ -110,14 +110,20 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const qc = useQueryClient();
   const { setSession, closeTab } = useDockStore();
   const secondary = pane === 'secondary';
-  const [prompt, setPrompt] = useState(''); const [composerReferences, setComposerReferences] = useState<ComposerReference[]>([]); const [sendMode, setSendMode] = useState<SendMode>('queue');
+  const [prompt, setPrompt] = useState(() => loadSessionDraft(getBrowserDraftStorage(), session.id)); const [composerReferences, setComposerReferences] = useState<ComposerReference[]>([]); const [sendMode, setSendMode] = useState<SendMode>('queue');
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
-  const [actionError, setActionError] = useState<string>(); const [archiveConfirm, setArchiveConfirm] = useState(false);
+  const [actionError, setActionError] = useState<string>(); const [archiveConfirm, setArchiveConfirm] = useState(false); const [mainArchiveBlocked, setMainArchiveBlocked] = useState(false);
   const composerTextarea = useRef<ComposerEditorHandle>(null);
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
+  // 发送/失败恢复都以编辑器当前文档为准：受控 prompt 比编辑器晚 200ms 才更新。
+  const readLiveDraft = () => composerTextarea.current?.getValue() ?? promptRef.current;
   // 这个面板是不是主会话（小猫）。只订阅主会话 id，不随便签轮询重渲染。
   const mainSessionId = useMainSessionId();
-  const silentEmoji = useSilentEmoji();
   const isMain = session.id === mainSessionId;
+  // 主会话被归档，或者恢复时 Agent 没起来留下 stopped/failed，都要能从这里重试；
+  // 否则归档标记清掉后横幅就消失，输入框却还是禁用，仍然是个死角。
+  const mainNeedsRestart = isMain && (Boolean(session.archivedAt) || session.state === 'stopped' || session.state === 'failed');
   // 便签上的「问问它」：把便签带进主会话输入框，接着聚焦。
   const mainDraft = useCompanionStore(store => (isMain && !secondary ? store.mainDraft : undefined));
   const injectedDraft = useDockStore(store => store.sessionDrafts[session.id]);
@@ -169,41 +175,6 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const timeline = useMemo(() => buildTimeline(events.data, tasks.data, optimisticMessages), [events.data, tasks.data, optimisticMessages]); const timelineSections = useMemo(() => buildTimelineSections(timeline, tasks.data), [timeline, tasks.data]);
   const timelineTurns = useMemo(() => groupTimelineSections(timelineSections), [timelineSections]);
   const rowKeys = useMemo(() => optimisticRowKeys(optimisticMessages), [optimisticMessages]);
-  // 静默触发回调必须保持同一性：把它依赖的快速变化值放进 ref，否则流式输出每帧都会让
-  // 整条时间线的 memo 失效。真正触发时才读当时的时间线和会话。
-  const silentContext = useRef({ timeline, session, mainSessionId, silentEmoji, agentName: agent?.name });
-  silentContext.current = { timeline, session, mainSessionId, silentEmoji, agentName: agent?.name };
-  const handleSilentTrigger = useCallback(async (event: TimelineEvent, target: SilentTriggerTarget): Promise<boolean> => {
-    const context = silentContext.current;
-    const emoji = context.silentEmoji;
-    const currentSession = context.session;
-    if (!emoji) return false;
-    if (!claimSilentTrigger({ sessionId: currentSession.id, event, emoji })) return false;
-    const prompt = buildSilentPrompt(context.timeline, event, emoji);
-    try {
-      setActionError(undefined);
-      if (target === 'tab') {
-        const created = await api.create({ agentId: currentSession.agentId, cwd: currentSession.cwd });
-        // 先写草稿再开标签：SessionPane 挂载时就能把上下文填进输入框并聚焦。
-        useDockStore.getState().setSessionDraft(created.id, prompt);
-        qc.setQueryData<Session[]>(['sessions'], current => [created, ...(current ?? []).filter(item => item.id !== created.id)]);
-        const owner = useDockStore.getState().primarySessionId ?? currentSession.id;
-        useDockStore.getState().openTab(sessionPaneTab(owner, created.id, sessionLabel(created, context.agentName)), owner);
-        return true;
-      }
-      const targetSessionId = target === 'main' ? context.mainSessionId : currentSession.id;
-      if (!targetSessionId) throw new Error('还没有主会话，无法发送');
-      const result = await api.send(targetSessionId, prompt, 'queue', SILENT_TRIGGER_ORIGIN);
-      qc.setQueryData<Task[]>(['tasks', targetSessionId], current => [...(current ?? []).filter(item => item.id !== result.task.id), result.task]);
-      void qc.invalidateQueries({ queryKey: ['sessions'] });
-      return true;
-    } catch (error) {
-      // 发送没被接受就不能占着幂等 key，否则用户重试同一消息 + 表情会被误判成重复。
-      releaseSilentTrigger({ sessionId: currentSession.id, event, emoji });
-      setActionError(error instanceof Error ? error.message : String(error));
-      return false;
-    }
-  }, [qc]);
   let latestUserIndex = -1;
   for (let index = timeline.length - 1; index >= 0; index--) if (timeline[index].type === 'text' && timeline[index].data.role === 'user') { latestUserIndex = index; break; }
   // 页面挂载时刻：时间戳早于它的行是「打开页面之前就存在的历史」，刷新时不重播。
@@ -231,6 +202,17 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       setSendMode('queue');
     },
     onSuccess: (result, variables) => {
+      const liveDraft = readLiveDraft();
+      const keptNewDraft = Boolean(liveDraft.trim()) && liveDraft !== variables.draft;
+      // 无论有没有新内容，都先让发送前的防抖写入失效；否则卸载/切会话的 flush
+      // 会把刚发出去的内容写回草稿。新内容再同步落盘一次，不依赖 400ms 防抖。
+      draftWriter.cancel();
+      if (keptNewDraft) {
+        saveSessionDraft(getBrowserDraftStorage(), session.id, liveDraft);
+        setPrompt(current => current === liveDraft ? current : liveDraft);
+      } else {
+        clearSessionDraft(getBrowserDraftStorage(), session.id);
+      }
       const existing = qc.getQueryData<Task[]>(['tasks', session.id])?.find(task => task.id === result.task.id);
       const task = existing && existing.status !== 'queued' ? existing : result.task;
       qc.setQueryData<Task[]>(['tasks', session.id], current => [...(current ?? []).filter(item => item.id !== task.id), task]);
@@ -245,12 +227,22 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     },
     onError: (error, variables) => {
       setOptimisticMessages(current => current.filter(item => item.id !== variables.optimisticId));
-      setPrompt(current => current || variables.draft);
-      setComposerReferences(current => current.length ? current : variables.references);
+      const liveDraft = readLiveDraft();
+      const keptNewDraft = Boolean(liveDraft.trim()) && liveDraft !== variables.draft;
+      if (keptNewDraft) {
+        // 等待期间用户已经打了新内容：保留它，不要把失败的那条盖回输入框。
+        setPrompt(liveDraft);
+      } else {
+        setPrompt(variables.draft);
+        setComposerReferences(current => current.length ? current : variables.references);
+      }
       setActionError(error.message);
     },
     onSettled: () => { sendInFlight.current = false; }
   });
+  // 乐观清屏写入的是空串，但请求还没成功，不能据此删掉已落盘的草稿；
+  // 成功/失败后 isPending 变化会再触发一次，成功清空、失败把草稿写回去。
+  const draftWriter = useSessionDraftWriter(session.id, prompt, { skipEmptyValue: send.isPending, enabled: !session.archivedAt });
   const cancelQueued = useMutation({ mutationFn: (taskId: string) => api.cancelQueued(session.id, taskId), onSuccess: result => qc.setQueryData<Task[]>(['tasks', session.id], current => current?.map(task => task.id === result.id ? result : task)), onError: error => setActionError(error.message) });
   const steerQueued = useMutation({ mutationFn: (taskId: string) => api.steerQueued(session.id, taskId), onSuccess: () => { setActionError(undefined); void qc.invalidateQueries({ queryKey: ['tasks', session.id] }); }, onError: error => setActionError(error.message) });
   const editQueued = useMutation({
@@ -274,6 +266,17 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     onError: error => setActionError(error.message)
   });
   const archive = useMutation({ mutationFn: () => api.archive(session.id), onSuccess: result => { qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === result.id ? result : item)); setArchiveConfirm(false); if (secondary) useDockStore.getState().tabs.filter(tab => tab.sessionId === session.id).forEach(tab => closeTab(tab.id)); else setSession(undefined); }, onError: error => setActionError(error.message) });
+  // 旧版本允许直接归档主会话；恢复入口必须能从主会话面板直接点到，不能只留在归档列表里。
+  const restoreMain = useMutation({
+    mutationFn: () => api.assistantRestoreMain(session.id),
+    onSuccess: result => {
+      setActionError(undefined);
+      qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === result.session.id ? result.session : item));
+      void qc.invalidateQueries({ queryKey: ['assistant-state'] });
+      void qc.invalidateQueries({ queryKey: ['assistant-lifecycle'] });
+    },
+    onError: error => setActionError(error.message)
+  });
   const refreshModels = useMutation({ mutationFn: ({ agentId, currentModel }: { agentId: string; currentModel?: string }) => loadAgentModels(agentId, currentModel, true, session.sshHost), onSuccess: (result, variables) => { setActionError(undefined); qc.setQueryData(agentModelsQueryKey(variables.agentId, variables.currentModel, session.sshHost), result); }, onError: error => setActionError(error.message) });
   const switchModel = useMutation({ mutationFn: (nextModel: string) => api.setSessionModel(session.id, nextModel), onSuccess: result => { setActionError(undefined); qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === result.id ? result : item)); void models.refetch(); }, onError: error => setActionError(error.message) });
   const switchReasoningEffort = useMutation({ mutationFn: (nextReasoningEffort: string) => api.setSessionReasoningEffort(session.id, nextReasoningEffort), onSuccess: result => { setActionError(undefined); qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === result.id ? result : item)); }, onError: error => setActionError(error.message) });
@@ -298,17 +301,23 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     }
   });
 
-  const submit = () => {
+  const submit = (submittedValue: string) => {
     if (modelReadiness.kind === 'blocked' || send.isPending || sendInFlight.current) return;
-    const message = buildPrompt(prompt, composerReferences, advertisedCommands.map(command => command.name));
+    // 唯一来源是点击/回车那一刻编辑器的文档快照，而不是可能还停在上一拍的 prompt。
+    const message = buildPrompt(submittedValue, composerReferences, advertisedCommands.map(command => command.name));
     if (!message) return;
     const mode = busyStates.has(session.state) ? sendMode : 'queue';
     // 落点在提交时就定：马上执行的进时间线并回到底部；要排队的只进「等待发送」面板，时间线不动。
     const placement = startsImmediately(session.state, mode, tasks.data) ? 'timeline' : 'queue';
     if (placement === 'timeline') timelineScroll.scrollToBottom();
+    // 直接清编辑器，不能只等 setPrompt('')：如果 200ms 防抖还没把刚输入的文本同步到
+    // state，prompt 本来就是空串，setPrompt('') 不产生新值，编辑器永远不会被清空；
+    // 随后迟到的 onChange 还会把已发送文本写回输入框和草稿。
+    composerTextarea.current?.setValue('');
+    setPrompt('');
     sendInFlight.current = true;
     // 每次提交一个 id；同一次提交被浏览器重放时请求体不变，服务端据此去重。
-    send.mutate({ message, mode, placement, draft: prompt, references: composerReferences, optimisticId: createOptimisticMessageId(), clientMessageId: createClientMessageId() });
+    send.mutate({ message, mode, placement, draft: submittedValue, references: composerReferences, optimisticId: createOptimisticMessageId(), clientMessageId: createClientMessageId() });
   };
   // 飞书来源会话：sourceId 里带 chatId，可以生成 applink 直接跳回该群/私聊。
   // 话题会话没有官方 thread 级直达链接，退化为「进群」，用 exact 标记给个提示。
@@ -354,7 +363,13 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       ...(!handoverInfo && larkLink ? [{ id: 'lark-open', label: larkLink.exact ? '在飞书中打开' : '在飞书中打开该话题', icon: <ExternalLink size={16}/>, onSelect: () => window.open(larkLink.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem] : []),
       ...(!session.archivedAt && session.source === 'import' ? [{ id: 'sync', label: syncExternal.isPending ? `正在从 ${externalName} 同步…` : `从 ${externalName} 同步新消息`, icon: <RefreshCw size={16}/>, disabled: syncExternal.isPending || busyStates.has(session.state), onSelect: () => syncExternal.mutate() } satisfies SessionMenuItem] : [])
     ] },
-    ...(!session.archivedAt ? [{ items: [{ id: 'archive', label: '归档会话', icon: <Archive size={16}/>, danger: true, disabled: archive.isPending, onSelect: () => { archive.reset(); setArchiveConfirm(true); } } satisfies SessionMenuItem] }] : [])
+    ...(!session.archivedAt ? [{ items: [{
+      id: 'archive',
+      // 主会话在岗时后端会硬拦；这里先把文案改掉，点开给解释和直达交接的入口。
+      label: isMain ? '归档会话（主会话需先交接）' : '归档会话',
+      icon: <Archive size={16}/>, danger: !isMain, disabled: archive.isPending,
+      onSelect: () => { archive.reset(); if (isMain) setMainArchiveBlocked(true); else setArchiveConfirm(true); }
+    } satisfies SessionMenuItem] }] : [])
   ];
 
   // h-full w-full：本组件既被当作并排的 flex 子项（主区），也被塞进 PaneHost 的
@@ -377,14 +392,18 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
           </div>
         </div>}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          {isMain && <RetireButton/>}
           {isMain && <CompanionHeaderNotes/>}
           {!session.archivedAt && busyStates.has(session.state) && <button type="button" onClick={() => void act('interrupt')} className="mr-1 flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[12px] font-medium text-white transition-colors hover:bg-zinc-700"><Square size={10} fill="currentColor"/>停止</button>}
-          {!session.archivedAt && <IconButton label={activeSchedules ? `定时任务（${activeSchedules} 个启用中）` : '定时任务'} active={activeSchedules > 0} onClick={() => openAppDialog('schedule', { sessionId: session.id })}><AlarmClock size={15}/></IconButton>}
-          {session.systemPrompt && <IconButton label="查看系统提示词" onClick={() => openAppDialog('system-prompt', { sessionId: session.id })}><BookOpen size={15}/></IconButton>}
-          {handoverInfo
-            ? <IconButton label={`已托管：${handoverInfo.name}（打开托管群）`} onClick={() => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer')}><Bot size={15} className="text-emerald-600"/></IconButton>
-            : !session.archivedAt && session.source !== 'lark' && <IconButton label="托管给飞书机器人" onClick={() => openAppDialog('handover', { sessionId: session.id })}><Bot size={15}/></IconButton>}
-          {!handoverInfo && larkLink && <IconButton label={larkLink.exact ? '在飞书中打开该会话' : '在飞书中打开该话题（若未定位请在群内查找）'} onClick={() => window.open(larkLink.url, '_blank', 'noopener,noreferrer')}><ExternalLink size={15}/></IconButton>}
+          {/* 手机上这些操作都收进 ⋯ 菜单，给标题和退休入口留出空间。 */}
+          {!session.archivedAt && <span className="max-sm:hidden"><IconButton label={activeSchedules ? `定时任务（${activeSchedules} 个启用中）` : '定时任务'} active={activeSchedules > 0} onClick={() => openAppDialog('schedule', { sessionId: session.id })}><AlarmClock size={15}/></IconButton></span>}
+          {session.systemPrompt && <span className="max-sm:hidden"><IconButton label="查看系统提示词" onClick={() => openAppDialog('system-prompt', { sessionId: session.id })}><BookOpen size={15}/></IconButton></span>}
+          <span className="max-sm:hidden">
+            {handoverInfo
+              ? <IconButton label={`已托管：${handoverInfo.name}（打开托管群）`} onClick={() => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer')}><Bot size={15} className="text-emerald-600"/></IconButton>
+              : !session.archivedAt && session.source !== 'lark' && <IconButton label="托管给飞书机器人" onClick={() => openAppDialog('handover', { sessionId: session.id })}><Bot size={15}/></IconButton>}
+          </span>
+          {!handoverInfo && larkLink && <span className="max-sm:hidden"><IconButton label={larkLink.exact ? '在飞书中打开该会话' : '在飞书中打开该话题（若未定位请在群内查找）'} onClick={() => window.open(larkLink.url, '_blank', 'noopener,noreferrer')}><ExternalLink size={15}/></IconButton></span>}
           {!secondary && onTogglePane && <PaneToggleButton open={Boolean(paneOpen)} onToggle={onTogglePane}/>}
           <SessionMenu groups={menuGroups.filter(group => group.items.length)}/>
         </div>
@@ -397,18 +416,32 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
           const time = turnTimeBadge(turn);
           return <TimelineTurn key={turn.turnId} turnId={turn.turnId} time={time}>
             {turn.sections.map(section => section.kind === 'event'
-              ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id} silentEmoji={silentEmoji} hasMainSession={Boolean(mainSessionId)} onSilentTrigger={handleSilentTrigger}/>
+              ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/>
               : <ActivityPanel key={section.id} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}
           </TimelineTurn>;
         })}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
         </div></div>{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}</div>
-      {session.archivedAt ? <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已永久归档，仅支持查看。</div> : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
+      {!session.archivedAt && prompt.length > MAX_DRAFT_CHARS && <div role="status" className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-center text-[12px] text-amber-700">草稿超过 {MAX_DRAFT_CHARS.toLocaleString()} 字符，超出部分不会保存，刷新后会丢失。</div>}
+      {session.archivedAt || mainNeedsRestart
+        ? mainNeedsRestart
+          ? <div className="flex flex-wrap items-center justify-center gap-2 border-t border-amber-200 bg-amber-50/80 px-4 py-3 text-center text-xs text-amber-800">
+            <span>{session.archivedAt ? '当前主会话被归档了：现在既不能继续对话，也不能发起交接。' : '主会话已停止，输入框不可用；重新启动后可以继续对话。'}</span>
+            <button type="button" disabled={restoreMain.isPending} onClick={() => restoreMain.mutate()} className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-300 bg-white px-2.5 text-[12px] font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50">
+              <RotateCcw size={12} className={restoreMain.isPending ? 'animate-spin' : ''}/>{restoreMain.isPending ? '正在恢复…' : session.archivedAt ? '恢复主会话' : '重新启动'}
+            </button>
+          </div>
+          : <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已归档，仅支持查看。</div>
+        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>
       </div>
     </section>
 
     {syncToast.toast}
     <ConfirmDialog open={archiveConfirm} tone="danger" title="归档此会话？" description="归档后会话将变为只读且无法恢复。历史消息和执行记录会保留在归档列表中。" confirmLabel="确认归档" busy={archive.isPending} error={archive.error?.message} onCancel={() => { if (!archive.isPending) setArchiveConfirm(false); }} onConfirm={() => archive.mutate()}/>
+    <ConfirmDialog open={mainArchiveBlocked} tone="warning" title="主会话不能直接归档" description="主会话还在岗，归档后会停掉对话，也不能再发起交接。请先「退休并交接」：交接完成后旧主会话会自动归档，新主会话会收到完整交接包。如果只是想暂时停下，可以在设置里「让它休息」。"
+      confirmLabel="去交接 / 退休"
+      onCancel={() => setMainArchiveBlocked(false)}
+      onConfirm={() => { setMainArchiveBlocked(false); useCompanionStore.getState().openCeremony(); }}/>
   </div>;
   // 会话数据更新（流式消息、任务轮询）会带着新的 props 渲染本组件。不在这里兜住的话，
   // 长会话会把整条时间线上千个节点全部重新 diff 一遍。弹窗开关已移到 dialog-store，

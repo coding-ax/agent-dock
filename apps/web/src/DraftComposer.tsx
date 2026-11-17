@@ -9,6 +9,8 @@ import type { ComposerEditorHandle } from './ComposerEditor';
 import { buildPrompt, getModelReadiness, referenceFromUpload, uploadSessionFile, type ComposerReference } from './composer-utils';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { createClientMessageId } from './client-message-id';
+import { clearSessionDraft, getBrowserDraftStorage, MAX_DRAFT_CHARS, saveSessionDraft } from './session-drafts';
+import { useSessionDraftWriter } from './use-session-draft';
 
 /**
  * 空态草稿 Composer：还不存在 Session 时，把输入框、Agent、工作目录、模型、思考强度和
@@ -41,6 +43,10 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   const stashed = useRef(new Map<string, File>());
   const objectUrls = useRef(new Set<string>());
   const seq = useRef(0);
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
+  const readLiveDraft = () => editorRef?.current?.getValue() ?? promptRef.current;
+  const draftWriter = useSessionDraftWriter(companion?.sessionId, prompt, { skipEmptyValue: creating });
 
   // agents 异步到达：agentId 初值可能为空或已失效，渲染期兜底到最近使用过的 Agent，
   // 再退到列表第一个。与 App 的 effectiveAgentId 同思路，避免多渲染一帧非法值。
@@ -110,8 +116,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     requestAnimationFrame(() => editorRef?.current?.focus());
   };
 
-  const sendToCompanion = (target: NonNullable<typeof companion>) => {
-    const draftPrompt = prompt;
+  const sendToCompanion = (target: NonNullable<typeof companion>, draftPrompt: string) => {
     const draftReferences = references;
     const clientMessageId = createClientMessageId();
     setCreating(true);
@@ -127,7 +132,20 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
         if (message) await api.send(target.sessionId, message, 'queue', undefined, clientMessageId);
         void qc.invalidateQueries({ queryKey: ['sessions'] });
         void qc.invalidateQueries({ queryKey: ['tasks', target.sessionId] });
-        setPrompt('');
+        // 组件可能紧接着卸载：先让 pending 写入失效，别让卸载时的 flush 把已发送内容写回来。
+        draftWriter.cancel();
+        const draftStorage = getBrowserDraftStorage();
+        const liveDraft = readLiveDraft();
+        const keptNewDraft = Boolean(liveDraft.trim()) && liveDraft !== draftPrompt;
+        if (keptNewDraft) {
+          saveSessionDraft(draftStorage, target.sessionId, liveDraft);
+          setPrompt(liveDraft);
+        } else {
+          clearSessionDraft(draftStorage, target.sessionId);
+          // 同 SessionPane：prompt 可能本来就是空串，必须直接清编辑器。
+          editorRef?.current?.setValue('');
+          setPrompt('');
+        }
         setReferences([]);
         clearAttachments();
         target.onSent();
@@ -139,12 +157,12 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     })();
   };
 
-  const submit = () => {
+  const submit = (submittedValue: string) => {
     if (creating) return;
     setError(undefined);
-    if (companion) { sendToCompanion(companion); return; }
+    if (companion) { sendToCompanion(companion, submittedValue); return; }
     if (!effectiveAgentId) return;
-    const draftPrompt = prompt;
+    const draftPrompt = submittedValue;
     const draftReferences = references;
     const clientMessageId = createClientMessageId();
     setCreating(true);
@@ -157,6 +175,8 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {})
         });
+        // create 后立刻按真实 sessionId 落草稿：后续上传/发送失败切进会话时还能恢复输入。
+        if (draftPrompt) saveSessionDraft(getBrowserDraftStorage(), session.id, draftPrompt);
         // create 之后附件才有归属会话：逐件上传，把占位 value 换成真实路径。
         const uploaded = await Promise.all(draftReferences.map(async reference => {
           const file = stashed.current.get(reference.id);
@@ -168,7 +188,18 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
         if (message) await api.send(session.id, message, 'queue', undefined, clientMessageId);
         void qc.invalidateQueries({ queryKey: ['sessions'] });
         void qc.invalidateQueries({ queryKey: ['tasks', session.id] });
-        setPrompt('');
+        draftWriter.cancel();
+        const draftStorage = getBrowserDraftStorage();
+        const liveDraft = readLiveDraft();
+        const keptNewDraft = Boolean(liveDraft.trim()) && liveDraft !== draftPrompt;
+        if (keptNewDraft) {
+          saveSessionDraft(draftStorage, session.id, liveDraft);
+          setPrompt(liveDraft);
+        } else {
+          clearSessionDraft(draftStorage, session.id);
+          editorRef?.current?.setValue('');
+          setPrompt('');
+        }
         setReferences([]);
         clearAttachments();
         onCreated(session);
@@ -176,6 +207,8 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
         setError(err instanceof Error ? err.message : String(err));
         // 会话已建好但上传/发送失败：先切过去，避免用户丢掉草稿又看不到会话。
         if (session) {
+          // 失败保留草稿；用户在请求期间又改了输入，就保存最新内容。
+          saveSessionDraft(getBrowserDraftStorage(), session.id, readLiveDraft());
           void qc.invalidateQueries({ queryKey: ['sessions'] });
           onCreated(session);
         }
@@ -246,6 +279,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     />
     </div>
     {!companion && <PromptTemplates onUse={useTemplate}/>}
+    {prompt.length > MAX_DRAFT_CHARS && <p role="status" className="mt-2 text-center text-[12px] text-amber-600">草稿超过 {MAX_DRAFT_CHARS.toLocaleString()} 字符，超出部分不会保存，刷新后会丢失。</p>}
     {error && <p role="alert" className="mt-2 text-center text-[12px] text-red-600">{error}</p>}
     {references.length > 0 && <p className="mt-2 text-center text-[12px] text-zinc-400">{references.length} 个附件会在{companion ? '发送' : '会话创建'}后上传</p>}
     </div></div>

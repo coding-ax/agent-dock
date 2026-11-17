@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Pencil, Sparkles } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Input } from 'antd';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Session } from './api';
@@ -7,24 +6,22 @@ import { api, type Session } from './api';
 /**
  * 会话名的展示 + 就地编辑。
  *
- * 三件事挤在一个小组件里，因为它们必须共用同一份「编辑中」状态：
- * 展示名、来源标记、编辑输入框，拆开就要把状态提到 App 里，而 App 已经 700+ 行。
+ * 展示名和编辑输入框放在一个小组件里，因为它们必须共用同一份「编辑中」状态；
+ * 拆开就要把状态提到 App 里，而 App 已经 700+ 行。来源标记不再占用行内图标位。
  *
  * 名字的三级来源见 `packages/agent-runtime/src/session-title.ts`：
  * 用户手改 > Agent 推来 > 首条 prompt 摘要。这里只负责呈现与提交，优先级全在服务端算，
  * 提交后把返回的会话**原样替换**进 `['sessions']` 缓存——本地自己拼一遍 title 就会
  * 和服务端的口径分叉（比如清空后到底回落到 Agent 名还是 prompt）。
  */
-export function SessionTitleEditor({ session, label, nameClassName, hintClassName, editButtonVisible = true }: {
+export function SessionTitleEditor({ session, label, nameClassName, editRequest }: {
   session: Session;
   /** 服务端算好的展示名（`session.title` 的最终形态，可能已回落到 Agent 名）。 */
   label: string;
-  /** 展示态名字 span 的类名：两种行高（密排 / 完整）不一样，由调用方给。 */
+  /** 展示态名字 span 的类名：行内不再预留操作图标位。 */
   nameClassName: string;
-  /** 来源标记的类名，同样由调用方决定是否常显。 */
-  hintClassName?: string;
-  /** 行尾有运行状态指示时，悬停铅笔会压住它；这种行只保留双击改名。 */
-  editButtonVisible?: boolean;
+  /** 右键菜单「重命名会话」递增的请求号；变化时进入行内编辑。 */
+  editRequest?: number;
 }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -46,6 +43,11 @@ export function SessionTitleEditor({ session, label, nameClassName, hintClassNam
     setDraft(session.customTitle ?? '');
     setEditing(true);
   };
+  useEffect(() => {
+    if (!editRequest) return;
+    setDraft(session.customTitle ?? '');
+    setEditing(true);
+  }, [editRequest, session.customTitle]);
   const cancel = () => { setEditing(false); save.reset(); };
 
   const commit = () => {
@@ -91,36 +93,10 @@ export function SessionTitleEditor({ session, label, nameClassName, hintClassNam
     />;
   }
 
-  return <>
-    {/* 刻意不加原生 title：整行已经挂了 Radix 信息卡，再挂原生提示就会像之前那样
-        同一行弹两个不同的气泡。可达名靠 aria-label，发现入口靠 hover 时出现的铅笔按钮。 */}
-    <span
-      className={nameClassName}
-      onDoubleClick={event => { event.stopPropagation(); startEditing(); }}
-    >{label}</span>
-    <TitleSourceHint source={session.titleSource} className={hintClassName}/>
-    <button
-      type="button"
-      aria-label="重命名会话"
-      onClick={event => { event.stopPropagation(); startEditing(); }}
-      // 绝对定位到行尾、不占排版宽度；悬停时与相对时间交叉淡入淡出（时间在 App 里淡出）。
-      // 移动端没有 hover，直接常显。
-      className={`absolute right-2 top-1/2 z-10 h-4 w-4 -translate-y-1/2 place-items-center rounded text-zinc-400 opacity-0 transition-opacity hover:bg-zinc-200 hover:text-zinc-700 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100 ${editButtonVisible ? 'grid' : 'hidden'}`}
-    >
-      <Pencil size={10}/>
-    </button>
-  </>;
-}
-
-/**
- * 名字是谁起的。
- *
- * `prompt` 不标——那是改动前的默认行为，标出来等于给几乎所有老会话加噪声。
- * `agent` 只在 hover 时露（它是新常态，一屏几十行都挂个标记反而看不出哪条特殊），
- * `user` 常显：那是用户自己的操作留下的痕迹，值得一眼看见自己改过哪些。
- */
-function TitleSourceHint({ source, className = '' }: { source?: Session['titleSource']; className?: string }) {
-  if (source === 'user') return <Sparkles size={9} aria-label="你给这个会话起的名字" className={`shrink-0 text-amber-400 ${className}`}/>;
-  if (source === 'agent') return <Sparkles size={9} aria-label="Agent 给这个会话起的名字" className={`shrink-0 text-zinc-300 opacity-0 transition-opacity group-hover:opacity-100 ${className}`}/>;
-  return null;
+  // 刻意不加原生 title：整行已经挂了 Radix 信息卡，再挂原生提示就会像之前那样
+  // 同一行弹两个不同的气泡。改名入口只留在右键菜单和双击标题，行内不再堆图标。
+  return <span
+    className={nameClassName}
+    onDoubleClick={event => { event.stopPropagation(); startEditing(); }}
+  >{label}</span>;
 }

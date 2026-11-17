@@ -3,7 +3,7 @@ import type { AssistantLifecycleLight, HandoffState, HandoffSummary, HandoffTran
 import {
   agePercent, ceremonyPhase, ceremonySteps, diffLifecycle, earlyHandoffEntry, formatMetricValue, formatReason, handoffFlagVisible,
   handoffInvite, isCeremonyFinal, isCeremonyRunning, isLineageSource, isSystemRoundOrigin, LIFE_STAGES, lifecycleBubble, nextStage,
-  proposeEarlyHandoff, stageBadge, STAGE_FLOORS, stageCatLabel, systemRoundCopy, transferSummary
+  openRetireCeremony, proposeEarlyHandoff, retireEntry, stageBadge, STAGE_FLOORS, stageCatLabel, systemRoundCopy, transferSummary
 } from './lifecycle-model';
 
 const summary = (patch: Partial<HandoffSummary> & { id: string; state: HandoffState }): HandoffSummary => ({
@@ -208,5 +208,30 @@ describe('early handoff entry', () => {
       reasons: [{ metric: 'rounds', level: 'handoff', value: 600, threshold: 600 }]
     }))).toBe(true);
     expect(handoffFlagVisible(summary({ id: 'h3', state: 'done', trigger: 'threshold' }))).toBe(false);
+  });
+});
+
+describe('main-session retire entry', () => {
+  it('is only visible on the main session', () => {
+    expect(retireEntry({ isMain: false }).visible).toBe(false);
+    expect(retireEntry({ isMain: false, handoff: { id: 'h1', state: 'packing' } }).visible).toBe(false);
+    expect(retireEntry({ isMain: true })).toMatchObject({ visible: true, label: '退休', progress: false });
+  });
+
+  it('shows the open handoff as progress instead of starting another one', () => {
+    expect(retireEntry({ isMain: true, handoff: { id: 'h1', state: 'proposed' } }))
+      .toMatchObject({ label: '交接待确认', progress: true, handoffId: 'h1' });
+    expect(retireEntry({ isMain: true, handoff: { id: 'h2', state: 'spawning' } }))
+      .toMatchObject({ label: '交接进度', progress: true, handoffId: 'h2' });
+    expect(retireEntry({ isMain: true, handoff: { id: 'h3', state: 'done' } }))
+      .toMatchObject({ label: '退休', progress: false });
+  });
+
+  it('opens the existing ceremony with or without an in-progress handoff', () => {
+    const open = vi.fn();
+    openRetireCeremony(retireEntry({ isMain: true }), open);
+    expect(open).toHaveBeenLastCalledWith(undefined);
+    openRetireCeremony(retireEntry({ isMain: true, handoff: { id: 'h1', state: 'proposed' } }), open);
+    expect(open).toHaveBeenLastCalledWith('h1');
   });
 });

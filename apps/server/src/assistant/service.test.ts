@@ -8,11 +8,18 @@ import {
   AssistantService, buildMainSystemPrompt, buildSuperagentDirective, classifyMainTurn,
   type AssistantServiceOptions
 } from './service.js';
+import { AssistantStore } from './store.js';
 import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER } from './lifecycle.js';
 
 const repositories: RepositoryBundle[] = [];
 const services: AssistantService[] = [];
 const directories: string[] = [];
+
+function tempDir(prefix = 'agentdock-task-') {
+  const directory = mkdtempSync(join(tmpdir(), prefix));
+  directories.push(directory);
+  return directory;
+}
 
 afterEach(async () => {
   await Promise.all(services.splice(0).map(service => service.close()));
@@ -26,7 +33,8 @@ async function mainSession(repos: RepositoryBundle) {
   return session;
 }
 
-function harness(overrides: Partial<Pick<AssistantServiceOptions, 'sendLarkReply' | 'postGithubComment'>> = {}) {
+function harness(overrides: Partial<Pick<AssistantServiceOptions, 'sendLarkReply' | 'postGithubComment' | 'log'>> & { databaseUrl?: string } = {}) {
+  const { databaseUrl = ':memory:', ...rest } = overrides;
   const repos = createRepositories(':memory:');
   repositories.push(repos);
   const listeners: Array<(event: { sessionId: string; state: string }) => void> = [];
@@ -44,7 +52,7 @@ function harness(overrides: Partial<Pick<AssistantServiceOptions, 'sendLarkReply
     stop: vi.fn(async () => undefined)
   };
   const notify = vi.fn(async () => true);
-  const service = new AssistantService({ databaseUrl: ':memory:', runtime: runtime as never, repos, notify, ...overrides });
+  const service = new AssistantService({ databaseUrl, runtime: runtime as never, repos, notify, ...rest });
   services.push(service);
   return { repos, service, runtime, listeners, notify };
 }
@@ -303,52 +311,99 @@ describe('AssistantService', () => {
     const { repos, service, runtime } = harness();
     await service.initialize();
     const main = await mainSession(repos);
-    await repos.sessions.save({ ...main, cwd: '/repo/main', model: 'claude-opus-5-5', reasoningEffort: 'high' });
+    const mainWorkspace = tempDir('agentdock-main-');
+    const anotherWorkspace = tempDir('agentdock-another-');
+    const planWorkspace = tempDir('agentdock-plan-');
+    await repos.sessions.save({ ...main, cwd: mainWorkspace, model: 'claude-opus-5-5', reasoningEffort: 'high' });
     await service.setMainSession(main.id);
     await repos.sessions.save({
-      id: 'ses_side', agentId: 'claude', state: 'idle', cwd: '/repo/main', runId: 'run_side',
+      id: 'ses_side', agentId: 'claude', state: 'idle', cwd: mainWorkspace, runId: 'run_side',
       createdAt: now(), updatedAt: now()
     });
 
     const inherited = await service.startTask({ title: '默认继承', doneWhen: ['给出证据'] });
     expect(runtime.start).toHaveBeenLastCalledWith(expect.objectContaining({
-      agentId: 'claude', cwd: '/repo/main', model: 'claude-opus-5-5', reasoningEffort: 'high'
+      agentId: 'claude', cwd: mainWorkspace, model: 'claude-opus-5-5', reasoningEffort: 'high'
     }));
-    expect(inherited).toMatchObject({ agentId: 'claude', cwd: '/repo/main', model: 'claude-opus-5-5', reasoningEffort: 'high' });
+    expect(inherited).toMatchObject({ agentId: 'claude', cwd: mainWorkspace, model: 'claude-opus-5-5', reasoningEffort: 'high' });
 
     // 主会话可以随意换 Agent、工作区、模型和思考深度，不受主会话配置限制。
     const overridden = await service.startTask({
       title: '自由组合', doneWhen: ['给出证据'],
-      agentId: 'codex', cwd: '/tmp/another-workspace', model: 'gpt-5-codex', reasoningEffort: 'low'
+      agentId: 'codex', cwd: anotherWorkspace, model: 'gpt-5-codex', reasoningEffort: 'low'
     });
     expect(runtime.start).toHaveBeenLastCalledWith(expect.objectContaining({
-      agentId: 'codex', cwd: '/tmp/another-workspace', model: 'gpt-5-codex', reasoningEffort: 'low'
+      agentId: 'codex', cwd: anotherWorkspace, model: 'gpt-5-codex', reasoningEffort: 'low'
     }));
-    expect(overridden).toMatchObject({ agentId: 'codex', cwd: '/tmp/another-workspace', model: 'gpt-5-codex', reasoningEffort: 'low' });
+    expect(overridden).toMatchObject({ agentId: 'codex', cwd: anotherWorkspace, model: 'gpt-5-codex', reasoningEffort: 'low' });
 
     // 只换 Agent、不指定模型时，用新 Agent 自己的默认，而不是把主会话的模型硬塞过去。
     await service.startTask({ title: '换 Agent', doneWhen: ['给出证据'], agentId: 'codex' });
     const switched = runtime.start.mock.calls.at(-1)![0] as { agentId: string; cwd?: string; model?: string; reasoningEffort?: string };
-    expect(switched).toMatchObject({ agentId: 'codex', cwd: '/repo/main' });
+    expect(switched).toMatchObject({ agentId: 'codex', cwd: mainWorkspace });
     expect(switched.model).toBeUndefined();
     expect(switched.reasoningEffort).toBeUndefined();
 
     // 计划卡也要记住配置，开工时不能被默认值冲掉。
     const plan = service.planTask({
       title: '计划也记住配置', doneWhen: ['给出证据'],
-      agentId: 'codex', cwd: '/tmp/plan-workspace', model: 'gpt-5-codex', reasoningEffort: 'medium'
+      agentId: 'codex', cwd: planWorkspace, model: 'gpt-5-codex', reasoningEffort: 'medium'
     });
-    expect(plan).toMatchObject({ agentId: 'codex', cwd: '/tmp/plan-workspace', model: 'gpt-5-codex', reasoningEffort: 'medium' });
+    expect(plan).toMatchObject({ agentId: 'codex', cwd: planWorkspace, model: 'gpt-5-codex', reasoningEffort: 'medium' });
     await service.startPlannedTask(plan.id);
     expect(runtime.start).toHaveBeenLastCalledWith(expect.objectContaining({
-      agentId: 'codex', cwd: '/tmp/plan-workspace', model: 'gpt-5-codex', reasoningEffort: 'medium'
+      agentId: 'codex', cwd: planWorkspace, model: 'gpt-5-codex', reasoningEffort: 'medium'
     }));
 
     const inheritPlan = service.planTask({ title: '计划开工时继承', doneWhen: ['给出证据'] });
     await service.startPlannedTask(inheritPlan.id);
     expect(runtime.start).toHaveBeenLastCalledWith(expect.objectContaining({
-      agentId: 'claude', cwd: '/repo/main', model: 'claude-opus-5-5', reasoningEffort: 'high'
+      agentId: 'claude', cwd: mainWorkspace, model: 'claude-opus-5-5', reasoningEffort: 'high'
     }));
+  });
+
+  it('rejects an unusable --cwd before creating a task or spawning a session', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+    const missing = join(tempDir(), 'missing');
+
+    await expect(service.startTask({ title: '不存在目录', doneWhen: ['x'], cwd: missing })).rejects.toThrow(/工作目录不存在/);
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(service.listTasks()).toHaveLength(0);
+
+    const file = join(tempDir(), 'file.txt');
+    writeFileSync(file, 'x');
+    await expect(service.startTask({ title: '不是目录', doneWhen: ['x'], cwd: file })).rejects.toThrow(/工作目录不是文件夹/);
+    expect(runtime.start).not.toHaveBeenCalled();
+  });
+
+  it('validates a planned task cwd again when the plan starts', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+    const workspace = tempDir('agentdock-plan-start-');
+    const plan = service.planTask({ title: '计划目录消失', doneWhen: ['x'], cwd: workspace });
+    rmSync(workspace, { recursive: true, force: true });
+
+    await expect(service.startPlannedTask(plan.id)).rejects.toThrow(/工作目录不存在/);
+    expect(runtime.start).not.toHaveBeenCalled();
+  });
+
+  it('lets task start <plan> override the recorded workspace', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+    const plannedWorkspace = tempDir('agentdock-plan-original-');
+    const overrideWorkspace = tempDir('agentdock-plan-override-');
+    const plan = service.planTask({ title: '计划换目录', doneWhen: ['x'], cwd: plannedWorkspace });
+
+    const started = await service.startPlannedTask(plan.id, { cwd: overrideWorkspace });
+    expect(runtime.start).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: overrideWorkspace }));
+    expect(started).toMatchObject({ cwd: overrideWorkspace, plan: false });
   });
 
   it('tells the main session it may freely choose agent, workspace, model and reasoning depth', () => {
@@ -565,30 +620,51 @@ describe('AssistantService', () => {
     expect(runtime.dispatch).toHaveBeenLastCalledWith('ses_side', expect.stringContaining('按钮还是太小'), 'queue');
   });
 
-  it('keeps quiet hours off by default and delays only normal notifications when enabled', async () => {
-    const { repos, service, notify } = harness();
+  it('reopens an archived side session in the task workspace', async () => {
+    const { repos, service, runtime } = harness();
     await service.initialize();
     const main = await mainSession(repos);
     await service.setMainSession(main.id);
+    const workspace = tempDir('agentdock-append-cwd-');
+    const task = await service.startTask({ title: '续做目录', doneWhen: ['x'], agentId: 'claude', cwd: workspace });
+    await repos.sessions.save({
+      id: task.sessionId!, agentId: 'claude', state: 'idle', cwd: workspace, runId: 'run_side',
+      createdAt: now(), updatedAt: now(), archivedAt: now()
+    });
 
-    expect(service.getQuietHours()).toEqual({ enabled: false, start: '23:00', end: '08:00' });
+    await service.appendTask(task.id, '继续在这个目录做');
+    expect(runtime.start).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: workspace }));
+  });
 
-    // 用「当前时间 ±1 小时」做静默窗口，避免测试在任意时刻跑都落到窗口外。
-    const now = new Date();
-    const current = now.getHours() * 60 + now.getMinutes();
-    const clock = (minutes: number) => {
-      const value = (minutes + 24 * 60) % (24 * 60);
-      return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
-    };
-    expect(service.setQuietHours({ enabled: true, start: clock(current - 60), end: clock(current + 60) })).toMatchObject({ enabled: true });
+  it('starts with legacy quiet-hours and silent-emoji settings and ignores them', async () => {
+    const directory = tempDir('agentdock-legacy-settings-');
+    const databaseUrl = join(directory, 'agentdock');
+    const legacy = new AssistantStore(`${databaseUrl}.assistant.db`);
+    legacy.setSetting('assistant.quietHours', JSON.stringify({ enabled: true, start: '00:00', end: '23:59' }));
+    legacy.setSetting('assistant.silentEmoji', '🐱');
+    legacy.setSetting('assistant.silentTriggerEmoji', '🐱');
+    legacy.close();
 
-    const delayed = await service.notify({ text: '普通通知' });
-    expect(delayed.delayed).toBe(true);
-    expect(notify).not.toHaveBeenCalled();
+    const warn = vi.fn();
+    const { repos, service, notify } = harness({ databaseUrl, log: { info: () => undefined, warn } });
+    await expect(service.initialize()).resolves.toBeUndefined();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
 
-    const urgent = await service.notify({ text: '紧急通知', urgent: true });
-    expect(urgent).toMatchObject({ delayed: false, sent: true });
+    const result = await service.notify({ text: '普通通知' });
+    expect(result).toMatchObject({ sent: true });
     expect(notify).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('assistant.quietHours');
+    expect(warn.mock.calls[0]?.[0]).toContain('assistant.silentEmoji');
+    expect(warn.mock.calls[0]?.[0]).toContain('assistant.silentTriggerEmoji');
+
+    // 旧设置行原样保留，回滚到旧版本也不会丢配置；新代码只是不再读取。
+    const reopened = new AssistantStore(`${databaseUrl}.assistant.db`);
+    expect(reopened.getSetting('assistant.quietHours')).toContain('"enabled":true');
+    expect(reopened.getSetting('assistant.silentEmoji')).toBe('🐱');
+    expect(reopened.getSetting('assistant.silentTriggerEmoji')).toBe('🐱');
+    reopened.close();
   });
 
   it('runs a watch script and fires once when the condition becomes true', async () => {

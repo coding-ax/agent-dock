@@ -72,6 +72,13 @@ export function sessionSourceLabel(session: Pick<Session, 'source' | 'systemProm
   return '本地';
 }
 
+/** 名字是谁起的；prompt 是默认来源，不再额外标注。 */
+export function sessionTitleSourceLabel(session: Pick<Session, 'titleSource'>): string | undefined {
+  if (session.titleSource === 'user') return '你起的名字';
+  if (session.titleSource === 'agent') return 'Agent 起的名字';
+  return undefined;
+}
+
 /** 状态文案与色点。已归档压过 state——归档行是只读的，再说「思考中」会误导。 */
 export function sessionStatusLabel(session: Pick<Session, 'state' | 'archivedAt'>): { text: string; tone: string } {
   if (session.archivedAt) return { text: '已归档', tone: 'bg-zinc-400' };

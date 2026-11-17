@@ -100,6 +100,17 @@ export function buildPrompt(message: string, references: ComposerReference[], ad
 }
 
 /**
+ * 发送时取输入框的实时快照，而不是受控 state。
+ *
+ * Milkdown 的 listener 插件会把 markdownUpdated 防抖 200ms，父组件的 value 在
+ * 「刚打完最后一个字就按 Enter」时还是上一拍的内容。发送、canSend 判断都必须读
+ * 编辑器当前文档；只有编辑器尚未挂载时才退回 state。
+ */
+export function composerSubmitValue(editorValue: string | null | undefined, stateValue: string): string {
+  return editorValue ?? stateValue;
+}
+
+/**
  * buildPrompt 的逆运算：把排队任务里存的 prompt 拆回「正文 + 引用 chips」，
  * 供「编辑排队任务」时把内容退回主输入框——原地单行输入框没法处理图片/文件
  * 引用，也拿不到粘贴、上传、斜杠命令等完整交互。

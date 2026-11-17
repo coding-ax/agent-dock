@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Editor, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, prosePluginsCtx, rootCtx, schemaCtx } from '@milkdown/kit/core';
-import { commonmark, linkSchema, wrapInBulletListInputRule, wrapInOrderedListInputRule } from '@milkdown/kit/preset/commonmark';
+import { commonmark, linkSchema } from '@milkdown/kit/preset/commonmark';
 import { gfm, wrapInTaskListInputRule } from '@milkdown/kit/preset/gfm';
 import { clipboard } from '@milkdown/kit/plugin/clipboard';
 import { history } from '@milkdown/kit/plugin/history';
@@ -11,29 +11,19 @@ import { getMarkdown, replaceAll } from '@milkdown/kit/utils';
 import { Plugin, Selection } from '@milkdown/kit/prose/state';
 import { DOMParser, DOMSerializer } from '@milkdown/kit/prose/model';
 import type { Ctx } from '@milkdown/kit/ctx';
+import { continueList, indentListItem, isInListItem, redundantListMarkerTransaction } from './composer-list';
 import type { CompositionGuard } from './composer-keyboard';
 import { linkedPasteToken, needsPasteSeparator, pastedLink } from './composer-paste';
 import '@milkdown/kit/prose/view/style/prosemirror.css';
 
-/**
- * 输入框里**不**启用「打字自动变成列表」的 input rule。
- *
- * 这个输入框的 Enter 已经绑定「发送」（见 Composer.keyboard），只有 Shift+Enter 才是换行。
- * 而 Milkdown 输入 `2. ` 会立刻把这一行包成有序列表，接着换行时列表项被拆开、编号
- * 重新计算，用户看到的就是「2. 3. 掉下去」。列表在这里没有编辑价值（一条消息里的编号
- * 用纯文本 `2. ` 表达即可，发给 Agent 后照样按 Markdown 渲染），干脆从源头上不让它变形。
- * 保留 # 标题、`**粗体**`、``` 围栏等其余 input rule；粘贴/外部 setValue 进来的
- * 列表 Markdown 仍会正常解析显示，只是不再因为「打字」而自动套列表结构。
- */
-const disabledListInputRules = new Set([wrapInOrderedListInputRule, wrapInBulletListInputRule, wrapInTaskListInputRule]);
 // 链接 mark 设成 inclusive:false：光标停在链接末尾继续打字时不会自动继承 link mark，
 // 粘贴进来的新文字也不会被塞进上一枚链接里（这是「贴到链接后面」粘成一团的另一半原因）。
 const exclusiveLinkSchema = linkSchema.extendSchema(base => ctx => ({ ...base(ctx), inclusive: false }));
 const composerCommonmark = commonmark
-  .filter(plugin => !disabledListInputRules.has(plugin as typeof wrapInOrderedListInputRule))
   // linkSchema 是 [schemaCtx, mark] 两个 plugin；extendSchema 返回的新版本同样是这两个，
   // 只在第一个位置整组换掉，第二个跳过，避免重复注册。
   .flatMap(plugin => plugin === linkSchema[0] ? exclusiveLinkSchema : plugin === linkSchema[1] ? [] : [plugin]);
+// 任务清单不在这次列表修复范围内，保留原有行为：打字不自动变成 checklist。
 const composerGfm = gfm.filter(plugin => plugin !== wrapInTaskListInputRule);
 
 /**
@@ -67,6 +57,8 @@ interface ComposerEditorProps {
   onChange(value: string): void;
   /** 光标前当前文本块的纯文本；`/` 面板用它判断查询词。 */
   onCaretChange(before: string): void;
+  /** 文档里是否有非空白正文；用于同步更新发送按钮/Enter 的可用态。 */
+  onContentChange?(hasContent: boolean): void;
   /** 返回 true 表示已处理（Enter 发送、命令面板选择等），编辑器会阻止默认行为。 */
   onKeydown(event: KeyboardEvent): boolean;
   /** 与 Composer.keyboard 共享的输入法组合态。 */
@@ -139,6 +131,31 @@ function caretToEnd(ctx: Ctx): void {
   view.dispatch(view.state.tr.setSelection(Selection.atEnd(view.state.doc)).scrollIntoView());
 }
 
+/**
+ * 列表相关的按键必须在捕获阶段先处理：Enter 已经被「发送」占用，列表续项只能用
+ * Shift+Enter；Tab/Shift+Tab 也要在 Milkdown 的 indent 插件之前改成真正的层级移动。
+ */
+function handleListKey(ctx: Ctx, event: KeyboardEvent): boolean {
+  const view = ctx.get(editorViewCtx);
+  const listItemType = view.state.schema.nodes.list_item;
+  if (!listItemType) return false;
+
+  if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    // 不在列表里时不接管：普通 Tab 仍由 Milkdown 插入缩进，Shift+Tab 保持原行为。
+    if (!isInListItem(view.state, listItemType)) return false;
+    const transaction = indentListItem(view.state, listItemType, event.shiftKey);
+    if (transaction) view.dispatch(transaction.scrollIntoView());
+    // 第一项没有上一项可挂靠时 sink 会失败，但也不该退化成插入两个空格。
+    return true;
+  }
+
+  if (event.key !== 'Enter' || !event.shiftKey) return false;
+  const transaction = continueList(view.state, listItemType);
+  if (!transaction) return false;
+  view.dispatch(transaction.scrollIntoView());
+  return true;
+}
+
 export const ComposerEditor = forwardRef<ComposerEditorHandle, ComposerEditorProps>(function ComposerEditor(props, ref) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Editor | null>(null);
@@ -147,7 +164,16 @@ export const ComposerEditor = forwardRef<ComposerEditorHandle, ComposerEditorPro
   // 外部写入（发送后清空、选择命令）期间屏蔽 markdownUpdated，避免自己触发一轮 onChange。
   const suppressing = useRef(false);
   const ready = useRef(false);
+  // 只把「从空到有 / 从有到空」的变化报给父级，避免每次按键都触发一次 setState。
+  const lastHasContent = useRef<boolean | undefined>(undefined);
   const [empty, setEmpty] = useState(() => !props.value.trim());
+
+  const reportContent = (doc: { textContent: string }) => {
+    const hasContent = doc.textContent.trim().length > 0;
+    if (lastHasContent.current === hasContent) return;
+    lastHasContent.current = hasContent;
+    latest.current.onContentChange?.(hasContent);
+  };
 
   useLayoutEffect(() => {
     const hostElement = host.current;
@@ -193,7 +219,9 @@ export const ComposerEditor = forwardRef<ComposerEditorHandle, ComposerEditorPro
         manager.mounted(ctx => {
           if (cancelled) return;
           ready.current = true;
-          setEmpty(isEmptyDoc(ctx.get(editorViewCtx).state.doc));
+          const doc = ctx.get(editorViewCtx).state.doc;
+          setEmpty(isEmptyDoc(doc));
+          reportContent(doc);
           latest.current.onCaretChange(textBeforeCaret(ctx));
         });
         // listener 插件的 updated 默认有 200ms debounce，输入后占位符会慢半拍才消失；
@@ -203,10 +231,24 @@ export const ComposerEditor = forwardRef<ComposerEditorHandle, ComposerEditorPro
             update: (nextView, prevState) => {
               if (cancelled || prevState.doc.eq(nextView.state.doc)) return;
               setEmpty(isEmptyDoc(nextView.state.doc));
+              reportContent(nextView.state.doc);
             }
           })
         });
-        ctx.update(prosePluginsCtx, plugins => [...plugins, emptyTracker]);
+        // 续项后用户手打的「2.」会删掉；首个「1.」仍交给 commonmark 的 input rule。
+        const listMarkerDeduper = new Plugin({
+          props: {
+            handleTextInput: (view, from, to, text) => {
+              const listItemType = view.state.schema.nodes.list_item;
+              if (!listItemType) return false;
+              const transaction = redundantListMarkerTransaction(view.state, listItemType, from, to, text);
+              if (!transaction) return false;
+              view.dispatch(transaction.scrollIntoView());
+              return true;
+            }
+          }
+        });
+        ctx.update(prosePluginsCtx, plugins => [...plugins, emptyTracker, listMarkerDeduper]);
       });
 
     void instance.create().then(created => {
@@ -268,12 +310,18 @@ export const ComposerEditor = forwardRef<ComposerEditorHandle, ComposerEditorPro
     onCompositionStartCapture={() => latest.current.compositionGuard.start()}
     onCompositionEndCapture={() => latest.current.compositionGuard.end()}
     onKeyDownCapture={event => {
-      // 捕获阶段先于 ProseMirror 的 keymap：Enter 发送、Shift+Enter 换行（交给编辑器）。
+      // 捕获阶段先于 ProseMirror 的 keymap：Enter 发送；Shift+Enter 普通段落换行、列表内续项。
       const ime = latest.current.compositionGuard.classify(event.nativeEvent);
       // 组合中不 preventDefault，交给浏览器/输入法确认候选词。
       if (ime === 'composing') return;
       // compositionend 后补发的 Enter 不属于用户输入：吞掉，别让它插入换行。
       if (ime === 'composition-enter') {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      // 列表续项/缩进先于 Composer 的 Enter 发送与其他 keymap。
+      if (editor.current?.action(ctx => handleListKey(ctx, event.nativeEvent))) {
         event.preventDefault();
         event.stopPropagation();
         return;

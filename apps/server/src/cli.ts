@@ -27,8 +27,8 @@ import { runPasswordClear, runPasswordSet, runPasswordStatus } from './password-
 import { webPasswordEnabled } from './web-password.js';
 import { runScheduleAdd, runScheduleList, runSchedulePause, runScheduleRemove, runScheduleResume, runScheduleRun, runScheduleShow } from './schedule-cli.js';
 import {
-  runDraftCreate, runDraftDiscard, runDraftList, runDraftSend, runMainClear, runMainGet, runMainSet,
-  runNotify, runSettingsGet, runSettingsQuietHours, runTaskCancel, runTaskList, runTaskPlan,
+  runDraftCreate, runDraftDiscard, runDraftList, runDraftSend, runMainClear, runMainGet, runMainRestore, runMainSet,
+  runNotify, runTaskCancel, runTaskList, runTaskPlan,
   runTaskAppend, runTaskReport, runTaskReview, runTaskShow, runTaskStart, runWatchAdd, runWatchControl,
   runWatchList, runWatchRemove, runWatchShow
 } from './assistant/cli.js';
@@ -243,6 +243,7 @@ async function main() {
     mainGet: async options => { process.stdout.write(await runMainGet(options)); },
     mainSet: async (sessionId, options) => { process.stdout.write(await runMainSet(sessionId, options)); },
     mainClear: async options => { process.stdout.write(await runMainClear(options)); },
+    mainRestore: async (sessionId, options) => { process.stdout.write(await runMainRestore(sessionId, options)); },
     mainHandoff: async options => { process.stdout.write(await runMainHandoff(options)); },
     mainHandoffShow: async (id, options) => { process.stdout.write(await runMainHandoffShow(id, options)); },
     mainHandoffCancel: async (id, options) => { process.stdout.write(await runMainHandoffCancel(id, options)); },
@@ -254,8 +255,6 @@ async function main() {
     notesList: async options => { process.stdout.write(await runNotesList(options)); },
     notesArchive: async options => { process.stdout.write(await runNotesArchive(options)); },
     notesUnarchive: async options => { process.stdout.write(await runNotesUnarchive(options)); },
-    settingsGet: async options => { process.stdout.write(await runSettingsGet(options)); },
-    settingsQuietHours: async options => { process.stdout.write(await runSettingsQuietHours(options)); },
     draftCreate: async options => { process.stdout.write(await runDraftCreate(options)); },
     draftList: async options => { process.stdout.write(await runDraftList(options)); },
     draftSend: async (id, options) => { process.stdout.write(await runDraftSend(id, options)); },

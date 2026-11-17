@@ -30,6 +30,37 @@ describe('AgentDock CLI', () => {
     expect(environmentFromCli(program.opts(), {})).toEqual({ AGENTDOCK_DISABLE_LARK_LISTENER: 'true' });
   });
 
+  it('parses task start --cwd as the side-session workspace, not the daemon default', async () => {
+    const taskStart = vi.fn();
+    const program = createCliProgram('0.0.6', { taskStart });
+    await program.parseAsync(['node', 'agent-dock', 'task', 'start', '--title', 'x', '--cwd', '/tmp/task-workspace', '--done-when', 'y']);
+    expect(taskStart).toHaveBeenCalledWith(undefined, expect.objectContaining({ cwd: '/tmp/task-workspace' }));
+    expect(program.opts().cwd).toBeUndefined();
+  });
+
+  it('parses task plan --cwd as the side-session workspace', async () => {
+    const taskPlan = vi.fn();
+    const program = createCliProgram('0.0.6', { taskPlan });
+    await program.parseAsync(['node', 'agent-dock', 'task', 'plan', '--title', 'x', '--cwd', '/tmp/plan-workspace', '--done-when', 'y']);
+    expect(taskPlan).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/tmp/plan-workspace' }));
+    expect(program.opts().cwd).toBeUndefined();
+  });
+
+  it('parses main set --cwd as the new main-session workspace', async () => {
+    const mainSet = vi.fn();
+    const program = createCliProgram('0.0.6', { mainSet });
+    await program.parseAsync(['node', 'agent-dock', 'main', 'set', '--agent', 'claude', '--cwd', '/tmp/main-workspace']);
+    expect(mainSet).toHaveBeenCalledWith(undefined, expect.objectContaining({ cwd: '/tmp/main-workspace' }));
+    expect(program.opts().cwd).toBeUndefined();
+  });
+
+  it('parses task start <plan-id> execution overrides', async () => {
+    const taskStart = vi.fn();
+    const program = createCliProgram('0.0.6', { taskStart });
+    await program.parseAsync(['node', 'agent-dock', 'task', 'start', 'atask_plan', '--cwd', '/tmp/plan-override', '--agent', 'codex']);
+    expect(taskStart).toHaveBeenCalledWith('atask_plan', expect.objectContaining({ cwd: '/tmp/plan-override', agent: 'codex' }));
+  });
+
   it('supports a semantic local-only startup option without requiring a raw host address', () => {
     const program = createCliProgram('0.0.5');
     program.parse(['node', 'agent-dock', '--local-only']);

@@ -6,8 +6,7 @@ import type {
 } from './sources-router/cli.js';
 import type {
   AssistantCliOptions, DraftCreateCliOptions, MainCliOptions, NotifyCliOptions,
-  SettingsCliOptions, TaskAppendCliOptions, TaskReportCliOptions, TaskReviewCliOptions, TaskStartCliOptions,
-  WatchAddCliOptions
+  TaskAppendCliOptions, TaskReportCliOptions, TaskReviewCliOptions, TaskStartCliOptions, WatchAddCliOptions
 } from './assistant/cli.js';
 import type {
   LarkMessageListenCliOptions, LarkMessageReadCliOptions, LarkMessageSendCliOptions
@@ -171,6 +170,7 @@ export interface CliHandlers {
   mainGet?(options: AssistantCliOptions): void | Promise<void>;
   mainSet?(sessionId: string | undefined, options: MainCliOptions): void | Promise<void>;
   mainClear?(options: AssistantCliOptions): void | Promise<void>;
+  mainRestore?(sessionId: string | undefined, options: AssistantCliOptions): void | Promise<void>;
   mainHandoff?(options: HandoffCliOptions): void | Promise<void>;
   mainHandoffShow?(id: string | undefined, options: LifecycleCliOptions): void | Promise<void>;
   mainHandoffCancel?(id: string | undefined, options: LifecycleCliOptions): void | Promise<void>;
@@ -182,8 +182,6 @@ export interface CliHandlers {
   notesList?(options: NotesListCliOptions): void | Promise<void>;
   notesArchive?(options: NotesArchiveCliOptions): void | Promise<void>;
   notesUnarchive?(options: NotesUnarchiveCliOptions): void | Promise<void>;
-  settingsGet?(options: AssistantCliOptions): void | Promise<void>;
-  settingsQuietHours?(options: SettingsCliOptions): void | Promise<void>;
   draftCreate?(options: DraftCreateCliOptions): void | Promise<void>;
   draftList?(options: AssistantCliOptions): void | Promise<void>;
   draftSend?(id: string, options: AssistantCliOptions): void | Promise<void>;
@@ -226,13 +224,25 @@ const addServerOptions = (command: Command) => command
  * so a subcommand reads the merged globals to see flags passed on the same
  * invocation.
  */
-const serverOptionsFrom = (options: CliOptions, command: Command): CliOptions => ({ ...command.optsWithGlobals(), ...options });
+const serverOptionsFrom = (options: CliOptions, command: Command): CliOptions => {
+  const merged: CliOptions = { ...command.optsWithGlobals() };
+  // 子命令现在也声明了 server options（--port/--cwd 等），默认值不能盖掉
+  // 写在子命令之前的根选项（例如 `agent-dock --no-lark-listen start`）。
+  for (const [key, value] of Object.entries(options)) {
+    if (command.getOptionValueSource(key) !== 'default') (merged as Record<string, unknown>)[key] = value;
+  }
+  return merged;
+};
 
 export function createCliProgram(version: string, handlers: CliHandlers = {}) {
   const program = new Command()
     .name('agent-dock')
     .description('Run the AgentDock local session server')
-    .version(version, '-V, --version', 'Show the installed version');
+    .version(version, '-V, --version', 'Show the installed version')
+    // 根命令和子命令都有 --cwd（daemon 默认目录 vs 任务/会话工作目录）。
+    // 不开启 positional options 时 Commander 会把子命令后的 --cwd 当成根选项吃掉，
+    // 子命令 handler 只能拿到 undefined，任务便悄悄继承主会话目录。
+    .enablePositionalOptions();
 
   addServerOptions(program)
     .showHelpAfterError();
@@ -554,10 +564,10 @@ Notes:
   watch.command('remove').description('删除 watch').argument('<watch-id>').option('--json', '输出 JSON').action((id, options) => handlers.watchRemove?.(id, options));
 
   program.command('notify')
-    .description('让主会话主动通知用户；免打扰默认关闭')
+    .description('让主会话主动通知用户')
     .argument('<text>', '通知内容')
     .option('--ask', '需要用户拍板')
-    .option('--urgent', '绕过免打扰')
+    .option('--urgent', '紧急通知：系统轮次里也放行')
     .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
     .option('--json', '输出 JSON')
     .action((text, options) => handlers.notify?.(text, options));
@@ -576,6 +586,8 @@ Notes:
     .option('--json', '输出 JSON')
     .action((sessionId, options) => handlers.mainSet?.(sessionId, options));
   main.command('clear').description('清除主会话设置').option('--json', '输出 JSON').action(options => handlers.mainClear?.(options));
+  main.command('restore').description('恢复被误归档的当前主会话（解除归档并重新启动）').argument('[session-id]')
+    .option('--json', '输出 JSON').action((sessionId, options) => handlers.mainRestore?.(sessionId, options));
   // 子命令和 handoff 本身都有 --json / --from：Commander 会让父命令先吃掉它们，子命令用 optsWithGlobals 取回。
   const handoff = main.command('handoff')
     .description('交接仪式：老猫退休、新猫接班。不带 --yes 只提议；--yes 由用户本人确认并执行（失败自动回滚）')
@@ -636,18 +648,6 @@ Notes:
     .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
     .option('--json', '输出 JSON')
     .action(options => handlers.notesUnarchive?.(options));
-
-  const settings = program.command('settings').description('主会话设置');
-  settings.command('show').description('查看设置').option('--json', '输出 JSON').action(options => handlers.settingsGet?.(options));
-  settings.command('quiet-hours')
-    .description('设置免打扰时段（默认关闭）')
-    .option('--enabled', '开启免打扰')
-    .option('--off', '关闭免打扰')
-    .option('--start <HH:MM>', '开始时间')
-    .option('--end <HH:MM>', '结束时间')
-    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
-    .option('--json', '输出 JSON')
-    .action(options => handlers.settingsQuietHours?.(options));
 
   const draft = program.command('draft').description('对外回复草稿：确认后才发送');
   draft.command('create')
@@ -813,14 +813,14 @@ Changes take effect immediately; no restart needed.`);
   }
 
   const addProcessCommands = (parent: Command) => {
-    parent.command('start')
-      .description('Start the AgentDock server in the background')
+    addServerOptions(parent.command('start')
+      .description('Start the AgentDock server in the background'))
       .action((options, command) => handlers.daemonStart?.(serverOptionsFrom(options, command)));
     parent.command('stop')
       .description('Stop the background AgentDock server')
       .action(() => handlers.daemonStop?.());
-    parent.command('restart')
-      .description('Restart the background AgentDock server')
+    addServerOptions(parent.command('restart')
+      .description('Restart the background AgentDock server'))
       .action((options, command) => handlers.daemonRestart?.(serverOptionsFrom(options, command)));
     parent.command('status')
       .description('Show whether the background AgentDock server is running')

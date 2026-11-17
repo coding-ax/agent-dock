@@ -55,6 +55,10 @@ import { busyStates, stateLabels, stateTextTone, stateTone } from './session-sta
 import { ConfirmDialog, IconButton, SettingRow } from './ui-controls';
 import { HoverTooltip, HoverTooltipText, TooltipProvider } from './HoverTooltip';
 import { SessionHoverCard } from './SessionHoverCard';
+import { SessionContextMenu } from './SessionContextMenu';
+import { createQuickArchiveController, type QuickArchiveSnapshot } from './quick-archive';
+import { isContextMenuKeyboardEvent, shouldOpenSessionFromClick } from './session-context-menu';
+import { useToast } from './Toast';
 import { CompanionLayer } from './companion/CompanionLayer';
 import { CompanionCard, CompanionStripButton } from './companion/CompanionCard';
 import { HomeStage } from './companion/HomeStage';
@@ -372,7 +376,7 @@ function SessionStateIndicator({ session, size = 12 }: { session: Session; size?
   return <span aria-label={stateLabels[session.state]} className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>;
 }
 
-function SessionRow({ session, agent, botName, parentLabel, active, drag, noteOf, onClick }: { session: Session; agent?: Agent; botName?: string; /** 侧边会话的父会话显示名，供 hover 卡片点出来处。 */ parentLabel?: string; active: boolean; /** 传入即表示这一行可拖拽：项目树里用于排序，时间列表里只用于拖到副屏。 */ drag?: ItemDrag; /** 小猫（主会话）派出的侧边会话：行首换成便签图标，悬停提示是谁派的。 */ noteOf?: string; onClick(): void }) {
+function SessionRow({ session, agent, botName, parentLabel, active, drag, noteOf, renameRequest, onClick, onOpenContextMenu }: { session: Session; agent?: Agent; botName?: string; /** 侧边会话的父会话显示名，供 hover 卡片点出来处。 */ parentLabel?: string; active: boolean; /** 传入即表示这一行可拖拽：项目树里用于排序，时间列表里只用于拖到副屏。 */ drag?: ItemDrag; /** 小猫（主会话）派出的侧边会话：行首换成便签图标，悬停提示是谁派的。 */ noteOf?: string; /** 右键菜单发起改名的请求号。 */ renameRequest?: number; onClick(): void; onOpenContextMenu(point: { x: number; y: number }, anchor: HTMLElement): void }) {
   // 定时任务新建的会话也是 side-chat，不加标记就和手动开的侧边会话混在一起。
   const scheduled = isScheduledSession(session);
   const sideChat = Boolean(sideChatParentId(session));
@@ -382,20 +386,73 @@ function SessionRow({ session, agent, botName, parentLabel, active, drag, noteOf
   // 单独的 cwd tooltip 一并撤掉——同一行挂两个不同内容的提示，用户不知道该信哪个。
   const hoverCard = <SessionHoverCard session={session} agentName={agentName} botName={botName} parentLabel={parentLabel} now={new Date()}/>;
   // 右侧只在需要关注时常显：运行中转圈、等待授权橙点、失败红点。
-  // 一屏几十条里每行都挂一个灰点/绿点，等于没有信息；普通行显示相对时间（悬停时淡出，
-  // 让位给重命名铅笔）。时间不给固定宽度：固定 48px 会在标题右侧留出一整条空白。
+  // 一屏几十条里每行都挂一个灰点/绿点，等于没有信息；普通行显示相对时间。
+  // 时间不给固定宽度：固定 48px 会在标题右侧留出一整条空白。
   const attention = busyStates.has(session.state) || session.state === 'failed';
   const trailing = attention
     ? <SessionStateIndicator session={session} size={12}/>
-    : <span className="text-[12px] tabular-nums text-zinc-400 transition-opacity group-hover:opacity-0 max-md:hidden">{relativeTimeLabel(sessionActivityTime(session))}</span>;
-  const row = <div onClick={onClick} role="button" tabIndex={0} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(); } }} {...(drag?.props ?? {})} className={`group relative flex h-[34px] w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left transition-colors ${active ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-700 hover:bg-zinc-100/60'} ${drag?.dragging ? 'opacity-40' : ''} ${drag?.over ? 'ring-1 ring-zinc-300' : ''}`}>
+    : <span className="text-[12px] tabular-nums text-zinc-400 max-md:hidden">{relativeTimeLabel(sessionActivityTime(session))}</span>;
+  const rowRef = useRef<HTMLDivElement>(null);
+  const longPress = useRef<{ timer?: ReturnType<typeof setTimeout>; start?: { x: number; y: number } }>({});
+  const longPressed = useRef(false);
+  // 移动端长按后浏览器仍会补一次 click，用它挡住「松手就打开会话」。
+  const suppressClickUntil = useRef(0);
+  const clearLongPress = () => {
+    if (longPress.current.timer) clearTimeout(longPress.current.timer);
+    longPress.current = {};
+  };
+  useEffect(() => () => clearLongPress(), []);
+  const openContextMenu = (point: { x: number; y: number }) => {
+    if (rowRef.current) onOpenContextMenu(point, rowRef.current);
+  };
+  const finishPointer = () => {
+    // 按压多久都算：松手这一刻再刷新抑制窗口，避免长按超过 1 秒后补发的 click 打开会话。
+    if (longPressed.current) suppressClickUntil.current = Date.now() + 900;
+    longPressed.current = false;
+    clearLongPress();
+  };
+  const row = <div
+    ref={rowRef}
+    onClick={() => { if (shouldOpenSessionFromClick(suppressClickUntil.current, Date.now())) onClick(); }}
+    onContextMenu={event => { event.preventDefault(); openContextMenu({ x: event.clientX, y: event.clientY }); }}
+    onPointerDown={event => {
+      if (event.pointerType === 'mouse') return;
+      clearLongPress();
+      longPressed.current = false;
+      const point = { x: event.clientX, y: event.clientY };
+      longPress.current.start = point;
+      longPress.current.timer = setTimeout(() => {
+        longPress.current = {};
+        longPressed.current = true;
+        openContextMenu(point);
+      }, 480);
+    }}
+    onPointerMove={event => {
+      const start = longPress.current.start;
+      if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 8) clearLongPress();
+    }}
+    onPointerUp={finishPointer}
+    onPointerCancel={finishPointer}
+    role="button"
+    tabIndex={0}
+    onKeyDown={event => {
+      if (isContextMenuKeyboardEvent(event)) {
+        event.preventDefault();
+        const rect = event.currentTarget.getBoundingClientRect();
+        openContextMenu({ x: rect.left + 16, y: rect.top + rect.height });
+        return;
+      }
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(); }
+    }}
+    {...(drag?.props ?? {})}
+    className={`group relative flex h-[34px] w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left transition-colors ${active ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-700 hover:bg-zinc-100/60'} ${drag?.dragging ? 'opacity-40' : ''} ${drag?.over ? 'ring-1 ring-zinc-300' : ''}`}
+  >
     {scheduled
       ? <AlarmClock size={12} aria-label="定时任务会话" className="shrink-0 text-zinc-400"/>
       : noteOf ? <StickyNote size={12} aria-label={`${noteOf}派出的便签`} className="shrink-0 text-amber-600/80"/>
       : sideChat ? <MessageSquare size={12} aria-label="侧边会话" className="shrink-0 text-zinc-400"/> : null}
-    <SessionTitleEditor session={session} label={primary} nameClassName="min-w-0 flex-1 truncate text-[14px]" editButtonVisible={!attention}/>
-    {/* 铅笔是绝对定位（right-2），不参与 flex 排版：悬停时它出现在时间的位置，
-        时间同时淡出，行内文字不会因为按钮出现而重新截断。 */}
+    {/* 行内不再放任何操作图标：重命名和归档都收进右键/长按菜单，避免 hover 时堆一排按钮。 */}
+    <SessionTitleEditor session={session} label={primary} nameClassName="min-w-0 flex-1 truncate text-[14px]" editRequest={renameRequest}/>
     <span className="flex shrink-0 items-center justify-end">{trailing}</span>
   </div>;
   // 信息卡一律往右弹：锚点是**整行**（宽度铺满侧栏），而卡片有 320px 宽、十来行高，
@@ -606,6 +663,21 @@ export default function App() {
   const [paneMenuAnchor, setPaneMenuAnchor] = useState<HTMLElement | undefined>();
   /** 右栏面板自己的错误（建侧边会话失败之类）。会话内的错误由 SessionPane 自己管。 */
   const [actionError, setActionError] = useState<string>();
+  // 快速归档只有一个确认框：状态由纯控制器管，右键/长按菜单只负责 open(sessionId)。
+  const [quickArchive, setQuickArchive] = useState<QuickArchiveSnapshot>({ status: 'closed' });
+  // 右键菜单与归档确认共用同一份控制器；菜单只负责把 action 交回 App。
+  const [sessionMenu, setSessionMenu] = useState<{ sessionId: string; point: { x: number; y: number }; anchor: HTMLElement }>();
+  // 右键菜单选中「重命名会话」后，用递增请求号让对应行进入就地编辑。
+  const [renameRequest, setRenameRequest] = useState<{ sessionId: string; nonce: number }>();
+  const copyToast = useToast(1_800);
+  const quickArchiveController = useMemo(() => createQuickArchiveController({
+    archive: async id => {
+      const archived = await api.archive(id);
+      qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === archived.id ? archived : item));
+      return archived;
+    },
+    onChange: setQuickArchive
+  }), [qc]);
   const quickCreate = useMutation({
     mutationFn: ({ agentId, cwd }: { agentId: string; cwd: string }) => api.create({ agentId, cwd }),
     onMutate: pair => setCreatingPair(pair),
@@ -710,7 +782,7 @@ export default function App() {
     const parent = session.sourceId ? sortedSessions.find(item => item.id === session.sourceId) : undefined;
     // 交接后，前几代小猫派出的侧边会话仍是这只猫家的便签。
     const noteOf = mainSessionId && isLineageSource(session.sourceId, mainSessionId, assistantState.data?.lifecycle?.ancestorSessionIds) && sideChatParentId(session) ? assistantState.data?.companion?.name ?? '小猫' : undefined;
-    return <SessionRow key={session.id} session={session} drag={drag} noteOf={noteOf} agent={agents.data?.find(item => item.id === session.agentId)} botName={larkConfig.data?.bots.find(bot => session.sourceId?.startsWith(`${bot.appId}:`))?.name} parentLabel={parent ? sessionLabel(parent, agents.data?.find(item => item.id === parent.agentId)?.name) : undefined} active={primarySessionId === session.id || tabs.some(tab => (tab.kind === 'session' || tab.kind === 'side-chat') && tab.sessionId === session.id)} onClick={() => selectSession(session.id)}/>;
+    return <SessionRow key={session.id} session={session} drag={drag} noteOf={noteOf} agent={agents.data?.find(item => item.id === session.agentId)} botName={larkConfig.data?.bots.find(bot => session.sourceId?.startsWith(`${bot.appId}:`))?.name} parentLabel={parent ? sessionLabel(parent, agents.data?.find(item => item.id === parent.agentId)?.name) : undefined} active={primarySessionId === session.id || tabs.some(tab => (tab.kind === 'session' || tab.kind === 'side-chat') && tab.sessionId === session.id)} renameRequest={renameRequest?.sessionId === session.id ? renameRequest.nonce : undefined} onClick={() => selectSession(session.id)} onOpenContextMenu={(point, anchor) => setSessionMenu({ sessionId: session.id, point, anchor })}/>;
   };
   // TooltipProvider 必须挂在根部：Radix 用它统一管理「同一时刻只显示一个提示」与交错延迟。
   return <TooltipProvider><CompanionNavProvider value={companionNav}><div ref={shellRef} className="ui-shell relative flex h-full overflow-hidden bg-canvas font-sans text-zinc-900">
@@ -830,6 +902,22 @@ export default function App() {
       </> : <div className="ui-page relative flex flex-1 justify-center overflow-y-auto px-4 sm:px-8"><span className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] md:hidden"><IconButton label="打开会话列表" onClick={() => setSidebarOpen(true)}><Menu size={17}/></IconButton></span><HomeStage editorRef={draftTextareaRef} agents={agents.data ?? []} sessions={sessions.data ?? []} onCreated={session => selectSession(session.id)}/></div>}
     </main>
     {paneMenuAnchor && <PaneTypeMenu anchor={paneMenuAnchor} shortcuts={shortcuts} onPick={openPaneKind} onClose={() => setPaneMenuAnchor(undefined)}/>}
+    {sessionMenu && (() => {
+      const session = sortedSessions.find(item => item.id === sessionMenu.sessionId);
+      if (!session) return null;
+      return <SessionContextMenu
+        session={session}
+        agentName={agents.data?.find(agent => agent.id === session.agentId)?.name}
+        point={sessionMenu.point}
+        origin={window.location.origin}
+        anchor={sessionMenu.anchor}
+        onClose={() => setSessionMenu(undefined)}
+        onRename={() => { setSessionMenu(undefined); setRenameRequest(current => ({ sessionId: session.id, nonce: (current?.nonce ?? 0) + 1 })); }}
+        onArchive={() => { setSessionMenu(undefined); quickArchiveController.open(session.id); }}
+        onNotice={text => copyToast.show(text, 'info')}
+      />;
+    })()}
+    {copyToast.toast}
     {actionError && <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2 text-[12px] text-red-700 shadow-[0_12px_32px_rgba(24,24,27,.12)]"><button type="button" onClick={() => setActionError(undefined)} className="mr-2 font-medium underline">关闭</button>{actionError}</div>}
     {/* 弹窗开关在 dialog-store 里：打开它们不会重渲染整棵会话树。 */}
     <DialogHost dialogs={{
@@ -847,10 +935,25 @@ export default function App() {
         return session?.systemPrompt ? <SystemPromptDialog session={session} onClose={closeAppDialog}/> : null;
       },
       share: <ShareAppDialog onClose={closeAppDialog}/>,
-      archived: <ArchivedSessionsDialog sessions={archivedSessions} agents={agents.data ?? []} onClose={closeAppDialog} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
+      archived: <ArchivedSessionsDialog sessions={archivedSessions} agents={agents.data ?? []} mainSessionId={mainSessionId} onClose={closeAppDialog} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
       import: <ImportSessionDialog agents={agents.data ?? []} onClose={closeAppDialog} onImported={session => selectSession(session.id)}/>,
       search: <SessionSearchDialog agents={agents.data ?? []} sessions={sessions.data ?? []} onClose={closeAppDialog} onOpen={session => { closeAppDialog(); selectSession(session.id); }}/>
     }}/>
+    {(() => {
+      const target = quickArchive.status === 'closed' ? undefined : sortedSessions.find(session => session.id === quickArchive.sessionId);
+      const targetName = target ? sessionLabel(target, agents.data?.find(agent => agent.id === target.agentId)?.name) : '该会话';
+      return <ConfirmDialog
+        open={quickArchive.status !== 'closed'}
+        tone="warning"
+        title={`归档「${targetName}」？`}
+        description="归档后，该会话会从会话列表移入「归档会话」，历史消息和执行记录都会保留，不会被删除。正在运行的会话会先停止。之后可在侧栏设置里的「归档会话」中找回并查看。"
+        confirmLabel="确认归档"
+        busy={quickArchive.status === 'archiving'}
+        error={quickArchive.status === 'error' ? quickArchive.message : undefined}
+        onCancel={() => quickArchiveController.cancel()}
+        onConfirm={() => void quickArchiveController.confirm()}
+      />;
+    })()}
     {agentPicker && <AgentPickerMenu cwd={agentPicker.cwd} top={agentPicker.top} left={agentPicker.left} agents={agents.data ?? []} creatingPair={creatingPair} onSelect={agentId => quickCreate.mutate({ agentId, cwd: agentPicker.cwd })} onClose={() => setAgentPicker(null)}/>}
     <CompanionLayer view={companionView}/>
   </div></CompanionNavProvider></TooltipProvider>;

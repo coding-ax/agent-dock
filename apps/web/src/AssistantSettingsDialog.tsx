@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Clock, Dices, PawPrint, Sparkles, X } from 'lucide-react';
-import { api, type AssistantQuietHours } from './api';
-import { normalizeSilentEmoji } from './silent-trigger';
+import { Dices, PawPrint, X } from 'lucide-react';
+import { api } from './api';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
-import { ConfirmDialog, SettingRow } from './ui-controls';
+import { ConfirmDialog } from './ui-controls';
 import { Kitten } from './companion/Kitten';
 import { CatProfile } from './companion/CatProfile';
 import { pickKittenName, sinceLabel } from './companion/companion-model';
-import { useAssistantState, useCompanion } from './companion/useCompanion';
+import { useCompanion } from './companion/useCompanion';
 import { useCompanionStore } from './companion/companion-store';
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败';
@@ -17,31 +16,18 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : '
 /**
  * 小猫与督办设置。小猫就是主会话：唯一能派活、验收、配置 watch 的会话。
  * 认领在首页完成（这里没认领时只给一个「去认领」）；认领后可以改名、打开、让它休息（解除主会话）。
- * 静默时段只影响普通通知，默认关闭，起止时间由用户自己定。
  */
 export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt, onOpenSession }: { onClose(): void; onOpenMain(): void; onAdopt(): void; onOpenSession?(id: string): void }) {
   const queryClient = useQueryClient();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   useModalFocusTrap({ panel: panelRef, initial: closeRef, dismissible: true, onDismiss: onClose });
-  const state = useAssistantState();
   const info = useCompanion();
   const inviteDismissed = useCompanionStore(store => store.inviteDismissed);
-  const [quiet, setQuiet] = useState<AssistantQuietHours | null>(null);
   const [name, setName] = useState('');
-  const [silentEmoji, setSilentEmoji] = useState('');
-  const [silentError, setSilentError] = useState<string>();
   const [error, setError] = useState<string>();
-  const [saved, setSaved] = useState(false);
-  const [silentSaved, setSilentSaved] = useState(false);
   const [confirmRelease, setConfirmRelease] = useState(false);
 
-  useEffect(() => {
-    if (state.data?.quietHours && !quiet) setQuiet(state.data.quietHours);
-  }, [state.data?.quietHours, quiet]);
-  useEffect(() => {
-    if (state.data?.silentEmoji !== undefined) setSilentEmoji(state.data.silentEmoji);
-  }, [state.data?.silentEmoji]);
   useEffect(() => { if (info.adopted) setName(info.name); }, [info.adopted, info.name]);
 
   const refresh = () => {
@@ -53,22 +39,10 @@ export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt, onOpenSe
 
   const rename = useMutation({ mutationFn: (value: string) => api.assistantRenameCompanion(value), onSuccess: () => { refresh(); useCompanionStore.getState().celebrate(); }, onError: fail });
   const release = useMutation({ mutationFn: () => api.assistantClearMain(), onSuccess: () => { setConfirmRelease(false); refresh(); }, onError: error => { setConfirmRelease(false); fail(error); } });
-  const saveQuiet = useMutation({
-    mutationFn: (value: AssistantQuietHours) => api.assistantSaveSettings({ quietHours: value }),
-    onSuccess: result => { setQuiet(result.quietHours); setSaved(true); refresh(); },
-    onError: fail
-  });
-  const saveSilent = useMutation({
-    mutationFn: (value: string) => api.assistantSaveSettings({ silentEmoji: value }),
-    onSuccess: result => { setSilentEmoji(result.silentEmoji); setSilentSaved(true); setSilentError(undefined); refresh(); },
-    onError: error => setSilentError(errorText(error))
-  });
 
   const main = info.mainSession;
   const attention = info.counts.needsUser + info.counts.planned + info.pendingDrafts;
   const trimmed = name.trim();
-  const normalizedSilent = normalizeSilentEmoji(silentEmoji);
-  const silentDirty = normalizedSilent !== undefined && normalizedSilent !== (state.data?.silentEmoji ?? '');
 
   return <div className="ui-overlay fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-2 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
     <div ref={panelRef} role="dialog" aria-modal="true" aria-label="小猫与督办" className="ui-dialog flex max-h-[86dvh] w-full max-w-2xl flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)]">
@@ -108,34 +82,6 @@ export function AssistantSettingsDialog({ onClose, onOpenMain, onAdopt, onOpenSe
             onOpenSession={id => onOpenSession?.(id)}
             onOpenCeremony={handoffId => { onClose(); useCompanionStore.getState().openCeremony(handoffId); }}
           />}
-
-          <SettingRow title={<span className="flex items-center gap-1.5"><Clock size={14}/>静默时段</span>} description="开启后，普通通知会压到结束时间再发；紧急通知（notify --urgent）不受影响。默认关闭。">
-            <div className="flex flex-col items-end gap-2">
-              <label className="flex items-center gap-2 text-[12px] text-zinc-600">
-                <input type="checkbox" checked={quiet?.enabled ?? false} onChange={event => setQuiet(value => value ? { ...value, enabled: event.target.checked } : value)} className="h-3.5 w-3.5 accent-zinc-900"/>
-                启用
-              </label>
-              <div className="flex items-center gap-1.5">
-                <input type="time" value={quiet?.start ?? '23:00'} disabled={!quiet?.enabled} onChange={event => setQuiet(value => value ? { ...value, start: event.target.value } : value)} aria-label="静默开始时间" className="h-7 rounded-md border border-zinc-200 px-1.5 text-[12px] tabular-nums text-zinc-700 outline-none disabled:bg-zinc-50 disabled:text-zinc-400"/>
-                <span className="text-[12px] text-zinc-400">至</span>
-                <input type="time" value={quiet?.end ?? '08:00'} disabled={!quiet?.enabled} onChange={event => setQuiet(value => value ? { ...value, end: event.target.value } : value)} aria-label="静默结束时间" className="h-7 rounded-md border border-zinc-200 px-1.5 text-[12px] tabular-nums text-zinc-700 outline-none disabled:bg-zinc-50 disabled:text-zinc-400"/>
-                <button type="button" disabled={!quiet || saveQuiet.isPending || !info.adopted} onClick={() => { setSaved(false); if (quiet) saveQuiet.mutate(quiet); }} className="h-7 rounded-md bg-zinc-900 px-2.5 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">保存</button>
-              </div>
-              {saved && <span className="text-[11px] text-emerald-600">已保存</span>}
-            </div>
-          </SettingRow>
-
-          <SettingRow title={<span className="flex items-center gap-1.5"><Sparkles size={14}/>静默触发表情</span>} description="在时间线的消息上点这个表情，就在背后开一轮 Agent。不会新增用户气泡，也不会弹通知；只接受一个 emoji，留空关闭。">
-            <div className="flex flex-col items-end gap-1.5">
-              <div className="flex items-center gap-1.5">
-                <input value={silentEmoji} maxLength={16} onChange={event => { setSilentEmoji(event.target.value); setSilentSaved(false); setSilentError(undefined); }} aria-label="静默触发表情" placeholder="例如 🐱" className="h-8 w-20 rounded-lg border border-zinc-300 bg-white px-2 text-center text-[16px] text-zinc-900 outline-none placeholder:text-[12px] placeholder:text-zinc-400"/>
-                <button type="button" aria-label="保存静默触发表情" disabled={saveSilent.isPending || !silentDirty} onClick={() => { if (normalizedSilent !== undefined) saveSilent.mutate(normalizedSilent); }} className="h-8 rounded-md bg-zinc-900 px-2.5 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">{saveSilent.isPending ? '保存中…' : '保存'}</button>
-              </div>
-              {silentEmoji.trim() && normalizedSilent === undefined && <span className="text-[11px] text-red-600">只支持单个 emoji</span>}
-              {silentSaved && normalizedSilent !== undefined && !silentDirty && <span className="text-[11px] text-emerald-600">已保存</span>}
-              {silentError && <span className="max-w-56 text-right text-[11px] text-red-600">{silentError}</span>}
-            </div>
-          </SettingRow>
 
           <div className="px-4 py-3 text-[12px] leading-5 text-zinc-400">
             小猫派活、验收和 watch 用 CLI 完成：<code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[11px] text-zinc-600">agent-dock task|watch|notify -h</code>。侧边会话只能 <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[11px] text-zinc-600">task report</code> 和 <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[11px] text-zinc-600">draft create</code>。命令行认领：<code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[11px] text-zinc-600">agent-dock main set --agent claude --name 小A同学</code>。

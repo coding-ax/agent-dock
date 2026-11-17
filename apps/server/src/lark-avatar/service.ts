@@ -2082,7 +2082,7 @@ export class LarkAvatarService {
         throw new RuntimeError('NO_MAIN_SESSION', '还没有主会话，无法发送表情触发轮次', 409);
       }
       const task = await this.mainSession.dispatch({
-        // origin=emoji 与网页端「静默触发表情」一致：不新增用户气泡、不打扰。
+        // origin=emoji：时间线不新增用户气泡，也不打扰用户。
         prompt: `飞书表情触发（${input.emoji}）：${reactionSummary(input.message, 80)}`,
         agentPrompt,
         origin: 'emoji',

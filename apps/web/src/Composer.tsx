@@ -6,7 +6,7 @@ import type { QueuedTask } from './timeline';
 import { AgentIcon } from './AgentIcon';
 import { ComposerEditor, type ComposerEditorHandle } from './ComposerEditor';
 import { composerKeyAction, createCompositionGuard } from './composer-keyboard';
-import { filterAgentModels, formatTokens, referenceFromUpload, replaceSlashQuery, shouldDismissComposerPanel, slashQuery, uploadSessionFile, workspaceLabel as displayWorkspaceLabel, type ComposerReference, type ContextStats, type ModelReadiness } from './composer-utils';
+import { composerSubmitValue, filterAgentModels, formatTokens, referenceFromUpload, replaceSlashQuery, shouldDismissComposerPanel, slashQuery, uploadSessionFile, workspaceLabel as displayWorkspaceLabel, type ComposerReference, type ContextStats, type ModelReadiness } from './composer-utils';
 
 type SendMode = 'queue' | 'interrupt';
 type ComposerCommand = { name: string; description: string };
@@ -124,7 +124,7 @@ export function Composer({ sessionId, state, value, references, sending, mode, q
   onPickDirectory?(): void;
   /** 草稿态没有 sessionId：文件先交给上层暂存，返回一枚引用 chip 展示。 */
   onAttachFile?(file: File | Blob): Promise<ComposerReference | void>;
-  onChange(value: string): void; onReferencesChange(value: ComposerReference[] | ((current: ComposerReference[]) => ComposerReference[])): void; onModeChange(mode: SendMode): void; onSubmit(): void; onInterrupt(): void; onCancelQueued(taskId: string): void; onSteerQueued(taskId: string): void; onEditQueued(task: Task): void; onModelChange(model: string): void; onReasoningEffortChange(reasoningEffort: string): void; onRefreshModels(): void;
+  onChange(value: string): void; onReferencesChange(value: ComposerReference[] | ((current: ComposerReference[]) => ComposerReference[])): void; onModeChange(mode: SendMode): void; onSubmit(value: string): void; onInterrupt(): void; onCancelQueued(taskId: string): void; onSteerQueued(taskId: string): void; onEditQueued(task: Task): void; onModelChange(model: string): void; onReasoningEffortChange(reasoningEffort: string): void; onRefreshModels(): void;
 }) {
   const [panel, setPanel] = useState<ComposerPanel>();
   const [modelQuery, setModelQuery] = useState('');
@@ -137,6 +137,9 @@ export function Composer({ sessionId, state, value, references, sending, mode, q
   const workspaceLabel = displayWorkspaceLabel(workspacePath, homeDirectory);
   const currentAgent = (agents ?? []).find(agent => agent.id === currentAgentId);
   const editor = useRef<ComposerEditorHandle>(null);
+  // 编辑器文档的「有无正文」由 ProseMirror 同步回报；不能只靠 200ms 防抖后的 value，
+  // 否则刚打完字就按 Enter/点发送时按钮还是 disabled。
+  const [editorHasContent, setEditorHasContent] = useState(() => value.trim().length > 0);
   // 输入法组合态由编辑器上的 composition 事件驱动，键盘处理读同一份状态。
   const [compositionGuard] = useState(createCompositionGuard);
   // 光标前当前文本块的纯文本。Milkdown 的文档位置与 Markdown 字符串偏移不是一回事，
@@ -150,7 +153,9 @@ export function Composer({ sessionId, state, value, references, sending, mode, q
   const busy = ['starting', 'thinking', 'running_tool', 'waiting_for_permission', 'interrupting'].includes(state);
   // 只有 blocked（正在切换模型）才拦发送；模型列表还在加载或加载失败都不影响
   // 用当前模型发消息，详见 getModelReadiness。
-  const canSend = modelReadiness.kind !== 'blocked' && (value.trim().length > 0 || references.length > 0) && !sending && (draft ? Boolean(currentAgentId) : !['starting', 'interrupting', 'stopped', 'failed'].includes(state));
+  const canSubmitWith = (hasText: boolean) => modelReadiness.kind !== 'blocked' && (hasText || references.length > 0) && !sending && (draft ? Boolean(currentAgentId) : !['starting', 'interrupting', 'stopped', 'failed'].includes(state));
+  const canSendValue = (candidate: string) => canSubmitWith(candidate.trim().length > 0);
+  const canSend = canSubmitWith(editorHasContent || value.trim().length > 0);
   const modelLabel = modelReadiness.kind === 'ready' ? currentModel || '默认模型' : modelReadiness.label;
   // 底栏优先展示模型的全名（如「Claude Opus 5.5」），拿不到目录时才退回 id；
   // 完整 id 放 title，反代前缀再长也不会把熟悉的名字截掉。
@@ -212,13 +217,15 @@ export function Composer({ sessionId, state, value, references, sending, mode, q
   // 返回 true = 已处理，由编辑器阻止默认行为。
   // Enter 发送；Shift+Enter 换行。命令面板打开时，Enter 选择第一项。
   const keyboard = (event: KeyboardEvent): boolean => {
+    // 读输入框此刻的文档，而不是 may-be-200ms 前的 controlled value。
+    const currentValue = composerSubmitValue(editor.current?.getValue(), value);
     const action = composerKeyAction(event, {
       guard: compositionGuard,
       panelOpen: Boolean(panel || query !== undefined),
       commandPanel,
       hasCommand: Boolean(visibleCommands[0]),
       hasSkill: Boolean(visibleSkills[0]),
-      canSend
+      canSend: canSendValue(currentValue)
     });
     switch (action.type) {
       case 'ignore':
@@ -236,7 +243,7 @@ export function Composer({ sessionId, state, value, references, sending, mode, q
         chooseSkill(visibleSkills[0]!.name);
         return true;
       case 'send':
-        onSubmit();
+        onSubmit(currentValue);
         return true;
       // Enter 一律吞掉，不能在发送失败时偷偷换行。
       case 'handled':
@@ -317,11 +324,11 @@ export function Composer({ sessionId, state, value, references, sending, mode, q
       {uploadError && <div className="mx-2.5 mb-1 flex items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 py-1.5 text-[12px] text-red-700"><AlertCircle size={12} className="shrink-0"/><span className="min-w-0 flex-1 truncate" title={uploadError}>{uploadError}</span><button type="button" onClick={() => setUploadError(undefined)} aria-label="关闭上传错误提示" className="shrink-0 text-red-400 hover:text-red-700"><X size={11}/></button></div>}
       {references.length > 0 && <div className="flex flex-wrap gap-1.5 px-2.5 pb-1.5 pt-1">{references.map(reference => <span key={reference.id} className="flex max-w-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1 text-[12px] text-zinc-600">{reference.kind === 'image' ? (reference.url ? <img src={reference.url} alt={reference.label} className="h-5 w-5 rounded object-cover" /> : <ImageIcon size={11}/>) : reference.kind === 'file' ? <File size={11}/> : <Sparkles size={11}/>}<span className="truncate font-mono">{reference.label}</span><button type="button" onClick={() => onReferencesChange(current => current.filter(item => item.id !== reference.id))} aria-label={`移除引用 ${reference.label}`} className="text-zinc-400 hover:text-zinc-800"><X size={10}/></button></span>)}</div>}
       {uploading.length > 0 && <div className="flex items-center gap-1.5 px-2.5 pb-1 text-[12px] text-zinc-500"><RefreshCw size={11} className="shrink-0 animate-spin text-zinc-400"/><span className="truncate">正在上传 {uploading.length > 1 ? `${uploading.length} 个文件` : uploading[0]}…</span></div>}
-      <ComposerEditor ref={node => { editor.current = node; if (externalEditorRef) externalEditorRef.current = node; }} value={value} ariaLabel="消息" placeholder={placeholder ?? <><span className="hidden sm:inline">输入消息，Enter 发送，Shift+Enter 换行；/ 选择 Skill 或命令，可粘贴/拖入文件</span><span className="sm:hidden">输入消息，/ 选择命令</span></>} onChange={next => { onChange(next); if (panel !== 'models' && panel !== 'reasoning') setPanel(undefined); }} onCaretChange={setBeforeCaret} onKeydown={keyboard} compositionGuard={compositionGuard} onFiles={files => { for (const file of files) void uploadFile(file); }}/>
+      <ComposerEditor ref={node => { editor.current = node; if (externalEditorRef) externalEditorRef.current = node; }} value={value} ariaLabel="消息" placeholder={placeholder ?? <><span className="hidden sm:inline">输入消息，Enter 发送，Shift+Enter 换行；/ 选择 Skill 或命令，可粘贴/拖入文件</span><span className="sm:hidden">输入消息，/ 选择命令</span></>} onChange={next => { onChange(next); if (panel !== 'models' && panel !== 'reasoning') setPanel(undefined); }} onCaretChange={setBeforeCaret} onContentChange={setEditorHasContent} onKeydown={keyboard} compositionGuard={compositionGuard} onFiles={files => { for (const file of files) void uploadFile(file); }}/>
       <div className="flex min-w-0 items-center gap-0.5 px-1 pb-1 sm:gap-1"><button type="button" data-composer-panel-trigger onClick={() => setPanel(panel === 'commands' ? undefined : 'commands')} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg font-mono text-[16px] text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800" aria-label="打开命令与 Skill 菜单" title="命令与 Skill（/）">/</button><button type="button" onClick={() => imageInput.current?.click()} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800" aria-label="上传文件" title={uploading.length ? '文件上传中…' : '上传文件'}>{uploading.length > 0 ? <RefreshCw size={14} className="animate-spin"/> : <Paperclip size={14}/>}</button><input ref={imageInput} type="file" multiple className="hidden" onChange={event => { const files = event.target.files; if (files) { for (const file of files) void uploadFile(file); } event.target.value = ''; }}/><div className="composer-toolbar-scroll no-scrollbar flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto sm:gap-1">{lockedTarget}{!lockedTarget && <>{draft && <button type="button" data-composer-panel-trigger onClick={() => setPanel(panel === 'agent' ? undefined : 'agent')} title={currentAgent?.name ?? '选择 Agent'} className="flex h-8 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-lg px-1.5 text-[12px] text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:px-2"><AgentIcon agentId={currentAgentId} agentName={currentAgent?.name} size={12}/><span className="truncate">{currentAgent?.name ?? '选择 Agent'}</span><ChevronDown size={10}/></button>}{draft && <button type="button" data-composer-panel-trigger onClick={() => { setWsDraft(workspacePath); setPanel(panel === 'workspace' ? undefined : 'workspace'); }} title={workspacePath || '工作目录'} className="flex h-8 min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-lg px-1.5 text-[12px] text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:px-2"><Folder size={12}/><span className="truncate">{workspaceLabel}</span><ChevronDown size={10}/></button>}<button type="button" data-composer-panel-trigger onClick={() => { setModelQuery(''); setPanel(current => current === 'models' ? undefined : 'models'); }} title={modelTitle} className={`${draft ? '' : ''}flex h-8 min-w-0 max-w-[16rem] shrink-0 items-center gap-1.5 rounded-lg px-2 text-[12px] text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800`}><Gauge size={12}/><span className="max-w-[220px] truncate">{modelDisplay}</span><ChevronDown size={10}/></button><button type="button" data-composer-panel-trigger onClick={() => setPanel(panel === 'reasoning' ? undefined : 'reasoning')} className={`${draft ? '' : ''}flex h-8 min-w-0 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[12px] text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800`}><BrainCircuit size={12}/><span className="truncate">{currentReasoningEffort || '默认深度'}</span><ChevronDown size={10}/></button></>}</div><div className="ml-auto flex min-w-0 items-center gap-1.5">{!draft && context.used !== undefined && <div className="hidden shrink-0 items-center sm:flex"><ContextMeter context={context}/></div>}
         {!draft && busy && value.trim() && <button type="button" onClick={() => setModeOpen(open => !open)} title={`发送方式：${mode === 'interrupt' ? '打断并发送' : '排队发送'}`} aria-haspopup="menu" aria-expanded={modeOpen} className={`flex h-8 items-center gap-1 rounded-lg px-2 text-[12px] font-medium ${mode === 'interrupt' ? 'bg-orange-50 text-orange-700' : 'text-zinc-600 hover:bg-zinc-100'}`}>{mode === 'interrupt' ? <Zap size={12}/> : <ListEnd size={12}/>}<span>{mode === 'interrupt' ? '打断' : '排队'}</span><ChevronDown size={10}/></button>}
         {!draft && modeOpen && <div role="menu" className="ui-popover absolute bottom-12 right-10 z-20 w-52 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_16px_45px_rgba(24,24,27,.16)]"><button type="button" role="menuitemradio" aria-checked={mode === 'queue'} onClick={() => { onModeChange('queue'); setModeOpen(false); }} className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-[12px] hover:bg-zinc-100"><ListEnd size={13}/><span className="flex-1 text-left">排队发送</span>{mode === 'queue' && <Check size={12}/>}</button><button type="button" role="menuitemradio" aria-checked={mode === 'interrupt'} onClick={() => { onModeChange('interrupt'); setModeOpen(false); }} className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-[12px] hover:bg-zinc-100"><Zap size={13}/><span className="flex-1 text-left">打断并发送</span>{mode === 'interrupt' && <Check size={12}/>}</button></div>}
-        {!draft && busy && !value.trim() && !references.length ? <button type="button" onClick={onInterrupt} aria-label="中断当前任务" className="grid h-8 w-8 place-items-center rounded-full bg-zinc-900 text-white hover:bg-zinc-700"><Square size={12} fill="currentColor"/></button> : <span className="shrink-0" title={modelReadiness.kind === 'blocked' ? modelReadiness.reason : undefined}><button type="button" disabled={!canSend} onClick={onSubmit} aria-label={sendLabel} aria-keyshortcuts="Enter" title={`${sendLabel}（Enter 发送，Shift+Enter 换行）`} className="grid h-8 w-8 place-items-center rounded-full bg-zinc-900 text-white shadow-[0_1px_2px_rgba(0,0,0,.16)] transition-[background-color,opacity,transform] duration-200 hover:bg-zinc-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none"><ArrowUp size={15} strokeWidth={2.2}/></button></span>}
+        {!draft && busy && !value.trim() && !references.length ? <button type="button" onClick={onInterrupt} aria-label="中断当前任务" className="grid h-8 w-8 place-items-center rounded-full bg-zinc-900 text-white hover:bg-zinc-700"><Square size={12} fill="currentColor"/></button> : <span className="shrink-0" title={modelReadiness.kind === 'blocked' ? modelReadiness.reason : undefined}><button type="button" disabled={!canSend} onClick={() => onSubmit(composerSubmitValue(editor.current?.getValue(), value))} aria-label={sendLabel} aria-keyshortcuts="Enter" title={`${sendLabel}（Enter 发送，Shift+Enter 换行）`} className="grid h-8 w-8 place-items-center rounded-full bg-zinc-900 text-white shadow-[0_1px_2px_rgba(0,0,0,.16)] transition-[background-color,opacity,transform] duration-200 hover:bg-zinc-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none"><ArrowUp size={15} strokeWidth={2.2}/></button></span>}
       </div></div>
     </div></div></div>;
 }

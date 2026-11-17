@@ -35,8 +35,8 @@ describe('queued task panel visibility', () => {
     expect(waitingQueuedTasks(undefined, false)).toEqual([]);
   });
 
-  it('never shows silent-origin tasks in the editable wait panel', () => {
-    const silent = { ...task('t2', 'queued', '2026-01-01T00:00:01.000Z'), origin: 'emoji', prompt: '静默触发：完整上下文' };
+  it('never shows reaction-origin tasks in the editable wait panel', () => {
+    const silent = { ...task('t2', 'queued', '2026-01-01T00:00:01.000Z'), origin: 'emoji', prompt: '表情触发：完整上下文' };
     const normal = { ...task('t3', 'queued', '2026-01-01T00:00:02.000Z'), prompt: '普通排队消息' };
     const hidden = new Set(['emoji']);
     expect(waitingQueuedTasks([task('t1', 'running'), silent, normal], true, [], hidden).map(item => item.id)).toEqual(['t3']);

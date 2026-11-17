@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Dices, PencilLine, StickyNote } from 'lucide-react';
+import { Dices, PencilLine, StickyNote, Sunset } from 'lucide-react';
 import { api, type AssistantState } from '../api';
 import { AgentIcon } from '../AgentIcon';
 import { Kitten } from './Kitten';
@@ -9,6 +9,7 @@ import { KITTEN_TRANSITION_NAME, useAnchor } from './effects';
 import { useCompanion } from './useCompanion';
 import { useCompanionStore } from './companion-store';
 import { HandoffFlag, StageChip } from './LifecycleBadges';
+import { openRetireCeremony, retireEntry } from './lifecycle-model';
 
 const selectMainId = (state: AssistantState) => state.mainSessionId;
 
@@ -82,6 +83,24 @@ export function CompanionHeader({ agentId, agentName }: { agentId: string; agent
       {rename.error && <div className="text-[11px] text-red-600">{rename.error.message}</div>}
     </div>
   </div>;
+}
+
+/**
+ * 主会话标题栏的小「退休」入口：图标 + 小字，不抢眼；只在主会话渲染。
+ * 没有进行中的交接时打开仪式邀请（里面仍要二次确认并选接班配置）。
+ */
+export function RetireButton() {
+  const info = useCompanion();
+  const entry = retireEntry({ isMain: true, handoff: info.lifecycle?.handoff });
+  if (!entry.visible) return null;
+  const label = entry.progress ? '查看交接进度' : '提前退休并交接';
+  return <button type="button" onClick={() => openRetireCeremony(entry, id => useCompanionStore.getState().openCeremony(id))}
+    aria-label={label} title={label}
+    className="relative flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg px-2 text-[12px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 max-sm:w-8 max-sm:px-0">
+    <Sunset size={14}/>
+    <span className="max-sm:hidden">{entry.label}</span>
+    {entry.progress && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-500"/>}
+  </button>;
 }
 
 /** 主会话标题栏右侧：各状态的便签数（点了按状态打开抽屉）+ 便签按钮。 */

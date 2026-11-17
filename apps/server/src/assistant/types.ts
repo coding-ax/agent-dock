@@ -114,14 +114,6 @@ export interface CompanionProfile {
   adoptedAt: string;
 }
 
-export interface QuietHours {
-  enabled: boolean;
-  /** `HH:MM`，本机时区。 */
-  start: string;
-  /** `HH:MM`，本机时区。 */
-  end: string;
-}
-
 export interface NotifyInput {
   text: string;
   ask?: boolean;
