@@ -10,7 +10,7 @@ AgentDock 不使用 Agent SDK，也不内嵌供应商专属适配器。固定版
 
 ## 能用它做什么
 
-- **自动发现 ACPX 支持的 Agent**：Claude Code、Codex、Cursor Agent、Gemini、Trae、Pi、opencode 等，只保留本机确实装了 CLI 的那些。
+- **自动发现 ACPX 支持的 Agent**：Claude Code、Codex、Cursor Agent、Google Antigravity、Gemini、Trae、Pi、opencode 等，只保留本机确实装了 CLI 的那些。
 - **部署在本地电脑或远端开发机**，当成常驻的 AI 分身用。
 - **服务化接入**：完整的 HTTP + SSE 接口，可以作为上层多 Agent 平台的执行底座。
 - **天然的多 Agent 群聊**：给机器人开通群权限拉进群，多个 Agent 可以在同一个飞书群里互相发现、读消息、@ 交接。
@@ -555,7 +555,7 @@ POST /api/lark/send
 
 ### ACPX 指令透传
 
-`agent-dock acpx` 后面的所有内容原样交给系统里的 `acpx` 可执行文件，不经 shell、不重排参数，标准输入输出错误和退出码全部继承。运行机器需要预装 `acpx` 并在 PATH 中。
+`agent-dock acpx` 后面的所有内容原样交给随 `@agent-dock/cli` 安装的 `acpx` 依赖，不经 shell、不重排参数，标准输入输出错误和退出码全部继承。运行机器不需要另外全局安装 `acpx`，也不依赖 PATH 里恰好有同名命令。
 
 ```bash
 agent-dock acpx agents list --json
@@ -572,7 +572,7 @@ ACPX 0.20.0 已于 2026-10-21 验证可从空缓存下载，tarball 完整性与
 
 ## Agent 发现与自定义 Agent
 
-启动时读取 ACPX 内置注册表（`pi`、`codex`、`claude`、`gemini`、`cursor`、`copilot`、`trae`、`opencode`、`qwen`、`iflow`、`kilocode` 等），检查本地供应商 CLI 是否存在并调它的版本命令。**只有成功发现的 Agent** 才会出现在 `GET /api/agents`、Session 选择器和飞书默认 Agent 选择器里。Mock ACP、JSONL Demo 和 PTY Demo 仅供测试，不作为可选内置 Agent 发布。
+启动时读取 ACPX 内置注册表（`pi`、`codex`、`claude`、`gemini`、`cursor`、`copilot`、`antigravity`、`trae`、`opencode`、`qwen`、`iflow`、`kilocode` 等），检查本地供应商 CLI 是否存在并调它的版本命令。**只有成功发现的 Agent** 才会出现在 `GET /api/agents`、Session 选择器和飞书默认 Agent 选择器里。Google Antigravity 优先发现 `agy`（兼容 `antigravity` 别名），以绝对路径执行 `agy acp`；没有新 CLI 时才回退到旧的 `agy_acp_server`。Mock ACP、JSONL Demo 和 PTY Demo 仅供测试，不作为可选内置 Agent 发布。
 
 Codex 默认从 PATH 中发现本机 Codex CLI；macOS 上还会比较 `/Applications` 和 `~/Applications` 中 ChatGPT / Codex 桌面应用自带 CLI 的版本，选择较新版本，避免旧 CLI 无法使用 `gpt-6.1-sol` 等新模型。无法识别版本的自定义包装器保持原样，相同版本优先保留 PATH。模型探测、版本展示和实际会话使用同一启动入口。`CODEX_PATH=/absolute/path/to/codex` 显式指定路径时不做自动选择。不限制本机 Codex 版本，也不会自动切换到适配器依赖的 Codex。未安装或配置不兼容时明确报错，不修改用户配置。模型实际可用性仍取决于所选 CLI 和当前账号。
 

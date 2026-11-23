@@ -1,5 +1,5 @@
-import { dirname, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { delimiter, dirname, extname, isAbsolute, join, resolve } from 'node:path';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createAcpRuntime, createAgentRegistry, createRuntimeStore, type AcpPermissionDecision, type AcpRuntime, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeTurn, type AcpSessionStore } from 'acpx/runtime';
 import { isAgentStreamErrorText, type AgentConfig, type EventType, type PermissionMode, type ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
@@ -18,6 +18,55 @@ export * from './ssh-agent.js';
 export interface NormalizedDriverEvent { type: EventType | 'session_title'; data: any; raw?: string }
 export interface AcpxBuiltinAgent { id: string; argv: string[] }
 
+export interface ResolveExecutableOptions {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}
+
+function isExecutableFile(file: string, platform: NodeJS.Platform) {
+  try {
+    if (!statSync(file).isFile()) return false;
+    if (platform !== 'win32') accessSync(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveExecutable(command: string, options: ResolveExecutableOptions = {}): string | undefined {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const candidates = platform === 'win32' && !extname(command)
+    ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [''];
+  const hasPathSeparator = command.includes('/') || command.includes('\\');
+  if (hasPathSeparator || isAbsolute(command)) {
+    const absolute = resolve(command);
+    for (const extension of candidates) {
+      const candidate = `${absolute}${extension}`;
+      if (isExecutableFile(candidate, platform)) return candidate;
+    }
+    return undefined;
+  }
+  const pathValue = env.PATH ?? env.Path ?? '';
+  for (const directory of pathValue.split(delimiter).filter(Boolean)) {
+    for (const extension of candidates) {
+      const candidate = resolve(directory, `${command}${extension}`);
+      if (isExecutableFile(candidate, platform)) return candidate;
+    }
+  }
+  return undefined;
+}
+
+function antigravityArgv(argv: string[], options: ResolveExecutableOptions) {
+  for (const command of ['agy', 'antigravity']) {
+    const executable = resolveExecutable(command, options);
+    if (executable) return [executable, 'acp'];
+  }
+  const legacy = argv[0] ? resolveExecutable(argv[0], options) : undefined;
+  return legacy ? [legacy, ...argv.slice(1)] : argv;
+}
+
 function agentLauncherPath(name: string) {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
   const adjacent = join(moduleDirectory, 'agents', `${name}-acp.mjs`);
@@ -30,13 +79,14 @@ const flattenRiskText = (value: unknown, output: string[] = []): string[] => {
   else if (value && typeof value === 'object') for (const item of Object.values(value)) flattenRiskText(item, output);
   return output;
 };
-export function listAcpxBuiltinAgents(): AcpxBuiltinAgent[] {
+export function listAcpxBuiltinAgents(options: ResolveExecutableOptions = {}): AcpxBuiltinAgent[] {
   const registry = createAgentRegistry();
   return registry.list().map(id => {
     const command = registry.resolve(id);
     if (id === 'claude') return { id, argv: [process.execPath, agentLauncherPath('claude')] };
     const argv = typeof command === 'string' ? [command] : [...command];
     if (id === 'codex') return { id, argv: [process.execPath, agentLauncherPath('codex')] };
+    if (id === 'antigravity') return { id, argv: antigravityArgv(argv, options) };
     return { id, argv };
   });
 }

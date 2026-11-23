@@ -20,12 +20,15 @@ export const appConfigSchema = z.object({
 });
 export type AppConfig = z.infer<typeof appConfigSchema>;
 
-const agentDetails: Record<string, { name: string; cli: string }> = {
+interface AgentDetail { name: string; cli: string | string[]; argvExecutable?: boolean }
+
+const agentDetails: Record<string, AgentDetail> = {
   pi: { name: 'Pi', cli: 'pi' }, openclaw: { name: 'OpenClaw', cli: 'openclaw' }, codex: { name: 'Codex', cli: 'codex' }, claude: { name: 'Claude Code', cli: 'claude' },
   gemini: { name: 'Gemini', cli: 'gemini' }, cursor: { name: 'Cursor Agent', cli: 'cursor-agent' }, copilot: { name: 'GitHub Copilot', cli: 'copilot' }, droid: { name: 'Factory Droid', cli: 'droid' },
   'fast-agent': { name: 'fast-agent', cli: 'fast-agent-mcp' }, 'grok-build': { name: 'Grok Build', cli: 'grok' }, iflow: { name: 'iFlow', cli: 'iflow' }, kilocode: { name: 'Kilocode', cli: 'kilocode' },
   kimi: { name: 'Kimi', cli: 'kimi' }, kiro: { name: 'Kiro', cli: 'kiro-cli-chat' }, mcode: { name: 'MiniMax Code', cli: 'mcode' }, mux: { name: 'Mux', cli: 'mux' }, opencode: { name: 'OpenCode', cli: 'opencode' },
-  pool: { name: 'Poolside', cli: 'pool' }, qoder: { name: 'Qoder', cli: 'qodercli' }, qwen: { name: 'Qwen Code', cli: 'qwen' }, trae: { name: 'Trae', cli: 'traecli' }, zeroclaw: { name: 'ZeroClaw', cli: 'zeroclaw' }
+  pool: { name: 'Poolside', cli: 'pool' }, qoder: { name: 'Qoder', cli: 'qodercli' }, qwen: { name: 'Qwen Code', cli: 'qwen' }, trae: { name: 'Trae', cli: 'traecli' }, zeroclaw: { name: 'ZeroClaw', cli: 'zeroclaw' },
+  antigravity: { name: 'Google Antigravity', cli: ['agy', 'antigravity'], argvExecutable: true }
 };
 
 export function cliVersion(command: string, prefixArgs: string[] = []): string | undefined {
@@ -38,11 +41,40 @@ export function cliVersion(command: string, prefixArgs: string[] = []): string |
 }
 
 let scannedBuiltinAgents: Array<Omit<AgentConfig, 'cwd'>> | undefined;
-const scanBuiltinAgents = () => scannedBuiltinAgents ??= listAcpxBuiltinAgents().flatMap(({ id, argv }) => {
-  const detail = agentDetails[id];
-  if (!detail || !commandExists(detail.cli)) return [];
-  return [{ id, name: detail.name, command: argv[0]!, args: argv.slice(1), protocol: 'acp' as const, env: {}, permissionMode: 'full-trust' as const, timeout: 600, capabilities: { pause: false, resume: true }, builtin: true, version: id === 'codex' ? cliVersion(argv[0]!, argv.slice(1)) : cliVersion(detail.cli) }];
-});
+export interface BuiltinAgentDiscoveryDependencies {
+  commandExists?: (command: string) => boolean;
+  cliVersion?: (command: string, prefixArgs?: string[]) => string | undefined;
+}
+
+export function discoverBuiltinAgents(
+  entries = listAcpxBuiltinAgents(),
+  dependencies: BuiltinAgentDiscoveryDependencies = {}
+): Array<Omit<AgentConfig, 'cwd'>> {
+  const exists = dependencies.commandExists ?? commandExists;
+  const version = dependencies.cliVersion ?? cliVersion;
+  return entries.flatMap(({ id, argv }) => {
+    const detail = agentDetails[id];
+    if (!detail) return [];
+    const commands = Array.isArray(detail.cli) ? detail.cli : [detail.cli];
+    const installed = commands.some(exists) || Boolean(detail.argvExecutable && argv[0] && exists(argv[0]));
+    if (!installed) return [];
+    return [{
+      id,
+      name: detail.name,
+      command: argv[0]!,
+      args: argv.slice(1),
+      protocol: 'acp' as const,
+      env: {},
+      permissionMode: 'full-trust' as const,
+      timeout: 600,
+      capabilities: { pause: false, resume: true },
+      builtin: true,
+      version: id === 'antigravity' ? version(argv[0]!) : id === 'codex' ? version(argv[0]!, argv.slice(1)) : version(commands[0]!)
+    }];
+  });
+}
+
+const scanBuiltinAgents = () => scannedBuiltinAgents ??= discoverBuiltinAgents();
 export const builtinAgents = (cwd = process.cwd()): AgentConfig[] => scanBuiltinAgents().map(agent => ({ ...agent, cwd }));
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
