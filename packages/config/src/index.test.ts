@@ -1,5 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { builtinAgents, loadConfig } from './index.js';
+import { builtinAgents, discoverBuiltinAgents, loadConfig } from './index.js';
+
+describe('built-in Agent discovery', () => {
+  it('discovers Antigravity through the agy ACP launcher', () => {
+    expect(discoverBuiltinAgents(
+      [{ id: 'antigravity', argv: ['/opt/homebrew/bin/agy', 'acp'] }],
+      { commandExists: command => command === '/opt/homebrew/bin/agy', cliVersion: () => '1.5.10' }
+    )).toEqual([{
+      id: 'antigravity',
+      name: 'Google Antigravity',
+      command: '/opt/homebrew/bin/agy',
+      args: ['acp'],
+      protocol: 'acp',
+      env: {},
+      permissionMode: 'full-trust',
+      timeout: 600,
+      capabilities: { pause: false, resume: true },
+      builtin: true,
+      version: '1.5.10'
+    }]);
+  });
+
+  it('does not advertise Antigravity when neither agy nor the legacy server exists', () => {
+    expect(discoverBuiltinAgents(
+      [{ id: 'antigravity', argv: ['agy_acp_server.par'] }],
+      { commandExists: () => false }
+    )).toEqual([]);
+  });
+});
 
 describe('working directory configuration', () => {
   it('uses the server process cwd when no default is specified', () => {
