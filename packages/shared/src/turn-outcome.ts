@@ -175,6 +175,18 @@ const agentStreamErrorSuffix = /(?:\r?\n){1,2}Error:\s*(?:RetriableError|T):[^\n
 
 export const isAgentStreamErrorText = (text: string) => agentStreamErrorPrefix.test(text);
 
+/**
+ * 部分 Agent（如 antigravity / agy acp）在长驻空闲导致 OAuth token 失效时，会把上游 401
+ * 包装成普通文本再以 stopReason=end_turn 结束。由各 Agent 按需配置 `authErrorPattern` 匹配。
+ */
+export const antigravityAuthErrorPattern = '^\\s*(?:⚠\\s*)?UNAUTHENTICATED\\s*\\(code\\s+401\\)';
+
+export function isAgentAuthErrorText(text: string, pattern?: string): boolean {
+  if (!pattern) return false;
+  try { return new RegExp(pattern, 'i').test(text); }
+  catch { return false; }
+}
+
 /** 已经拼进正文末尾的那一行内部流错误；没有匹配时原样返回。 */
 export function stripAgentStreamErrorSuffix(text: string): string {
   // ACP 的换行可能单独占一个 chunk。普通文本必须原样返回；逐块 trimEnd 会把

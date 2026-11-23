@@ -1,4 +1,4 @@
-import { agentConfigSchema, type AgentConfig } from '@agent-dock/agent-dock-shared';
+import { agentConfigSchema, antigravityAuthErrorPattern, type AgentConfig } from '@agent-dock/agent-dock-shared';
 import { listAcpxBuiltinAgents } from '@agent-dock/agent-dock-acp-client';
 import { commandExists } from '@agent-dock/agent-dock-transports';
 import { z } from 'zod';
@@ -20,7 +20,13 @@ export const appConfigSchema = z.object({
 });
 export type AppConfig = z.infer<typeof appConfigSchema>;
 
-interface AgentDetail { name: string; cli: string | string[]; argvExecutable?: boolean }
+interface AgentDetail {
+  name: string;
+  cli: string | string[];
+  argvExecutable?: boolean;
+  idleTimeoutMs?: number;
+  authErrorPattern?: string;
+}
 
 const agentDetails: Record<string, AgentDetail> = {
   pi: { name: 'Pi', cli: 'pi' }, openclaw: { name: 'OpenClaw', cli: 'openclaw' }, codex: { name: 'Codex', cli: 'codex' }, claude: { name: 'Claude Code', cli: 'claude' },
@@ -28,7 +34,7 @@ const agentDetails: Record<string, AgentDetail> = {
   'fast-agent': { name: 'fast-agent', cli: 'fast-agent-mcp' }, 'grok-build': { name: 'Grok Build', cli: 'grok' }, iflow: { name: 'iFlow', cli: 'iflow' }, kilocode: { name: 'Kilocode', cli: 'kilocode' },
   kimi: { name: 'Kimi', cli: 'kimi' }, kiro: { name: 'Kiro', cli: 'kiro-cli-chat' }, mcode: { name: 'MiniMax Code', cli: 'mcode' }, mux: { name: 'Mux', cli: 'mux' }, opencode: { name: 'OpenCode', cli: 'opencode' },
   pool: { name: 'Poolside', cli: 'pool' }, qoder: { name: 'Qoder', cli: 'qodercli' }, qwen: { name: 'Qwen Code', cli: 'qwen' }, trae: { name: 'Trae', cli: 'traecli' }, zeroclaw: { name: 'ZeroClaw', cli: 'zeroclaw' },
-  antigravity: { name: 'Google Antigravity', cli: ['agy', 'antigravity'], argvExecutable: true }
+  antigravity: { name: 'Google Antigravity', cli: ['agy', 'antigravity'], argvExecutable: true, idleTimeoutMs: 15 * 60_000, authErrorPattern: antigravityAuthErrorPattern }
 };
 
 export function cliVersion(command: string, prefixArgs: string[] = []): string | undefined {
@@ -69,7 +75,9 @@ export function discoverBuiltinAgents(
       timeout: 600,
       capabilities: { pause: false, resume: true },
       builtin: true,
-      version: id === 'antigravity' ? version(argv[0]!) : id === 'codex' ? version(argv[0]!, argv.slice(1)) : version(commands[0]!)
+      version: id === 'antigravity' ? version(argv[0]!) : id === 'codex' ? version(argv[0]!, argv.slice(1)) : version(commands[0]!),
+      ...(detail.idleTimeoutMs !== undefined ? { idleTimeoutMs: detail.idleTimeoutMs } : {}),
+      ...(detail.authErrorPattern !== undefined ? { authErrorPattern: detail.authErrorPattern } : {})
     }];
   });
 }

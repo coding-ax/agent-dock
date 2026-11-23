@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentWarningPrefix, hasUnresolvedToolCalls, isAgentStreamErrorText, isAgentWarningText, isTurnActivity, pickFinalAssistantEntry, pickFinalAssistantText, stripAgentStreamErrorSuffix, unresolvedToolCallsAfterAnswer } from './turn-outcome.js';
+import { agentWarningPrefix, antigravityAuthErrorPattern, hasUnresolvedToolCalls, isAgentAuthErrorText, isAgentStreamErrorText, isAgentWarningText, isTurnActivity, pickFinalAssistantEntry, pickFinalAssistantText, stripAgentStreamErrorSuffix, unresolvedToolCallsAfterAnswer } from './turn-outcome.js';
 
 const text = (value: string, role: 'user' | 'assistant' = 'assistant') => ({ type: 'text', data: { role, text: value } });
 const thinking = () => ({ type: 'thinking', data: { text: '…' } });
@@ -153,6 +153,16 @@ describe('cursor-agent 内部流错误识别', () => {
     expect(stripAgentStreamErrorSuffix('普通回复')).toBe('普通回复');
     expect(stripAgentStreamErrorSuffix('表格标题\n\n')).toBe('表格标题\n\n');
     expect(stripAgentStreamErrorSuffix('\n| 步骤 | 结果 |\n')).toBe('\n| 步骤 | 结果 |\n');
+  });
+});
+
+describe('Agent 401 认证错误识别', () => {
+  it('按配置的正则只认开头（可选 ⚠ 前缀），正文里提到不算；未配置或非法正则返回 false', () => {
+    expect(isAgentAuthErrorText('\n⚠ UNAUTHENTICATED (code 401): Request had invalid authentication credentials.\n', antigravityAuthErrorPattern)).toBe(true);
+    expect(isAgentAuthErrorText('UNAUTHENTICATED (code 401): token expired', antigravityAuthErrorPattern)).toBe(true);
+    expect(isAgentAuthErrorText('排查结果：日志里出现了 UNAUTHENTICATED (code 401)', antigravityAuthErrorPattern)).toBe(false);
+    expect(isAgentAuthErrorText('UNAUTHENTICATED (code 401)')).toBe(false);
+    expect(isAgentAuthErrorText('UNAUTHENTICATED (code 401)', '[invalid')).toBe(false);
   });
 });
 

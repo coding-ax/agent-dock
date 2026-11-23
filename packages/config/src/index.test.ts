@@ -17,7 +17,9 @@ describe('built-in Agent discovery', () => {
       timeout: 600,
       capabilities: { pause: false, resume: true },
       builtin: true,
-      version: '1.5.10'
+      version: '1.5.10',
+      idleTimeoutMs: 15 * 60_000,
+      authErrorPattern: '^\\s*(?:⚠\\s*)?UNAUTHENTICATED\\s*\\(code\\s+401\\)'
     }]);
   });
 

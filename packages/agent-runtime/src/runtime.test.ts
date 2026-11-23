@@ -481,6 +481,67 @@ describe('runtime lifecycle acceptance', () => {
     expect(h.driver.start).toHaveBeenCalledTimes(2); expect(h.driver.send).toHaveBeenCalledTimes(2); await h.runtime.shutdown(); h.repos.close();
   });
 
+  it('reaps idle drivers according to each agent idleTimeoutMs while keeping others at default', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'answer' } }) });
+    const shortIdle = { ...agent, id: 'antigravity', name: 'Google Antigravity', idleTimeoutMs: 15 * 60_000 };
+    await h.runtime.initialize([agent, shortIdle]);
+    const otherSession = await h.runtime.start({ agentId: 'mock' });
+    const agSession = await h.runtime.start({ agentId: 'antigravity' });
+    await h.runtime.send(otherSession.id, 'hi');
+    await h.runtime.send(agSession.id, 'hi');
+    await h.runtime.cleanupIdleDrivers(Date.now() + 16 * 60_000);
+    expect(h.driver.stop).toHaveBeenCalledOnce();
+    await h.runtime.send(agSession.id, 'again');
+    expect(h.driver.start).toHaveBeenCalledTimes(3);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('evicts and retries once when an agent emits text matching its authErrorPattern', async () => {
+    let sends = 0;
+    const h = harness({
+      onSend: emit => {
+        sends += 1;
+        emit({ type: 'text', data: { text: sends === 1 ? '\n⚠ UNAUTHENTICATED (code 401): Request had invalid authentication credentials.\n' : 'recovered' } });
+      }
+    });
+    await h.runtime.initialize([{ ...agent, id: 'antigravity', name: 'Google Antigravity', authErrorPattern: '^\\s*(?:⚠\\s*)?UNAUTHENTICATED\\s*\\(code\\s+401\\)' }]);
+    const session = await h.runtime.start({ agentId: 'antigravity' });
+    const task = await h.runtime.send(session.id, 'hello');
+    expect(task.status).toBe('completed');
+    expect(task.finalText).toBe('recovered');
+    expect(h.driver.stop).toHaveBeenCalledOnce();
+    expect(h.driver.start).toHaveBeenCalledTimes(2);
+    expect(h.driver.send).toHaveBeenCalledTimes(2);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('marks task failed and recovers session to idle when authErrorPattern persists after retry', async () => {
+    const h = harness({
+      onSend: emit => emit({ type: 'text', data: { text: '\n⚠ UNAUTHENTICATED (code 401): Request had invalid authentication credentials.\n' } })
+    });
+    await h.runtime.initialize([{ ...agent, id: 'antigravity', name: 'Google Antigravity', authErrorPattern: '^\\s*(?:⚠\\s*)?UNAUTHENTICATED\\s*\\(code\\s+401\\)' }]);
+    const session = await h.runtime.start({ agentId: 'antigravity' });
+    const task = await h.runtime.send(session.id, 'hello');
+    expect(task.status).toBe('failed');
+    expect(h.driver.send).toHaveBeenCalledTimes(2);
+    const updated = await h.runtime.getSession(session.id);
+    expect(updated?.state).toBe('idle');
+    expect(updated?.error).toContain('401 UNAUTHENTICATED');
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('does not treat UNAUTHENTICATED (code 401) text as auth failure when agent has no authErrorPattern', async () => {
+    const h = harness({
+      onSend: emit => emit({ type: 'text', data: { text: '\n⚠ UNAUTHENTICATED (code 401): quoted output\n' } })
+    });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+    const task = await h.runtime.send(session.id, 'hello');
+    expect(task.status).toBe('completed');
+    expect(h.driver.send).toHaveBeenCalledOnce();
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
   // acpx 会 prune 掉已 close 的 ACP session 记录文件，此后 driver.stop() 抛
   // "ACP session not found"。空闲清理里若不吞掉它，异常会经 setInterval 的 void promise
   // 变成 unhandledRejection，直接打挂整个 daemon 进程（线上已复现多次重启）。

@@ -51,7 +51,11 @@ export const agentConfigSchema = z.object({
   capabilities: z.object({ pause: z.boolean().default(false), resume: z.boolean().default(true) }).default({ pause: false, resume: true }),
   builtin: z.boolean().default(false),
   // 可选以保持既有 AgentConfig 字面量与行 JSON 兼容；读取方一律按 undefined === false 处理。
-  disabled: z.boolean().optional()
+  disabled: z.boolean().optional(),
+  /** 空闲驱动回收阈值（毫秒）；未设置时回落到 runtime 全局默认值，0 表示不按空闲回收。 */
+  idleTimeoutMs: z.number().nonnegative().optional(),
+  /** 认证失效错误匹配正则；命中时驱逐旧驱动并重连重试一次，仍失败则判 failed。 */
+  authErrorPattern: z.string().optional()
 });
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 

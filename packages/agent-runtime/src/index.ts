@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, Session, SessionInterruptIntent, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
 import { basename } from 'node:path';
 import { resolveProjectPath } from './project-path.js';
-import { agentConfigSchema, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
+import { agentConfigSchema, isAgentAuthErrorText, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 export type { AgentConfig };
 import { AcpxAdapter, describeAcpError, wrapAgentForSsh, type NormalizedDriverEvent } from '@agent-dock/agent-dock-acp-client';
 import { JsonlTransport, PipeTransport, probeAgent, PtyTransport, type ProbeMatrix } from '@agent-dock/agent-dock-transports';
@@ -294,7 +294,7 @@ export class AgentDockRuntime {
     const range = await this.repos.events.turnRange(sessionId, taskId);
     return range ? this.repos.events.listRange(sessionId, { after: range.startSequence, before: range.endSequence }) : [];
   }
-  private async resolveTaskOutcome(session: Session, task: TaskRecord): Promise<{ status: 'completed' | 'failed' | 'interrupted'; stopReason?: string; message?: string; finalText?: string }> {
+  private async resolveTaskOutcome(session: Session, task: TaskRecord, afterSequence = this.turnAnchors.get(task.id)): Promise<{ status: 'completed' | 'failed' | 'interrupted'; stopReason?: string; message?: string; finalText?: string; authError?: boolean }> {
     const stopReason = this.driverStopReasons.get(session.id);
     if (this.interruptedTurns.has(session.id) || stopReason === 'cancelled') return { status: 'interrupted', stopReason };
     if (AgentDockRuntime.isTruncatedStopReason(stopReason)) {
@@ -302,7 +302,7 @@ export class AgentDockRuntime {
     }
     // 终态判定只读一次事件：unresolvedToolCallsAfterAnswer 与 pickFinalAssistantText 共用同一份切片。
     // 切片由本轮锚点定界，不再「先全量读整个会话再切」——重会话上那一次是几百 MB 的读取。
-    const turnEvents = await this.turnEventsFor(session.id, task.id, this.turnAnchors.get(task.id));
+    const turnEvents = await this.turnEventsFor(session.id, task.id, afterSequence);
     // 顺便把这段文本带出去落库（调用方写进 task.finalText）：判「有没有最终输出」用的就是它，
     // 不再让轨迹面板为了显示每轮输出重新扫一遍事件——重会话上一轮就是全量扫描。
     const finalText = pickFinalAssistantText(turnEvents);
@@ -315,6 +315,10 @@ export class AgentDockRuntime {
     // 最后一条 assistant text 会把「只剩 Agent 自己告警」的轮次判成 completed 却给不出正文。
     if (!finalText) {
       return { status: 'failed', stopReason, message: 'Agent 未返回最终输出', finalText };
+    }
+    const agent = await this.repos.agents.get(session.agentId);
+    if (agent?.authErrorPattern && isAgentAuthErrorText(finalText, agent.authErrorPattern)) {
+      return { status: 'failed', stopReason, message: `${agent.name} 认证已失效（401 UNAUTHENTICATED），请重新认证后重试`, authError: true, finalText };
     }
     return { status: 'completed', stopReason, finalText };
   }
@@ -854,6 +858,20 @@ export class AgentDockRuntime {
     await writeFile(join(directory, `${session.id}.json`), JSON.stringify(policy ?? { enabled: false }), { mode: 0o600 });
   }
 
+  private async evictDriver(sessionId: string, driver: AgentDriver) {
+    try { await driver.stop(); }
+    catch { /* 旧驱动可能已退出或记录已被清理，继续释放映射以便重连。 */ }
+    finally { if (this.drivers.get(sessionId) === driver) this.drivers.delete(sessionId); }
+  }
+
+  private async executeTurnAndResolve(id: string, session: Session, task: TaskRecord, driver: AgentDriver, prompt: string, afterSequence?: number) {
+    this.driverStopReasons.delete(id);
+    await driver.send(prompt);
+    await this.flushDriverEvents(id);
+    await this.flushStream(id);
+    return this.resolveTaskOutcome(session, task, afterSequence);
+  }
+
   private async runTask(id: string, task: TaskRecord, agentPrompt = task.prompt, riskPolicy?: ToolRiskPolicy) {
     const { session } = await this.active(id);
     if (['stopped', 'failed'].includes(session.state)) throw new RuntimeError('INVALID_STATE', `Cannot send while session is ${session.state}`, 409);
@@ -886,11 +904,16 @@ export class AgentDockRuntime {
       const resolvedAgentPrompt = await this.options.sessionPrompt?.(session, agentPrompt, task.origin ?? undefined) ?? agentPrompt;
       task.sentPrompt = resolvedAgentPrompt;
       await this.repos.tasks.save(task);
-      this.driverStopReasons.delete(id);
-      await driver.send(resolvedAgentPrompt);
-      await this.flushDriverEvents(id);
-      await this.flushStream(id);
-      const outcome = await this.resolveTaskOutcome(session, task);
+      let outcome = await this.executeTurnAndResolve(id, session, task, driver, resolvedAgentPrompt);
+      // antigravity 长驻 agy acp 子进程偶尔在 OAuth token 过期后不自刷新而吐 401；
+      // 仅对 antigravity 尝试驱逐旧驱动并重连重试一次，仍失败则判 failed 交给用户处理。
+      if (outcome.status === 'failed' && outcome.authError) {
+        const retryAfterSequence = this.sequences.get(id);
+        await this.evictDriver(id, driver);
+        driver = await this.reconnect(session);
+        if (riskPolicy) await this.applyRiskPolicy(session, driver, riskPolicy);
+        outcome = await this.executeTurnAndResolve(id, session, task, driver, resolvedAgentPrompt, retryAfterSequence);
+      }
       task.finalText = outcome.finalText;
       // 收尾也算一次对话事件（长轮次结束时该浮上来），同样蹭终端态的 saveState 落盘。
       session.lastMessageAt = now();
@@ -1265,12 +1288,15 @@ export class AgentDockRuntime {
   }
 
   private async cleanupIdleDriversOnce(at: number) {
-    const timeout = this.options.driverIdleTimeoutMs ?? 6 * 60 * 60_000;
-    if (timeout <= 0) return;
+    if (!this.drivers.size) return;
+    const defaultTimeout = this.options.driverIdleTimeoutMs ?? 6 * 60 * 60_000;
+    const agentsById = new Map((await this.repos.agents.list()).map(agent => [agent.id, agent]));
     for (const [sessionId, driver] of this.drivers) {
-      if (this.activeTurns.has(sessionId) || at - (this.lastActivity.get(sessionId) ?? at) < timeout) continue;
+      if (this.activeTurns.has(sessionId)) continue;
       const session = await this.repos.sessions.get(sessionId);
       if (!session || !['idle', 'completed', 'interrupted'].includes(session.state)) continue;
+      const timeout = agentsById.get(session.agentId)?.idleTimeoutMs ?? defaultTimeout;
+      if (timeout <= 0 || at - (this.lastActivity.get(sessionId) ?? at) < timeout) continue;
       // driver.stop() 可能因为 ACP session 记录文件已被 acpx 的 prune 回收而抛
       // "ACP session not found"：会话早已 close，记录文件被删，但 driver 仍留在内存 map 里。
       // 这属于「已经停了」，不是故障；旧代码用 try/finally 不吞异常，它会冒泡到
