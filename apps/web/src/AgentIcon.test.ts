@@ -7,11 +7,16 @@ import { AgentIcon, agentBrand } from './AgentIcon';
 const acpxBuiltins = [
   'pi', 'openclaw', 'codex', 'claude', 'gemini', 'cursor', 'copilot', 'droid',
   'fast-agent', 'grok-build', 'iflow', 'kilocode', 'kimi', 'kiro', 'mcode',
-  'mux', 'opencode', 'pool', 'qoder', 'qwen', 'trae', 'zeroclaw',
+  'mux', 'opencode', 'pool', 'qoder', 'qwen', 'trae', 'zeroclaw', 'antigravity',
 ];
 
 describe('agentBrand', () => {
   it('matches supported Agent identities and aliases', () => {
+    expect(agentBrand('antigravity')).toBe('antigravity');
+    expect(agentBrand('agy')).toBe('antigravity');
+    expect(agentBrand(undefined, 'Google Antigravity')).toBe('antigravity');
+    expect(agentBrand('antigravity-cli')).toBe('antigravity');
+    expect(agentBrand('agy-cli')).toBe('antigravity');
     expect(agentBrand('claude')).toBe('claudecode');
     expect(agentBrand('cursor-agent')).toBe('cursor');
     expect(agentBrand('traecli')).toBe('trae');
@@ -19,6 +24,12 @@ describe('agentBrand', () => {
     expect(agentBrand('factory-droid')).toBe('droid');
     expect(agentBrand('GitHub Copilot')).toBe('copilot');
     expect(agentBrand('mcode')).toBe('mcode');
+  });
+
+  it('renders Antigravity with its dedicated color SVG icon', () => {
+    const markup = renderToStaticMarkup(createElement(AgentIcon, { agentId: 'antigravity', agentName: 'Google Antigravity', size: 16 }));
+    expect(markup).toContain('src="/agent-icons/antigravity.svg"');
+    expect(markup).not.toContain('ui-mono-brand');
   });
 
   it('has an icon asset for every acpx built-in Agent', () => {

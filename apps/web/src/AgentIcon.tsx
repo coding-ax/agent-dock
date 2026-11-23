@@ -12,6 +12,7 @@ export function BotAvatar({ url, size, className = 'h-full w-full rounded-md obj
 }
 
 const agentBrands = {
+  antigravity: 'antigravity', agy: 'antigravity', googleantigravity: 'antigravity', antigravitycli: 'antigravity', agycli: 'antigravity',
   claude: 'claudecode', claudecode: 'claudecode',
   codex: 'codex',
   copilot: 'copilot', githubcopilot: 'copilot',

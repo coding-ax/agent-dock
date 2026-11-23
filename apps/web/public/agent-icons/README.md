@@ -1,7 +1,7 @@
 Agent logos identify the ACPX built-in agents in AgentDock. Most SVGs come from
 [Lobe Icons](https://github.com/lobehub/lobe-icons),
-`@lobehub/icons-static-svg` 1.95.1 (MIT). In particular, `gemini.svg` is the
-Gemini CLI mark, `mcode.svg` is MiniMax, `poolside.svg` is Poolside, and
+`@lobehub/icons-static-svg` 1.95.1 / 1.106.0 (MIT). In particular, `gemini.svg` is the
+Gemini CLI mark, `antigravity.svg` is the Google Antigravity color mark, `mcode.svg` is MiniMax, `poolside.svg` is Poolside, and
 `grok.svg` is Grok. The existing `deepseek.svg` also comes from Lobe Icons.
 
 The remaining marks come from their projects:
