@@ -15,7 +15,7 @@ async function bin(root: string) {
 }
 
 async function executable(directory: string, name: string, body = '#!/bin/sh\nexit 0\n') {
-  const file = join(directory, name);
+  const file = join(directory, process.platform === 'win32' && !name.includes('.') ? `${name}.exe` : name);
   await writeFile(file, body, { mode: 0o755 });
   await chmod(file, 0o755);
   return file;
@@ -55,8 +55,9 @@ describe('Antigravity ACP launcher', () => {
     const root = await mkdtemp(join(tmpdir(), 'agentdock-agy-legacy-')); dirs.push(root);
     const directory = await bin(root);
     const legacy = await executable(directory, process.platform === 'win32' ? 'agy_acp_server.exe' : 'agy_acp_server.par');
+    const legacyArgs = process.platform === 'linux' ? ['--uid='] : [];
 
-    expect(antigravity({ PATH: directory })).toEqual([{ id: 'antigravity', argv: [legacy] }]);
+    expect(antigravity({ PATH: directory })).toEqual([{ id: 'antigravity', argv: [legacy, ...legacyArgs] }]);
   });
 
   it('completes an ACP turn through the resolved agy acp command', async () => {
