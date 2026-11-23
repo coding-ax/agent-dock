@@ -42,8 +42,8 @@ export type KittenProps = {
   onClick?: (event: MouseEvent<HTMLElement>) => void;
 };
 
-/** 每种心情对应参考图里的一张像素立绘（透明底 SVG）。 */
-const SPRITES = Object.fromEntries((['idle', 'happy', 'curious', 'sparkle', 'busy', 'search', 'sleepy'] as const).map(name => [name, `/companion/cat-${name}.svg`])) as Record<'idle' | 'happy' | 'curious' | 'sparkle' | 'busy' | 'search' | 'sleepy', string>;
+/** 每种心情对应参考图里的一张像素立绘（透明底 PNG）。 */
+const SPRITES = Object.fromEntries((['idle', 'happy', 'curious', 'sparkle', 'busy', 'search', 'sleepy'] as const).map(name => [name, `/companion/cat-${name}.png`])) as Record<'idle' | 'happy' | 'curious' | 'sparkle' | 'busy' | 'search' | 'sleepy', string>;
 const MOOD_SPRITE: Record<KittenMood, keyof typeof SPRITES> = {
   idle: 'idle', happy: 'happy', curious: 'search', busy: 'busy', alert: 'curious', sleepy: 'sleepy', sad: 'idle',
 };

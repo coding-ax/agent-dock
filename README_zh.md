@@ -20,11 +20,11 @@
 
 <br>
 
-<img src="docs/assets/readme/video-cover-en.webp" alt="AgentDock 60 秒视频导览" width="100%">
+<div align="center">
 
-<p align="center"><sub>在下方直接播放 AgentDock 的 60 秒视频导览。</sub></p>
+https://github.com/user-attachments/assets/16a78cd2-5a0b-43ec-b403-ab0a1309200b
 
-https://github.com/user-attachments/assets/20457ff7-945c-463a-b1a9-f7bc41e7215d
+</div>
 
 ## 能做什么
 

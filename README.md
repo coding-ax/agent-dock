@@ -20,11 +20,11 @@ English · [简体中文](README_zh.md)
 
 <br>
 
-<img src="docs/assets/readme/video-cover-en.webp" alt="AgentDock 60-second video tour" width="100%">
+<div align="center">
 
-<p align="center"><sub>Play the 60-second AgentDock tour below. The app screens are from a real AgentDock run.</sub></p>
+https://github.com/user-attachments/assets/16a78cd2-5a0b-43ec-b403-ab0a1309200b
 
-https://github.com/user-attachments/assets/20457ff7-945c-463a-b1a9-f7bc41e7215d
+</div>
 
 ## Features
 
