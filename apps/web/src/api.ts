@@ -62,6 +62,20 @@ export type ShareLinkKind = 'hostname' | 'lan-v4' | 'lan-v6' | 'public';
 export type ShareLinkUrl = { kind: ShareLinkKind; label: string; url: string };
 export type ShareLinkResult = { sessionId?: string; expiresAt: number; urls: ShareLinkUrl[]; publicUrl?: string; publicUrlSource?: 'env' | 'config'; lanEnabled: boolean };
 export type ShareSettings = { publicUrl?: string; publicUrlSource?: 'env' | 'config'; envLocked: boolean };
+export type SideChatTargetMode = 'follow_current' | 'custom_agent';
+export type SideChatOpenMode = 'side_pane' | 'switch_session';
+export type BtwSessionReuseMode = 'new_session' | 'reuse_latest';
+export type SideChatConfig = {
+  targetMode: SideChatTargetMode;
+  agentId?: string;
+  model?: string;
+  reasoningEffort?: string;
+  openMode: SideChatOpenMode;
+  btwEnabled: boolean;
+  triggerPrefix: string;
+  btwSessionReuse: BtwSessionReuseMode;
+};
+export type SideChatConfigState = { configured: boolean; config: SideChatConfig };
 export type ExternalSession = { sessionId: string; cwd: string; title?: string; updatedAt?: string };
 export type ScheduleDelivery = 'new_session' | 'append';
 export type Schedule = { id: string; name: string; sessionId?: string | null; sessionTemplate?: string | null; delivery: ScheduleDelivery; cron?: string | null; runAt?: string | null; intervalMinutes?: number | null; timezone: string; prompt: string; enabled: boolean; nextRunAt?: string | null; lastRunAt?: string | null; lastStatus?: string | null; runCount: number; createdBySessionId?: string | null; createdAt: string; updatedAt: string };
@@ -447,6 +461,9 @@ export const api = {
   setAutostart: (enabled: boolean) => json<AutostartStatus>('/api/system/autostart', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) }),
   keepAwakeStatus: () => json<KeepAwakeStatus>('/api/system/keep-awake', undefined, true),
   setKeepAwake: (body: { enabled?: boolean; keepDisplay?: boolean }) => json<KeepAwakeStatus>('/api/system/keep-awake', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  sideChatConfig: () => json<SideChatConfigState>('/api/side-chat/config', undefined, true),
+  saveSideChatConfig: (body: SideChatConfig) => json<SideChatConfigState>('/api/side-chat/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  resetSideChatConfig: () => json<SideChatConfigState>('/api/side-chat/config', { method: 'DELETE' }),
   systemCapabilities: () => json<{ platform: string; directoryPicker: boolean; filePicker: boolean; workingDirectory: string; homeDirectory: string }>('/api/system/capabilities'),
   skills: (cwd?: string) => json<SkillReference[]>(`/api/system/skills${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   selectDirectory: () => json<{ path: string }>('/api/system/select-directory', { method: 'POST' }),

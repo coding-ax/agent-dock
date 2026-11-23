@@ -1,13 +1,14 @@
 import { Spinner } from './Loaders';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Bot, Plug, Plus, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Bot, MessagesSquare, Plug, Plus, RefreshCw, X } from 'lucide-react';
 import { Input, Segmented } from 'antd';
 import { api, type Agent } from './api';
 import { ConfirmDialog } from './ui-controls';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { agentToDraft, canSave, draftToPayload, newAgentDraft, uniqueAgentId, validateDraft, type AgentFormDraft, type FormError } from './agent-config-form';
 import { LlmEndpointPanel } from './LlmEndpointPanel';
+import { SideChatConfigPanel } from './SideChatConfigPanel';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { AgentIcon } from './AgentIcon';
 import { AgentUsagePanel } from './AgentUsagePanel';
@@ -28,16 +29,16 @@ function ReadOnlyField({ label, value, mono = false, hint }: { label: string; va
   </div>;
 }
 
-type SettingsTab = 'llm' | 'agents';
+type SettingsTab = 'llm' | 'agents' | 'side-chat';
 
-export function AgentConfigDialog({ onClose }: { onClose(): void }) {
+export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): void; initialTab?: SettingsTab }) {
   const panelRef = useRef<HTMLDivElement>(null);
   useModalFocusTrap({ panel: panelRef, initial: panelRef, dismissible: true, onDismiss: () => requestClose() });
   const queryClient = useQueryClient();
   // 配置面板需要看到停用的内置项（置灰）：仅 master token 生效，会话令牌拿到的仍是过滤后列表。
   const agents = useQuery({ queryKey: ['agents-admin'], queryFn: () => api.agents(true), refetchOnWindowFocus: false });
   // 模型端点是平台拿模型能力的唯一来源，默认落在这一页：它是先要配好的那一半。
-  const [tab, setTab] = useState<SettingsTab>('llm');
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [draft, setDraft] = useState<AgentFormDraft>(newAgentDraft());
@@ -140,13 +141,15 @@ export function AgentConfigDialog({ onClose }: { onClose(): void }) {
     <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Agent 设置" className="ui-dialog flex h-[86dvh] w-full max-w-4xl flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)]">
       <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-4 py-2">
         <div className="flex items-center gap-2 text-[16px] font-semibold text-zinc-900"><Bot size={16}/>Agent 设置</div>
-        <span className="md:ml-4"><Segmented<typeof tab> value={tab} onChange={setTab} options={[{ value: 'llm', label: '模型端点', icon: <Plug size={12}/> }, { value: 'agents', label: 'Agent', icon: <Bot size={12}/> }]}/></span>
+        <span className="md:ml-4"><Segmented<typeof tab> value={tab} onChange={setTab} options={[{ value: 'llm', label: '模型端点', icon: <Plug size={12}/> }, { value: 'agents', label: 'Agent', icon: <Bot size={12}/> }, { value: 'side-chat', label: '侧边对话', icon: <MessagesSquare size={12}/> }]}/></span>
         <button type="button" onClick={requestClose} aria-label="关闭" className="ml-auto grid h-8 w-8 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={16}/></button>
       </div>
 
       <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-5 py-4"><DeferredSkeleton/></div>}>
       {tab === 'llm'
         ? <LlmEndpointPanel/>
+        : tab === 'side-chat'
+          ? <SideChatConfigPanel/>
         : <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[220px_1fr]">
           {/* 窄屏把 Agent 列表收成上方一条可滚动带，表单占满剩余高度；md 以上恢复左侧栏。 */}
           <div className="max-h-[min(11rem,30dvh)] shrink-0 overflow-y-auto border-b border-zinc-100 bg-zinc-50/60 p-2 md:max-h-none md:border-b-0 md:border-r">

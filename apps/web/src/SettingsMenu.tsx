@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useEventListener } from 'ahooks';
 import { useQuery } from '@tanstack/react-query';
-import { AlarmClock, Archive, Bot, FolderOpen, PawPrint, Settings, Settings2, Smartphone } from 'lucide-react';
+import { AlarmClock, Archive, Bot, FolderOpen, MessagesSquare, PawPrint, Settings, Settings2, Smartphone } from 'lucide-react';
 import { api } from './api';
 import { AutostartToggle } from './AutostartToggle';
 import { KeepAwakeToggle } from './KeepAwakeToggle';
@@ -19,13 +19,14 @@ const itemClass = 'flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 t
  *
  * 弹层只用 hidden 切换、不条件渲染：SelfUpdateNotice 里有「升级中轮询版本号、完成后刷新页面」的状态，卸载就丢了。
  */
-export function SettingsMenu({ webDenied, archivedCount, onSchedule, onArchived, onImport, onAgentConfig, onAssistant, onLark, onLarkAvatar, onShare }: {
+export function SettingsMenu({ webDenied, archivedCount, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onAssistant, onLark, onLarkAvatar, onShare }: {
   webDenied: boolean;
   archivedCount: number;
   onSchedule(): void;
   onArchived(): void;
   onImport(): void;
   onAgentConfig(): void;
+  onSideChatConfig(): void;
   onAssistant(): void;
   onLark(): void;
   onLarkAvatar(): void;
@@ -49,6 +50,7 @@ export function SettingsMenu({ webDenied, archivedCount, onSchedule, onArchived,
       <button type="button" role="menuitem" onClick={pick(onImport)} className={itemClass}><FolderOpen size={16}/><span>导入外部会话</span></button>
       <div className="my-1 border-t border-zinc-200/70"/>
       <button type="button" role="menuitem" onClick={pick(onAgentConfig)} className={itemClass}><Bot size={16}/><span>Agent 设置</span></button>
+      <button type="button" role="menuitem" onClick={pick(onSideChatConfig)} className={itemClass}><MessagesSquare size={16}/><span>侧边对话设置</span></button>
       <button type="button" role="menuitem" onClick={pick(onAssistant)} className={itemClass}><PawPrint size={16}/><span>小猫与督办</span></button>
       <button type="button" role="menuitem" onClick={pick(onLark)} className={itemClass}><Settings2 size={16}/><span>飞书设置</span></button>
       <button type="button" role="menuitem" onClick={pick(onLarkAvatar)} className={itemClass}><Bot size={16}/><span>AI 飞书替身</span></button>

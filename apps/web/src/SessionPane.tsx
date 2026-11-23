@@ -32,6 +32,7 @@ import { CompanionHeader, CompanionHeaderNotes, CompanionWelcome, RetireButton, 
 import { useCompanion } from './companion/useCompanion';
 import { useCompanionStore } from './companion/companion-store';
 import { sessionPaneTab } from './pane-tab';
+import { DEFAULT_SIDE_CHAT_TRIGGER_PREFIX, matchSideChatTrigger, sideChatBuiltinCommand } from './side-chat-config';
 import { clearSessionDraft, getBrowserDraftStorage, loadSessionDraft, MAX_DRAFT_CHARS, saveSessionDraft } from './session-drafts';
 import { useSessionDraftWriter } from './use-session-draft';
 import { useElapsedNow } from './useElapsedNow';
@@ -101,7 +102,7 @@ function SessionMenu({ groups }: { groups: SessionMenuGroup[] }) {
   </div>;
 }
 
-export const SessionPane = memo(function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onTogglePane, onOpenRawLog }: {
+export const SessionPane = memo(function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onTogglePane, onOpenRawLog, btwEnabled = false, btwTriggerPrefix = DEFAULT_SIDE_CHAT_TRIGGER_PREFIX, onSideChat }: {
   session: Session;
   agent?: Agent;
   pane: PaneKind;
@@ -109,6 +110,9 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   paneOpen?: boolean;
   onTogglePane?(): void;
   onOpenRawLog?(sessionId: string): void;
+  btwEnabled?: boolean;
+  btwTriggerPrefix?: string;
+  onSideChat?(source: Session, options?: { initialPrompt?: string; fromBtw?: boolean }): Promise<void> | void;
 }) {
   const qc = useQueryClient();
   const { setSession, closeTab } = useDockStore();
@@ -342,6 +346,28 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
 
   const submit = (submittedValue: string) => {
     if (modelReadiness.kind === 'blocked' || send.isPending || sendInFlight.current) return;
+    if (btwEnabled && onSideChat) {
+      const btw = matchSideChatTrigger(submittedValue, btwTriggerPrefix);
+      if (btw.matched) {
+        const references = composerReferences;
+        const initialPrompt = buildPrompt(btw.prompt, references, []) || undefined;
+        composerTextarea.current?.setValue('');
+        setPrompt('');
+        setComposerReferences([]);
+        setActionError(undefined);
+        draftWriter.cancel();
+        clearSessionDraft(getBrowserDraftStorage(), session.id);
+        void Promise.resolve(onSideChat(session, { ...(initialPrompt ? { initialPrompt } : {}), fromBtw: true })).catch(error => {
+          const liveDraft = readLiveDraft();
+          if (!liveDraft.trim()) {
+            setPrompt(submittedValue);
+            setComposerReferences(current => current.length ? current : references);
+          }
+          setActionError(error instanceof Error ? error.message : String(error));
+        });
+        return;
+      }
+    }
     // 唯一来源是点击/回车那一刻编辑器的文档快照，而不是可能还停在上一拍的 prompt。
     const message = buildPrompt(submittedValue, composerReferences, advertisedCommands.map(command => command.name));
     if (!message) return;
@@ -474,7 +500,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             </button>
           </div>
           : <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已归档，仅支持查看。</div>
-        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
+        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>
       </div>
     </section>
@@ -489,4 +515,4 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 会话数据更新（流式消息、任务轮询）会带着新的 props 渲染本组件。不在这里兜住的话，
   // 长会话会把整条时间线上千个节点全部重新 diff 一遍。弹窗开关已移到 dialog-store，
   // 打开弹窗不再经过 App/SessionPane；这里只兜住父子数据更新。
-}, (prev, next) => prev.session === next.session && prev.agent === next.agent && prev.pane === next.pane && prev.paneOpen === next.paneOpen);
+}, (prev, next) => prev.session === next.session && prev.agent === next.agent && prev.pane === next.pane && prev.paneOpen === next.paneOpen && prev.btwEnabled === next.btwEnabled && prev.btwTriggerPrefix === next.btwTriggerPrefix);

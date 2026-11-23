@@ -19,8 +19,9 @@ import { PaneHost } from './PaneHost';
 import { AgentIcon, BotAvatar } from './AgentIcon';
 import { PaneTypeMenu } from './PaneTypeMenu';
 import { shortcutLabel, useShortcuts, type Shortcut } from './useShortcuts';
-import { buildSideSessionSeed } from './side-session';
-import { sideChatParentId, sideChatSource } from './side-chat-link';
+import { DEFAULT_SIDE_CHAT_CONFIG, findReusableSideChatSession, resolveSideChatStartOptions } from './side-chat-config';
+import { createClientMessageId } from './client-message-id';
+import { sideChatParentId } from './side-chat-link';
 import { ScheduleDialog } from './ScheduleDialog';
 import { isScheduledSession } from './schedule-view';
 import { ArchivedSessionsDialog } from './ArchivedSessionsDialog';
@@ -627,21 +628,58 @@ export default function App() {
       return;
     }
     // 侧边聊天要在右栏新开一个会话，由 mutation 完成（建会话需要请求）。
-    if (primarySession) sideChat.mutate(primarySession);
+    if (primarySession) sideChat.mutate({ source: primarySession });
   });
 
+  const sideChatConfigQuery = useQuery({
+    queryKey: ['side-chat-config'],
+    queryFn: api.sideChatConfig,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false
+  });
+  const sideChatConfig = sideChatConfigQuery.data?.config ?? DEFAULT_SIDE_CHAT_CONFIG;
+
   /**
-   * 侧边聊天：同 agent / 同 cwd 建一个全新会话，把「门牌号 + 取数方式」通过
-   * **会话级 systemPrompt** 注入——不出现在时间线里。早先是当第一条用户消息发的，
-   * 用户会看到一坨自己没打过的字。
+   * 侧边聊天统一入口（副屏按钮、⌘⇧S、/btw 共用同一份 sideChatConfig）：
+   * - 按配置选择跟随当前会话还是指定独立 Agent/模型/思考深度；
+   * - /btw 配置为复用时优先复用当前会话最近活跃的侧边会话；
+   * - 按配置在右侧副屏并排打开或直接切换到侧边会话；
+   * - 若带初始问题（来自 `/btw <问题>`），自动发送到该侧边会话，不污染主会话上下文。
    */
   const sideChat = useMutation({
-    mutationFn: async (source: Session) => api.create({ agentId: source.agentId, cwd: source.cwd, systemPrompt: buildSideSessionSeed(source.id), source: sideChatSource, sourceId: source.id }),
-    onSuccess: (created, source) => {
-      void qc.invalidateQueries({ queryKey: ['sessions'] });
-      openTab({ id: `side-chat:${created.id}`, kind: 'side-chat', sessionId: created.id, title: '侧边聊天' }, source.id);
+    mutationFn: async (input: { source: Session; initialPrompt?: string; fromBtw?: boolean }) => {
+      const config = sideChatConfigQuery.data?.config ?? DEFAULT_SIDE_CHAT_CONFIG;
+      const reusable = input.fromBtw && config.btwSessionReuse === 'reuse_latest'
+        ? findReusableSideChatSession(input.source.id, sortedSessions, tabs)
+        : undefined;
+      const target = reusable ?? await api.create(resolveSideChatStartOptions(input.source, config, agents.data ?? []));
+      return { target, reused: Boolean(reusable), config, source: input.source, initialPrompt: input.initialPrompt };
+    },
+    onSuccess: async ({ target, reused, config, source, initialPrompt }) => {
+      if (!reused) void qc.invalidateQueries({ queryKey: ['sessions'] });
+      if (config.openMode === 'switch_session') {
+        selectSession(target.id);
+      } else {
+        const anchorId = primarySessionId ?? source.id;
+        const title = reused
+          ? sessionLabel(target, agents.data?.find(agent => agent.id === target.agentId)?.name)
+          : '侧边聊天';
+        openTab({ id: `side-chat:${target.id}`, kind: 'side-chat', sessionId: target.id, title }, anchorId);
+      }
+      if (initialPrompt?.trim()) {
+        try {
+          await api.send(target.id, initialPrompt, 'queue', undefined, createClientMessageId());
+          void qc.invalidateQueries({ queryKey: ['tasks', target.id] });
+        } catch (error) {
+          setActionError(error instanceof Error ? error.message : String(error));
+        }
+      }
     },
     onError: error => setActionError(error instanceof Error ? error.message : String(error))
+  });
+
+  const handleSessionSideChat = useMemoizedFn(async (source: Session, options?: { initialPrompt?: string; fromBtw?: boolean }) => {
+    await sideChat.mutateAsync({ source, ...options });
   });
 
   const shortcuts: Shortcut[] = [
@@ -909,7 +947,7 @@ export default function App() {
               </div>}
       </div>
       {/* 两个入口都开弹窗：归档列表早先挂在会话树最底部，点了要滚到底才看得见，看起来像点不开。 */}
-      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onAssistant={openAssistantSettings} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
+      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onSideChatConfig={() => { setSidebarOpen(false); openAppDialog('side-chat'); }} onAssistant={openAssistantSettings} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
       </div>
       {/* 收起态细条（仅桌面）：展开 + 快捷新建 + 两个设置入口 */}
       <div className={`hidden h-full w-full flex-col items-center gap-1 py-3 ${sidebarCollapsed ? 'md:flex' : ''}`}>
@@ -929,15 +967,15 @@ export default function App() {
     <main className="flex min-w-0 flex-1 bg-canvas">
       {primarySession ? <>
         {/* lg 以下右栏全屏覆盖主区（小屏不并排）；lg 以上并排、宽度可拖拽（PaneHost 负责）。 */}
-        <div className={`flex min-w-0 flex-1 ${paneOpen ? 'max-lg:hidden' : ''}`}><SessionPane key={`primary:${primarySession.id}`} session={primarySession} agent={agents.data?.find(agent => agent.id === primarySession.agentId)} pane="primary" onOpenSidebar={() => setSidebarOpen(true)} paneOpen={paneOpen} onTogglePane={() => { setPaneMenuAnchor(undefined); togglePane(); }}/></div>
+        <div className={`flex min-w-0 flex-1 ${paneOpen ? 'max-lg:hidden' : ''}`}><SessionPane key={`primary:${primarySession.id}`} session={primarySession} agent={agents.data?.find(agent => agent.id === primarySession.agentId)} pane="primary" onOpenSidebar={() => setSidebarOpen(true)} paneOpen={paneOpen} onTogglePane={() => { setPaneMenuAnchor(undefined); togglePane(); }} btwEnabled={sideChatConfig.btwEnabled} btwTriggerPrefix={sideChatConfig.triggerPrefix} onSideChat={handleSessionSideChat}/></div>
         {(paneOpen || mountedTabs.length > 0) && <PaneHost tabs={tabs} mountedTabs={mountedTabs} activeTabId={activeTabId} visible={paneOpen} shortcuts={shortcuts} acceptsDrop={Boolean(dragItem?.sessionId)} onDropSession={() => { const dropped = dragItem?.sessionId; setDragItem(undefined); setDragOverItem(undefined); if (dropped) openSessionInPane(dropped); }} onActivate={activateTab} onClose={closeTab} onAdd={anchor => setPaneMenuAnchor(anchor)} onPick={openPaneKind} onHide={() => { setPaneMenuAnchor(undefined); togglePane(); }}>
           {Object.fromEntries(mountedTabs.map(tab => [tab.id,
             // 终端与文件锚定主会话；会话类标签用自己的 sessionId。三者都是廉价组件
             // （终端/文件只读会话的 cwd，不启进程），所以可以全部常驻挂载。
             tab.kind === 'terminal' ? <TerminalPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} sshHost={(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost}/>
-            : tab.kind === 'files' ? <FileExplorerPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} cwd={sortedSessions.find(item => item.id === tab.anchorSessionId)?.cwd ?? primarySession.cwd} initialPath={tab.filePath} disabledReason={(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost ? `SSH 远端会话（${(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost}）暂不支持文件浏览；终端面板可以直接连到远端。` : undefined}/>
+            : tab.kind === 'files' ? <FileExplorerPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} cwd={sortedSessions.find(item => item.id === tab.anchorSessionId)?.cwd ?? primarySession.cwd} initialPath={tab.filePath} targetLine={tab.fileLine} targetEndLine={tab.fileEndLine} previewNonce={tab.filePreviewNonce} onClose={() => { setPaneMenuAnchor(undefined); togglePane(); }} disabledReason={(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost ? `SSH 远端会话（${(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost}）暂不支持文件浏览；终端面板可以直接连到远端。` : undefined}/>
             : tab.kind === 'raw' ? <RawLogPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} active={paneOpen && tab.id === activeTabId}/>
-            : (() => { const session = sortedSessions.find(item => item.id === tab.sessionId); return session ? <SessionPane key={tab.id} session={session} agent={agents.data?.find(agent => agent.id === session.agentId)} pane="secondary" onOpenSidebar={() => setSidebarOpen(true)} onOpenRawLog={openRawLog}/> : <div className="grid h-full place-items-center text-[12px] text-zinc-400">会话已不存在。</div>; })()
+            : (() => { const session = sortedSessions.find(item => item.id === tab.sessionId); return session ? <SessionPane key={tab.id} session={session} agent={agents.data?.find(agent => agent.id === session.agentId)} pane="secondary" onOpenSidebar={() => setSidebarOpen(true)} onOpenRawLog={openRawLog} btwEnabled={sideChatConfig.btwEnabled} btwTriggerPrefix={sideChatConfig.triggerPrefix} onSideChat={handleSessionSideChat}/> : <div className="grid h-full place-items-center text-[12px] text-zinc-400">会话已不存在。</div>; })()
           ]))}
         </PaneHost>}
         {/* 副屏整个收起时它带着 hidden、收不到 dragover，所以拖拽期间单独在右缘补一个落点。
@@ -971,6 +1009,7 @@ export default function App() {
       lark: <LarkConfigModal agents={agents.data ?? []} onClose={closeAppDialog}/>,
       'lark-avatar': <LarkAvatarDialog onClose={closeAppDialog}/>,
       agent: <AgentConfigDialog onClose={closeAppDialog}/>,
+      'side-chat': <AgentConfigDialog initialTab="side-chat" onClose={closeAppDialog}/>,
       assistant: <AssistantSettingsDialog onClose={closeAppDialog} onOpenMain={() => { closeAppDialog(); openMain(); }} onAdopt={() => { closeAppDialog(); goAdopt(); }} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
       schedule: sessionId => <ScheduleDialog {...(sessionId ? { session: sortedSessions.find(item => item.id === sessionId) } : {})} sessions={sortedSessions} onClose={closeAppDialog} onOpenSession={selectSession}/>,
       handover: sessionId => {

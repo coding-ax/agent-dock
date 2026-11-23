@@ -31,6 +31,7 @@ import type { SourceRouterService } from './sources-router/service.js';
 import { registerTerminalWebSockets } from './terminal-ws.js';
 import { registerFsRoutes } from './fs-routes.js';
 import { registerLlmRoutes, type LlmRoutesOptions } from './llm/service.js';
+import { registerSideChatConfigRoutes, type SideChatConfigService } from './side-chat-config.js';
 import { registerJsonCompression } from './json-compression.js';
 import { LoginRateLimiter, readWebPasswordHash, verifyWebPassword, webPasswordPath } from './web-password.js';
 import { isLocalOwnerRequest, issueMasterToken, parseCookieHeader, sessionTokenAllows, verifyWebToken, webAccessCookieName, webAccessCookieNameFor, webAccessSessionCookieName, type VerifiedWebToken } from './web-access.js';
@@ -97,6 +98,8 @@ export interface BuildAppOptions {
   system?: SystemRoutesOptions;
   /** 模型端点（平台拿模型能力的唯一来源）；不传表示这套路由不挂。 */
   llm?: LlmRoutesOptions;
+  /** 侧边对话与 /btw 共享配置；不传表示这套路由不挂。 */
+  sideChatConfig?: SideChatConfigService;
   /** 本地 Web 访问凭证防护；不传（或 enabled=false）时不挂防护中间件。 */
   webAuth?: { enabled?: boolean; secret?: string; /** 访问密码哈希文件；默认 ~/.agentdock/web-password，文件不存在即未启用密码。 */ passwordFile?: string; /** 会话分享令牌寿命；与启动时的 AGENTDOCK_WEB_TOKEN_TTL_DAYS 对齐。 */ sessionTokenTtlMs?: number };
   /** 扫码链接；不传表示这套路由不挂。 */
@@ -618,6 +621,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   });
   await registerFsRoutes(app, runtime);
   await registerLlmRoutes(app, options.llm);
+  if (options.sideChatConfig) registerSideChatConfigRoutes(app, options.sideChatConfig);
 
   const mimeToExt: Record<string, string> = {
     'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',

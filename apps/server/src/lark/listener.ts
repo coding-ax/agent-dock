@@ -5,12 +5,13 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import type { AgentEvent, ConfigRepository, ChannelMappingRepository, PermissionMode, Session, TaskRecord, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
+import type { AgentConfig, AgentEvent, ConfigRepository, ChannelMappingRepository, PermissionMode, Session, TaskRecord, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
 import { defaultHighRiskPattern, defaultLarkTraceLimit, type StoredLarkConfig } from './config.js';
 import { parseLarkMessageContent, type LarkMessageResource } from './message-content.js';
 import { boundLarkCardElements, createLarkCardService, larkIdentityPermissionHelp, LarkServiceError, type LarkCardActionButton, type LarkCardService } from './service.js';
 import { clearSessionReplyMode, getSessionReplyMode, type AgentReplyMode } from './agent-tools.js';
 import { larkHandoverChannel } from './handover-binding.js';
+import { buildSideSessionSeed, matchSideChatTrigger, readSideChatConfig, type SideChatConfig } from '../side-chat-config.js';
 import { isAgentStreamErrorText, isAgentWarningText, isCarriedOverToolCall, pickFinalAssistantEntry, stripAgentStreamErrorSuffix, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 
 type ListenerLog = {
@@ -20,7 +21,8 @@ type ListenerLog = {
 };
 
 export interface LarkRuntime {
-  start(input: { agentId: string; cwd?: string; model?: string; reasoningEffort?: string; permissionMode?: PermissionMode; source?: string; sourceId?: string }): Promise<Session>;
+  start(input: { agentId: string; cwd?: string; model?: string; reasoningEffort?: string; systemPrompt?: string; permissionMode?: PermissionMode; source?: string; sourceId?: string }): Promise<Session>;
+  listAgents?(): Promise<AgentConfig[]>;
   listSessions?(): Promise<Session[]>;
   getSession(id: string): Promise<Session | undefined>;
   stop?(id: string): Promise<unknown>;
@@ -133,6 +135,15 @@ type LarkTask = {
   reopenOffered?: boolean;
   /** Agent 通过 group reply-mode 工具指定的回复方式；未指定时按默认逻辑（parent_id）决定。 */
   replyMode?: AgentReplyMode;
+  /** 侧边对话强制以话题形式回复触发消息（reply_in_thread），无论群聊还是私聊。 */
+  forceReplyInThread?: boolean;
+  /** 命中侧边对话触发词时的上下文：按 SideChatConfig 创建并绑定侧边会话，不阻塞主会话。 */
+  sideChat?: {
+    parentGroupKey: string;
+    parentSourceId: string;
+    triggerRootId: string;
+    config: SideChatConfig;
+  };
 };
 type PersistedLarkCardTask = {
   app_id: string;
@@ -163,6 +174,7 @@ const larkReconnectMultiplier = 2;
 const larkReconnectCooldownMs = 60_000;
 
 const larkCardChannel = (appId: string) => `lark-card:${appId}`;
+export const larkSideChatThreadChannel = (appId: string) => `lark-side-chat:${appId}`;
 export { larkHandoverChannel } from './handover-binding.js';
 const terminalTaskStates = new Set(['completed', 'failed', 'interrupted', 'cancelled']);
 // 群名列表只用于身份注入，且注入里最多展示 20 个群名，因此分页与等待都设上限：
@@ -246,9 +258,9 @@ async function parsePrompt(
   event: LarkMessageEvent,
   selfMention: (mention: { key?: string; name?: string; openId?: string; appId?: string; mentionedType?: string }) => boolean,
   service?: Pick<LarkCardService, 'getMessage' | 'getUserName'>,
-  trace?: { log?: ListenerLog; appId?: string }
+  trace?: { log?: ListenerLog; appId?: string; stripSideChatTriggerPrefix?: string }
 ) {
-  const { log, appId } = trace ?? {};
+  const { log, appId, stripSideChatTriggerPrefix } = trace ?? {};
   // 合并转发（merge_forward）消息不自动展开，只返回带 message_id 的占位提示；
   // Agent 如需查看转发内容，可通过群协作工具按 message_id 拉取。
   const parsed = await parseLarkMessageContent(event.messageType, event.content, {
@@ -256,6 +268,10 @@ async function parsePrompt(
   });
   let text = renderPromptMentions(parsed.text, event.mentions, selfMention);
   text = text.trim();
+  if (stripSideChatTriggerPrefix) {
+    const matched = matchSideChatTrigger(text, stripSideChatTriggerPrefix);
+    if (matched.matched) text = matched.prompt;
+  }
 
   const quotedResources: LarkMessageResource[] = [];
   // 并行获取：当前发送者名字 + 被引用消息（如有）。两者失败都不影响主流程。
@@ -408,7 +424,7 @@ async function sendTaskCard(
   input: Omit<Parameters<LarkCardService['send']>[0], 'chatId'> & { replyInThread?: boolean },
   log?: { warn: (...args: any[]) => void }
 ) {
-  if (event.chatType === 'group' && typeof service.reply === 'function') {
+  if ((event.chatType === 'group' || input.replyInThread) && typeof service.reply === 'function') {
     try {
       return await service.reply({ ...larkReplyContext(event), ...input });
     } catch (error) {
@@ -451,12 +467,13 @@ async function sendQuietFinalReply(
   service: Pick<LarkCardService, 'sendText' | 'replyText'>,
   event: LarkMessageEvent,
   text: string,
-  log?: { warn: (...args: any[]) => void }
+  log?: { warn: (...args: any[]) => void },
+  forceReplyInThread?: boolean
 ): Promise<void> {
   const content = text.trim() || '（Agent 未返回最终输出）';
-  if (event.chatType === 'group' && typeof service.replyText === 'function') {
+  if ((event.chatType === 'group' || forceReplyInThread) && typeof service.replyText === 'function') {
     try {
-      await service.replyText({ messageId: event.messageId, text: content, ...(event.threadId?.trim() ? { replyInThread: true } : {}) });
+      await service.replyText({ messageId: event.messageId, text: content, ...(forceReplyInThread || event.threadId?.trim() ? { replyInThread: true } : {}) });
       return;
     } catch (error) {
       // 回复触发消息失败（例如消息已被删除）时回退为群内发送，保证最终回复仍能送达。
@@ -471,7 +488,7 @@ async function deliverTaskFailure(
   service: Pick<LarkCardService, 'send' | 'reply' | 'sendText' | 'replyText'>,
   event: LarkMessageEvent,
   config: Pick<StoredLarkConfig, 'quietReply'>,
-  input: Omit<Parameters<LarkCardService['send']>[0], 'chatId'>,
+  input: Omit<Parameters<LarkCardService['send']>[0], 'chatId'> & { replyInThread?: boolean },
   log?: { warn: (...args: any[]) => void }
 ): Promise<{ messageId: string }> {
   if (config.quietReply) {
@@ -483,7 +500,7 @@ async function deliverTaskFailure(
       .replace(/`/g, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim() || '（AgentDock 处理失败）';
-    await sendQuietFinalReply(service, event, text, log);
+    await sendQuietFinalReply(service, event, text, log, input.replyInThread);
     return { messageId: '' };
   }
   return await sendTaskCard(service, event, input, log);
@@ -839,6 +856,8 @@ export class LarkMessageCoordinator {
   private readonly groups = new Map<string, LarkGroup>();
   private readonly tasks = new Map<string, LarkTask>();
   private readonly handledMessages = new Set<string>();
+  /** 飞书侧聊话题映射（`${appId}:${rootId|threadId}` -> sideChatSessionId），与 cardMappings 双写。 */
+  private readonly sideChatThreads = new Map<string, string>();
   private reconcileTimer?: NodeJS.Timeout;
   private reconcileRun?: Promise<number>;
   private reconcileConfig?: StoredLarkConfig;
@@ -1030,11 +1049,11 @@ export class LarkMessageCoordinator {
       prompt: task.prompt,
       state,
       ...(task.lastSuccessfulElements?.length ? { last_successful_elements: task.lastSuccessfulElements } : {}),
-      ...(task.event.chatType === 'group' ? {
+      ...(task.event.chatType === 'group' || task.forceReplyInThread ? {
         reply_message_id: task.event.messageId,
         ...(task.replyMode
           ? { reply_in_thread: task.replyMode === 'thread' }
-          : task.event.threadId?.trim() ? { reply_in_thread: true } : {})
+          : (task.forceReplyInThread || task.event.threadId?.trim()) ? { reply_in_thread: true } : {})
       } : {}),
       started_at: task.startedAt
     };
@@ -1233,11 +1252,137 @@ export class LarkMessageCoordinator {
       || (this.botOpenId === undefined && mention.mentionedType === 'bot');
   }
 
+  private async lookupSideChatThread(appId: string, event: Pick<LarkMessageEvent, 'rootId' | 'threadId'>): Promise<{ key: string; sessionId: string } | undefined> {
+    const keys = [event.rootId?.trim(), event.threadId?.trim()].filter((value): value is string => Boolean(value));
+    for (const key of keys) {
+      const mem = this.sideChatThreads.get(`${appId}:${key}`);
+      if (mem) return { key, sessionId: mem };
+      if (this.cardMappings) {
+        try {
+          const mapping = await this.cardMappings.get(larkSideChatThreadChannel(appId), key);
+          if (mapping?.sessionId) {
+            this.sideChatThreads.set(`${appId}:${key}`, mapping.sessionId);
+            return { key, sessionId: mapping.sessionId };
+          }
+        } catch (error) {
+          this.log.warn({ error, appId, key }, '读取飞书侧聊话题绑定失败');
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private async saveSideChatThread(appId: string, keys: string[], sessionId: string) {
+    const uniqueKeys = [...new Set(keys.map(key => key.trim()).filter(Boolean))];
+    for (const key of uniqueKeys) {
+      this.sideChatThreads.set(`${appId}:${key}`, sessionId);
+      if (this.sideChatThreads.size > 5_000) this.sideChatThreads.delete(this.sideChatThreads.keys().next().value!);
+      if (this.cardMappings) {
+        try {
+          await this.cardMappings.save({
+            id: `${larkSideChatThreadChannel(appId)}:${key}`,
+            channel: larkSideChatThreadChannel(appId),
+            externalId: key,
+            sessionId,
+            createdAt: new Date().toISOString()
+          });
+        } catch (error) {
+          this.log.warn({ error, appId, key, sessionId }, '持久化飞书侧聊话题绑定失败');
+        }
+      }
+    }
+  }
+
+  /** 查找当前聊天对应的主会话（用于侧边会话关联父会话上下文，不新建主会话）。 */
+  private async findParentSessionForSideChat(
+    config: StoredLarkConfig,
+    event: LarkMessageEvent,
+    parentGroupKey: string,
+    parentSourceId: string
+  ): Promise<Session | undefined> {
+    const parentGroup = this.groups.get(parentGroupKey);
+    let candidateId = parentGroup?.boundSessionId ?? parentGroup?.sessionId;
+    if (!candidateId && this.cardMappings) {
+      try {
+        const handover = await this.cardMappings.get(larkHandoverChannel(config.appId), event.chatId);
+        if (handover?.sessionId) candidateId = handover.sessionId;
+      } catch { /* ignore */ }
+    }
+    if (candidateId) {
+      const existing = await this.runtime.getSession(candidateId);
+      if (existing && !existing.archivedAt) return existing;
+    }
+    if (this.runtime.listSessions) {
+      const sessions = await this.runtime.listSessions();
+      const matched = [...sessions].reverse().find(item => item.source === 'lark'
+        && item.sourceId === parentSourceId
+        && !item.archivedAt);
+      if (matched) return matched;
+    }
+    return undefined;
+  }
+
+  /**
+   * 按 SideChatConfig 创建飞书侧边会话并绑定话题。
+   * 复用与网页端完全一致的「侧边会话」模型（source: 'side-chat' + buildSideSessionSeed）。
+   */
+  private async sideChatSessionFor(task: LarkTask): Promise<Session> {
+    const { group, event, config, sideChat } = task;
+    if (!sideChat) throw new Error('Missing sideChat context');
+    if (group.boundSessionId) {
+      const existing = await this.runtime.getSession(group.boundSessionId);
+      if (existing && !existing.archivedAt && !['failed', 'stopped'].includes(existing.state)) return existing;
+    }
+    const parentSession = await this.findParentSessionForSideChat(config, event, sideChat.parentGroupKey, sideChat.parentSourceId);
+    const sideConfig = sideChat.config;
+
+    let agentId: string | undefined;
+    let model: string | undefined;
+    let reasoningEffort: string | undefined;
+
+    if (sideConfig.targetMode === 'custom_agent' && sideConfig.agentId?.trim()) {
+      const targetId = sideConfig.agentId.trim();
+      const availableAgents = this.runtime.listAgents ? await this.runtime.listAgents() : undefined;
+      const available = !availableAgents || availableAgents.some(agent => agent.id === targetId && !agent.disabled);
+      if (available) {
+        agentId = targetId;
+        model = sideConfig.model?.trim() || undefined;
+        reasoningEffort = sideConfig.reasoningEffort?.trim() || undefined;
+      }
+    }
+
+    if (!agentId) {
+      agentId = parentSession?.agentId ?? config.defaultAgentId;
+      model = parentSession ? parentSession.model : config.defaultModel;
+      reasoningEffort = parentSession ? parentSession.reasoningEffort : config.defaultReasoningEffort;
+    }
+    if (!agentId) throw new Error('尚未配置默认 Agent，请先在设置中配置飞书默认 Agent 或侧边对话目标 Agent');
+
+    const cwd = parentSession?.cwd ?? config.workspace;
+    const session = await this.runtime.start({
+      agentId,
+      ...(cwd ? { cwd } : {}),
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(parentSession ? { systemPrompt: buildSideSessionSeed(parentSession.id) } : {}),
+      permissionMode: 'full-trust',
+      source: 'side-chat',
+      sourceId: parentSession ? parentSession.id : sideChat.parentSourceId
+    });
+    group.boundSessionId = session.id;
+    group.sessionId = session.id;
+    await this.saveSideChatThread(config.appId, [sideChat.triggerRootId, ...(event.threadId ? [event.threadId] : [])], session.id);
+    return session;
+  }
+
   async handle(event: LarkMessageEvent, config: StoredLarkConfig) {
     // 唤醒判定以 open_id 为主（机器人被 @ 时飞书回调给的也是 open_id），
     // 并兼容极端情况下携带 app_id 的形态。@ 唤不醒时先看下面那条日志里的原始 mentions。
     const mentionsBot = event.mentions.some(mention => this.isSelfMention(config, mention));
-    const shouldWake = event.chatType === 'p2p' || (event.chatType === 'group' && mentionsBot);
+    // 先查是否处于机器人已开启的侧聊话题中：在群聊侧聊话题下直接追问（且没有 @ 别人）时自动唤醒，无需每次再 @ 或敲 /btw。
+    const existingSideThread = await this.lookupSideChatThread(config.appId, event);
+    const inSideChatFollowUp = Boolean(existingSideThread) && (event.chatType === 'p2p' || mentionsBot || event.mentions.length === 0);
+    const shouldWake = event.chatType === 'p2p' || (event.chatType === 'group' && mentionsBot) || inSideChatFollowUp;
     if (event.chatType === 'group' && !shouldWake && event.mentions.length) {
       // 有 @ 却没命中本机器人：多数是正常的（@ 的是别人），但也是「@ 不醒」类问题的第一现场。
       this.log.info({ messageId: event.messageId, chatId: event.chatId, appId: config.appId, botOpenId: this.botOpenId, mentions: event.mentions }, '飞书消息含 @ 但未命中本机器人，跳过');
@@ -1246,11 +1391,35 @@ export class LarkMessageCoordinator {
     // 先标记已处理，避免异步解析期间同一条消息被重复入队。
     this.handledMessages.add(event.messageId);
     if (this.handledMessages.size > 5_000) this.handledMessages.delete(this.handledMessages.values().next().value!);
-    // 空 @ 消息（仅 @ 机器人无文字）仍需创建任务，由 runTurn 拉取聊天记录做兜底意图判断。
-    const groupKey = larkGroupKey(event, config.groupSessionScope);
+
+    const sideChatConfig = await readSideChatConfig(this.configRepository);
+    const mainScopeId = larkGroupScopeId(event, config.groupSessionScope);
+    const mainGroupKey = larkGroupKey(event, config.groupSessionScope);
+
+    // 轻量检测消息正文是否命中侧边对话触发前缀（默认 /btw），不阻塞主会话队列。
+    let matchedNewSideChat = false;
+    if (!existingSideThread && sideChatConfig.btwEnabled) {
+      try {
+        const quickParsed = await parseLarkMessageContent(event.messageType, event.content, { messageId: event.messageId });
+        const quickText = renderPromptMentions(quickParsed.text, event.mentions, mention => this.isSelfMention(config, mention)).trim();
+        matchedNewSideChat = matchSideChatTrigger(quickText, sideChatConfig.triggerPrefix).matched;
+      } catch { /* 解析失败按普通消息处理 */ }
+    }
+
+    const triggerRootId = event.rootId?.trim() || event.messageId;
+    const isSideChat = Boolean(existingSideThread) || matchedNewSideChat;
+    const groupKey = isSideChat
+      ? `side-chat:${event.chatId}:${existingSideThread ? existingSideThread.key : triggerRootId}`
+      : mainGroupKey;
     const group = this.groups.get(groupKey) ?? { tail: Promise.resolve() };
-    // 「托管给机器人」：该群被显式绑定到某个会话时，忽略常规的 sourceId 复用，强制用这个会话。
-    if (!group.boundSessionId && this.cardMappings) {
+    if (existingSideThread) {
+      group.boundSessionId = existingSideThread.sessionId;
+      // 追问消息带了新的 threadId 时顺便补记，确保后续按 threadId 也能命中。
+      if (event.threadId?.trim()) {
+        void this.saveSideChatThread(config.appId, [existingSideThread.key, event.threadId.trim()], existingSideThread.sessionId);
+      }
+    } else if (!isSideChat && !group.boundSessionId && this.cardMappings) {
+      // 「托管给机器人」：该群被显式绑定到某个会话时，忽略常规的 sourceId 复用，强制用这个会话。
       try {
         const mapping = await this.cardMappings.get(larkHandoverChannel(config.appId), event.chatId);
         if (mapping?.sessionId) group.boundSessionId = mapping.sessionId;
@@ -1258,12 +1427,37 @@ export class LarkMessageCoordinator {
         this.log.warn({ error, appId: config.appId, chatId: event.chatId }, '读取托管绑定失败，按普通会话处理');
       }
     }
-    const task: LarkTask = { id: event.messageId, group, event, prompt: '', resources: [], config, state: 'queued', events: [], turn: 0 };
+
+    const task: LarkTask = {
+      id: event.messageId,
+      group,
+      event,
+      prompt: '',
+      resources: [],
+      config,
+      state: 'queued',
+      events: [],
+      turn: 0,
+      ...(isSideChat ? { forceReplyInThread: true } : {}),
+      ...(matchedNewSideChat ? {
+        sideChat: {
+          parentGroupKey: mainGroupKey,
+          parentSourceId: larkSourceId(config, event.chatId, event.chatType, mainScopeId),
+          triggerRootId,
+          config: sideChatConfig
+        }
+      } : {})
+    };
     this.tasks.set(task.id, task);
     if (this.tasks.size > 5_000) this.tasks.delete(this.tasks.keys().next().value!);
+    const stripSideChatTriggerPrefix = isSideChat && sideChatConfig.btwEnabled ? sideChatConfig.triggerPrefix : undefined;
     group.tail = group.tail.then(async () => {
       if (this.stopped) return;
-      const parsed = await parsePrompt(event, mention => this.isSelfMention(config, mention), this.service, { log: this.log, appId: config.appId });
+      const parsed = await parsePrompt(event, mention => this.isSelfMention(config, mention), this.service, {
+        log: this.log,
+        appId: config.appId,
+        ...(stripSideChatTriggerPrefix ? { stripSideChatTriggerPrefix } : {})
+      });
       task.prompt = parsed.prompt;
       task.resources = parsed.resources;
       await this.runTurn(task);
@@ -1519,9 +1713,13 @@ export class LarkMessageCoordinator {
       task.resources = [];
     }
     // 用户仅 @ 机器人而未发送文字时，拉取最近聊天记录作为上下文，让 Agent 判断用户意图。
+    // 侧边对话触发但未附带问题时（例如裸 `/btw`），直接提示已就绪，不把群主流记录塞进侧边会话。
     if (!task.prompt.trim()) {
-      task.prompt = await this.buildEmptyMessageFallback(event, config);
+      task.prompt = task.sideChat
+        ? '用户开启了侧边对话，但未输入具体问题。请简短说明侧边对话已就绪，用户可在本话题中继续提问。'
+        : await this.buildEmptyMessageFallback(event, config);
     }
+    const replyInThreadOpt = task.forceReplyInThread ? { replyInThread: true } : {};
     const prompt = task.prompt;
     const firstAttempt = !task.cardMessageId;
     const emojiType = acknowledgementEmojis[Math.floor(this.random() * acknowledgementEmojis.length)] ?? acknowledgementEmojis[0];
@@ -1608,11 +1806,15 @@ export class LarkMessageCoordinator {
       reason: '当前飞书发送人不在高危操作允许名单中'
     };
     let session: Session;
-    try { session = await this.sessionFor(group, config, event.chatId, event.chatType, larkGroupScopeId(event, config.groupSessionScope)); }
+    try {
+      session = task.sideChat
+        ? await this.sideChatSessionFor(task)
+        : await this.sessionFor(group, config, event.chatId, event.chatType, larkGroupScopeId(event, config.groupSessionScope));
+    }
     catch (error) {
       task.state = 'failed'; task.startedAt = Date.now();
       const markdown = `**Agent 启动失败**\n\n${error instanceof Error ? error.message : String(error)}`;
-      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', taskId: task.id, taskName: prompt.slice(0, 80), markdown, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) }, this.log);
+      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', taskId: task.id, taskName: prompt.slice(0, 80), markdown, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyInThreadOpt }, this.log);
       if (card.messageId) task.cardMessageId = card.messageId;
       if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
       return;
@@ -1630,7 +1832,7 @@ export class LarkMessageCoordinator {
       if (task.cardMessageId) {
         await this.service.update({ messageId: task.cardMessageId, state: 'running', taskId: task.id, taskName: prompt.slice(0, 80), markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
       } else {
-        const card = await sendTaskCard(this.service, event, { state: 'running', taskId: task.id, taskName: prompt.slice(0, 80), markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) }, this.log);
+        const card = await sendTaskCard(this.service, event, { state: 'running', taskId: task.id, taskName: prompt.slice(0, 80), markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyInThreadOpt }, this.log);
         task.cardMessageId = card.messageId;
       }
       task.lastSuccessfulElements = initialElements;
@@ -1808,7 +2010,7 @@ export class LarkMessageCoordinator {
         let lastQuietError: unknown;
         for (let attempt = 1; attempt <= maxQuietReplyAttempts; attempt++) {
           try {
-            await sendQuietFinalReply(this.service, event, reply, this.log);
+            await sendQuietFinalReply(this.service, event, reply, this.log, task.forceReplyInThread);
             lastQuietError = undefined;
             break;
           } catch (error) {
@@ -1828,7 +2030,7 @@ export class LarkMessageCoordinator {
         }
         return;
       }
-      const defaultReplyInThread = Boolean(event.threadId?.trim());
+      const defaultReplyInThread = Boolean(task.forceReplyInThread || event.threadId?.trim());
       const agentReplyInThread = agentReplyMode === 'thread';
       if (agentReplyMode && agentReplyInThread !== defaultReplyInThread) {
         task.replyMode = agentReplyMode;
@@ -2003,7 +2205,7 @@ export class LarkMessageCoordinator {
         buffered = [];
         if (runtimeTask.status === 'queued' && (runtimeTask.queuedAhead ?? 0) > 0 && task.state === 'queued') {
           if (config.quietReply) {
-            await sendQuietFinalReply(this.service, event, `已收到请求，前面还有 ${runtimeTask.queuedAhead} 个任务，完成后我会把结果发到这里。`, this.log);
+            await sendQuietFinalReply(this.service, event, `已收到请求，前面还有 ${runtimeTask.queuedAhead} 个任务，完成后我会把结果发到这里。`, this.log, task.forceReplyInThread);
           } else {
             await this.service.update({ messageId: task.cardMessageId!, state: 'queued', taskId: task.id, taskName: prompt.slice(0, 80), markdown: `正在排队，前面还有 ${runtimeTask.queuedAhead} 个任务…`, sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
           }

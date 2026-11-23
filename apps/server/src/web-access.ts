@@ -175,5 +175,5 @@ export function sessionTokenAllows(method: string, pathname: string, sessionId: 
   return pathname === '/api/sessions' || pathname.startsWith('/api/agents')
     || pathname === '/api/lark/config' || pathname === '/api/system/capabilities'
     || pathname === '/api/system/skills' || pathname === '/api/system/update'
-    || pathname === '/api/llm';
+    || pathname === '/api/llm' || pathname === '/api/side-chat/config';
 }

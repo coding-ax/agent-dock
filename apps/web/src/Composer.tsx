@@ -95,10 +95,10 @@ function ContextMeter({ context }: { context: ContextStats }) {
   </div>;
 }
 
-export function Composer({ sessionId, state, value, references, sending, mode, queuedTasks, cancellingTaskId, steeringTaskId, editingTaskId, skills, models, reasoningEfforts, currentModel, currentReasoningEffort, context, advertisedCommands, modelReadiness, switchingModel, switchingReasoningEffort, refreshingModels, editorRef: externalEditorRef, draft, placeholder, sendLabel: sendLabelOverride, lockedTarget, agents, currentAgentId, onAgentChange, workspace, onWorkspaceChange, workspaceSuggestion, workspaceOptions, homeDirectory, directoryPickerAvailable, pickingDirectory, onPickDirectory, onAttachFile, onChange, onReferencesChange, onModeChange, onSubmit, onInterrupt, onCancelQueued, onSteerQueued, onEditQueued, onModelChange, onReasoningEffortChange, onRefreshModels }: {
+export function Composer({ sessionId, state, value, references, sending, mode, queuedTasks, cancellingTaskId, steeringTaskId, editingTaskId, skills, models, reasoningEfforts, currentModel, currentReasoningEffort, context, advertisedCommands, builtinCommands = [], modelReadiness, switchingModel, switchingReasoningEffort, refreshingModels, editorRef: externalEditorRef, draft, placeholder, sendLabel: sendLabelOverride, lockedTarget, agents, currentAgentId, onAgentChange, workspace, onWorkspaceChange, workspaceSuggestion, workspaceOptions, homeDirectory, directoryPickerAvailable, pickingDirectory, onPickDirectory, onAttachFile, onChange, onReferencesChange, onModeChange, onSubmit, onInterrupt, onCancelQueued, onSteerQueued, onEditQueued, onModelChange, onReasoningEffortChange, onRefreshModels }: {
   sessionId: string; state: string; value: string; references: ComposerReference[]; sending: boolean; mode: SendMode; queuedTasks: QueuedTask[]; cancellingTaskId?: string; steeringTaskId?: string; editingTaskId?: string;
   // 输入框由 CodeMirror 承载（Markdown 实时编辑）；光标位置由编辑器回报，用于 / 命令查询。
-  skills: SkillReference[]; models: AgentModel[]; reasoningEfforts: AgentModel[]; currentModel?: string; currentReasoningEffort?: string; context: ContextStats; advertisedCommands: Array<{ name: string; description: string }>; modelReadiness: ModelReadiness; switchingModel: boolean; switchingReasoningEffort: boolean; refreshingModels: boolean;
+  skills: SkillReference[]; models: AgentModel[]; reasoningEfforts: AgentModel[]; currentModel?: string; currentReasoningEffort?: string; context: ContextStats; advertisedCommands: Array<{ name: string; description: string }>; builtinCommands?: Array<{ name: string; description: string }>; modelReadiness: ModelReadiness; switchingModel: boolean; switchingReasoningEffort: boolean; refreshingModels: boolean;
   /** 分屏时父级需要精确聚焦本 pane 的输入框（不能再用 document.querySelector）。 */
   editorRef?: RefObject<ComposerEditorHandle | null>;
   /** 草稿态：尚未创建会话。显示 Agent / 工作目录选择，隐藏排队 / 中断等会话内控件。 */
@@ -168,9 +168,22 @@ export function Composer({ sessionId, state, value, references, sending, mode, q
   const query = slashQuery(beforeCaret, beforeCaret.length);
   const commands = useMemo(() => {
     // ACP command updates vary by Agent: Codex advertises /plan, Claude advertises /fast.
-    // Only offer a command when the active Agent actually reports it.
-    return advertisedCommands.filter(command => supportedCommands.has(command.name));
-  }, [advertisedCommands]);
+    // Only offer Agent commands when the active Agent actually reports them; platform builtin
+    // commands (such as /btw) are merged in front and deduplicated by name.
+    const seen = new Set<string>();
+    const list: ComposerCommand[] = [];
+    for (const command of builtinCommands) {
+      if (seen.has(command.name)) continue;
+      seen.add(command.name);
+      list.push(command);
+    }
+    for (const command of advertisedCommands) {
+      if (!supportedCommands.has(command.name) || seen.has(command.name)) continue;
+      seen.add(command.name);
+      list.push(command);
+    }
+    return list;
+  }, [advertisedCommands, builtinCommands]);
   const visibleCommands = commands.filter(command => query === undefined || command.name.toLowerCase().includes(query) || command.description.toLowerCase().includes(query));
   const visibleSkills = skills.filter(skill => query === undefined || skill.name.toLowerCase().includes(query) || skill.description.toLowerCase().includes(query));
   const commandPanel = panel === 'commands' || (query !== undefined && panel === undefined);
