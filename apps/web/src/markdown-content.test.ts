@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { isBlockCode, resolveCodeLanguage, MarkdownContent } from './MarkdownContent';
+import {
+  extractLinkedImages,
+  isBlockCode,
+  MarkdownContent,
+  MAX_AUTO_IMAGE_THUMBNAILS,
+  resolveCodeLanguage,
+  resolveImageSrc
+} from './MarkdownContent';
 
 describe('stream-safe Markdown code rendering', () => {
   it('normalizes common fenced-code language aliases', () => {
@@ -75,5 +82,41 @@ describe('workspace file preview links', () => {
   it('keeps session links as navigation', () => {
     const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', children: '[会话](/sessions/ses_2)' }));
     expect(html).toContain('href="/sessions/ses_2"');
+  });
+
+  it('turns bare file:// URLs into clickable preview chips without touching code blocks', () => {
+    const md = '查看 file:///repo/src/app.ts#L14-L16 和 `file:///repo/ignored.ts`';
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', children: md }));
+    expect(html).toContain('<button type="button" title="/repo/src/app.ts"');
+    expect(html).toContain('app.ts#L14-L16');
+    expect(html).toContain('<code');
+    expect(html).not.toContain('title="/repo/ignored.ts"');
+  });
+
+  it('resolves workspace, artifact, and uploads image sources', () => {
+    expect(resolveImageSrc('/Users/me/.agentdock/uploads/ses_1/shot.png', 'ses_1')).toBe('/api/sessions/ses_1/uploads/shot.png');
+    expect(resolveImageSrc('file:///Users/me/.gemini/brain/chart.svg', 'ses_1')).toBe('/api/sessions/ses_1/fs/read?path=%2FUsers%2Fme%2F.gemini%2Fbrain%2Fchart.svg');
+    expect(resolveImageSrc('./assets/pic.png', 'ses_1')).toBe('/api/sessions/ses_1/fs/read?path=.%2Fassets%2Fpic.png');
+    expect(resolveImageSrc('https://example.com/a.png', 'ses_1')).toBe('https://example.com/a.png');
+  });
+
+  it('extracts linked local images/SVGs and caps auto thumbnails at 4 with expand button', () => {
+    const md = [
+      '[图1](file:///tmp/1.png)',
+      '[图2](file:///tmp/2.svg)',
+      '[图3](./3.webp)',
+      '[图4](file:///tmp/4.jpg)',
+      '[图5](file:///tmp/5.gif)',
+      '![已内联](file:///tmp/inline.png)',
+      '```txt\n[代码里](file:///tmp/code.png)\n```'
+    ].join('\n');
+    const items = extractLinkedImages(md, 'ses_1');
+    expect(items).toHaveLength(5);
+    expect(items.map(i => i.filePath)).toEqual(['/tmp/1.png', '/tmp/2.svg', './3.webp', '/tmp/4.jpg', '/tmp/5.gif']);
+
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', children: md }));
+    expect(html).toContain('data-testid="linked-image-thumbnails"');
+    expect(html).toContain(`+${5 - MAX_AUTO_IMAGE_THUMBNAILS} 张`);
+    expect(html).toContain('展开全部');
   });
 });

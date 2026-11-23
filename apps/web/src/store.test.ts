@@ -189,3 +189,34 @@ describe('renameTab', () => {
     expect(state().tabs).toBe(before);
   });
 });
+
+describe('openFilePreview', () => {
+  it('reuses a single files tab per primary session and updates path, line range, and nonce', () => {
+    state().setSession('main');
+    state().openFilePreview({ sessionId: 'main', filePath: 'src/a.ts', startLine: 14, endLine: 16 });
+    expect(state().tabs).toHaveLength(1);
+    expect(state().tabs[0]).toMatchObject({
+      id: 'files:main',
+      kind: 'files',
+      anchorSessionId: 'main',
+      filePath: 'src/a.ts',
+      fileLine: 14,
+      fileEndLine: 16,
+      filePreviewNonce: 1,
+      title: 'a.ts'
+    });
+    expect(state().paneOpen).toBe(true);
+    expect(state().activeTabId).toBe('files:main');
+
+    state().openFilePreview({ sessionId: 'main', filePath: 'docs/guide.md', startLine: 5 });
+    expect(state().tabs).toHaveLength(1);
+    expect(state().tabs[0]).toMatchObject({
+      id: 'files:main',
+      filePath: 'docs/guide.md',
+      fileLine: 5,
+      fileEndLine: undefined,
+      filePreviewNonce: 2,
+      title: 'guide.md'
+    });
+  });
+});

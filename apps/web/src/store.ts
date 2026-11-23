@@ -26,6 +26,12 @@ export interface PaneTab {
   title?: string;
   /** Markdown link target for a file preview tab. */
   filePath?: string;
+  /** 目标高亮起始行（1-based）。 */
+  fileLine?: number;
+  /** 目标高亮结束行（1-based，可选）。 */
+  fileEndLine?: number;
+  /** 每次点击文件链接递增，用于触发复用 Tab 内的重新选中与滚屏定位。 */
+  filePreviewNonce?: number;
 }
 
 interface PaneView {
@@ -51,6 +57,8 @@ type Store = {
   clearSessionDraft(sessionId: string): void;
   /** 开一个标签并激活它。同 id 已存在时只激活，不重复开。 */
   openTab(tab: PaneTab, ownerSessionId?: string): void;
+  /** 复用右栏单个文件预览标签打开指定文件与可选行号，避免连续点击导致标签爆炸。 */
+  openFilePreview(input: { sessionId: string; filePath: string; startLine?: number; endLine?: number; title?: string }): void;
   closeTab(id: string): void;
   activateTab(id: string): void;
   /**
@@ -89,6 +97,42 @@ export const useDockStore = create<Store>(set => ({
     const ownedTab = { ...tab, ownerSessionId: owner };
     const tabs = state.tabs.some(item => item.id === tab.id) ? state.tabs : [...state.tabs, ownedTab];
     const view: PaneView = { paneOpen: true, activeTabId: tab.id };
+    return { tabs, paneViews: { ...state.paneViews, [key]: view }, ...(owner === state.primarySessionId ? view : {}) };
+  }),
+  openFilePreview: input => set(state => {
+    const owner = state.primarySessionId ?? input.sessionId;
+    const key = paneKey(owner);
+    const tabId = `files:${owner}`;
+    const title = input.title ?? (input.filePath.split('/').at(-1) || '文件');
+    const existingIndex = state.tabs.findIndex(item => item.id === tabId);
+    let tabs: PaneTab[];
+    if (existingIndex >= 0) {
+      const existing = state.tabs[existingIndex]!;
+      tabs = [...state.tabs];
+      tabs[existingIndex] = {
+        ...existing,
+        ownerSessionId: owner,
+        anchorSessionId: input.sessionId,
+        filePath: input.filePath,
+        fileLine: input.startLine,
+        fileEndLine: input.endLine,
+        filePreviewNonce: (existing.filePreviewNonce ?? 0) + 1,
+        title
+      };
+    } else {
+      tabs = [...state.tabs, {
+        id: tabId,
+        kind: 'files',
+        ownerSessionId: owner,
+        anchorSessionId: input.sessionId,
+        filePath: input.filePath,
+        fileLine: input.startLine,
+        fileEndLine: input.endLine,
+        filePreviewNonce: 1,
+        title
+      }];
+    }
+    const view: PaneView = { paneOpen: true, activeTabId: tabId };
     return { tabs, paneViews: { ...state.paneViews, [key]: view }, ...(owner === state.primarySessionId ? view : {}) };
   }),
   closeTab: id => set(state => {

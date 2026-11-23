@@ -718,6 +718,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     // attachment 让直接导航变成下载；nosniff 阻止 MIME 嗅探。<img> 等子资源预览不受影响。
     reply.header('Content-Disposition', `attachment; filename="${filename}"`);
     reply.header('X-Content-Type-Options', 'nosniff');
+    if (ext === '.svg') reply.header('Content-Security-Policy', 'sandbox');
     return reply.send(data);
   });
 

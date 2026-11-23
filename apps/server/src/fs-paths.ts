@@ -1,10 +1,14 @@
-import { realpathSync } from 'node:fs';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 
 /**
- * 会话文件浏览的路径安全：所有路径都必须被关在会话 cwd（realpath 后）内。
- * 单纯做字符串 prefix 检查防不住 symlink 逃逸（cwd 内一个指向 /etc 的软链），
- * 因此解析为绝对路径后还要与 realpath(cwd) 做前缀比较。
+ * 会话文件浏览的路径安全：
+ * 1. 分层白名单：
+ *    - session（分享链接）：仅允许当前会话 cwd 与本会话的 .agentdock/uploads/<sessionId>；
+ *    - master（控制台所有者）：允许当前会话 cwd、.agentdock/uploads 及产物/临时目录（~/.gemini、/tmp、/private/tmp、os.tmpdir()）；
+ * 2. 所有路径必须经 realpath 解析后校验 containment，防 symlink 逃逸；
+ * 3. 全角色强制敏感文件黑名单：.env、.env.*、.npmrc、~/.ssh/**、*.key、*.pem、id_rsa*、auth.json 等一律拒绝。
  */
 
 export interface ResolvedWorkspacePath {
@@ -54,13 +58,133 @@ export class WorkspacePathError extends Error {
   constructor(message: string) { super(message); this.name = 'WorkspacePathError'; }
 }
 
-// 可直接按 UTF-8 文本预览的扩展名白名单；其余类型走图片/415 分支。
+/**
+ * 敏感文件黑名单（全角色强制生效，包括 master 与 cwd 内部）。
+ * 同时校验原始路径与 realpath，防止通过软链绕过。
+ */
+const sensitiveExactNames = new Set([
+  '.env',
+  '.npmrc',
+  '.netrc',
+  '.pypirc',
+  '.dockercfg',
+  '.htpasswd',
+  'auth.json',
+  'credentials.json',
+  '.credentials.json',
+  'secrets.json',
+  'token.json'
+]);
+
+const sensitiveExtensions = new Set([
+  '.key',
+  '.pem',
+  '.p12',
+  '.pfx',
+  '.jks',
+  '.keystore'
+]);
+
+const sensitiveKeyPrefixPattern = /^id_(?:rsa|ed25519|ecdsa|dsa)(?:\..+)?$/i;
+
+export function isSensitivePath(targetPath: string): boolean {
+  const normalized = targetPath.replace(/\\/g, '/');
+  const segments = normalized.split('/').filter(Boolean);
+  if (!segments.length) return false;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]!.toLowerCase();
+    if (seg === '.ssh' || seg === '.gnupg') return true;
+    // ~/.aws/credentials、~/.kube/config
+    if (seg === '.aws' && segments[i + 1]?.toLowerCase() === 'credentials') return true;
+    if (seg === '.kube' && segments[i + 1]?.toLowerCase() === 'config') return true;
+  }
+  const name = basename(normalized).toLowerCase();
+  if (sensitiveExactNames.has(name)) return true;
+  if (name.startsWith('.env.')) return true;
+  if (sensitiveKeyPrefixPattern.test(name)) return true;
+  if (name.startsWith('service-account') && name.endsWith('.json')) return true;
+  const dot = name.lastIndexOf('.');
+  if (dot >= 0 && sensitiveExtensions.has(name.slice(dot))) return true;
+  return false;
+}
+
+export interface AllowedRootsOptions {
+  role: 'master' | 'session';
+  cwd: string;
+  sessionId?: string;
+  homeDir?: string;
+  tempDir?: string;
+  extraMasterRoots?: string[];
+}
+
+/**
+ * 计算当前角色允许读取的根目录列表（去重且仅保留已存在目录的 realpath）。
+ * - session：仅 cwd + 本会话的 ~/.agentdock/uploads/<sessionId>
+ * - master：cwd + ~/.agentdock/uploads + 产物/临时目录（~/.gemini、/tmp、/private/tmp、tmpdir()）
+ */
+export function allowedReadRoots(options: AllowedRootsOptions): string[] {
+  const home = options.homeDir ?? homedir();
+  const candidates: string[] = [options.cwd];
+  if (options.role === 'session') {
+    if (options.sessionId) {
+      candidates.push(join(home, '.agentdock', 'uploads', options.sessionId));
+    }
+  } else {
+    candidates.push(
+      join(home, '.agentdock', 'uploads'),
+      join(home, '.gemini'),
+      '/tmp',
+      '/private/tmp',
+      options.tempDir ?? tmpdir(),
+      ...(options.extraMasterRoots ?? [])
+    );
+  }
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate || !existsSync(candidate)) continue;
+    try {
+      const real = realpathSync(candidate);
+      if (!seen.has(real)) {
+        seen.add(real);
+        resolved.push(real);
+      }
+    } catch { /* 无法 realpath 的候选目录忽略。 */ }
+  }
+  return resolved;
+}
+
+/** 判断已 realpath 的绝对路径是否落在任意允许根目录内。 */
+export function isRealPathWithinRoots(realTarget: string, realRoots: string[]): boolean {
+  return realRoots.some(root => realTarget === root || realTarget.startsWith(`${root}${sep}`));
+}
+
+/**
+ * 简单二进制嗅探：检查前 8KB 是否包含 NUL 字节或高比例不可打印控制字符。
+ * 防止改了文本扩展名（如 .log/.txt/.json）的二进制文件把乱码塞进文本预览。
+ */
+export function isBinaryBuffer(buffer: Buffer): boolean {
+  const len = Math.min(buffer.length, 8192);
+  if (len === 0) return false;
+  let suspicious = 0;
+  for (let i = 0; i < len; i++) {
+    const byte = buffer[i]!;
+    if (byte === 0) return true;
+    // 允许常见空白/控制字符：\t(9), \n(10), \v(11), \f(12), \r(13), ESC(27)
+    if (byte < 7 || (byte > 14 && byte < 32 && byte !== 27)) {
+      suspicious++;
+    }
+  }
+  return suspicious / len > 0.3;
+}
+
+// 可直接按 UTF-8 文本预览的扩展名白名单；移除了 .env/.npmrc（敏感）与 .svg（归类到 image，源码模式走 ?format=text）。
 export const textExtensions = new Set([
-  '.txt', '.md', '.markdown', '.json', '.jsonl', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.env', '.csv', '.tsv',
+  '.txt', '.md', '.markdown', '.json', '.jsonl', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.csv', '.tsv',
   '.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx', '.py', '.rb', '.go', '.rs', '.java', '.kt', '.swift', '.c', '.h', '.cc', '.cpp', '.hpp', '.m', '.mm', '.sh', '.bash', '.zsh', '.fish', '.ps1',
-  '.html', '.htm', '.css', '.scss', '.less', '.xml', '.svg', '.vue', '.svelte',
+  '.html', '.htm', '.css', '.scss', '.less', '.xml', '.vue', '.svelte',
   '.sql', '.graphql', '.gql', '.proto', '.thrift',
-  '.gitignore', '.dockerignore', '.editorconfig', '.eslintrc', '.prettierrc', '.npmrc',
+  '.gitignore', '.dockerignore', '.editorconfig', '.eslintrc', '.prettierrc',
   '.lock', '.sum', '.mod', '.work',
   '.log', '.patch', '.diff', '.rst', '.tex', '.bib'
 ]);
@@ -78,8 +202,8 @@ export function previewKindForName(name: string): PreviewKind {
   const dot = lower.lastIndexOf('.');
   // .gitignore 这类点开头无后缀名也要能按文本打开。
   const ext = dot >= 0 ? lower.slice(dot) : lower;
-  if (textExtensions.has(ext)) return 'text';
   if (imageExtensions.has(ext)) return 'image';
+  if (textExtensions.has(ext)) return 'text';
   if (ext === '.pdf') return 'pdf';
   return 'unsupported';
 }

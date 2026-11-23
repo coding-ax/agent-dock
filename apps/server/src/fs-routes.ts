@@ -1,10 +1,21 @@
 import type { FastifyInstance } from 'fastify';
 import { realpathSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { isAbsolute, relative } from 'node:path';
+import { basename, isAbsolute, relative, sep } from 'node:path';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { RuntimeError } from '@agent-dock/agent-dock-shared';
-import { imageMimeForName, maxDocumentPreviewBytes, maxTextPreviewBytes, previewKindForName, resolveExistingInside, WorkspacePathError } from './fs-paths.js';
+import {
+  allowedReadRoots,
+  imageMimeForName,
+  isBinaryBuffer,
+  isRealPathWithinRoots,
+  isSensitivePath,
+  maxDocumentPreviewBytes,
+  maxTextPreviewBytes,
+  previewKindForName,
+  resolveExistingInside,
+  WorkspacePathError
+} from './fs-paths.js';
 
 export interface FsListEntry {
   name: string;
@@ -13,28 +24,46 @@ export interface FsListEntry {
   mtime: string;
 }
 
+export interface FsRoutesOptions {
+  homeDir?: string;
+  tempDir?: string;
+  extraMasterRoots?: string[];
+}
+
 function badPath(error: unknown): never {
+  if (error instanceof RuntimeError) throw error;
   if (error instanceof WorkspacePathError) throw new RuntimeError('INVALID_PATH', error.message, 400);
   if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') throw new RuntimeError('PATH_NOT_FOUND', '路径不存在', 404);
   if ((error as NodeJS.ErrnoException)?.code === 'ENOTDIR') throw new RuntimeError('NOT_A_DIRECTORY', '目标不是目录', 400);
   throw error;
 }
 
+function contentDispositionAttachment(filename: string): string {
+  const safeAscii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 /**
- * 会话文件浏览默认关在 cwd 内。主控台可预览 Agent 返回的工作区外绝对路径；
- * 分享会话的令牌仍只能读取该会话 cwd 内的文件。
+ * 会话文件浏览与预览路由：
+ * - 拦截 SSH 远端会话误走本机文件系统；
+ * - 分层白名单（session 仅 cwd + 本会话 uploads；master 增放行 ~/.gemini、/tmp、/private/tmp 等产物/临时目录）；
+ * - realpath 防 symlink 逃逸 + 全角色强制敏感文件黑名单；
+ * - SVG raw 响应强制 CSP sandbox + nosniff，并支持 ?format=text 源码读取与 ?download=1 下载。
  */
-export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockRuntime): Promise<void> {
+export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockRuntime, options: FsRoutesOptions = {}): Promise<void> {
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/fs/list', async request => {
     const session = await runtime.getSession(request.params.id);
     if (!session) throw new RuntimeError('SESSION_NOT_FOUND', 'Session not found', 404);
+    if (session.sshHost) {
+      throw new RuntimeError('REMOTE_SESSION_UNSUPPORTED', `SSH 远端会话（${session.sshHost}）暂不支持本机文件浏览`, 400);
+    }
     const userPath = request.query.path ?? '';
     let resolved;
     try { resolved = resolveExistingInside(session.cwd, userPath); }
     catch (error) { badPath(error); }
     let names: string[];
     try { names = await readdir(resolved.absolute); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new RuntimeError('PATH_NOT_FOUND', '路径不存在', 404); if ((error as NodeJS.ErrnoException).code === 'ENOTDIR') throw new RuntimeError('NOT_A_DIRECTORY', '目标不是目录', 400); throw error; }
+    catch (error) { badPath(error); }
     const entries: FsListEntry[] = [];
     await Promise.all(names.map(async name => {
       // 隐藏噪音目录（依赖/版本控制/agentdock 自身），浏览器树里看它们没有价值。
@@ -48,40 +77,105 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
     return { cwd: session.cwd, path: resolved.relative, entries };
   });
 
-  app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/fs/read', async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { path?: string; format?: string; download?: string } }>('/api/sessions/:id/fs/read', async (request, reply) => {
     const session = await runtime.getSession(request.params.id);
     if (!session) throw new RuntimeError('SESSION_NOT_FOUND', 'Session not found', 404);
+    if (session.sshHost) {
+      throw new RuntimeError('REMOTE_SESSION_UNSUPPORTED', `SSH 远端会话（${session.sshHost}）暂不支持本机文件预览`, 400);
+    }
     const userPath = request.query.path;
     if (!userPath) throw new RuntimeError('INVALID_PATH', '缺少 path 参数', 400);
-    let resolved;
+    if (isSensitivePath(userPath)) {
+      throw new RuntimeError('SENSITIVE_FILE_BLOCKED', '禁止预览或下载敏感文件', 403);
+    }
+
+    const claim = (request as unknown as { webClaim?: { kind: 'master' | 'session' } }).webClaim;
+    const role: 'master' | 'session' = claim?.kind === 'session' ? 'session' : 'master';
+
+    let resolved: { absolute: string; relative: string };
     try {
       if (isAbsolute(userPath)) {
-        try {
-          resolved = resolveExistingInside(session.cwd, relative(session.cwd, userPath));
-        } catch {
-          const claim = (request as unknown as { webClaim?: { kind: 'master' | 'session' } }).webClaim;
-          if (claim?.kind === 'session') throw new RuntimeError('FORBIDDEN', '会话分享链接只能预览该会话工作区内的文件', 403);
-          // 主控台本来就有本机终端权限；这里只开放只读且限制文件类型和大小。
-          resolved = { absolute: realpathSync(userPath), relative: userPath };
+        const realTarget = realpathSync(userPath);
+        const roots = allowedReadRoots({
+          role,
+          cwd: session.cwd,
+          sessionId: request.params.id,
+          ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+          ...(options.tempDir ? { tempDir: options.tempDir } : {}),
+          ...(options.extraMasterRoots ? { extraMasterRoots: options.extraMasterRoots } : {})
+        });
+        if (!isRealPathWithinRoots(realTarget, roots)) {
+          throw new RuntimeError(
+            'FORBIDDEN',
+            role === 'session'
+              ? '会话分享链接只能预览该会话工作区及上传目录内的文件'
+              : '路径不在允许预览的目录范围内',
+            403
+          );
         }
+        let rel = userPath;
+        try {
+          const realCwd = realpathSync(session.cwd);
+          if (realTarget === realCwd || realTarget.startsWith(`${realCwd}${sep}`)) {
+            rel = relative(realCwd, realTarget);
+          }
+        } catch { /* cwd 不存在时退回绝对路径展示。 */ }
+        resolved = { absolute: realTarget, relative: rel };
       } else {
         resolved = resolveExistingInside(session.cwd, userPath);
       }
     } catch (error) { badPath(error); }
+
+    // realpath 后再验一次敏感黑名单，防止工作区/临时目录内用软链指向 .env / ~/.ssh / *.key 等。
+    if (isSensitivePath(resolved.absolute)) {
+      throw new RuntimeError('SENSITIVE_FILE_BLOCKED', '禁止预览或下载敏感文件', 403);
+    }
+
     let info;
     try { info = await stat(resolved.absolute); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new RuntimeError('PATH_NOT_FOUND', '路径不存在', 404); throw error; }
+    catch (error) { badPath(error); }
     if (!info.isFile()) throw new RuntimeError('NOT_A_FILE', '目标不是文件', 400);
-    const kind = previewKindForName(resolved.absolute.split('/').pop() ?? '');
-    if (kind === 'unsupported') throw new RuntimeError('UNSUPPORTED_PREVIEW', '不支持预览的文件类型，请在终端中查看或下载', 415);
-    const maxBytes = kind === 'text' ? maxTextPreviewBytes : maxDocumentPreviewBytes;
-    if (info.size > maxBytes) throw new RuntimeError('FILE_TOO_LARGE', `文件超过 ${kind === 'text' ? '1MB' : '20MB'} 预览上限（实际 ${info.size} 字节），请在终端中查看`, 415);
-    const buffer = await readFile(resolved.absolute);
-    if (kind === 'image' || kind === 'pdf') {
-      reply.header('Content-Type', kind === 'pdf' ? 'application/pdf' : imageMimeForName(resolved.absolute) ?? 'application/octet-stream');
+
+    const filename = basename(resolved.absolute);
+    const isSvg = filename.toLowerCase().endsWith('.svg');
+    const wantDownload = request.query.download === '1' || request.query.download === 'true';
+    const wantText = request.query.format === 'text';
+
+    if (wantDownload) {
+      if (info.size > maxDocumentPreviewBytes) {
+        throw new RuntimeError('FILE_TOO_LARGE', `文件超过 20MB 下载上限（实际 ${info.size} 字节），请在终端中处理`, 415);
+      }
+      const buffer = await readFile(resolved.absolute);
+      reply.header('Content-Type', imageMimeForName(filename) ?? (filename.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'));
+      reply.header('Content-Disposition', contentDispositionAttachment(filename));
       reply.header('X-Content-Type-Options', 'nosniff');
+      if (isSvg) reply.header('Content-Security-Policy', 'sandbox');
+      reply.header('Cache-Control', 'private, no-store');
+      return reply.send(buffer);
+    }
+
+    const baseKind = previewKindForName(filename);
+    const effectiveKind = wantText && (baseKind === 'text' || isSvg) ? 'text' : baseKind;
+
+    if (effectiveKind === 'unsupported') {
+      throw new RuntimeError('UNSUPPORTED_PREVIEW', '不支持预览的文件类型，请在终端中查看或下载', 415);
+    }
+    const maxBytes = effectiveKind === 'text' ? maxTextPreviewBytes : maxDocumentPreviewBytes;
+    if (info.size > maxBytes) {
+      throw new RuntimeError('FILE_TOO_LARGE', `文件超过 ${effectiveKind === 'text' ? '1MB' : '20MB'} 预览上限（实际 ${info.size} 字节），请在终端中查看或下载`, 415);
+    }
+
+    const buffer = await readFile(resolved.absolute);
+    if (effectiveKind === 'image' || effectiveKind === 'pdf') {
+      reply.header('Content-Type', effectiveKind === 'pdf' ? 'application/pdf' : imageMimeForName(filename) ?? 'application/octet-stream');
+      reply.header('X-Content-Type-Options', 'nosniff');
+      if (isSvg) reply.header('Content-Security-Policy', 'sandbox');
       reply.header('Cache-Control', 'private, max-age=60');
       return reply.send(buffer);
+    }
+
+    if (isBinaryBuffer(buffer)) {
+      throw new RuntimeError('BINARY_FILE', '检测到二进制文件内容，暂不支持文本预览，请下载查看', 415);
     }
     return { cwd: session.cwd, path: resolved.relative, size: info.size, content: buffer.toString('utf8') };
   });

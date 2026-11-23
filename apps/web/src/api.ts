@@ -471,8 +471,14 @@ export const api = {
   handoverSyncBot: (sessionId?: string) => json<HandoverBotProfile>('/api/lark/handover/sync-bot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sessionId ? { sessionId } : {}) }),
   action: (id: string, action: string) => json(`/api/sessions/${id}/${action}`, { method: 'POST' }),
   permission: (id: string, permissionId: string, approved: boolean) => json(`/api/sessions/${id}/permissions/${permissionId}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved }) }),
-  fsList: (id: string, path = '') => json<FsListResult>(`/api/sessions/${id}/fs/list?path=${encodeURIComponent(path)}`),
-  fsReadText: (id: string, path: string) => json<FsReadResult>(`/api/sessions/${id}/fs/read?path=${encodeURIComponent(path)}`, undefined, path.startsWith('/')),
-  /** 图片不走 JSON：直接给 <img> 用的同源 URL（cookie/会话令牌语义与其他接口一致）。 */
-  fsReadUrl: (id: string, path: string) => `/api/sessions/${id}/fs/read?path=${encodeURIComponent(path)}`
+  fsList: (id: string, path = '') => json<FsListResult>(`/api/sessions/${id}/fs/list?path=${encodeURIComponent(path)}`, undefined, true),
+  fsReadText: (id: string, path: string, options?: { format?: 'text' }) => {
+    const query = new URLSearchParams({ path });
+    if (options?.format) query.set('format', options.format);
+    // quietDenied=true：敏感文件黑名单或目录越界会返回 403，应在文件面板内联展示错误，不能把整页打成「访问被拒」。
+    return json<FsReadResult>(`/api/sessions/${id}/fs/read?${query.toString()}`, undefined, true);
+  },
+  /** 图片/SVG/PDF 不走 JSON：直接给 <img>/<iframe> 用的同源 URL（cookie/会话令牌语义与其他接口一致）。 */
+  fsReadUrl: (id: string, path: string) => `/api/sessions/${id}/fs/read?path=${encodeURIComponent(path)}`,
+  fsDownloadUrl: (id: string, path: string) => `/api/sessions/${id}/fs/read?path=${encodeURIComponent(path)}&download=1`
 };
