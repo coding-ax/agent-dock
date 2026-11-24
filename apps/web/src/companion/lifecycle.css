@@ -1,26 +1,14 @@
 /*
- * 小猫的一生：阶段道具、交接仪式动画、系统轮次卡片。
+ * 小猫的一生：成长阶段、交接仪式动画、系统轮次卡片。
  * 只用 opacity / transform 做动画，不读布局；prefers-reduced-motion 下全部停住。
  */
 
-/* ---------- 阶段道具：幼猫一撮毛、资深圆眼镜、老年白眉；退休戴小帽子 ---------- */
-.ui-cat-tuft, .ui-cat-glasses, .ui-cat-brows, .ui-cat-hat { opacity: 0; transition: opacity .45s ease; }
-.ui-cat-tuft, .ui-cat-hat { transform-box: fill-box; transform-origin: 50% 100%; }
-.ui-kitten[data-stage="kitten"] .ui-cat-tuft { opacity: 1; }
-.ui-kitten[data-stage="senior"] .ui-cat-glasses, .ui-kitten[data-stage="elder"] .ui-cat-glasses { opacity: .92; }
-.ui-kitten[data-stage="elder"] .ui-cat-brows { opacity: 1; }
-.ui-kitten[data-retired] .ui-cat-hat { opacity: 1; }
-.ui-kitten[data-retired] .ui-cat-tuft { opacity: 0; }
-
 @media (prefers-reduced-motion: no-preference) {
   /* 呼吸节奏随年纪放慢；犯困时仍以犯困为准。 */
-  .ui-kitten[data-stage="kitten"]:not([data-mood="sleepy"]) .ui-cat-body-group { animation-duration: 3s; }
-  .ui-kitten[data-stage="senior"]:not([data-mood="sleepy"]) .ui-cat-body-group { animation-duration: 4.6s; }
-  .ui-kitten[data-stage="elder"]:not([data-mood="sleepy"]) .ui-cat-body-group { animation-duration: 5.6s; }
-  .ui-kitten[data-stage="elder"]:not([data-mood="happy"]) .ui-cat-tail { animation-duration: 4.8s; }
-  .ui-kitten[data-stage="kitten"] .ui-cat-tuft { animation: ui-cat-tuft 2.4s ease-in-out infinite; }
+  .ui-kitten[data-stage="kitten"]:not([data-mood="sleepy"]) .ui-cat-sprite-box { --cat-breath-duration: 3s; }
+  .ui-kitten[data-stage="senior"]:not([data-mood="sleepy"]) .ui-cat-sprite-box { --cat-breath-duration: 4.6s; }
+  .ui-kitten[data-stage="elder"]:not([data-mood="sleepy"]) .ui-cat-sprite-box { --cat-breath-duration: 5.6s; }
 }
-@keyframes ui-cat-tuft { 0%, 100% { transform: rotate(-7deg); } 50% { transform: rotate(7deg); } }
 
 /* ---------- 阶段徽标（侧栏卡片、主会话标题栏） ---------- */
 .ui-stage-chip { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 500; line-height: 17px; background: rgb(244 244 245); color: rgb(113 113 122); }
