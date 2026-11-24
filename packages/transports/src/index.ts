@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { accessSync, constants, statSync } from 'node:fs';
 import readline from 'node:readline';
 import * as pty from 'node-pty';
 import type { AgentConfig, AgentCapabilities } from '@agent-dock/agent-dock-shared';
@@ -6,7 +7,14 @@ import { normalizeAcpxEvent, type NormalizedDriverEvent } from '@agent-dock/agen
 
 export interface ProbeMatrix { acp: boolean; jsonl: boolean; pipe: boolean; pty: boolean }
 export function commandExists(command: string) {
-  if (command.includes('/') || command.includes('\\')) return spawnSync('test', ['-x', command]).status === 0;
+  if (command.includes('/') || command.includes('\\')) {
+    try {
+      accessSync(command, constants.X_OK);
+      return statSync(command).isFile();
+    } catch {
+      return false;
+    }
+  }
   return spawnSync(process.platform === 'win32' ? 'where' : 'which', [command], { stdio: 'ignore' }).status === 0;
 }
 
