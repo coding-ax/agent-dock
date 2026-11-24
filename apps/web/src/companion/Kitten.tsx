@@ -174,7 +174,10 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
   const face = variant === 'face';
   const sprite = sparkling ? SPRITES.sparkle : SPRITES[MOOD_SPRITE[mood] ?? 'idle'];
   const artwork = <span className="ui-cat-sprite-box">
-    <img className="ui-cat-sprite" src={sprite} alt="" draggable={false} decoding="async"/>
+    <picture>
+      <source media="(prefers-reduced-motion: no-preference)" type="image/webp" srcSet={sprite.replace(/\.png$/, '.webp')}/>
+      <img className="ui-cat-sprite" src={sprite} alt="" draggable={false} decoding="async"/>
+    </picture>
   </span>;
 
   const classes = `ui-cat ui-kitten ${face ? 'ui-kitten-face' : 'ui-kitten-full'} ${className}`;
