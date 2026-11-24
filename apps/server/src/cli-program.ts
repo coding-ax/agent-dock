@@ -21,6 +21,7 @@ import type {
   HandoffCliOptions, LifecycleCliOptions, MaintenanceConfigCliOptions, MaintenanceRunCliOptions,
   NotesArchiveCliOptions, NotesListCliOptions, NotesUnarchiveCliOptions
 } from './assistant/lifecycle-cli.js';
+import type { UsageBreakdownCliOptions, UsageFilterCliOptions, UsageSessionCliOptions } from './usage-cli.js';
 
 export interface CliOptions {
   host?: string;
@@ -186,6 +187,9 @@ export interface CliHandlers {
   draftList?(options: AssistantCliOptions): void | Promise<void>;
   draftSend?(id: string, options: AssistantCliOptions): void | Promise<void>;
   draftDiscard?(id: string, options: AssistantCliOptions): void | Promise<void>;
+  usageSummary?(options: UsageFilterCliOptions): void | Promise<void>;
+  usageBreakdown?(options: UsageBreakdownCliOptions): void | Promise<void>;
+  usageSession?(sessionId: string | undefined, options: UsageSessionCliOptions): void | Promise<void>;
 }
 
 const collect = (value: string, previous: string[] = []) => [...previous, value];
@@ -836,6 +840,26 @@ Changes take effect immediately; no restart needed.`);
   addProcessCommands(program);
   const daemon = program.command('daemon').description('Run the AgentDock server in the background and manage it');
   addProcessCommands(daemon);
+
+  const usage = program.command('usage').description('查询真实的 Token 消耗、TPS 与多维统计看板（供人与 Agent 调用）');
+  const addUsageFilterOptions = (cmd: Command) => cmd
+    .option('--from <date>', '起始时间（支持 today / 7d / 30d / YYYY-MM-DD / ISO 时间）')
+    .option('--to <date>', '结束时间（支持 YYYY-MM-DD / ISO 时间）')
+    .option('--agent <id>', '按 Agent ID 筛选（如 claude / codex / antigravity）')
+    .option('--project <pathOrName>', '按项目目录或项目名筛选')
+    .option('--session <id>', '按会话 ID 筛选')
+    .option('--model <name>', '按模型名筛选')
+    .option('--json', '输出 JSON');
+  addUsageFilterOptions(usage.command('summary').description('查询总消耗、平均 TPS 与按日趋势'))
+    .action(async (options: UsageFilterCliOptions) => { await handlers.usageSummary?.(options); });
+  addUsageFilterOptions(usage.command('breakdown').description('按项目 / Agent / 会话 / 模型维度分组统计消耗'))
+    .option('--by <dimension>', '分组维度：project | agent | session | model（默认 project）')
+    .option('--limit <n>', '最多返回条数（默认 50）')
+    .action(async (options: UsageBreakdownCliOptions) => { await handlers.usageBreakdown?.(options); });
+  usage.command('session [session-id]')
+    .description('查询指定会话（默认当前 $agentdock_session_id）的累计消耗、TPS 与逐轮明细')
+    .option('--json', '输出 JSON')
+    .action(async (sessionId: string | undefined, options: UsageSessionCliOptions) => { await handlers.usageSession?.(sessionId, options); });
 
   return program
     .addHelpText('after', `

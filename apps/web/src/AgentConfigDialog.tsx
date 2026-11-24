@@ -166,7 +166,7 @@ export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): 
                   <div className="flex items-center gap-2"><AgentIcon agentId={selected!.id} agentName={selected!.name} size={16}/><div className="min-w-0 flex-1"><ReadOnlyField label="名称" value={selected!.name}/></div></div>
                   <ReadOnlyField label="启动命令" value={[selected!.command, ...(selected!.args ?? [])].join(' ')} mono/>
                   <ReadOnlyField label="工作目录" value={selected!.cwd} mono hint="跟随会话"/>
-                  {['codex', 'claude', 'cursor'].includes(selected!.id) && <AgentUsagePanel agentId={selected!.id as 'codex' | 'claude' | 'cursor'}/>}
+                  {['codex', 'claude', 'cursor', 'antigravity'].includes(selected!.id) && <AgentUsagePanel agentId={selected!.id as 'codex' | 'claude' | 'cursor' | 'antigravity'}/>}
                   <p className="text-[12px] leading-5 text-zinc-400">内置 Agent 的参数由扫描得出（命令、参数、协议、版本），不需要也不能在这里修改；升级客户端后会自动刷新。你只能停用或重新启用它。</p>
                 </>
                 : <>

@@ -4,10 +4,12 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { openDatabase, type NativeBindingFallback } from './native.js';
+import { createUsageRepository } from './usage.js';
 import type { AgentConfig, AgentEvent, ProjectRecord, RepositoryBundle, ScheduleRecord, ScheduleRunRecord, Session, TaskRecord } from '@agent-dock/agent-dock-shared';
 import { agentConfigs, channelMappings, configs, errors, events, machines, permissionRequests, projects, scheduleRuns, schedules, sessions, tasks, toolCalls } from './schema.js';
 export * from './native.js';
 export * from './schema.js';
+export { computeTps, normalizeUsageDateBound } from './usage.js';
 
 type EventRow = { id: string; session_id: string; sequence: number; type: AgentEvent['type']; timestamp: string; data: string; raw: string | null };
 
@@ -394,6 +396,7 @@ export function createRepositories(filename: string, options: { nativeFallback?:
       async save(project) { db.insert(projects).values(project).onConflictDoUpdate({ target: projects.id, set: project }).run(); },
       async setPinned(id, pinnedAt) { db.update(projects).set({ pinnedAt, updatedAt: new Date().toISOString() }).where(eq(projects.id, id)).run(); }
     },
+    usage: createUsageRepository(sqlite),
     close() { sqlite.close(); }
   };
 }

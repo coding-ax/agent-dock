@@ -26,6 +26,7 @@ import { devDown, devEnv, devRun, devUp } from './dev-sandbox.js';
 import { runPasswordClear, runPasswordSet, runPasswordStatus } from './password-cli.js';
 import { webPasswordEnabled } from './web-password.js';
 import { runScheduleAdd, runScheduleList, runSchedulePause, runScheduleRemove, runScheduleResume, runScheduleRun, runScheduleShow } from './schedule-cli.js';
+import { runUsageBreakdown, runUsageSession, runUsageSummary } from './usage-cli.js';
 import {
   runDraftCreate, runDraftDiscard, runDraftList, runDraftSend, runMainClear, runMainGet, runMainRestore, runMainSet,
   runNotify, runTaskCancel, runTaskList, runTaskPlan,
@@ -258,7 +259,10 @@ async function main() {
     draftCreate: async options => { process.stdout.write(await runDraftCreate(options)); },
     draftList: async options => { process.stdout.write(await runDraftList(options)); },
     draftSend: async (id, options) => { process.stdout.write(await runDraftSend(id, options)); },
-    draftDiscard: async (id, options) => { process.stdout.write(await runDraftDiscard(id, options)); }
+    draftDiscard: async (id, options) => { process.stdout.write(await runDraftDiscard(id, options)); },
+    usageSummary: async options => { process.stdout.write(await runUsageSummary(options)); },
+    usageBreakdown: async options => { process.stdout.write(await runUsageBreakdown(options)); },
+    usageSession: async (sessionId, options) => { process.stdout.write(await runUsageSession(sessionId, options)); }
   });
   await program.parseAsync();
 }

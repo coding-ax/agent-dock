@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useEventListener } from 'ahooks';
 import { useQuery } from '@tanstack/react-query';
-import { AlarmClock, Archive, Bot, FolderOpen, MessagesSquare, PawPrint, Settings, Settings2, Smartphone } from 'lucide-react';
+import { AlarmClock, Archive, BarChart3, Bot, FolderOpen, MessagesSquare, PawPrint, Settings, Settings2, Smartphone } from 'lucide-react';
 import { api } from './api';
 import { AutostartToggle } from './AutostartToggle';
 import { KeepAwakeToggle } from './KeepAwakeToggle';
@@ -19,9 +19,10 @@ const itemClass = 'flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 t
  *
  * 弹层只用 hidden 切换、不条件渲染：SelfUpdateNotice 里有「升级中轮询版本号、完成后刷新页面」的状态，卸载就丢了。
  */
-export function SettingsMenu({ webDenied, archivedCount, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onAssistant, onLark, onLarkAvatar, onShare }: {
+export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onAssistant, onLark, onLarkAvatar, onShare }: {
   webDenied: boolean;
   archivedCount: number;
+  onUsage(): void;
   onSchedule(): void;
   onArchived(): void;
   onImport(): void;
@@ -45,6 +46,7 @@ export function SettingsMenu({ webDenied, archivedCount, onSchedule, onArchived,
 
   return <div ref={root} className="relative flex min-w-[268px] items-center gap-1 border-t border-zinc-200 p-2">
     <div role="menu" aria-label="设置" style={{ transformOrigin: 'bottom center' }} aria-hidden={!open} inert={!open} className={`absolute inset-x-2 bottom-full z-30 mb-1 max-h-[75dvh] overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_-12px_36px_rgba(12,13,16,.14)] transition-[opacity,transform,visibility] duration-200 ease-[cubic-bezier(.2,0,0,1)] ${open ? 'visible translate-y-0 opacity-100' : 'invisible translate-y-1.5 opacity-0'}`}>
+      <button type="button" role="menuitem" onClick={pick(onUsage)} className={itemClass}><BarChart3 size={16}/><span>消耗看板</span></button>
       <button type="button" role="menuitem" onClick={pick(onSchedule)} className={itemClass}><AlarmClock size={16}/><span>定时任务</span></button>
       <button type="button" role="menuitem" onClick={pick(onArchived)} className={itemClass}><Archive size={16}/><span>归档会话</span><span className="ml-auto text-[12px] tabular-nums text-zinc-400">{archivedCount}</span></button>
       <button type="button" role="menuitem" onClick={pick(onImport)} className={itemClass}><FolderOpen size={16}/><span>导入外部会话</span></button>

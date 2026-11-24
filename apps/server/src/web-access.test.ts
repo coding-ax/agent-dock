@@ -37,6 +37,11 @@ describe('web-access tokens', () => {
     expect(sessionTokenAllows('GET', '/api/codex/usage', claim!.sessionId!)).toBe(false);
     expect(sessionTokenAllows('GET', '/api/claude/usage', claim!.sessionId!)).toBe(false);
     expect(sessionTokenAllows('GET', '/api/cursor/usage', claim!.sessionId!)).toBe(false);
+    expect(sessionTokenAllows('GET', '/api/antigravity/usage', claim!.sessionId!)).toBe(false);
+    expect(sessionTokenAllows('GET', '/api/usage/summary', claim!.sessionId!)).toBe(false);
+    expect(sessionTokenAllows('GET', '/api/usage/breakdown', claim!.sessionId!)).toBe(false);
+    expect(sessionTokenAllows('GET', '/api/sessions/ses_1/usage', claim!.sessionId!)).toBe(true);
+    expect(sessionTokenAllows('GET', '/api/sessions/ses_2/usage', claim!.sessionId!)).toBe(false);
     expect(sessionTokenAllows('POST', '/api/system/select-directory', claim!.sessionId!)).toBe(false);
     expect(sessionTokenAllows('POST', '/api/sessions', claim!.sessionId!)).toBe(false);
   });

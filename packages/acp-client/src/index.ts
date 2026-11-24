@@ -15,7 +15,7 @@ export * from './ssh-agent.js';
  * runtime 会拦截它、只落库不进时间线，所以它**不会**出现在 events 表或前端轨迹里，
  * 也就不该混进 `EventType`（那个联合是前端要逐个渲染的）。
  */
-export interface NormalizedDriverEvent { type: EventType | 'session_title'; data: any; raw?: string }
+export interface NormalizedDriverEvent { type: EventType | 'session_title' | 'turn_usage'; data: any; raw?: string }
 export interface AcpxBuiltinAgent { id: string; argv: string[] }
 
 export interface ResolveExecutableOptions {
@@ -356,10 +356,88 @@ export class AcpxAdapter {
     this.reportedTitle = title;
     this.options.onEvent({ type: 'session_title', data: { title } });
   }
+  private async reportTurnUsage(
+    prevKeys: Set<string>,
+    prevCostUsd: number,
+    fallbackRequestId: string,
+    timing: { durationMs: number; generationMs?: number; ttftMs?: number }
+  ) {
+    let record: any;
+    try { record = await this.sessionStore.load(this.sessionKey); }
+    catch { return; }
+    const reqMap = record?.request_token_usage as Record<string, Record<string, unknown>> | undefined;
+    if (!reqMap || typeof reqMap !== 'object') return;
+    const newKeys = Object.keys(reqMap).filter(key => !prevKeys.has(key));
+    if (!newKeys.length) return;
+
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    let thoughtTokens = 0;
+    let totalTokens = 0;
+    for (const key of newKeys) {
+      const entry = reqMap[key];
+      if (!entry || typeof entry !== 'object') continue;
+      const inp = Number(entry.input_tokens ?? 0);
+      const out = Number(entry.output_tokens ?? 0);
+      const cRead = Number(entry.cache_read_input_tokens ?? 0);
+      const cWrite = Number(entry.cache_creation_input_tokens ?? 0);
+      const thought = Number(entry.thought_tokens ?? 0);
+      const total = Number(entry.total_tokens ?? (inp + out + cRead + cWrite + thought));
+      if (Number.isFinite(inp) && inp > 0) inputTokens += inp;
+      if (Number.isFinite(out) && out > 0) outputTokens += out;
+      if (Number.isFinite(cRead) && cRead > 0) cacheReadTokens += cRead;
+      if (Number.isFinite(cWrite) && cWrite > 0) cacheWriteTokens += cWrite;
+      if (Number.isFinite(thought) && thought > 0) thoughtTokens += thought;
+      if (Number.isFinite(total) && total > 0) totalTokens += total;
+    }
+    if (totalTokens <= 0 && inputTokens <= 0 && outputTokens <= 0) return;
+    if (totalTokens <= 0) totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens + thoughtTokens;
+
+    const afterCost = typeof record?.cumulative_cost?.amount === 'number' && Number.isFinite(record.cumulative_cost.amount)
+      ? record.cumulative_cost.amount
+      : undefined;
+    const costUsd = afterCost !== undefined && afterCost > prevCostUsd
+      ? Math.round((afterCost - prevCostUsd) * 1_000_000) / 1_000_000
+      : undefined;
+
+    this.options.onEvent({
+      type: 'turn_usage',
+      data: {
+        requestId: newKeys[newKeys.length - 1] ?? fallbackRequestId,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        thoughtTokens,
+        totalTokens,
+        ...(costUsd !== undefined ? { costUsd } : {}),
+        durationMs: timing.durationMs,
+        ...(timing.generationMs !== undefined ? { generationMs: timing.generationMs } : {}),
+        ...(timing.ttftMs !== undefined ? { ttftMs: timing.ttftMs } : {})
+      }
+    });
+  }
   private async sendTurn(prompt: string) {
     if (!this.handle) await this.start();
     await this.applyCodexPermissionMode();
     const requestId = `req-${crypto.randomUUID()}`;
+    const beforeRecord = await this.sessionStore.load(this.sessionKey).catch(() => undefined) as any;
+    const prevUsageKeys = new Set<string>(Object.keys(beforeRecord?.request_token_usage ?? {}));
+    const prevCostUsd = typeof beforeRecord?.cumulative_cost?.amount === 'number' && Number.isFinite(beforeRecord.cumulative_cost.amount)
+      ? beforeRecord.cumulative_cost.amount
+      : 0;
+    const turnStartedAt = Date.now();
+    let firstOutputAt: number | undefined;
+    let activeOutputMs = 0;
+    let outputSegmentStart: number | undefined;
+    const closeOutputSegment = (at: number) => {
+      if (outputSegmentStart !== undefined) {
+        activeOutputMs += Math.max(0, at - outputSegmentStart);
+        outputSegmentStart = undefined;
+      }
+    };
     // ACPX 的 timeoutMs 是整轮墙钟超时，流式事件和工具调用都不会续期。
     // 禁用它，在 AgentDock 边界按每个 ACP 事件重置“无活动”计时，避免正常长任务被固定时长误杀。
     // 工具调用执行期间 Agent 处于等待工具结果的状态，不属于“无活动”，因此用更长的一档。
@@ -392,18 +470,33 @@ export class AcpxAdapter {
         if (next.done) break;
         const normalized = normalizeAcpxEvent(next.value);
         if (normalized) {
-          // 按 toolCallId 维护未完成工具调用集合，用于决定空闲超时策略。
+          const eventAt = Date.now();
+          // 按 toolCallId 维护未完成工具调用集合，用于决定空闲超时策略与扣除工具等待耗时。
           const toolCallId = typeof normalized.data?.id === 'string' ? normalized.data.id : undefined;
-          if (normalized.type === 'tool_call') { if (toolCallId) activeToolCallIds.add(toolCallId); }
-          else if (normalized.type === 'tool_result') { if (toolCallId) activeToolCallIds.delete(toolCallId); else activeToolCallIds.clear(); }
+          if (normalized.type === 'tool_call') {
+            if (activeToolCallIds.size === 0) closeOutputSegment(eventAt);
+            if (toolCallId) activeToolCallIds.add(toolCallId);
+          } else if (normalized.type === 'tool_result') {
+            if (toolCallId) activeToolCallIds.delete(toolCallId); else activeToolCallIds.clear();
+          } else if ((normalized.type === 'text' || normalized.type === 'thinking') && activeToolCallIds.size === 0) {
+            if (firstOutputAt === undefined) firstOutputAt = eventAt;
+            if (outputSegmentStart === undefined) outputSegmentStart = eventAt;
+          }
           this.options.onEvent(normalized);
         }
       }
+      const streamEndedAt = Date.now();
+      closeOutputSegment(streamEndedAt);
       const result = await turn.result;
       if (result.status === 'failed') throw new Error(result.error.message);
-      // 先报标题再报 completed：驱动事件在 runtime 侧是按会话串行消费的，这样能保证
-      // 「标题已落库」发生在本轮收尾记账之前，列表页不会看到一轮已完成却还挂着旧名字。
+      const finishedAt = Date.now();
+      // 先报标题与本轮真实消耗，再报 completed：确保轮次收尾前库里已有最新元数据与统计。
       await this.reportAgentTitle();
+      await this.reportTurnUsage(prevUsageKeys, prevCostUsd, requestId, {
+        durationMs: Math.max(1, finishedAt - turnStartedAt),
+        ...(activeOutputMs > 0 ? { generationMs: activeOutputMs } : {}),
+        ...(firstOutputAt !== undefined ? { ttftMs: Math.max(0, firstOutputAt - turnStartedAt) } : {})
+      });
       this.options.onEvent({ type: 'completed', data: { stopReason: result.stopReason ?? result.status } });
     } finally {
       if (this.turn === turn) this.turn = undefined;

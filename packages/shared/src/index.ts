@@ -373,6 +373,140 @@ export interface ProjectRepository {
   setPinned(id: string, pinnedAt: string | null): Promise<void>;
 }
 
+/** 单轮真实消耗记录，来自 Agent 自身上报的 ACP usage（或历史 acpx 记录回填）。 */
+export interface TurnUsageRecord {
+  id: string;
+  sessionId: string;
+  taskId?: string | null;
+  /** ACP / acpx 层的单轮请求 ID，与 sessionId 组成唯一键用于幂等去重。 */
+  requestId?: string | null;
+  agentId: string;
+  cwd: string;
+  model?: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+  /** Agent 主动上报的费用（USD）；未上报时为空。 */
+  costUsd?: number | null;
+  /** 整轮墙钟耗时（毫秒）。 */
+  durationMs?: number | null;
+  /** 扣除工具调用等待后的有效输出/思考耗时（毫秒），用于计算真实生成 TPS。 */
+  generationMs?: number | null;
+  /** 首字延迟（毫秒）。 */
+  ttftMs?: number | null;
+  source: string;
+  createdAt: string;
+}
+
+export interface UsageQueryFilter {
+  /** ISO 时间或 YYYY-MM-DD（含当日 00:00:00）。 */
+  from?: string;
+  /** ISO 时间或 YYYY-MM-DD（含当日 23:59:59.999）。 */
+  to?: string;
+  agentId?: string;
+  /** 按项目路径或项目名筛选。 */
+  project?: string;
+  sessionId?: string;
+  model?: string;
+}
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  turnCount: number;
+  sessionCount: number;
+  totalGenerationMs: number;
+  totalDurationMs: number;
+  /** 平均生成速度：(outputTokens + thoughtTokens) / (generationMs / 1000)；无有效生成耗时为 null。 */
+  avgTps: number | null;
+  /** 最近一轮生成速度；仅会话级统计返回。 */
+  lastTps?: number | null;
+}
+
+export interface UsageDailyPoint {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  turnCount: number;
+  avgTps: number | null;
+}
+
+export interface UsageSummary {
+  from?: string;
+  to?: string;
+  totals: UsageTotals;
+  daily: UsageDailyPoint[];
+}
+
+export type UsageBreakdownGroup = 'project' | 'agent' | 'session' | 'model';
+
+export interface UsageBreakdownItem {
+  key: string;
+  label: string;
+  sublabel?: string;
+  agentId?: string;
+  cwd?: string;
+  sessionId?: string;
+  model?: string;
+  lastActiveAt?: string;
+  totals: UsageTotals;
+}
+
+export interface UsageBreakdown {
+  groupBy: UsageBreakdownGroup;
+  from?: string;
+  to?: string;
+  items: UsageBreakdownItem[];
+}
+
+export interface SessionUsageTurn {
+  id: string;
+  taskId?: string | null;
+  model?: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+  costUsd?: number | null;
+  durationMs?: number | null;
+  generationMs?: number | null;
+  ttftMs?: number | null;
+  tps: number | null;
+  createdAt: string;
+}
+
+export interface SessionUsageDetail {
+  sessionId: string;
+  agentId?: string;
+  cwd?: string;
+  model?: string | null;
+  totals: UsageTotals;
+  turns: SessionUsageTurn[];
+}
+
+export interface UsageRepository {
+  /** 写入一条单轮用量；若 (sessionId, requestId) 已存在则忽略（幂等，便于历史回填）。 */
+  save(record: TurnUsageRecord): Promise<boolean>;
+  getSessionUsage(sessionId: string): Promise<SessionUsageDetail>;
+  summary(filter?: UsageQueryFilter): Promise<UsageSummary>;
+  breakdown(groupBy: UsageBreakdownGroup, filter?: UsageQueryFilter, limit?: number): Promise<UsageBreakdown>;
+}
+
 export interface RepositoryBundle {
   agents: AgentRepository;
   sessions: SessionRepository;
@@ -383,6 +517,7 @@ export interface RepositoryBundle {
   schedules: ScheduleRepository;
   artifacts: ArtifactRepository;
   projects: ProjectRepository;
+  usage: UsageRepository;
   close(): void;
 }
 
