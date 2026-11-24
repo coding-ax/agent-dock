@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, Session, SessionInterruptIntent, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
+import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, Session, SessionInterruptIntent, SessionUsageDetail, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy, TurnUsageRecord, UsageBreakdown, UsageBreakdownGroup, UsageQueryFilter, UsageSummary } from '@agent-dock/agent-dock-shared';
 import { basename } from 'node:path';
 import { resolveProjectPath } from './project-path.js';
 import { agentConfigSchema, isAgentAuthErrorText, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
@@ -469,6 +469,18 @@ export class AgentDockRuntime {
   listProjects(): Promise<ProjectRecord[]> {
     return this.repos.projects.list();
   }
+  saveTurnUsage(record: TurnUsageRecord): Promise<boolean> {
+    return this.repos.usage.save(record);
+  }
+  getSessionUsage(sessionId: string): Promise<SessionUsageDetail> {
+    return this.repos.usage.getSessionUsage(sessionId);
+  }
+  getUsageSummary(filter?: UsageQueryFilter): Promise<UsageSummary> {
+    return this.repos.usage.summary(filter);
+  }
+  getUsageBreakdown(groupBy: UsageBreakdownGroup, filter?: UsageQueryFilter, limit?: number): Promise<UsageBreakdown> {
+    return this.repos.usage.breakdown(groupBy, filter, limit);
+  }
   /**
    * 登记用户导入的项目。路径统一 realpath（`~` 展开、相对路径拒绝、macOS /private 别名归一），
    * 已存在则原样返回并标记 created=false，前端可据此提示「已存在」而不是造出第二条。
@@ -747,6 +759,58 @@ export class AgentDockRuntime {
     // 在轨迹里留一条「标题更新」只会干扰阅读。因此这里提前返回，不走下面的 emit。
     if (event.type === 'session_title') {
       await this.setAgentTitle(session, typeof event.data?.title === 'string' ? event.data.title : undefined);
+      return;
+    }
+    // 单轮真实消耗：落入 turn_usage 表，并向当前会话广播一条轻量 status 事件供前端实时刷新 TPS / 累计消耗。
+    if (event.type === 'turn_usage') {
+      const d = event.data ?? {};
+      const inputTokens = Number(d.inputTokens ?? 0);
+      const outputTokens = Number(d.outputTokens ?? 0);
+      const cacheReadTokens = Number(d.cacheReadTokens ?? 0);
+      const cacheWriteTokens = Number(d.cacheWriteTokens ?? 0);
+      const thoughtTokens = Number(d.thoughtTokens ?? 0);
+      const totalTokens = Number(d.totalTokens ?? (inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens + thoughtTokens));
+      if (totalTokens > 0 || inputTokens > 0 || outputTokens > 0) {
+        const taskId = this.activeTasks.get(session.id)?.id ?? null;
+        const generationMs = typeof d.generationMs === 'number' && Number.isFinite(d.generationMs) && d.generationMs > 0 ? Math.round(d.generationMs) : null;
+        const durationMs = typeof d.durationMs === 'number' && Number.isFinite(d.durationMs) && d.durationMs > 0 ? Math.round(d.durationMs) : null;
+        const ttftMs = typeof d.ttftMs === 'number' && Number.isFinite(d.ttftMs) && d.ttftMs >= 0 ? Math.round(d.ttftMs) : null;
+        const costUsd = typeof d.costUsd === 'number' && Number.isFinite(d.costUsd) && d.costUsd >= 0 ? d.costUsd : null;
+        await this.repos.usage.save({
+          id: makeId('tu'),
+          sessionId: session.id,
+          taskId,
+          requestId: typeof d.requestId === 'string' && d.requestId.trim() ? d.requestId.trim() : null,
+          agentId: session.agentId,
+          cwd: session.cwd,
+          model: session.model ?? null,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          thoughtTokens,
+          totalTokens,
+          costUsd,
+          durationMs,
+          generationMs,
+          ttftMs,
+          source: 'acp',
+          createdAt: now()
+        });
+        await this.emit(session.id, 'status', {
+          state: 'turn_usage',
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          thoughtTokens,
+          totalTokens,
+          ...(costUsd !== null ? { costUsd } : {}),
+          ...(durationMs !== null ? { durationMs } : {}),
+          ...(generationMs !== null ? { generationMs } : {}),
+          ...(ttftMs !== null ? { ttftMs } : {})
+        });
+      }
       return;
     }
     let data = event.data;

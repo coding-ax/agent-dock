@@ -3,13 +3,19 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
 import { api, WebAccessDeniedError, type AgentUsage, type CodexUsage } from './api';
 
-type UsageAgent = 'codex' | 'claude' | 'cursor';
-const names: Record<UsageAgent, string> = { codex: 'Codex', claude: 'Claude Code', cursor: 'Cursor' };
+type UsageAgent = 'codex' | 'claude' | 'cursor' | 'antigravity';
+const names: Record<UsageAgent, string> = { codex: 'Codex', claude: 'Claude Code', cursor: 'Cursor', antigravity: 'Antigravity' };
 const percent = (value: number) => `${Math.round(value)}%`;
 
 export function AgentUsagePanel({ agentId }: { agentId: UsageAgent }) {
   const client = useQueryClient();
-  const fetchUsage = (refresh = false): Promise<AgentUsage | CodexUsage> => agentId === 'codex' ? api.codexUsage(refresh) : agentId === 'claude' ? api.claudeUsage(refresh) : api.cursorUsage(refresh);
+  const fetchUsage = (refresh = false): Promise<AgentUsage | CodexUsage> => agentId === 'codex'
+    ? api.codexUsage(refresh)
+    : agentId === 'claude'
+      ? api.claudeUsage(refresh)
+      : agentId === 'cursor'
+        ? api.cursorUsage(refresh)
+        : api.antigravityUsage(refresh);
   const key = ['agent-usage', agentId];
   const usage = useQuery({ queryKey: key, queryFn: () => fetchUsage(), staleTime: 60_000, refetchOnWindowFocus: false });
   const refresh = useMutation({ mutationFn: () => fetchUsage(true), onSuccess: data => client.setQueryData(key, data) });

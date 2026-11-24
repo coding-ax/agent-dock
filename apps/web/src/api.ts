@@ -291,6 +291,118 @@ async function readEventStream(body: ReadableStream<Uint8Array>, onEvent: (event
   } finally { reader.releaseLock(); }
 }
 
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  turnCount: number;
+  sessionCount: number;
+  totalGenerationMs: number;
+  totalDurationMs: number;
+  avgTps: number | null;
+  lastTps?: number | null;
+}
+
+export interface UsageDailyPoint {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  turnCount: number;
+  avgTps: number | null;
+}
+
+export interface UsageSummary {
+  from?: string;
+  to?: string;
+  totals: UsageTotals;
+  daily: UsageDailyPoint[];
+}
+
+export type UsageBreakdownGroup = 'project' | 'agent' | 'session' | 'model';
+
+export interface UsageBreakdownItem {
+  key: string;
+  label: string;
+  sublabel?: string;
+  agentId?: string;
+  cwd?: string;
+  sessionId?: string;
+  model?: string;
+  lastActiveAt?: string;
+  totals: UsageTotals;
+}
+
+export interface UsageBreakdown {
+  groupBy: UsageBreakdownGroup;
+  from?: string;
+  to?: string;
+  items: UsageBreakdownItem[];
+}
+
+export interface SessionUsageTurn {
+  id: string;
+  taskId?: string | null;
+  model?: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+  costUsd?: number | null;
+  durationMs?: number | null;
+  generationMs?: number | null;
+  ttftMs?: number | null;
+  tps: number | null;
+  createdAt: string;
+}
+
+export interface SessionUsageDetail {
+  sessionId: string;
+  agentId?: string;
+  cwd?: string;
+  model?: string | null;
+  totals: UsageTotals;
+  turns: SessionUsageTurn[];
+}
+
+export interface UsageQueryParams {
+  from?: string;
+  to?: string;
+  agentId?: string;
+  project?: string;
+  sessionId?: string;
+  model?: string;
+  limit?: number;
+}
+
+const buildUsageQuery = (params?: UsageQueryParams, extra?: Record<string, string | undefined>) => {
+  const qs = new URLSearchParams();
+  if (params?.from) qs.set('from', params.from);
+  if (params?.to) qs.set('to', params.to);
+  if (params?.agentId) qs.set('agentId', params.agentId);
+  if (params?.project) qs.set('project', params.project);
+  if (params?.sessionId) qs.set('sessionId', params.sessionId);
+  if (params?.model) qs.set('model', params.model);
+  if (params?.limit) qs.set('limit', String(params.limit));
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (v) qs.set(k, v);
+    }
+  }
+  const s = qs.toString();
+  return s ? `?${s}` : '';
+};
+
 const agentModelsUrl = (id: string, model?: string, refresh = false, sshHost?: string) => {  const query = new URLSearchParams();
   if (model) query.set('model', model);
   if (refresh) query.set('refresh', '1');
@@ -302,6 +414,10 @@ export const api = {
   codexUsage: (refresh = false) => json<CodexUsage>(`/api/codex/usage${refresh ? '?refresh=1' : ''}`, undefined, true),
   claudeUsage: (refresh = false) => json<AgentUsage>(`/api/claude/usage${refresh ? '?refresh=1' : ''}`, undefined, true),
   cursorUsage: (refresh = false) => json<AgentUsage>(`/api/cursor/usage${refresh ? '?refresh=1' : ''}`, undefined, true),
+  antigravityUsage: (refresh = false) => json<AgentUsage>(`/api/antigravity/usage${refresh ? '?refresh=1' : ''}`, undefined, true),
+  usageSummary: (params?: UsageQueryParams) => json<UsageSummary>(`/api/usage/summary${buildUsageQuery(params)}`, undefined, true),
+  usageBreakdown: (groupBy: UsageBreakdownGroup, params?: UsageQueryParams) => json<UsageBreakdown>(`/api/usage/breakdown${buildUsageQuery(params, { groupBy })}`, undefined, true),
+  sessionUsage: (sessionId: string) => json<SessionUsageDetail>(`/api/sessions/${encodeURIComponent(sessionId)}/usage`, undefined, true),
   agents: (includeDisabled = false) => json<Agent[]>(`/api/agents${includeDisabled ? '?includeDisabled=1' : ''}`),
   createAgent: (body: unknown) => json<Agent>('/api/agents', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   updateAgent: (id: string, body: unknown) => json<Agent>(`/api/agents/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),

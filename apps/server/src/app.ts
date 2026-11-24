@@ -18,6 +18,8 @@ import { collectAgentDockOwnedSessionIds } from './agent-owned-sessions.js';
 import { getCodexUsage } from './codex-usage.js';
 import { getClaudeUsage } from './claude-usage.js';
 import { getCursorUsage } from './cursor-usage.js';
+import { getAntigravityUsage } from './antigravity-usage.js';
+import { createUsageBackfiller } from './usage-backfill.js';
 import { registerSystemRoutes, type SystemRoutesOptions } from './system-routes.js';
 import { registerShareLinkRoutes, type ShareLinkService } from './share-link.js';
 import { registerSelfUpdateRoutes, type SelfUpdateService } from './self-update.js';
@@ -371,6 +373,37 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   app.get<{ Querystring: { refresh?: string } }>('/api/codex/usage', async request => getCodexUsage(request.query.refresh === '1'));
   app.get<{ Querystring: { refresh?: string } }>('/api/claude/usage', async request => getClaudeUsage(request.query.refresh === '1'));
   app.get<{ Querystring: { refresh?: string } }>('/api/cursor/usage', async request => getCursorUsage(request.query.refresh === '1'));
+  app.get<{ Querystring: { refresh?: string } }>('/api/antigravity/usage', async request => getAntigravityUsage(request.query.refresh === '1'));
+
+  const usageBackfiller = createUsageBackfiller(runtime);
+  const parseUsageFilter = (query: { from?: string; to?: string; agentId?: string; project?: string; sessionId?: string; model?: string }) => ({
+    ...(query.from?.trim() ? { from: query.from.trim() } : {}),
+    ...(query.to?.trim() ? { to: query.to.trim() } : {}),
+    ...(query.agentId?.trim() ? { agentId: query.agentId.trim() } : {}),
+    ...(query.project?.trim() ? { project: query.project.trim() } : {}),
+    ...(query.sessionId?.trim() ? { sessionId: query.sessionId.trim() } : {}),
+    ...(query.model?.trim() ? { model: query.model.trim() } : {})
+  });
+  // 多维消耗看板汇总与分组接口（全库维度，仅 master token 可访问）。
+  app.get<{ Querystring: { from?: string; to?: string; agentId?: string; project?: string; sessionId?: string; model?: string } }>('/api/usage/summary', async request => {
+    await usageBackfiller.sync();
+    return runtime.getUsageSummary(parseUsageFilter(request.query));
+  });
+  app.get<{ Querystring: { groupBy?: string; from?: string; to?: string; agentId?: string; project?: string; sessionId?: string; model?: string; limit?: string } }>('/api/usage/breakdown', async request => {
+    const rawGroup = (request.query.groupBy?.trim() || 'project') as 'project' | 'agent' | 'session' | 'model';
+    if (!['project', 'agent', 'session', 'model'].includes(rawGroup)) {
+      throw new RuntimeError('INVALID_GROUP_BY', 'groupBy 必须是 project、agent、session 或 model', 400);
+    }
+    const rawLimit = request.query.limit ? Number(request.query.limit) : undefined;
+    const limit = rawLimit !== undefined && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(200, Math.round(rawLimit)) : 50;
+    await usageBackfiller.sync();
+    return runtime.getUsageBreakdown(rawGroup, parseUsageFilter(request.query), limit);
+  });
+  // 单会话真实消耗与 TPS（挂在 /api/sessions/:id 下，会话级令牌可读本会话数据）。
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/usage', async request => {
+    await usageBackfiller.sync();
+    return runtime.getSessionUsage(request.params.id);
+  });
   app.post('/api/agents', async request => runtime.createAgent((request as { body: unknown }).body));
   app.put<{ Params: { id: string } }>('/api/agents/:id', async request => runtime.updateAgent(request.params.id, request.body));
   app.delete<{ Params: { id: string } }>('/api/agents/:id', async request => runtime.deleteAgent(request.params.id));

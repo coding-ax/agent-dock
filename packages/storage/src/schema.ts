@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 const timestamps = { createdAt: text('created_at').notNull(), updatedAt: text('updated_at').notNull() };
 export const agentConfigs = sqliteTable('agent_configs', { id: text('id').primaryKey(), json: text('json').notNull(), ...timestamps });
@@ -14,3 +14,24 @@ export const channelMappings = sqliteTable('channel_mappings', { id: text('id').
 export const schedules = sqliteTable('schedules', { id: text('id').primaryKey(), name: text('name').notNull(), sessionId: text('session_id'), delivery: text('delivery').notNull(), sessionTemplate: text('session_template'), cron: text('cron'), runAt: text('run_at'), intervalMinutes: integer('interval_minutes'), timezone: text('timezone').notNull(), prompt: text('prompt').notNull(), enabled: integer('enabled', { mode: 'boolean' }).notNull(), nextRunAt: text('next_run_at'), lastRunAt: text('last_run_at'), lastStatus: text('last_status'), runCount: integer('run_count').notNull(), createdBySessionId: text('created_by_session_id'), extra: text('extra'), ...timestamps });
 export const scheduleRuns = sqliteTable('schedule_runs', { id: text('id').primaryKey(), scheduleId: text('schedule_id').notNull(), fireAt: text('fire_at').notNull(), status: text('status').notNull(), reason: text('reason'), sessionId: text('session_id'), taskId: text('task_id'), createdAt: text('created_at').notNull() });
 export const configs = sqliteTable('configs', { key: text('key').primaryKey(), value: text('value').notNull() });
+export const turnUsage = sqliteTable('turn_usage', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  taskId: text('task_id'),
+  requestId: text('request_id'),
+  agentId: text('agent_id').notNull(),
+  cwd: text('cwd').notNull(),
+  model: text('model'),
+  inputTokens: integer('input_tokens').notNull().default(0),
+  outputTokens: integer('output_tokens').notNull().default(0),
+  cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
+  cacheWriteTokens: integer('cache_write_tokens').notNull().default(0),
+  thoughtTokens: integer('thought_tokens').notNull().default(0),
+  totalTokens: integer('total_tokens').notNull().default(0),
+  costUsd: real('cost_usd'),
+  durationMs: integer('duration_ms'),
+  generationMs: integer('generation_ms'),
+  ttftMs: integer('ttft_ms'),
+  source: text('source').notNull().default('acp'),
+  createdAt: text('created_at').notNull()
+});

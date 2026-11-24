@@ -9,7 +9,7 @@ import { WebBaseUrlInput } from './WebBaseUrlInput';
 import { KeyboardEvent, lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { useMount, useEventListener, useUpdateEffect, useLocalStorageState, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlarmClock, AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MessageSquare, PanelLeftOpen, Pin, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, StickyNote, Trash2, Wrench, X } from 'lucide-react';
+import { AlarmClock, AlertTriangle, Archive, BarChart3, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MessageSquare, PanelLeftOpen, Pin, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, StickyNote, Trash2, Wrench, X } from 'lucide-react';
 import { Input, InputNumber, Select, Switch } from 'antd';
 import { defaultLarkTraceLimit, validateHighRiskPattern } from '@agent-dock/agent-dock-shared';
 import { api, WebAccessDeniedError, type Agent, type AssistantTask, type Project, type Session } from './api';
@@ -43,6 +43,7 @@ import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { SessionSearchDialog } from './SessionSearchDialog';
 import { WebAccessDeniedPanel, shouldCancelOnAccessDenied } from './WebAccessDeniedPanel';
 import { AgentConfigDialog } from './AgentConfigDialog';
+import { UsageDashboardDialog } from './UsageDashboardDialog';
 import { AssistantSettingsDialog } from './AssistantSettingsDialog';
 import { HandoverDialog } from './HandoverDialog';
 import { ImportSessionDialog } from './ImportSessionDialog';
@@ -947,7 +948,7 @@ export default function App() {
               </div>}
       </div>
       {/* 两个入口都开弹窗：归档列表早先挂在会话树最底部，点了要滚到底才看得见，看起来像点不开。 */}
-      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onSideChatConfig={() => { setSidebarOpen(false); openAppDialog('side-chat'); }} onAssistant={openAssistantSettings} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
+      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onUsage={() => { setSidebarOpen(false); openAppDialog('usage'); }} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onSideChatConfig={() => { setSidebarOpen(false); openAppDialog('side-chat'); }} onAssistant={openAssistantSettings} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
       </div>
       {/* 收起态细条（仅桌面）：展开 + 快捷新建 + 两个设置入口 */}
       <div className={`hidden h-full w-full flex-col items-center gap-1 py-3 ${sidebarCollapsed ? 'md:flex' : ''}`}>
@@ -957,6 +958,7 @@ export default function App() {
         <CompanionStripButton/>
 
         <span className="mt-auto flex flex-col items-center gap-1">
+          <HoverTooltip content="消耗看板"><button type="button" onClick={() => openAppDialog('usage')} aria-label="消耗看板" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><BarChart3 size={15}/></button></HoverTooltip>
           <HoverTooltip content="定时任务"><button type="button" onClick={() => openAppDialog('schedule')} aria-label="定时任务" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><AlarmClock size={15}/></button></HoverTooltip><HoverTooltip content="归档会话"><button type="button" onClick={() => openAppDialog('archived')} aria-label="归档会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Archive size={15}/></button></HoverTooltip>
           <HoverTooltip content="导入外部会话"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('import'); }} aria-label="导入外部会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><FolderOpen size={15}/></button></HoverTooltip><HoverTooltip content="Agent 设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('agent'); }} aria-label="Agent 设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Bot size={15}/></button></HoverTooltip>
           <HoverTooltip content="飞书设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('lark'); }} aria-label="飞书设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Settings2 size={15}/></button></HoverTooltip>
@@ -1009,6 +1011,7 @@ export default function App() {
       lark: <LarkConfigModal agents={agents.data ?? []} onClose={closeAppDialog}/>,
       'lark-avatar': <LarkAvatarDialog onClose={closeAppDialog}/>,
       agent: <AgentConfigDialog onClose={closeAppDialog}/>,
+      usage: <UsageDashboardDialog agents={agents.data ?? []} onClose={closeAppDialog} onOpenSession={selectSession}/>,
       'side-chat': <AgentConfigDialog initialTab="side-chat" onClose={closeAppDialog}/>,
       assistant: <AssistantSettingsDialog onClose={closeAppDialog} onOpenMain={() => { closeAppDialog(); openMain(); }} onAdopt={() => { closeAppDialog(); goAdopt(); }} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
       schedule: sessionId => <ScheduleDialog {...(sessionId ? { session: sortedSessions.find(item => item.id === sessionId) } : {})} sessions={sortedSessions} onClose={closeAppDialog} onOpenSession={selectSession}/>,
