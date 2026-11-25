@@ -81,6 +81,28 @@ describe('user bubble sending state', () => {
     expect(html).not.toContain('<pre');
   });
 
+  it('renders quoted blockquotes inside user bubbles with dedicated bounded styling and marks assistant outputs', () => {
+    const quotedEvent: TimelineEvent = {
+      id: 'u-quote', sequence: 3, type: 'text', timestamp: '2026-01-01T00:00:00.000Z',
+      data: { role: 'user', text: '> 被引用的 Agent 结论\n\n请展开说明这一点' }
+    } as TimelineEvent;
+    const html = render(quotedEvent);
+    expect(html).toContain('<blockquote>');
+    expect(html).toContain('被引用的 Agent 结论');
+    expect(html).toContain('请展开说明这一点');
+
+    const assistantEvent: TimelineEvent = {
+      id: 'a-1', sequence: 4, type: 'text', timestamp: '2026-01-01T00:00:01.000Z',
+      data: { role: 'assistant', text: '这是 Agent 回复正文' }
+    } as TimelineEvent;
+    const assistantHtml = render(assistantEvent);
+    expect(assistantHtml).toContain('data-assistant-output');
+
+    const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
+    expect(css).toMatch(/\.ui-user-bubble blockquote\s*\{[^}]*border-left:/);
+    expect(css).toMatch(/\.ui-user-bubble blockquote\s*\{[^}]*max-height:/);
+  });
+
   it('Disclosure uses grid-template-rows transition and respects initial open state with unmountOnClose', () => {
     const closed = renderToStaticMarkup(createElement(Disclosure, { open: false, unmountOnClose: true, children: createElement('pre', null, 'hidden body') }));
     expect(closed).toContain('transition-[grid-template-rows,opacity]');

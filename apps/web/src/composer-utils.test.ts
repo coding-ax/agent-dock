@@ -56,6 +56,15 @@ describe('composer references', () => {
       .toBe('/plan review this\n\n[文件] /repo/a.md');
   });
 
+  it('prepends quoted text as a markdown blockquote before the user reply', () => {
+    expect(buildPrompt('能举个例子吗', [], [], '第一段\n\n第二段'))
+      .toBe('> 第一段\n>\n> 第二段\n\n能举个例子吗');
+    expect(buildPrompt('结合这个文件看', [{ id: 'f', kind: 'file', label: 'a.ts', value: '/repo/a.ts' }], [], 'Agent 的建议'))
+      .toBe('[文件] /repo/a.ts\n\n> Agent 的建议\n\n结合这个文件看');
+    expect(buildPrompt('/plan 按这个思路改', [], ['plan'], 'Agent 的建议'))
+      .toBe('/plan 按这个思路改\n\n> Agent 的建议');
+  });
+
   it('keeps a leading slash that the Agent never advertised as plain text', () => {
     // 用户手打的未知命令不该被当成技能 chip 退回来，否则编辑排队任务会改写他的输入。
     const { text, references } = parsePromptToDraft('/not-a-real-command\n\n读一下', ['compact']);

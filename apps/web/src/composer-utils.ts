@@ -1,4 +1,5 @@
 import type { AgentModel, DockEvent } from './api';
+import { formatQuoteBlock } from './selection-quote';
 
 export type ComposerReference = { id: string; kind: 'file' | 'skill' | 'image'; label: string; value: string; url?: string };
 export type ContextStats = { used?: number; size?: number; compacted?: number; percentage?: number };
@@ -81,9 +82,11 @@ const SLASH_COMMAND_LINE = /^\/([A-Za-z0-9_:-]+)$/;
  *
  * 最多提升一个：斜杠命令只认首行，其余技能保持方括号写法。
  */
-export function buildPrompt(message: string, references: ComposerReference[], advertisedCommands: string[] = []) {
+export function buildPrompt(message: string, references: ComposerReference[], advertisedCommands: string[] = [], quote?: string) {
   const advertised = new Set(advertisedCommands);
-  const rawCommand = /^\/(goal|plan|fast)(?=\s|$)/.exec(message.trim())?.[1];
+  const trimmedMessage = message.trim();
+  const quoteBlock = quote ? formatQuoteBlock(quote) : '';
+  const rawCommand = /^\/(goal|plan|fast)(?=\s|$)/.exec(trimmedMessage)?.[1];
   const startsWithAdvertisedCommand = Boolean(rawCommand && advertised.has(rawCommand));
   const promoted = startsWithAdvertisedCommand ? undefined : references.find(reference => reference.kind === 'skill' && advertised.has(reference.value));
   const referenceLines = [
@@ -96,7 +99,10 @@ export function buildPrompt(message: string, references: ComposerReference[], ad
       return [`${FILE_MARKER} ${reference.value}`];
     })
   ];
-  return (startsWithAdvertisedCommand ? [message.trim(), ...referenceLines] : [...referenceLines, message.trim()]).filter(Boolean).join('\n\n');
+  return (startsWithAdvertisedCommand
+    ? [trimmedMessage, ...referenceLines, quoteBlock]
+    : [...referenceLines, quoteBlock, trimmedMessage]
+  ).filter(Boolean).join('\n\n');
 }
 
 /**

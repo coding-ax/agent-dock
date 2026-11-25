@@ -83,6 +83,24 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
    anywhere 允许在任意字符处折行，链接完整保留、只是换行显示，绝不超出圆角边界。
    用户气泡走 MarkdownContent，但没有挂 .markdown 类，所以要单独给这一层。 */
 .ui-user-bubble, .ui-user-bubble * { overflow-wrap: anywhere; }
+.ui-user-bubble > :first-child { margin-top: 0; }
+.ui-user-bubble > :last-child { margin-bottom: 0; }
+.ui-user-bubble p + p { margin-top: .5em; }
+.ui-user-bubble blockquote {
+  margin: 0 0 .55rem 0;
+  padding: .4rem .7rem;
+  border-left: 2.5px solid rgb(var(--zinc-400));
+  border-radius: 0 .5rem .5rem 0;
+  background: rgb(var(--zinc-900) / .045);
+  color: rgb(var(--zinc-600));
+  font-size: 13px;
+  line-height: 1.55;
+  max-height: 8.5rem;
+  overflow-y: auto;
+}
+.ui-user-bubble * + blockquote { margin-top: .5rem; }
+.ui-user-bubble blockquote:last-child { margin-bottom: 0; }
+.ui-user-bubble blockquote p + p { margin-top: .3em; }
 /* 终态轮次的发送时间：绝对定位在整轮下方，不参与布局，出现/消失都不会让时间线跳动。
    桌面端悬停轮内任意位置、或用键盘聚焦轮容器/轮内控件时出现；触摸屏没有 hover，
    直接常驻成一行 11px 小字，不把信息锁在悬停里。 */

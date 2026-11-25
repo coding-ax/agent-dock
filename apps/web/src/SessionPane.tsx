@@ -37,6 +37,8 @@ import { DEFAULT_SIDE_CHAT_TRIGGER_PREFIX, matchSideChatTrigger, sideChatBuiltin
 import { clearSessionDraft, getBrowserDraftStorage, loadSessionDraft, MAX_DRAFT_CHARS, saveSessionDraft } from './session-drafts';
 import { useSessionDraftWriter } from './use-session-draft';
 import { useElapsedNow } from './useElapsedNow';
+import { SelectionQuotePopover } from './SelectionQuotePopover';
+import { normalizeQuotedText } from './selection-quote';
 
 /** 主会话输入框的占位：单独成组件，小猫改名时只重渲染这一小块，不拖着整条时间线。 */
 function CompanionPlaceholder() {
@@ -118,7 +120,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const qc = useQueryClient();
   const { setSession, closeTab } = useDockStore();
   const secondary = pane === 'secondary';
-  const [prompt, setPrompt] = useState(() => loadSessionDraft(getBrowserDraftStorage(), session.id)); const [composerReferences, setComposerReferences] = useState<ComposerReference[]>([]); const [sendMode, setSendMode] = useState<SendMode>('queue');
+  const [prompt, setPrompt] = useState(() => loadSessionDraft(getBrowserDraftStorage(), session.id)); const [composerReferences, setComposerReferences] = useState<ComposerReference[]>([]); const [quotedText, setQuotedText] = useState<string>(); const [sendMode, setSendMode] = useState<SendMode>('queue');
+  useEffect(() => { setQuotedText(undefined); }, [session.id]);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
   const [actionError, setActionError] = useState<string>(); const [archiveConfirm, setArchiveConfirm] = useState(false); const [mainArchiveBlocked, setMainArchiveBlocked] = useState(false);
   const composerTextarea = useRef<ComposerEditorHandle>(null);
@@ -244,12 +247,13 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 两次触发（Enter + 点击）；重复请求最终由服务端的 clientMessageId 兜底。
   const sendInFlight = useRef(false);
   const send = useMutation({
-    mutationFn: ({ message, mode, clientMessageId }: { message: string; mode: SendMode; placement: OptimisticMessage['placement']; draft: string; references: ComposerReference[]; optimisticId: string; clientMessageId: string }) => api.send(session.id, message, mode, undefined, clientMessageId),
+    mutationFn: ({ message, mode, clientMessageId }: { message: string; mode: SendMode; placement: OptimisticMessage['placement']; draft: string; references: ComposerReference[]; quote?: string; optimisticId: string; clientMessageId: string }) => api.send(session.id, message, mode, undefined, clientMessageId),
     onMutate: variables => {
       setActionError(undefined);
       setOptimisticMessages(current => [...current, { id: variables.optimisticId, prompt: variables.message, createdAt: new Date().toISOString(), placement: variables.placement }]);
       setPrompt('');
       setComposerReferences([]);
+      setQuotedText(undefined);
       setSendMode('queue');
     },
     onSuccess: (result, variables) => {
@@ -286,6 +290,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       } else {
         setPrompt(variables.draft);
         setComposerReferences(current => current.length ? current : variables.references);
+        setQuotedText(current => current ?? variables.quote);
       }
       setActionError(error.message);
     },
@@ -366,16 +371,25 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     }
   });
 
+  const handleQuoteReply = (text: string) => {
+    const normalized = normalizeQuotedText(text);
+    if (!normalized) return;
+    setQuotedText(normalized);
+    requestAnimationFrame(() => composerTextarea.current?.focus());
+  };
+
   const submit = (submittedValue: string) => {
     if (modelReadiness.kind === 'blocked' || send.isPending || sendInFlight.current) return;
     if (btwEnabled && onSideChat) {
       const btw = matchSideChatTrigger(submittedValue, btwTriggerPrefix);
       if (btw.matched) {
         const references = composerReferences;
-        const initialPrompt = buildPrompt(btw.prompt, references, []) || undefined;
+        const quote = quotedText;
+        const initialPrompt = buildPrompt(btw.prompt, references, [], quote) || undefined;
         composerTextarea.current?.setValue('');
         setPrompt('');
         setComposerReferences([]);
+        setQuotedText(undefined);
         setActionError(undefined);
         draftWriter.cancel();
         clearSessionDraft(getBrowserDraftStorage(), session.id);
@@ -384,6 +398,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
           if (!liveDraft.trim()) {
             setPrompt(submittedValue);
             setComposerReferences(current => current.length ? current : references);
+            setQuotedText(current => current ?? quote);
           }
           setActionError(error instanceof Error ? error.message : String(error));
         });
@@ -391,7 +406,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       }
     }
     // 唯一来源是点击/回车那一刻编辑器的文档快照，而不是可能还停在上一拍的 prompt。
-    const message = buildPrompt(submittedValue, composerReferences, advertisedCommands.map(command => command.name));
+    const quote = quotedText;
+    const message = buildPrompt(submittedValue, composerReferences, advertisedCommands.map(command => command.name), quote);
     if (!message) return;
     const mode = busyStates.has(session.state) ? sendMode : 'queue';
     // 落点在提交时就定：马上执行的进时间线并回到底部；要排队的只进「等待发送」面板，时间线不动。
@@ -404,7 +420,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     setPrompt('');
     sendInFlight.current = true;
     // 每次提交一个 id；同一次提交被浏览器重放时请求体不变，服务端据此去重。
-    send.mutate({ message, mode, placement, draft: submittedValue, references: composerReferences, optimisticId: createOptimisticMessageId(), clientMessageId: createClientMessageId() });
+    send.mutate({ message, mode, placement, draft: submittedValue, references: composerReferences, quote, optimisticId: createOptimisticMessageId(), clientMessageId: createClientMessageId() });
   };
   // 飞书来源会话：sourceId 里带 chatId，可以生成 applink 直接跳回该群/私聊。
   // 话题会话没有官方 thread 级直达链接，退化为「进群」，用 exact 标记给个提示。
@@ -511,7 +527,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
               : <ActivityPanel key={section.id} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}
           </TimelineTurn>;
         })}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
-        </div></div>{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}</div>
+        </div></div>{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}<SelectionQuotePopover containerRef={timelineScroll.containerRef} enabled={!session.archivedAt && !mainNeedsRestart} onQuote={handleQuoteReply}/></div>
       {!session.archivedAt && prompt.length > MAX_DRAFT_CHARS && <div role="status" className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-center text-[12px] text-amber-700">草稿超过 {MAX_DRAFT_CHARS.toLocaleString()} 字符，超出部分不会保存，刷新后会丢失。</div>}
       {session.archivedAt || mainNeedsRestart
         ? mainNeedsRestart
@@ -522,7 +538,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             </button>
           </div>
           : <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已归档，仅支持查看。</div>
-        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} sessionUsage={effectiveSessionUsage} liveTps={liveStreamTps} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
+        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} quotedText={quotedText} onClearQuote={() => setQuotedText(undefined)} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} sessionUsage={effectiveSessionUsage} liveTps={liveStreamTps} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>
       </div>
     </section>
