@@ -2,9 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import type { ScheduleDelivery, ScheduleSessionTemplate } from '@agent-dock/agent-dock-shared';
 import type { ScheduleService } from './service.js';
 
-interface CreateBody { name?: string; sessionId?: string; template?: ScheduleSessionTemplate; delivery?: ScheduleDelivery; cron?: string; runAt?: string; intervalMinutes?: number; timezone?: string; prompt?: string; createdBySessionId?: string }
+interface CreateBody { name?: string; sessionId?: string; followMain?: boolean; template?: ScheduleSessionTemplate; delivery?: ScheduleDelivery; cron?: string; runAt?: string; intervalMinutes?: number; timezone?: string; prompt?: string; createdBySessionId?: string }
 
-interface UpdateBody { name?: string; prompt?: string; delivery?: ScheduleDelivery; sessionId?: string | null; template?: ScheduleSessionTemplate; cron?: string | null; runAt?: string | null; intervalMinutes?: number | null; timezone?: string }
+interface UpdateBody { name?: string; prompt?: string; delivery?: ScheduleDelivery; sessionId?: string | null; followMain?: boolean; template?: ScheduleSessionTemplate; cron?: string | null; runAt?: string | null; intervalMinutes?: number | null; timezone?: string }
 
 /**
  * 定时任务的 HTTP 入口。鉴权跟其他 /api 路由一样走全局中间件；
@@ -12,15 +12,14 @@ interface UpdateBody { name?: string; prompt?: string; delivery?: ScheduleDelive
  */
 export function registerScheduleRoutes(app: FastifyInstance, schedules: ScheduleService) {
   app.get<{ Querystring: { sessionId?: string } }>('/api/schedules', async request => {
-    const all = await schedules.list();
-    const sessionId = request.query?.sessionId?.trim();
-    return sessionId ? all.filter(item => item.sessionId === sessionId) : all;
+    return schedules.list(request.query?.sessionId?.trim() || undefined);
   });
   app.post<{ Body: CreateBody }>('/api/schedules', async (request, reply) => {
     const body = request.body ?? {};
     const created = await schedules.create({
       prompt: body.prompt ?? '',
       ...(body.sessionId !== undefined ? { sessionId: body.sessionId } : {}),
+      ...(body.followMain !== undefined ? { followMain: Boolean(body.followMain) } : {}),
       ...(body.template !== undefined ? { template: body.template } : {}),
       ...(body.name !== undefined ? { name: body.name } : {}),
       ...(body.delivery !== undefined ? { delivery: body.delivery } : {}),
@@ -39,6 +38,7 @@ export function registerScheduleRoutes(app: FastifyInstance, schedules: Schedule
       ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
       ...(body.delivery !== undefined ? { delivery: body.delivery } : {}),
       ...(body.sessionId !== undefined ? { sessionId: body.sessionId } : {}),
+      ...(body.followMain !== undefined ? { followMain: Boolean(body.followMain) } : {}),
       ...(body.template !== undefined ? { template: body.template } : {}),
       ...(body.cron !== undefined ? { cron: body.cron } : {}),
       ...(body.runAt !== undefined ? { runAt: body.runAt } : {}),

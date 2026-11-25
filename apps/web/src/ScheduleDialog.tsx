@@ -13,10 +13,11 @@ import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { AgentIcon } from './AgentIcon';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { useToast } from './Toast';
-import { bindableSessions, canResume, deliveryHints, deliveryLabels, describeTrigger, emptyScheduleForm, formatScheduleTime, parseScheduleTemplate, recentWorkspaces, runStatusLabels, scheduleFormToInput, scheduleFormToUpdate, scheduleState, scheduleToForm, type ScheduleFormState, describeCountdown, summarizeSchedules, type ScheduleSummary } from './schedule-view';
+import { bindableSessions, canResume, defaultAppendTarget, deliveryHints, deliveryLabels, describeTrigger, emptyScheduleForm, formatScheduleTime, isMainSessionScheduleTarget, parseScheduleTemplate, recentWorkspaces, runStatusLabels, SCHEDULE_MAIN_SESSION_ID, scheduleFormToInput, scheduleFormToUpdate, scheduleState, scheduleToForm, type ScheduleFormState, describeCountdown, summarizeSchedules, type ScheduleSummary } from './schedule-view';
 
-/** 全局列表里「在哪里跑」：绑了会话显示会话标题，独立任务显示 Agent · 目录。 */
+/** 全局列表里「在哪里跑」：跟随主会话显示动态提示，绑了会话显示会话标题，独立任务显示 Agent · 目录。 */
 function scheduleTarget(schedule: Schedule, titles: Map<string, string>, agents: Agent[]): string | undefined {
+  if (isMainSessionScheduleTarget(schedule.sessionId)) return '跟随当前主会话';
   if (schedule.sessionId) return titles.get(schedule.sessionId);
   const template = parseScheduleTemplate(schedule.sessionTemplate);
   if (!template) return undefined;
@@ -93,6 +94,7 @@ function ScheduleRow({ schedule, sessionTitle, lastRun, now, actions, onOpenSess
           <div className="flex min-w-0 items-center gap-2">
             <span className="min-w-0 truncate text-[13px] font-medium text-zinc-900">{schedule.name}</span>
             <Tag bordered={false} color={stateColor[state.tone]} className="m-0 shrink-0 text-[12px]">{state.label}</Tag>
+            {isMainSessionScheduleTarget(schedule.sessionId) && <Tag bordered={false} color="blue" className="m-0 shrink-0 text-[12px]">跟随主会话</Tag>}
           </div>
           {schedule.prompt.trim() !== schedule.name.trim() && <div className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[12px] leading-5 text-zinc-500">{schedule.prompt}</div>}
           <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-zinc-500">
@@ -159,17 +161,22 @@ function RecentRuns({ runs, names, now, onOpenSession }: { runs: ScheduleRun[]; 
  * - 追加到已有会话：只有这时才需要选会话。
  * - 底部始终显示一句话摘要和接下来几次触发时间，创建前就知道它会在什么时候、在哪里跑。
  */
-function ScheduleForm({ session, agents, sessions, editing, onDone, onCancel }: { session?: Session; agents: Agent[]; sessions: Session[]; /** 传入时是编辑这条任务：表单用它预填，提交走更新而不是创建。 */ editing?: Schedule; onDone(name: string): void; onCancel(): void }) {
+function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDone, onCancel }: { session?: Session; mainSessionId?: string; agents: Agent[]; sessions: Session[]; /** 传入时是编辑这条任务：表单用它预填，提交走更新而不是创建。 */ editing?: Schedule; onDone(name: string): void; onCancel(): void }) {
   const qc = useQueryClient();
   const candidates = useMemo(() => bindableSessions(sessions), [sessions]);
   const enabledAgents = useMemo(() => agents.filter(agent => !agent.disabled), [agents]);
+  const isCurrentMain = Boolean(session && mainSessionId && session.id === mainSessionId);
   const [form, setForm] = useState<ScheduleFormState>(() => editing ? scheduleToForm(editing, { agentId: enabledAgents[0]?.id ?? '', cwd: '' }) : ({
     ...emptyScheduleForm,
     runAt: oncePresets(new Date())[1]!.value,
     agentId: session?.agentId ?? candidates.find(item => enabledAgents.some(agent => agent.id === item.agentId))?.agentId ?? enabledAgents[0]?.id ?? '',
     cwd: session?.cwd ?? candidates[0]?.cwd ?? '',
     model: session?.model ?? '',
-    appendSessionId: session?.id ?? candidates[0]?.id ?? ''
+    appendSessionId: defaultAppendTarget({
+      ...(session?.id ? { sessionId: session.id } : {}),
+      ...(mainSessionId ? { mainSessionId } : {}),
+      ...(candidates[0]?.id ? { fallbackSessionId: candidates[0].id } : {})
+    })
   }));
   const [error, setError] = useState<string>();
   const [now, setNow] = useState(() => new Date());
@@ -222,9 +229,13 @@ function ScheduleForm({ session, agents, sessions, editing, onDone, onCancel }: 
     return trigger?.cron ? nextCronRuns(trigger.cron, now, 3) : [];
   }, [form.kind, form.runAt, trigger?.cron, trigger?.intervalMinutes, now]);
   const oncePast = form.kind === 'once' && upcoming[0] !== undefined && upcoming[0].getTime() <= now.getTime();
+  const appendFollowsMain = isMainSessionScheduleTarget(form.appendSessionId);
+  const mainSession = useMemo(() => mainSessionId ? sessions.find(item => item.id === mainSessionId && !item.archivedAt) : undefined, [mainSessionId, sessions]);
   const appendTarget = editing ? sessions.find(item => item.id === form.appendSessionId) : session ?? candidates.find(item => item.id === form.appendSessionId);
   const target = form.delivery === 'append'
-    ? appendTarget ? `追加到「${appendTarget.title || appendTarget.cwd}」` : '还没选要追加的会话'
+    ? appendFollowsMain
+      ? '追加到当前活跃主会话（换代自动跟随）'
+      : appendTarget ? `追加到「${appendTarget.title || appendTarget.cwd}」` : '还没选要追加的会话'
     : `用 ${enabledAgents.find(agent => agent.id === form.agentId)?.name ?? '…'} 在 ${form.cwd.split(/[\\/]/).filter(Boolean).pop() || '…'} 新开会话`;
   const when = form.kind === 'once' ? (upcoming[0] ? describeRunTime(upcoming[0], now) : '未选时间') : trigger?.intervalMinutes ? describeInterval(trigger.intervalMinutes) : trigger?.cron ? describeCron(trigger.cron) : '周期未填完整';
 
@@ -282,8 +293,41 @@ function ScheduleForm({ session, agents, sessions, editing, onDone, onCancel }: 
             </Space.Compact>
           </div>
         </div> : session && !editing
-          ? <span className="text-[12px] text-zinc-600">追加到当前会话「{session.title || session.cwd}」</span>
-          : <Select value={form.appendSessionId || undefined} placeholder="选择会话" notFoundContent="没有可追加的会话" showSearch optionFilterProp="title" options={candidates.map(item => ({ value: item.id, title: `${item.title || item.cwd} ${item.cwd}`, label: <span className="flex min-w-0 items-center gap-2"><AgentIcon agentId={item.agentId} size={15}/><span className="min-w-0 truncate">{item.title || item.cwd}</span><span className="ml-auto shrink-0 font-mono text-[12px] text-zinc-400">{item.cwd.split(/[\\/]/).filter(Boolean).pop()}</span></span> }))} onChange={appendSessionId => update({ appendSessionId })}/>}
+          ? isCurrentMain
+            ? <div className="flex flex-col gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50/70 px-3 py-2.5">
+              <Checkbox
+                checked={appendFollowsMain}
+                onChange={event => update({ appendSessionId: event.target.checked ? SCHEDULE_MAIN_SESSION_ID : session.id })}
+              >
+                <span className="text-[12px] font-medium text-zinc-800">跟随当前活跃主会话（推荐）</span>
+              </Checkbox>
+              <span className="pl-6 text-[12px] text-zinc-500">
+                {appendFollowsMain
+                  ? '主会话交接换代后会自动投递给新一代主会话，不会因旧主会话归档而停用。'
+                  : `仅绑定当前会话「${session.title || session.cwd}」，该会话归档后定时任务会自动停用。`}
+              </span>
+            </div>
+            : <span className="text-[12px] text-zinc-600">追加到当前会话「{session.title || session.cwd}」</span>
+          : <Select
+            value={form.appendSessionId || undefined}
+            placeholder="选择会话"
+            notFoundContent="没有可追加的会话"
+            showSearch
+            optionFilterProp="title"
+            options={[
+              {
+                value: SCHEDULE_MAIN_SESSION_ID,
+                title: `当前活跃主会话 跟随主会话 main ${mainSession?.title ?? ''}`,
+                label: <span className="flex min-w-0 items-center gap-2">
+                  <Tag bordered={false} color="blue" className="m-0 shrink-0 text-[11px]">自动跟随</Tag>
+                  <span className="min-w-0 truncate font-medium text-zinc-800">当前活跃主会话</span>
+                  <span className="ml-auto shrink-0 text-[12px] text-zinc-400">{mainSession ? (mainSession.title || mainSession.cwd) : '换代自动跟随'}</span>
+                </span>
+              },
+              ...candidates.map(item => ({ value: item.id, title: `${item.title || item.cwd} ${item.cwd}`, label: <span className="flex min-w-0 items-center gap-2"><AgentIcon agentId={item.agentId} size={15}/><span className="min-w-0 truncate">{item.title || item.cwd}</span><span className="ml-auto shrink-0 font-mono text-[12px] text-zinc-400">{item.cwd.split(/[\\/]/).filter(Boolean).pop()}</span></span> }))
+            ]}
+            onChange={appendSessionId => update({ appendSessionId })}
+          />}
       </div>
 
       <label className="flex flex-col gap-1.5"><span className={label}>名称 <span className="font-normal text-zinc-400">可选</span></span>
@@ -316,7 +360,7 @@ function ScheduleForm({ session, agents, sessions, editing, onDone, onCancel }: 
  * - 不传 session：全局列表（侧边栏入口），新建时直接选 Agent / 目录，或选一个会话追加。
  * - 传 session：只列这个会话的（会话标题栏入口），新建时用它的配置预填。
  */
-export function ScheduleDialog({ session, sessions, onClose, onOpenSession }: { session?: Session; sessions: Session[]; onClose(): void; onOpenSession(id: string): void }) {
+export function ScheduleDialog({ session, mainSessionId, sessions, onClose, onOpenSession }: { session?: Session; mainSessionId?: string; sessions: Session[]; onClose(): void; onOpenSession(id: string): void }) {
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api.agents() });
   const panelRef = useRef<HTMLDivElement>(null);
   useModalFocusTrap({ panel: panelRef, initial: panelRef, dismissible: true, onDismiss: onClose });
@@ -357,7 +401,7 @@ export function ScheduleDialog({ session, sessions, onClose, onOpenSession }: { 
           移动端点开时若同步挂载会连同整棵 App 一起卡住。 */}
       {formOpen
         ? <DeferredMount key={editing?.id ?? 'new'} placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-5 py-4"><DeferredSkeleton/></div>}>
-          <ScheduleForm {...(session ? { session } : {})} {...(editing ? { editing } : {})} agents={agents.data ?? []} sessions={sessions} onDone={name => { const wasEditing = Boolean(editing); closeForm(); toast.show(wasEditing ? `已保存「${name}」` : `已创建「${name}」`, 'info'); }} onCancel={closeForm}/>
+          <ScheduleForm {...(session ? { session } : {})} {...(mainSessionId ? { mainSessionId } : {})} {...(editing ? { editing } : {})} agents={agents.data ?? []} sessions={sessions} onDone={name => { const wasEditing = Boolean(editing); closeForm(); toast.show(wasEditing ? `已保存「${name}」` : `已创建「${name}」`, 'info'); }} onCancel={closeForm}/>
         </DeferredMount>
         : <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-4 py-3"><DeferredSkeleton/></div>}>
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -369,7 +413,7 @@ export function ScheduleDialog({ session, sessions, onClose, onOpenSession }: { 
               <Button type="primary" icon={<Plus size={14}/>} onClick={() => setCreating(true)} className="mt-1">新建定时任务</Button>
             </div>}
             {items.length > 0 && <ScheduleOverview summary={summary} now={now}/>}
-            {items.map(schedule => <ScheduleRow key={schedule.id} schedule={schedule} sessionTitle={session ? undefined : scheduleTarget(schedule, titles, agents.data ?? [])} lastRun={lastRuns.get(schedule.id)} now={now} actions={actions} onOpenSession={openSession} onEdit={setEditing}/>)}
+            {items.map(schedule => <ScheduleRow key={schedule.id} schedule={schedule} sessionTitle={isMainSessionScheduleTarget(schedule.sessionId) ? '跟随当前主会话' : session ? undefined : scheduleTarget(schedule, titles, agents.data ?? [])} lastRun={lastRuns.get(schedule.id)} now={now} actions={actions} onOpenSession={openSession} onEdit={setEditing}/>)}
             {items.length > 0 && <RecentRuns runs={recentRuns.data ?? []} names={names} now={now} onOpenSession={openSession}/>}
           </div>
         </DeferredMount>}

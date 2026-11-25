@@ -81,7 +81,7 @@ export function requireDaemon(daemonDir?: string) {
 }
 
 /** 用 daemon 状态里的本地地址与访问凭证调用 HTTP API，返回 JSON；非 2xx 时把服务端错误信息抛出来。 */
-export async function callDaemon<T = Record<string, unknown>>(state: { webConsoleUrl?: string; address?: string }, path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', body?: object): Promise<T> {
+export async function callDaemon<T = Record<string, unknown>>(state: { webConsoleUrl?: string; address?: string }, path: string, method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', body?: object): Promise<T> {
   const entry = state.webConsoleUrl ?? state.address;
   if (!entry) throw new Error('daemon 未提供本地 API 地址。请运行 agent-dock status 检查状态。');
   const base = new URL(entry);

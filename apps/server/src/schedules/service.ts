@@ -1,4 +1,4 @@
-import { makeId, RuntimeError, type ScheduleDelivery, type ScheduleRecord, type ScheduleRepository, type ScheduleRunRecord, type ScheduleSessionTemplate, type Session, type SessionRepository, type StartSessionInput, type TaskRecord } from '@agent-dock/agent-dock-shared';
+import { isMainSessionScheduleTarget, makeId, RuntimeError, SCHEDULE_MAIN_SESSION_ID, type ScheduleDelivery, type ScheduleRecord, type ScheduleRepository, type ScheduleRunRecord, type ScheduleSessionTemplate, type Session, type SessionRepository, type StartSessionInput, type TaskRecord } from '@agent-dock/agent-dock-shared';
 import { assertValidTimezone, busySessionStates, followingRun, initialNextRun, isRecurring, localTimezone, schedulePrompt, unfinishedTaskStatuses } from './rules.js';
 
 /** 调度器用到的 runtime 能力；单测里可以直接给假实现。 */
@@ -21,6 +21,8 @@ export interface ScheduleLog { info(message: string): void; warn(message: string
 export interface CreateScheduleInput {
   name?: string;
   sessionId?: string;
+  /** 动态跟随当前活跃主会话（等价于 sessionId: 'main'）。 */
+  followMain?: boolean;
   template?: ScheduleSessionTemplate;
   delivery?: ScheduleDelivery;
   cron?: string;
@@ -41,6 +43,8 @@ export interface UpdateScheduleInput {
   prompt?: string;
   delivery?: ScheduleDelivery;
   sessionId?: string | null;
+  /** 动态跟随当前活跃主会话；给 true 等价于 sessionId: 'main'，给 false 且未显式给 sessionId 时解除主会话跟随。 */
+  followMain?: boolean;
   template?: ScheduleSessionTemplate;
   cron?: string | null;
   runAt?: string | null;
@@ -53,6 +57,8 @@ export interface ScheduleServiceOptions {
   intervalMs?: number;
   /** new_session 模式每个任务保留的未归档会话数，更早的自动归档。 */
   keepSessions?: number;
+  /** 动态解析当前活跃主会话 ID（用于 sessionId='main' 的定时任务）。 */
+  resolveMainSessionId?: () => string | undefined | Promise<string | undefined>;
   clock?: () => Date;
   log?: ScheduleLog;
 }
@@ -110,7 +116,25 @@ export class ScheduleService {
     await this.ticking;
   }
 
-  list() { return this.schedules.list(); }
+  private async resolveMainSessionId(): Promise<string | undefined> {
+    const id = (await this.options.resolveMainSessionId?.())?.trim();
+    return id || undefined;
+  }
+
+  /**
+   * 列出定时任务；指定 sessionId 时只看该会话的任务：
+   * - sessionId='main'：只看跟随当前主会话的任务；
+   * - sessionId 恰好是当前活跃主会话 ID：同时包含直接绑在该会话上的和跟随主会话的任务。
+   */
+  async list(sessionId?: string) {
+    const all = await this.schedules.list();
+    const target = sessionId?.trim();
+    if (!target) return all;
+    if (isMainSessionScheduleTarget(target)) return all.filter(item => isMainSessionScheduleTarget(item.sessionId));
+    const mainId = await this.resolveMainSessionId();
+    const includeMain = Boolean(mainId && mainId === target);
+    return all.filter(item => item.sessionId === target || (includeMain && isMainSessionScheduleTarget(item.sessionId)));
+  }
 
   async get(id: string) {
     const schedule = await this.schedules.get(id);
@@ -120,11 +144,27 @@ export class ScheduleService {
 
   async runs(id: string, limit?: number) { await this.get(id); return this.schedules.listRuns(id, limit); }
 
-  /** 最近执行（跨任务）；给 sessionId 时只看绑在这个会话上的任务。 */
+  /** 最近执行（跨任务）；给 sessionId 时只看绑在这个会话上的任务（主会话同时含跟随主会话的任务）。 */
   async recentRuns(limit = 50, sessionId?: string) {
     if (!sessionId) return this.schedules.listRecentRuns(limit);
-    const ids = (await this.schedules.list()).filter(item => item.sessionId === sessionId).map(item => item.id);
+    const ids = (await this.list(sessionId)).map(item => item.id);
     return this.schedules.listRecentRuns(limit, ids);
+  }
+
+  /**
+   * 主会话交接换代时，把旧主会话上存量写死 sessionId 的 append 定时任务平滑迁移为跟随当前主会话，
+   * 避免旧主会话归档后存量任务在下次触发时被误停用。
+   */
+  async migrateSessionAppendSchedulesToMain(fromSessionId: string): Promise<number> {
+    const all = await this.schedules.list();
+    const targets = all.filter(item => item.delivery === 'append' && item.sessionId === fromSessionId);
+    if (!targets.length) return 0;
+    const stamp = this.clock().toISOString();
+    for (const item of targets) {
+      await this.schedules.save({ ...item, sessionId: SCHEDULE_MAIN_SESSION_ID, updatedAt: stamp });
+    }
+    this.options.log?.info(`主会话交接：已将 ${targets.length} 条绑定旧主会话 ${fromSessionId} 的追加型定时任务迁移为跟随当前主会话`);
+    return targets.length;
   }
 
   async create(input: CreateScheduleInput): Promise<ScheduleRecord> {
@@ -132,11 +172,19 @@ export class ScheduleService {
     if (!prompt) throw new RuntimeError('INVALID_SCHEDULE', '定时任务内容不能为空', 400);
     const delivery = input.delivery ?? 'new_session';
     if (delivery !== 'append' && delivery !== 'new_session') throw new RuntimeError('INVALID_SCHEDULE', `未知的投递方式：${String(delivery)}`, 400);
-    const sessionId = input.sessionId?.trim();
+    const followMain = input.followMain === true || isMainSessionScheduleTarget(input.sessionId?.trim());
+    const sessionId = followMain ? SCHEDULE_MAIN_SESSION_ID : input.sessionId?.trim();
     if (!sessionId && delivery === 'append') throw new RuntimeError('INVALID_SCHEDULE', '追加到会话必须指定会话', 400);
-    const session = sessionId ? await this.sessions.get(sessionId) : undefined;
-    if (sessionId && !session) throw new RuntimeError('SESSION_NOT_FOUND', `会话不存在：${sessionId}`, 404);
-    if (session?.archivedAt) throw new RuntimeError('SESSION_ARCHIVED', `会话已归档：${sessionId}`, 409);
+    let session: Session | undefined;
+    if (followMain) {
+      const mainId = await this.resolveMainSessionId();
+      const main = mainId ? await this.sessions.get(mainId) : undefined;
+      if (main && !main.archivedAt) session = main;
+    } else if (sessionId) {
+      session = await this.sessions.get(sessionId);
+      if (!session) throw new RuntimeError('SESSION_NOT_FOUND', `会话不存在：${sessionId}`, 404);
+      if (session.archivedAt) throw new RuntimeError('SESSION_ARCHIVED', `会话已归档：${sessionId}`, 409);
+    }
     // 模板在注册时定下：之后改了来源会话的模型或目录，定时任务仍按注册时的配置跑。显式传入的优先。
     const template = delivery === 'new_session' ? normalizeTemplate(input.template) ?? (session ? templateFrom(session) : undefined) : undefined;
     if (delivery === 'new_session' && !template) throw new RuntimeError('INVALID_SCHEDULE', '每次新开会话需要指定 Agent 和工作目录，或绑定一个会话', 400);
@@ -151,7 +199,7 @@ export class ScheduleService {
     const schedule: ScheduleRecord = {
       id: scheduleId(),
       name: input.name?.trim() || prompt.replace(/\s+/g, ' ').slice(0, 40),
-      sessionId: session?.id ?? null,
+      sessionId: followMain ? SCHEDULE_MAIN_SESSION_ID : (session?.id ?? null),
       delivery,
       sessionTemplate: template ? JSON.stringify(template) : null,
       cron, runAt, intervalMinutes, timezone, prompt,
@@ -171,13 +219,31 @@ export class ScheduleService {
     if (!prompt) throw new RuntimeError('INVALID_SCHEDULE', '定时任务内容不能为空', 400);
     const delivery = input.delivery ?? current.delivery;
     if (delivery !== 'append' && delivery !== 'new_session') throw new RuntimeError('INVALID_SCHEDULE', `未知的投递方式：${String(delivery)}`, 400);
-    const sessionId = input.sessionId !== undefined ? input.sessionId?.trim() || null : current.sessionId ?? null;
+    let sessionId: string | null;
+    if (input.followMain === true) {
+      sessionId = SCHEDULE_MAIN_SESSION_ID;
+    } else if (input.sessionId !== undefined) {
+      const trimmed = input.sessionId?.trim() || null;
+      sessionId = isMainSessionScheduleTarget(trimmed) ? SCHEDULE_MAIN_SESSION_ID : trimmed;
+    } else if (input.followMain === false && isMainSessionScheduleTarget(current.sessionId)) {
+      sessionId = null;
+    } else {
+      sessionId = current.sessionId ?? null;
+    }
     if (delivery === 'append' && !sessionId) throw new RuntimeError('INVALID_SCHEDULE', '追加到会话必须指定会话', 400);
-    const session = sessionId ? await this.sessions.get(sessionId) : undefined;
-    // 只在换绑会话时校验；任务原本绑着的会话后来被归档了，不该让「改个名字」也失败。
-    if (sessionId && sessionId !== current.sessionId) {
-      if (!session) throw new RuntimeError('SESSION_NOT_FOUND', `会话不存在：${sessionId}`, 404);
-      if (session.archivedAt) throw new RuntimeError('SESSION_ARCHIVED', `会话已归档：${sessionId}`, 409);
+    const followMain = isMainSessionScheduleTarget(sessionId);
+    let session: Session | undefined;
+    if (followMain) {
+      const mainId = await this.resolveMainSessionId();
+      const main = mainId ? await this.sessions.get(mainId) : undefined;
+      if (main && !main.archivedAt) session = main;
+    } else if (sessionId) {
+      session = await this.sessions.get(sessionId);
+      // 只在换绑会话时校验；任务原本绑着的会话后来被归档了，不该让「改个名字」也失败。
+      if (sessionId !== current.sessionId) {
+        if (!session) throw new RuntimeError('SESSION_NOT_FOUND', `会话不存在：${sessionId}`, 404);
+        if (session.archivedAt) throw new RuntimeError('SESSION_ARCHIVED', `会话已归档：${sessionId}`, 409);
+      }
     }
     let template: ScheduleSessionTemplate | undefined;
     if (delivery === 'new_session') {
@@ -283,11 +349,22 @@ export class ScheduleService {
   }
 
   private async attempt(schedule: ScheduleRecord): Promise<Pick<ScheduleRunRecord, 'status' | 'reason' | 'sessionId' | 'taskId'>> {
-    // 没绑定会话的 new_session 任务不依赖任何已有会话；绑定了的，来源会话没了就停用。
-    const source = schedule.sessionId ? await this.runtime.getSession(schedule.sessionId) : undefined;
-    if (schedule.sessionId && (!source || source.archivedAt)) {
-      await this.disable(schedule.id, '来源会话不存在或已归档');
-      return { status: 'failed', reason: '来源会话不存在或已归档，定时任务已停用', sessionId: schedule.sessionId, taskId: null };
+    const followMain = isMainSessionScheduleTarget(schedule.sessionId);
+    let source: Session | undefined;
+    if (followMain) {
+      const mainId = await this.resolveMainSessionId();
+      source = mainId ? await this.runtime.getSession(mainId) : undefined;
+      if (!source || source.archivedAt) {
+        // 动态跟随主会话：暂无活跃主会话（或正在换代空窗期）时优雅跳过，不自动停用。
+        return { status: 'skipped', reason: '当前没有活跃的主会话，本次跳过', sessionId: null, taskId: null };
+      }
+    } else if (schedule.sessionId) {
+      // 没绑定会话的 new_session 任务不依赖任何已有会话；绑定了固定会话的，来源会话没了就停用。
+      source = await this.runtime.getSession(schedule.sessionId);
+      if (!source || source.archivedAt) {
+        await this.disable(schedule.id, '来源会话不存在或已归档');
+        return { status: 'failed', reason: '来源会话不存在或已归档，定时任务已停用', sessionId: schedule.sessionId, taskId: null };
+      }
     }
     const previous = await this.unfinishedPrevious(schedule);
     if (previous) return { status: 'skipped', reason: `上一次触发的任务还未结束（${previous}）`, sessionId: null, taskId: null };
@@ -298,22 +375,25 @@ export class ScheduleService {
       const task = await this.runtime.dispatch(source.id, prompt);
       return { status: 'delivered', reason: null, sessionId: source.id, taskId: task.id };
     }
+    const parentSessionId = source?.id ?? null;
     const template = parseTemplate(schedule);
     const created = await this.runtime.start({
       agentId: template.agentId, cwd: template.cwd,
       ...(template.model ? { model: template.model } : {}),
       ...(template.reasoningEffort ? { reasoningEffort: template.reasoningEffort } : {}),
-      systemPrompt: buildScheduleSessionSeed(schedule),
-      ...(schedule.sessionId ? { source: scheduleSessionSource, sourceId: schedule.sessionId } : {})
+      systemPrompt: buildScheduleSessionSeed({ ...schedule, sessionId: parentSessionId }),
+      ...(parentSessionId ? { source: scheduleSessionSource, sourceId: parentSessionId } : {})
     });
     const task = await this.runtime.dispatch(created.id, prompt);
     return { status: 'delivered', reason: null, sessionId: created.id, taskId: task.id };
   }
 
-  /** 上一条已投递的任务若仍在排队/执行，返回它的状态。 */
+  /** 上一条已投递的任务若仍在排队/执行，返回它的状态。已归档会话（如换代后的前任主会话）上的旧任务不再阻塞新触发。 */
   private async unfinishedPrevious(schedule: ScheduleRecord): Promise<string | undefined> {
     const last = (await this.schedules.listRuns(schedule.id, 10)).find(run => run.status === 'delivered' && run.sessionId && run.taskId);
     if (!last) return undefined;
+    const lastSession = await this.runtime.getSession(last.sessionId!);
+    if (lastSession?.archivedAt) return undefined;
     const task = (await this.runtime.getTasks(last.sessionId!)).find(item => item.id === last.taskId);
     return task && unfinishedTaskStatuses.has(task.status) ? task.status : undefined;
   }

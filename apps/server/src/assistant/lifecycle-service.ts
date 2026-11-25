@@ -45,6 +45,8 @@ export interface LifecycleHost {
   normalizeName(value: unknown): string | undefined;
   /** 校验接班配置用：Agent 是否存在、可用模型和思考深度。 */
   agentCatalog(agentId: string): Promise<HandoffAgentOption | undefined>;
+  /** 主会话交接完成切换、即将归档旧主会话前的钩子（如迁移旧主会话上的存量定时任务）。 */
+  onMainSessionHandoff?(fromSessionId: string, toSessionId: string): Promise<void> | void;
 }
 
 export interface AssistantLifecycleOptions {
@@ -859,6 +861,8 @@ export class AssistantLifecycle {
       retired.rounds = metrics.rounds;
       if (collected) { retired.lifeStage = collected.cat.lifeStage; retired.peakAgeScore = collected.cat.peakAgeScore; }
       this.store.saveCat(retired);
+      try { await this.host.onMainSessionHandoff?.(fromSession.id, session.id); }
+      catch (error) { this.log.warn(`主会话交接迁移定时任务失败：${errorMessage(error)}`); }
       await this.runtime.archive(fromSession.id);
       committed = true;
       this.markStep(id, 'retiring', `旧主会话 ${fromSession.id} 已归档（只读，记录全部保留）`);

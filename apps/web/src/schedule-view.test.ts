@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildScheduleSessionSeed } from '../../server/src/schedules/service';
-import { bindableSessions, canResume, cronToRecurrence, describeTrigger, emptyScheduleForm, isScheduledSession, scheduleFormToInput, scheduleFormToUpdate, scheduleState, scheduleToForm, describeCountdown, summarizeSchedules } from './schedule-view';
+import { bindableSessions, canResume, cronToRecurrence, defaultAppendTarget, describeTrigger, emptyScheduleForm, isMainSessionScheduleTarget, isScheduledSession, SCHEDULE_MAIN_SESSION_ID, scheduleFormToInput, scheduleFormToUpdate, scheduleState, scheduleToForm, describeCountdown, summarizeSchedules } from './schedule-view';
 import type { Schedule } from './api';
 
 const now = new Date('2026-10-14T10:00:00Z');
@@ -114,5 +114,20 @@ describe('editing a schedule', () => {
     expect(form).toMatchObject({ agentId: 'codex', cwd: '/w', model: 'm', kind: 'recurring', recurrence: { kind: 'interval', every: 2, everyUnit: 'hour' } });
     const update = scheduleFormToUpdate({ ...form, agentId: 'claude' });
     expect(update.input).toMatchObject({ template: { agentId: 'claude', cwd: '/w', model: 'm' }, intervalMinutes: 120, cron: null, runAt: null });
+  });
+
+  it('defaults append schedules created inside the main session to follow active main, and round-trips main target in edit forms', () => {
+    expect(defaultAppendTarget({ sessionId: 'ses_main', mainSessionId: 'ses_main', fallbackSessionId: 'ses_other' })).toBe(SCHEDULE_MAIN_SESSION_ID);
+    expect(defaultAppendTarget({ sessionId: 'ses_side', mainSessionId: 'ses_main', fallbackSessionId: 'ses_other' })).toBe('ses_side');
+    expect(defaultAppendTarget({ mainSessionId: 'ses_main', fallbackSessionId: 'ses_other' })).toBe('ses_other');
+    expect(isMainSessionScheduleTarget('main')).toBe(true);
+    expect(isMainSessionScheduleTarget('ses_1')).toBe(false);
+
+    const created = scheduleFormToInput({ ...emptyScheduleForm, prompt: '早报', delivery: 'append', appendSessionId: SCHEDULE_MAIN_SESSION_ID }, { now });
+    expect(created.input).toMatchObject({ delivery: 'append', sessionId: 'main' });
+
+    const editForm = scheduleToForm(schedule({ delivery: 'append', sessionId: 'main', sessionTemplate: null, cron: '0 9 * * *' }), { agentId: 'claude', cwd: '/w' });
+    expect(editForm).toMatchObject({ delivery: 'append', appendSessionId: 'main' });
+    expect(scheduleFormToUpdate(editForm, { now }).input).toMatchObject({ delivery: 'append', sessionId: 'main', cron: '0 9 * * *' });
   });
 });

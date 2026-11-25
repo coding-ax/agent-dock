@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import Fastify from 'fastify';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
-import type { Session, StartSessionInput, TaskRecord } from '@agent-dock/agent-dock-shared';
+import { SCHEDULE_MAIN_SESSION_ID, type Session, type StartSessionInput, type TaskRecord } from '@agent-dock/agent-dock-shared';
 import { followingRun, initialNextRun, nextCronRun } from './rules.js';
+import { registerScheduleRoutes } from './routes.js';
 import { ScheduleService, type ScheduleRuntime } from './service.js';
 
 const session = (id: string, extra: Partial<Session> = {}): Session => ({
@@ -262,5 +264,167 @@ describe('schedule update', () => {
     const created = await service.create({ prompt: 'p', cron: '0 9 * * *', timezone: 'UTC', template: { agentId: 'claude', cwd: '/work' } });
     await expect(service.update(created.id, { prompt: '  ' })).rejects.toThrow(/不能为空/);
     await expect(service.update(created.id, { delivery: 'append' })).rejects.toThrow(/指定会话/);
+  });
+});
+
+describe('dynamic active main-session schedules', () => {
+  function setupWithMain(initialMainId?: string) {
+    const repos = createRepositories(':memory:');
+    const runtime = new FakeRuntime();
+    let clock = new Date('2026-10-14T00:00:00.000Z');
+    let activeMainId = initialMainId;
+    const service = new ScheduleService(repos.schedules, repos.sessions, runtime, {
+      clock: () => clock,
+      keepSessions: 2,
+      resolveMainSessionId: () => activeMainId
+    });
+    const addSession = async (id: string, extra: Partial<Session> = {}) => {
+      const s = session(id, extra);
+      runtime.sessions.set(id, s);
+      await repos.sessions.save(s);
+      return s;
+    };
+    return {
+      repos, runtime, service, addSession,
+      setMain: (id?: string) => { activeMainId = id; },
+      setClock: (iso: string) => { clock = new Date(iso); }
+    };
+  }
+
+  it('dynamically resolves the active main session and keeps delivering across handoff and old-main archival', async () => {
+    const { service, runtime, repos, addSession, setMain, setClock } = setupWithMain('ses_main_1');
+    const main1 = await addSession('ses_main_1');
+    const schedule = await service.create({ sessionId: SCHEDULE_MAIN_SESSION_ID, delivery: 'append', cron: '0 * * * *', timezone: 'UTC', prompt: '主会话巡检' });
+    expect(schedule.sessionId).toBe('main');
+
+    // 第 1 次触发：投递到第 1 代主会话
+    setClock('2026-10-14T01:00:01.000Z');
+    await service.tick();
+    expect(runtime.dispatched).toHaveLength(1);
+    expect(runtime.dispatched[0]!.sessionId).toBe('ses_main_1');
+
+    // 模拟主会话交接换代：创建第 2 代主会话、切换主会话指针、归档旧主会话（即使旧主会话上仍有未结束任务也不应阻塞）
+    await addSession('ses_main_2');
+    setMain('ses_main_2');
+    main1.archivedAt = '2026-10-14T01:30:00.000Z';
+
+    // 第 2 次触发：自动跟随并投递给第 2 代主会话，任务保持启用
+    setClock('2026-10-14T02:00:01.000Z');
+    await service.tick();
+    expect(runtime.dispatched).toHaveLength(2);
+    expect(runtime.dispatched[1]!.sessionId).toBe('ses_main_2');
+    expect(await repos.schedules.get(schedule.id)).toMatchObject({ enabled: true, runCount: 2, lastStatus: 'delivered', sessionId: 'main' });
+  });
+
+  it('gracefully skips without disabling when there is no active main session, then resumes once a main session exists', async () => {
+    const { service, runtime, repos, addSession, setMain, setClock } = setupWithMain(undefined);
+    const schedule = await service.create({ followMain: true, delivery: 'append', cron: '0 * * * *', timezone: 'UTC', prompt: '提醒' });
+    expect(schedule.sessionId).toBe('main');
+
+    // 无主会话时优雅跳过，不崩溃、不停用
+    setClock('2026-10-14T01:00:01.000Z');
+    await service.tick();
+    expect(runtime.dispatched).toEqual([]);
+    expect((await repos.schedules.listRuns(schedule.id))[0]).toMatchObject({ status: 'skipped', reason: expect.stringContaining('没有活跃的主会话') });
+    expect(await repos.schedules.get(schedule.id)).toMatchObject({ enabled: true, nextRunAt: '2026-10-14T02:00:00.000Z', runCount: 0 });
+
+    // 主会话已归档且尚未换代时同样跳过、不停用
+    const archivedMain = await addSession('ses_main_old', { archivedAt: '2026-10-14T01:30:00.000Z' });
+    setMain(archivedMain.id);
+    setClock('2026-10-14T02:00:01.000Z');
+    await service.tick();
+    expect(runtime.dispatched).toEqual([]);
+    expect(await repos.schedules.get(schedule.id)).toMatchObject({ enabled: true, runCount: 0 });
+
+    // 新主会话就绪后下一次触发正常投递
+    await addSession('ses_main_new');
+    setMain('ses_main_new');
+    setClock('2026-10-14T03:00:01.000Z');
+    await service.tick();
+    expect(runtime.dispatched).toMatchObject([{ sessionId: 'ses_main_new' }]);
+    expect(await repos.schedules.get(schedule.id)).toMatchObject({ enabled: true, runCount: 1, lastStatus: 'delivered' });
+  });
+
+  it('migrates legacy append schedules pinned to the retiring main session on handoff without touching other sessions', async () => {
+    const { service, runtime, repos, addSession, setMain, setClock } = setupWithMain('ses_main_1');
+    const main1 = await addSession('ses_main_1');
+    await addSession('ses_other');
+    const legacyMainAppend = await service.create({ sessionId: 'ses_main_1', delivery: 'append', cron: '0 * * * *', timezone: 'UTC', prompt: '旧主会话追加任务' });
+    const otherAppend = await service.create({ sessionId: 'ses_other', delivery: 'append', cron: '0 * * * *', timezone: 'UTC', prompt: '其他会话任务' });
+    const mainNewSession = await service.create({ sessionId: 'ses_main_1', delivery: 'new_session', cron: '0 * * * *', timezone: 'UTC', prompt: '新会话任务' });
+
+    const migrated = await service.migrateSessionAppendSchedulesToMain('ses_main_1');
+    expect(migrated).toBe(1);
+    expect((await repos.schedules.get(legacyMainAppend.id))?.sessionId).toBe('main');
+    expect((await repos.schedules.get(otherAppend.id))?.sessionId).toBe('ses_other');
+    expect((await repos.schedules.get(mainNewSession.id))?.sessionId).toBe('ses_main_1');
+
+    // 换代并归档旧主会话后，迁移过的任务继续投递给新主会话
+    await addSession('ses_main_2');
+    setMain('ses_main_2');
+    main1.archivedAt = '2026-10-14T00:30:00.000Z';
+    setClock('2026-10-14T01:00:01.000Z');
+    await service.tick();
+    expect(runtime.dispatched.some(item => item.sessionId === 'ses_main_2' && item.prompt.includes('旧主会话追加任务'))).toBe(true);
+    expect(await repos.schedules.get(legacyMainAppend.id)).toMatchObject({ enabled: true, runCount: 1 });
+  });
+
+  it('includes main-following schedules and recent runs when querying for the active main session', async () => {
+    const { service, addSession, setClock } = setupWithMain('ses_main_1');
+    await addSession('ses_main_1');
+    await addSession('ses_other');
+    const mainFollow = await service.create({ sessionId: 'main', delivery: 'append', intervalMinutes: 10, prompt: '主会话动态' });
+    const mainFixed = await service.create({ sessionId: 'ses_main_1', delivery: 'append', intervalMinutes: 15, prompt: '主会话固定' });
+    const other = await service.create({ sessionId: 'ses_other', delivery: 'append', intervalMinutes: 20, prompt: '其他' });
+
+    expect((await service.list('main')).map(item => item.id)).toEqual([mainFollow.id]);
+    expect((await service.list('ses_main_1')).map(item => item.id)).toEqual([mainFollow.id, mainFixed.id]);
+    expect((await service.list('ses_other')).map(item => item.id)).toEqual([other.id]);
+
+    setClock('2026-10-14T00:10:01.000Z');
+    await service.tick();
+    expect((await service.recentRuns(50, 'ses_main_1')).map(run => run.scheduleId)).toEqual([mainFollow.id]);
+    expect((await service.recentRuns(50, 'main')).map(run => run.scheduleId)).toEqual([mainFollow.id]);
+    expect(await service.recentRuns(50, 'ses_other')).toEqual([]);
+  });
+
+  it('supports creating, listing, and updating followMain schedules over HTTP routes', async () => {
+    const { service, addSession } = setupWithMain('ses_main_1');
+    await addSession('ses_main_1');
+    await addSession('ses_other');
+    const app = Fastify();
+    registerScheduleRoutes(app, service);
+    try {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/schedules',
+        payload: { prompt: 'API 跟随主会话', delivery: 'append', followMain: true, intervalMinutes: 30 }
+      });
+      expect(createRes.statusCode).toBe(201);
+      const created = createRes.json() as { id: string; sessionId: string };
+      expect(created.sessionId).toBe('main');
+
+      const listMain = await app.inject({ method: 'GET', url: '/api/schedules?sessionId=ses_main_1' });
+      expect(listMain.statusCode).toBe(200);
+      expect((listMain.json() as Array<{ id: string }>).map(item => item.id)).toEqual([created.id]);
+
+      const patchFixed = await app.inject({
+        method: 'PATCH',
+        url: `/api/schedules/${created.id}`,
+        payload: { sessionId: 'ses_other' }
+      });
+      expect(patchFixed.statusCode).toBe(200);
+      expect((patchFixed.json() as { sessionId: string }).sessionId).toBe('ses_other');
+
+      const patchBack = await app.inject({
+        method: 'PATCH',
+        url: `/api/schedules/${created.id}`,
+        payload: { followMain: true }
+      });
+      expect(patchBack.statusCode).toBe(200);
+      expect((patchBack.json() as { sessionId: string }).sessionId).toBe('main');
+    } finally {
+      await app.close();
+    }
   });
 });

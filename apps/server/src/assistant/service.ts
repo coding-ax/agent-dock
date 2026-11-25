@@ -134,6 +134,8 @@ export interface AssistantServiceOptions {
   sendLarkReply?: (input: LarkReplySendInput) => Promise<{ messageId: string }>;
   /** 便于测试；默认调用 gh api。 */
   postGithubComment?: (input: { owner: string; repo: string; number: number; body: string }) => Promise<void>;
+  /** 主会话交接切换完成、即将归档旧主会话前的回调（如迁移存量定时任务）。 */
+  onMainSessionHandoff?: (fromSessionId: string, toSessionId: string) => Promise<void> | void;
 }
 
 export interface StartTaskInput {
@@ -189,7 +191,8 @@ export class AssistantService {
         nameSession: (sessionId, title) => this.nameSession(sessionId, title),
         mainSystemPrompt: () => buildMainSystemPrompt(),
         normalizeName: normalizeCompanionName,
-        agentCatalog: agentId => this.handoffAgentCatalog(agentId)
+        agentCatalog: agentId => this.handoffAgentCatalog(agentId),
+        ...(options.onMainSessionHandoff ? { onMainSessionHandoff: options.onMainSessionHandoff } : {})
       }
     });
   }

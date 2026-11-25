@@ -25,7 +25,7 @@ import { runSessionCancel, runSessionInterrupt, runSessionList, runSessionPeers,
 import { devDown, devEnv, devRun, devUp } from './dev-sandbox.js';
 import { runPasswordClear, runPasswordSet, runPasswordStatus } from './password-cli.js';
 import { webPasswordEnabled } from './web-password.js';
-import { runScheduleAdd, runScheduleList, runSchedulePause, runScheduleRemove, runScheduleResume, runScheduleRun, runScheduleShow } from './schedule-cli.js';
+import { runScheduleAdd, runScheduleList, runSchedulePause, runScheduleRemove, runScheduleResume, runScheduleRun, runScheduleShow, runScheduleUpdate } from './schedule-cli.js';
 import { runUsageBreakdown, runUsageSession, runUsageSummary } from './usage-cli.js';
 import {
   runDraftCreate, runDraftDiscard, runDraftList, runDraftSend, runMainClear, runMainGet, runMainRestore, runMainSet,
@@ -204,6 +204,7 @@ async function main() {
     passwordClear: () => { process.stdout.write(runPasswordClear()); },
     passwordStatus: () => { process.stdout.write(runPasswordStatus()); },
     scheduleAdd: async (prompt, options) => { process.stdout.write(await runScheduleAdd(prompt, options)); },
+    scheduleUpdate: async (id, options) => { process.stdout.write(await runScheduleUpdate(id, options)); },
     scheduleList: async options => { process.stdout.write(await runScheduleList(options)); },
     scheduleShow: async (id, options) => { process.stdout.write(await runScheduleShow(id, options)); },
     schedulePause: async (id, options) => { process.stdout.write(await runSchedulePause(id, options)); },

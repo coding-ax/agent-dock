@@ -1,5 +1,8 @@
+import { isMainSessionScheduleTarget, SCHEDULE_MAIN_SESSION_ID } from '@agent-dock/agent-dock-shared';
 import type { CreateScheduleInput, Schedule, ScheduleDelivery, ScheduleRun, UpdateScheduleInput } from './api';
 import { defaultRecurrence, describeCron, describeInterval, recurrenceToTrigger, toLocalInput, type Recurrence } from './recurrence';
+
+export { isMainSessionScheduleTarget, SCHEDULE_MAIN_SESSION_ID };
 
 /**
  * 定时任务面板的展示与表单规则。纯函数，不依赖 React，组件只管渲染。
@@ -9,8 +12,16 @@ import { defaultRecurrence, describeCron, describeInterval, recurrenceToTrigger,
 export const deliveryLabels: Record<ScheduleDelivery, string> = { new_session: '每次新开会话', append: '追加到已有会话' };
 export const deliveryHints: Record<ScheduleDelivery, string> = {
   new_session: '每次触发用下面的 Agent 和目录新建一个会话，互不干扰。适合巡检、汇总、提醒。',
-  append: '接着在选定的会话里发，上下文连续。会话正忙时本次跳过。'
+  append: '接着在选定的会话里发，上下文连续。选择「当前活跃主会话」可在换代交接后自动跟随；会话正忙时本次跳过。'
 };
+
+/** 新建表单里「追加到已有会话」的默认目标：在主会话内打开时默认跟随主会话换代。 */
+export function defaultAppendTarget(options: { sessionId?: string; mainSessionId?: string; fallbackSessionId?: string }): string {
+  if (options.sessionId && options.mainSessionId && options.sessionId === options.mainSessionId) {
+    return SCHEDULE_MAIN_SESSION_ID;
+  }
+  return options.sessionId ?? options.fallbackSessionId ?? '';
+}
 
 export const runStatusLabels: Record<ScheduleRun['status'], string> = { delivered: '已投递', skipped: '已跳过', failed: '失败' };
 

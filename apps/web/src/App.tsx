@@ -1014,7 +1014,7 @@ export default function App() {
       usage: <UsageDashboardDialog agents={agents.data ?? []} onClose={closeAppDialog} onOpenSession={selectSession}/>,
       'side-chat': <AgentConfigDialog initialTab="side-chat" onClose={closeAppDialog}/>,
       assistant: <AssistantSettingsDialog onClose={closeAppDialog} onOpenMain={() => { closeAppDialog(); openMain(); }} onAdopt={() => { closeAppDialog(); goAdopt(); }} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
-      schedule: sessionId => <ScheduleDialog {...(sessionId ? { session: sortedSessions.find(item => item.id === sessionId) } : {})} sessions={sortedSessions} onClose={closeAppDialog} onOpenSession={selectSession}/>,
+      schedule: sessionId => <ScheduleDialog {...(sessionId ? { session: sortedSessions.find(item => item.id === sessionId) } : {})} sessions={sortedSessions} {...(mainSessionId ? { mainSessionId } : {})} onClose={closeAppDialog} onOpenSession={selectSession}/>,
       handover: sessionId => {
         const session = sessionId ? sortedSessions.find(item => item.id === sessionId) : undefined;
         return session ? <HandoverDialog session={session} agent={agents.data?.find(item => item.id === session.agentId)} onClose={closeAppDialog}/> : null;

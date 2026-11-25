@@ -87,7 +87,9 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     const sideChatConfig = new SideChatConfigService({ config: repos.config, listAgents: () => runtime.listAgents() });
     const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string };
     const selfUpdate = options.cliEntrypoint ? new SelfUpdateService({ currentVersion: packageJson.version, packageName: packageJson.name, cliEntrypoint: options.cliEntrypoint, env }) : undefined;
-    schedules = new ScheduleService(repos.schedules, repos.sessions, runtime);
+    schedules = new ScheduleService(repos.schedules, repos.sessions, runtime, {
+      resolveMainSessionId: () => assistant?.mainSessionId
+    });
     // 主会话/事项/watch/督办。旧 sources-router 从 M0 起不再构造，代码留到 M2 删除。
     assistant = new AssistantService({
       databaseUrl: config.databaseUrl,
@@ -99,6 +101,9 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       sendLarkReply: input => {
         if (!larkAvatar) throw new Error('飞书替身尚未初始化');
         return larkAvatar.sendMessage(input);
+      },
+      onMainSessionHandoff: async fromSessionId => {
+        await schedules?.migrateSessionAppendSchedulesToMain(fromSessionId);
       }
     });
     await assistant.initialize();

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
 import { now, RuntimeError, type RepositoryBundle, type Session, type TaskRecord } from '@agent-dock/agent-dock-shared';
 import { AssistantService, buildMainSystemPrompt, buildSuperagentDirective } from './service.js';
+import { ScheduleService } from '../schedules/service.js';
 import { registerAssistantRoutes } from './routes.js';
 import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER } from './lifecycle.js';
 
@@ -79,11 +80,17 @@ function createRuntime(repos: RepositoryBundle) {
   return runtime;
 }
 
-function harness(options: { repos?: RepositoryBundle; databaseUrl?: string } = {}) {
+function harness(options: { repos?: RepositoryBundle; databaseUrl?: string; onMainSessionHandoff?: (fromSessionId: string, toSessionId: string) => Promise<void> | void } = {}) {
   const repos = options.repos ?? createRepositories(':memory:');
   if (!options.repos) repositories.push(repos);
   const runtime = createRuntime(repos);
-  const service = new AssistantService({ databaseUrl: options.databaseUrl ?? ':memory:', runtime: runtime as never, repos, notify: vi.fn(async () => true) });
+  const service = new AssistantService({
+    databaseUrl: options.databaseUrl ?? ':memory:',
+    runtime: runtime as never,
+    repos,
+    notify: vi.fn(async () => true),
+    ...(options.onMainSessionHandoff ? { onMainSessionHandoff: options.onMainSessionHandoff } : {})
+  });
   services.push(service);
   return { repos, service, runtime, lifecycle: service.lifecycle };
 }
@@ -363,6 +370,50 @@ describe('main-session handoff ceremony', () => {
     const calls = h.runtime.dispatch.mock.calls.filter(call => call[5] === 'handoff').length;
     await h.lifecycle.resendBriefing(proposal.id);
     expect(h.runtime.dispatch.mock.calls.filter(call => call[5] === 'handoff').length).toBe(calls);
+  });
+
+  it('migrates legacy append schedules and keeps main-following schedules delivering to the successor after handoff', async () => {
+    let schedules!: ScheduleService;
+    const h = harness({
+      onMainSessionHandoff: async fromSessionId => {
+        await schedules.migrateSessionAppendSchedulesToMain(fromSessionId);
+      }
+    });
+    let clock = new Date('2026-10-14T00:00:00.000Z');
+    schedules = new ScheduleService(h.repos.schedules, h.repos.sessions, {
+      getSession: id => h.repos.sessions.get(id),
+      getTasks: async id => h.runtime.list(id),
+      start: input => h.runtime.start(input as never),
+      dispatch: (id, prompt) => h.runtime.dispatch(id, prompt),
+      archive: id => h.runtime.archive(id)
+    }, {
+      clock: () => clock,
+      resolveMainSessionId: () => h.service.mainSessionId
+    });
+
+    await h.service.initialize();
+    const main1 = await h.service.createMainSession({ agentId: 'claude', cwd: '/work/dock', name: '初代' });
+    const legacy = await schedules.create({ sessionId: main1.id, delivery: 'append', cron: '0 * * * *', timezone: 'UTC', prompt: '存量巡检' });
+    const dynamic = await schedules.create({ sessionId: 'main', delivery: 'append', cron: '0 * * * *', timezone: 'UTC', prompt: '动态巡检' });
+
+    const proposal = await h.lifecycle.proposeHandoff({ trigger: 'user', reason: '换代测试' });
+    await h.lifecycle.confirmHandoff(proposal.id, { name: '二代' });
+    await h.lifecycle.settle();
+
+    const main2Id = h.service.mainSessionId!;
+    expect(main2Id).not.toBe(main1.id);
+    expect((await h.repos.sessions.get(main1.id))?.archivedAt).toBeTruthy();
+    expect((await h.repos.schedules.get(legacy.id))?.sessionId).toBe('main');
+
+    // 交接后新主会话触发定时任务：存量和动态两条都投递到二代主会话，均未停用
+    clock = new Date('2026-10-14T01:00:01.000Z');
+    await schedules.tick();
+
+    const main2Tasks = h.runtime.list(main2Id);
+    expect(main2Tasks.some(task => task.prompt.includes('存量巡检'))).toBe(true);
+    expect(main2Tasks.some(task => task.prompt.includes('动态巡检'))).toBe(true);
+    expect(await h.repos.schedules.get(legacy.id)).toMatchObject({ enabled: true, runCount: 1, sessionId: 'main' });
+    expect(await h.repos.schedules.get(dynamic.id)).toMatchObject({ enabled: true, runCount: 1, sessionId: 'main' });
   });
 });
 

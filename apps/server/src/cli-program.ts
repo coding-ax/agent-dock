@@ -85,8 +85,9 @@ export interface SessionControlCliOptions {
   mode?: 'queue' | 'interrupt';
 }
 
-export interface ScheduleAddCliOptions { cron?: string; every?: string; at?: string; tz?: string; name?: string; delivery?: string; session?: string; from?: string; json?: boolean }
-export interface ScheduleListCliOptions { all?: boolean; session?: string; json?: boolean }
+export interface ScheduleAddCliOptions { cron?: string; every?: string; at?: string; tz?: string; name?: string; delivery?: string; session?: string; main?: boolean; from?: string; json?: boolean }
+export interface ScheduleUpdateCliOptions { prompt?: string; cron?: string; every?: string; at?: string; tz?: string; name?: string; delivery?: string; session?: string; main?: boolean; from?: string; json?: boolean }
+export interface ScheduleListCliOptions { all?: boolean; session?: string; main?: boolean; json?: boolean }
 export interface ScheduleControlCliOptions { json?: boolean }
 
 export interface DevCliOptions { port?: string; repo?: string; keepData?: boolean }
@@ -131,6 +132,7 @@ export interface CliHandlers {
   passwordClear?(): void | Promise<void>;
   passwordStatus?(): void | Promise<void>;
   scheduleAdd?(prompt: string, options: ScheduleAddCliOptions): void | Promise<void>;
+  scheduleUpdate?(id: string, options: ScheduleUpdateCliOptions): void | Promise<void>;
   scheduleList?(options: ScheduleListCliOptions): void | Promise<void>;
   scheduleShow?(id: string, options: ScheduleControlCliOptions): void | Promise<void>;
   schedulePause?(id: string, options: ScheduleControlCliOptions): void | Promise<void>;
@@ -698,6 +700,7 @@ Notes:
 
   const schedule = program.command('schedule').description('Register and manage AgentDock scheduled prompts (persisted by the daemon, survive restarts)');
   schedule.command('add')
+    .alias('create')
     .description('Register a scheduled prompt; defaults to the current session (agentdock_session_id)')
     .argument('<prompt>', 'Prompt delivered to the session when the schedule fires')
     .option('--cron <expr>', 'Recurring 5-field cron expression, e.g. "0 9 * * 1-5"')
@@ -706,14 +709,31 @@ Notes:
     .option('--tz <timezone>', 'IANA timezone for --cron, defaults to the machine timezone')
     .option('--name <name>', 'Short label shown in lists')
     .option('--delivery <mode>', 'new_session (default: fresh session each run) or append (continue in the bound session)')
-    .option('--session <session-id>', 'Bind to this session instead of the current one (current session or its linked main/side sessions only)')
+    .option('--session <session-id>', 'Bind to this session (use "main" to dynamically follow the active main session)')
+    .option('--main', 'Dynamically follow the active main session (shorthand for --session main; survives handoff)')
     .option('--from <session-id>', 'Source session ID (defaults to agentdock_session_id)')
     .option('--json', 'Output the created schedule as JSON')
     .action((prompt, options) => handlers.scheduleAdd?.(prompt, options));
+  schedule.command('update')
+    .description('Update an existing schedule (prompt, timing, delivery, or target session)')
+    .argument('<schedule-id>', 'Schedule ID (sch_*)')
+    .option('--prompt <prompt>', 'Updated prompt text')
+    .option('--name <name>', 'Updated short label')
+    .option('--cron <expr>', 'Switch to a 5-field cron expression')
+    .option('--every <interval>', 'Switch to a fixed interval, e.g. 45m, 2h, 1d')
+    .option('--at <time>', 'Switch to a one-shot trigger time')
+    .option('--tz <timezone>', 'IANA timezone for --cron')
+    .option('--delivery <mode>', 'new_session or append')
+    .option('--session <session-id>', 'Rebind to this session (use "main" to dynamically follow the active main session)')
+    .option('--main', 'Dynamically follow the active main session (shorthand for --session main)')
+    .option('--from <session-id>', 'Source session ID (defaults to agentdock_session_id)')
+    .option('--json', 'Output the updated schedule as JSON')
+    .action((id, options) => handlers.scheduleUpdate?.(id, options));
   schedule.command('list')
     .description('List schedules of the current session (all schedules outside a session)')
     .option('--all', 'List schedules of every session')
-    .option('--session <session-id>', 'List schedules bound to this session')
+    .option('--session <session-id>', 'List schedules bound to this session (use "main" for main-following schedules)')
+    .option('--main', 'List schedules dynamically following the active main session')
     .option('--json', 'Output raw schedule rows as JSON')
     .action(options => handlers.scheduleList?.(options));
   schedule.command('show')
@@ -743,6 +763,8 @@ Examples:
   $ agent-dock schedule add "检查发布状态" --every 45m          # also 2h, 1h30m, 1d
   $ agent-dock schedule add "提醒我开会" --at "2026-10-14 18:00"   # local time; --tz for another zone
   $ agent-dock schedule add "继续跟进" --every 1h --delivery append
+  $ agent-dock schedule add "每日巡检" --cron "0 9 * * *" --delivery append --main   # follow active main session across handoffs
+  $ agent-dock schedule update sch_xxx --main --delivery append
   $ agent-dock schedule list
   $ agent-dock schedule show|pause|resume|run|remove SCHEDULE_ID
 
