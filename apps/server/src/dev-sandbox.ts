@@ -67,7 +67,10 @@ export function sandboxEnv(sandbox: DevSandbox, base: NodeJS.ProcessEnv = proces
     AGENTDOCK_ALLOW_REACTION_TEST: 'true',
     agentdock_database: sandbox.database
   };
-  env.PATH = [shimDir(sandbox), base.PATH].filter(Boolean).join(delimiter);
+  const pathKey = process.platform === 'win32'
+    ? Object.keys(base).find(key => key.toUpperCase() === 'PATH') ?? 'PATH'
+    : 'PATH';
+  env[pathKey] = [shimDir(sandbox), base[pathKey]].filter(Boolean).join(delimiter);
   // 这些是正式实例注入给当前 Agent 的：带进沙箱会让 session/group 类命令打到正式实例上。
   for (const key of ['agentdock_session_id', 'agentdock_group_tools_url', 'agentdock_group_tools_token']) delete env[key];
   // Agent 跑在正式 daemon 的子进程树里，会继承它的 daemon 标记；带进去后沙箱的 `daemon start` 会把自己当成 daemon 本体，
@@ -80,11 +83,16 @@ export function sandboxEnv(sandbox: DevSandbox, base: NodeJS.ProcessEnv = proces
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
-/** 沙箱专用的 agent-dock 命令：daemon 会把 PATH 传给它拉起的 Agent。Windows 上不垫（没有 sh）。 */
+/** 沙箱专用的 agent-dock 命令：daemon 会把 PATH 传给它拉起的 Agent。 */
 function writeCliShim(sandbox: DevSandbox, node = process.execPath) {
-  if (process.platform === 'win32') return;
   const dir = shimDir(sandbox);
   mkdirSync(dir, { recursive: true });
+  if (process.platform === 'win32') {
+    const quote = (path: string) => `"${path.replace(/%/g, '%%')}"`;
+    writeFileSync(join(dir, 'agent-dock.cmd'),
+      `@echo off\r\nsetlocal DisableDelayedExpansion\r\n${quote(node)} ${quote(sandbox.entrypoint)} %*\r\n`);
+    return;
+  }
   const file = join(dir, 'agent-dock');
   writeFileSync(file, `#!/bin/sh\nexec ${shellQuote(node)} ${shellQuote(sandbox.entrypoint)} "$@"\n`);
   chmodSync(file, 0o755);

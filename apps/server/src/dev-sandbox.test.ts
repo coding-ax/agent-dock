@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { selfRestartBlockReason } from './daemon/self-guard.js';
 import { devDown, devRun, devUp, sandboxEnv, sandboxPaths } from './dev-sandbox.js';
 
@@ -49,12 +50,12 @@ describe('dev sandbox', () => {
     const env = sandboxEnv(sandbox, { HOME: '/home/u', PATH: '/bin', agentdock_session_id: 'ses_1', agentdock_group_tools_token: 't', agentdock_database: '/home/u/.agentdock/agentdock.db' });
     // fake reaction 注入口需要 SANDBOX + ALLOW 两个标记同时存在；只设置 ALLOW 的正式实例不开放端点。
     expect(env).toMatchObject({
-      HOME: '/repo/.agentdock/dev/home',
-      PATH: '/repo/.agentdock/dev/bin:/bin',
+      HOME: sandbox.home,
+      PATH: [join(sandbox.root, 'bin'), '/bin'].join(delimiter),
       AGENTDOCK_DISABLE_LARK_LISTENER: 'true',
       AGENTDOCK_DEV_SANDBOX: 'true',
       AGENTDOCK_ALLOW_REACTION_TEST: 'true',
-      agentdock_database: '/repo/.agentdock/dev/agentdock.db'
+      agentdock_database: sandbox.database
     });
     expect(env).not.toHaveProperty('agentdock_session_id');
     expect(env).not.toHaveProperty('agentdock_group_tools_token');
@@ -80,10 +81,21 @@ describe('dev sandbox', () => {
       expect(start.args).toEqual([join(repo, 'apps/server/dist/cli.js'), 'daemon', 'start', '--port', '4555', '--local-only', '--database', join(repo, '.agentdock/dev/agentdock.db')]);
       expect(start.env.HOME).toBe(join(repo, '.agentdock/dev/home'));
       // 沙箱里的 Agent 调 agent-dock 也要落到这份构建上。
-      const shim = join(repo, '.agentdock/dev/bin/agent-dock');
-      expect(start.env.PATH?.split(':')[0]).toBe(join(repo, '.agentdock/dev/bin'));
-      expect(readFileSync(shim, 'utf8')).toContain(`'${join(repo, 'apps/server/dist/cli.js')}' "$@"`);
-      expect(statSync(shim).mode & 0o111).toBeTruthy();
+      const pathKey = Object.keys(start.env).find(key => key.toUpperCase() === 'PATH')!;
+      expect(start.env[pathKey]?.split(delimiter)[0]).toBe(join(repo, '.agentdock/dev/bin'));
+      if (process.platform === 'win32') {
+        const entrypoint = join(repo, 'apps/server/dist/cli.js');
+        writeFileSync(entrypoint, 'console.log(JSON.stringify(process.argv.slice(2)));process.exitCode=7;');
+        const result = spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/c', 'agent-dock', 'task', 'list'], {
+          cwd: repo, env: start.env, encoding: 'utf8'
+        });
+        expect(result.stdout.trim()).toBe('["task","list"]');
+        expect(result.status).toBe(7);
+      } else {
+        const shim = join(repo, '.agentdock/dev/bin/agent-dock');
+        expect(readFileSync(shim, 'utf8')).toContain(`'${join(repo, 'apps/server/dist/cli.js')}' "$@"`);
+        expect(statSync(shim).mode & 0o111).toBeTruthy();
+      }
       expect(devRun(['schedule', 'list'], { repo, run })).toBe(0);
       expect(calls.at(-1)!.args.slice(1)).toEqual(['schedule', 'list']);
       expect(devDown({ repo, run })).toContain('清理');
