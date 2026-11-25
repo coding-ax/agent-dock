@@ -260,3 +260,31 @@ export function pickFinalAssistantText(entries: TurnOutcomeEntry[]): string {
   const text = index >= 0 ? folded[index]?.data?.text : undefined;
   return typeof text === 'string' ? text : '';
 }
+
+const DEFERRED_WAIT_MAX_CHARS = 600;
+const DEFERRED_WAIT_DISPATCH_RE = /(?:已派活|atask_[a-z0-9-]+)/i;
+const DEFERRED_WAIT_PATTERNS: RegExp[] = [
+  /(?:正在|仍在|已在|目前在|后台正在|当前正在).{0,35}(?:后台|运行|执行|构建|编译|测试|跑|等待|进行中|发布|触发).{0,45}(?:完成后|结束后|跑完后|一完成|稍后|随后|会自动|我会立刻|我会再|再继续|再汇报|再通知|再进入|再验收)/,
+  /(?:等|等待).{0,25}(?:完成|结束|跑完|返回|结果|构建|测试|发布|流水线|通知).{0,25}(?:后|之后|再|我会|立刻|自动|继续|汇报|推进|唤醒)/,
+  /\b(?:running|executing|building|testing|waiting)\b.{0,45}\b(?:in the background|for (?:it|the build|the test|the tests|the task|the command|ci|workflow|run|completion) to (?:finish|complete))\b/i,
+  /\b(?:i['’]?ll|will)\s+(?:wake up|resume|continue|report|follow up|let you know|proceed)\b.{0,35}\b(?:when|once|as soon as)\b.{0,30}\b(?:finish|finishes|complete|completes|done|ready)\b/i
+];
+
+/**
+ * 判定一轮最终输出是否属于「假收尾 / 挂起等待后台通知」：
+ * 部分 ACP Agent（如 Antigravity / Claude Code）的内置提示词会教模型把长命令转后台后直接结束本轮、
+ * 等待系统异步回调；但 ACPX 按轮次收口，end_turn 后不会收到后台任务/subAgent/定时器的异步唤醒，
+ * 导致用户一直干等。
+ *
+ * 仅对短/中等长度（<= 600 字符）且命中明确「正在等后台完成后再汇报/继续」的回复生效，
+ * 并排除主会话派活（已派活 / atask_），避免误伤正常长报告。
+ */
+export function isDeferredAsyncWaitText(text: string | undefined): boolean {
+  const trimmed = text?.trim();
+  if (!trimmed || trimmed.length > DEFERRED_WAIT_MAX_CHARS) return false;
+  if (DEFERRED_WAIT_DISPATCH_RE.test(trimmed)) return false;
+  return DEFERRED_WAIT_PATTERNS.some(pattern => pattern.test(trimmed));
+}
+
+export const ACPX_DEFERRED_WAIT_CORRECTION_PROMPT =
+  '[AgentDock 强约束] ACPX 按轮次收口，本轮结束后不会把内置后台任务（background task）、内置 subAgent 或定时器的完成事件异步推回唤醒你——你刚才结束本轮会让用户一直干等。请立刻检查未完成的后台任务状态，并在本轮工具调用内同步等到最终结果再给出完整答复；严禁再次提前结束本轮等待通知。';

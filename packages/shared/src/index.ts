@@ -285,11 +285,15 @@ export interface ChannelMappingRepository {
 }
 /**
  * 定时任务：到点把 prompt 投递到会话。
- * - `append`：追加到 `sessionId` 这个会话，上下文连续。
+ * - `append`：追加到 `sessionId` 这个会话，上下文连续；`sessionId === 'main'` 表示动态跟随当前活跃主会话（换代自动跟随）。
  * - `new_session`：每次按 `sessionTemplate` 新建一个会话；有 `sessionId`（来源会话）时挂在它下面作为侧边会话，
  *   没有时（Web 上直接选 Agent/目录创建）就是独立会话。
  * 只有 `cron` 与 `runAt` 之一：前者周期、后者单次。待触发时 `nextRunAt` 非空，完成/停用后为空。
  */
+export const SCHEDULE_MAIN_SESSION_ID = 'main';
+export function isMainSessionScheduleTarget(sessionId?: string | null): boolean {
+  return sessionId === SCHEDULE_MAIN_SESSION_ID;
+}
 export type ScheduleDelivery = 'append' | 'new_session';
 export interface ScheduleSessionTemplate { agentId: string; cwd: string; model?: string; reasoningEffort?: string }
 export interface ScheduleRecord {

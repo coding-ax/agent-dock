@@ -515,6 +515,31 @@ describe('runtime lifecycle acceptance', () => {
     await h.runtime.shutdown(); h.repos.close();
   });
 
+  it('auto-corrects once when a non-main session ends a turn with a deferred background wait promise', async () => {
+    let sends = 0;
+    const h = harness({
+      onSend: emit => {
+        sends += 1;
+        emit({ type: 'text', data: { text: sends === 1 ? '正在等待 pnpm build 完成，随后立刻汇报结果。' : '构建已完成，所有测试通过。' } });
+      }
+    });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+    const task = await h.runtime.send(session.id, '帮我跑一下构建');
+    expect(task.status).toBe('completed');
+    expect(task.finalText).toBe('构建已完成，所有测试通过。');
+    expect(h.driver.send).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(h.driver.send).mock.calls[1]?.[0]).toContain('ACPX 按轮次收口');
+
+    // 主会话允许派活后立即结束，不触发同步守卫
+    const mainSession = await h.runtime.start({ agentId: 'mock', source: 'assistant-main' });
+    sends = 0;
+    const mainTask = await h.runtime.send(mainSession.id, '派个活');
+    expect(mainTask.status).toBe('completed');
+    expect(h.driver.send).toHaveBeenCalledTimes(3);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
   it('marks task failed and recovers session to idle when authErrorPattern persists after retry', async () => {
     const h = harness({
       onSend: emit => emit({ type: 'text', data: { text: '\n⚠ UNAUTHENTICATED (code 401): Request had invalid authentication credentials.\n' } })

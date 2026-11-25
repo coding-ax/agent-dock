@@ -8,6 +8,9 @@ describe('会话初始 system prompt', () => {
     expect(result).toContain('[AgentDock]');
     expect(result).toContain('ses_main');
     expect(result).toMatch(/同步等到结果/);
+    expect(result).toMatch(/ACPX 按轮次收口/);
+    expect(result).toMatch(/background task/);
+    expect(result).toMatch(/严禁结束本轮/);
   });
 
   it('定时与会话通信只指向 CLI 入口和 -h，并拦住进程内的替代工具', () => {

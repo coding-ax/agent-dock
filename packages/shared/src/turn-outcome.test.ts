@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentWarningPrefix, antigravityAuthErrorPattern, hasUnresolvedToolCalls, isAgentAuthErrorText, isAgentStreamErrorText, isAgentWarningText, isTurnActivity, pickFinalAssistantEntry, pickFinalAssistantText, stripAgentStreamErrorSuffix, unresolvedToolCallsAfterAnswer } from './turn-outcome.js';
+import { agentWarningPrefix, antigravityAuthErrorPattern, hasUnresolvedToolCalls, isAgentAuthErrorText, isAgentStreamErrorText, isAgentWarningText, isDeferredAsyncWaitText, isTurnActivity, pickFinalAssistantEntry, pickFinalAssistantText, stripAgentStreamErrorSuffix, unresolvedToolCallsAfterAnswer } from './turn-outcome.js';
 
 const text = (value: string, role: 'user' | 'assistant' = 'assistant') => ({ type: 'text', data: { role, text: value } });
 const thinking = () => ({ type: 'thinking', data: { text: '…' } });
@@ -281,5 +281,19 @@ describe('后台进程的进度推送', () => {
     const first = toolCall('x');
     pickFinalAssistantText([text('跑一下'), first, toolResult('x'), text('好了')]);
     expect(first.data.status).toBe('running');
+  });
+
+  it('识别 ACPX 假收尾（挂起等后台通知），且不误伤正常完结报告与主会话派活', () => {
+    expect(isDeferredAsyncWaitText('正在等待 pnpm build 完成，随后进入沙箱验收。')).toBe(true);
+    expect(isDeferredAsyncWaitText('GitHub Actions 流水线正在后台运行，等发布完成后我会立刻汇报最终版本号。')).toBe(true);
+    expect(isDeferredAsyncWaitText('Tests and build are running in the background; I will wake up as soon as they finish.')).toBe(true);
+    expect(isDeferredAsyncWaitText('The build is currently running in the background—waiting for it to finish.')).toBe(true);
+
+    // 正常完结汇报、主会话派活、超长文档都不应误判
+    expect(isDeferredAsyncWaitText('已完成所有改动，单测与构建全部通过。你可以在终端运行 agent-dock update。')).toBe(false);
+    expect(isDeferredAsyncWaitText('已派活 atask_123 / ses_456：等待构建与验收完成后汇报。')).toBe(false);
+    expect(isDeferredAsyncWaitText('x'.repeat(650) + ' 正在后台运行，完成后再汇报')).toBe(false);
+    expect(isDeferredAsyncWaitText('')).toBe(false);
+    expect(isDeferredAsyncWaitText(undefined)).toBe(false);
   });
 });

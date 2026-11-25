@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, Session, SessionInterruptIntent, SessionUsageDetail, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy, TurnUsageRecord, UsageBreakdown, UsageBreakdownGroup, UsageQueryFilter, UsageSummary } from '@agent-dock/agent-dock-shared';
 import { basename } from 'node:path';
 import { resolveProjectPath } from './project-path.js';
-import { agentConfigSchema, isAgentAuthErrorText, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
+import { ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, agentConfigSchema, isAgentAuthErrorText, isDeferredAsyncWaitText, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 export type { AgentConfig };
 import { AcpxAdapter, describeAcpError, wrapAgentForSsh, type NormalizedDriverEvent } from '@agent-dock/agent-dock-acp-client';
 import { JsonlTransport, PipeTransport, probeAgent, PtyTransport, type ProbeMatrix } from '@agent-dock/agent-dock-transports';
@@ -977,6 +977,18 @@ export class AgentDockRuntime {
         driver = await this.reconnect(session);
         if (riskPolicy) await this.applyRiskPolicy(session, driver, riskPolicy);
         outcome = await this.executeTurnAndResolve(id, session, task, driver, resolvedAgentPrompt, retryAfterSequence);
+      }
+      // ACPX 按轮次收口，end_turn 后不会把内置后台任务/subAgent/定时器的完成事件异步推回唤醒会话。
+      // 若非主会话给出了「后台在跑、等完成后再汇报」的挂起回复，自动注入一次纠偏续跑（每轮最多 1 次）。
+      if (
+        outcome.status === 'completed'
+        && session.source !== 'assistant-main'
+        && !this.interruptedTurns.has(id)
+        && isDeferredAsyncWaitText(outcome.finalText)
+      ) {
+        const retryAfterSequence = this.sequences.get(id);
+        await this.emit(id, 'status', { state: 'acpx_sync_guard', reason: 'deferred_async_wait' });
+        outcome = await this.executeTurnAndResolve(id, session, task, driver, ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, retryAfterSequence);
       }
       task.finalText = outcome.finalText;
       // 收尾也算一次对话事件（长轮次结束时该浮上来），同样蹭终端态的 saveState 落盘。
