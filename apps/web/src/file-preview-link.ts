@@ -6,9 +6,19 @@ export interface FilePreviewTarget {
 }
 
 const imageFilePattern = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+const videoFilePattern = /\.(mp4|webm|mov|m4v|ogv)$/i;
+const audioFilePattern = /\.(mp3|wav|m4a|aac|ogg|flac|opus)$/i;
 
 export function isImageFilePath(path: string | undefined): boolean {
   return Boolean(path && imageFilePattern.test(path));
+}
+
+export function isVideoFilePath(path: string | undefined): boolean {
+  return Boolean(path && videoFilePattern.test(path));
+}
+
+export function isAudioFilePath(path: string | undefined): boolean {
+  return Boolean(path && audioFilePattern.test(path));
 }
 
 export function isSvgFilePath(path: string | undefined): boolean {
@@ -105,6 +115,7 @@ export function workspacePreviewPath(link: string, cwd: string): string | undefi
   const path = localFileLink(link)?.replace(/\\/g, '/');
   if (!path) return undefined;
   const root = cwd.replace(/\\/g, '/').replace(/\/$/, '');
+  if (path.startsWith('~/')) return undefined;
   if (path.startsWith('/')) {
     if (!root || !path.startsWith(`${root}/`)) return undefined;
     return path.slice(root.length + 1);
@@ -118,8 +129,8 @@ export function workspacePreviewPath(link: string, cwd: string): string | undefi
   return parts.join('/') || undefined;
 }
 
-/** Keep workspace browsing relative, but allow absolute links in the owner's read-only preview. */
+/** Keep workspace browsing relative, but allow absolute and ~/ links in the owner's read-only preview. */
 export function filePreviewPath(link: string, cwd: string): string | undefined {
   const local = localFileLink(link);
-  return workspacePreviewPath(link, cwd) ?? (local?.startsWith('/') ? local : undefined);
+  return workspacePreviewPath(link, cwd) ?? (local?.startsWith('/') || local?.startsWith('~/') ? local : undefined);
 }

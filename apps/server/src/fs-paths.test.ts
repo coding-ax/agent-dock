@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { isBinaryBuffer, isSensitivePath, previewKindForName } from './fs-paths.js';
+import { isBinaryBuffer, isSensitivePath, mediaMimeForName, previewKindForName } from './fs-paths.js';
 
 describe('workspace preview types', () => {
-  it('recognizes text, images (including SVG) and PDF artifacts', () => {
+  it('recognizes text, images (including SVG), PDF, video and audio artifacts', () => {
     expect(previewKindForName('notes.md')).toBe('text');
     expect(previewKindForName('screen.png')).toBe('image');
     expect(previewKindForName('diagram.svg')).toBe('image');
     expect(previewKindForName('report.PDF')).toBe('pdf');
+    expect(previewKindForName('demo.mp4')).toBe('video');
+    expect(previewKindForName('clip.MOV')).toBe('video');
+    expect(previewKindForName('song.wav')).toBe('audio');
+    expect(previewKindForName('voice.mp3')).toBe('audio');
     expect(previewKindForName('archive.zip')).toBe('unsupported');
+    expect(mediaMimeForName('demo.mp4')).toBe('video/mp4');
+    expect(mediaMimeForName('song.wav')).toBe('audio/wav');
   });
 
   it('removes .env and .npmrc from text preview allowlist', () => {

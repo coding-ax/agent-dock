@@ -62,7 +62,7 @@ describe('session file preview security & formats', () => {
 
     const app = await buildApp({ cwd: workspace, homeDir, tempDir });
     try {
-      // master: allowed in cwd, ~/.gemini, tempDir, uploads
+      // master: allowed in cwd, ~/.gemini, tempDir, uploads, and arbitrary non-sensitive local paths (absolute or ~/)
       const ownerGemini = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(geminiArtifact)}` });
       expect(ownerGemini.statusCode).toBe(200);
       expect(ownerGemini.json().content).toBe('# Gemini Artifact');
@@ -71,7 +71,15 @@ describe('session file preview security & formats', () => {
       expect(ownerTemp.statusCode).toBe(200);
       expect(ownerTemp.json().content).toBe('temp output');
 
-      // master: blocked outside allowlist & symlink escape (note: outsideDir is inside os.tmpdir() in test env, so test against /etc/hosts or similar real outside path if needed)
+      const ownerOutside = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(outsideFile)}` });
+      expect(ownerOutside.statusCode).toBe(200);
+      expect(ownerOutside.json().content).toBe('outside');
+
+      const ownerTilde = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent('~/.gemini/brain/report.md')}` });
+      expect(ownerTilde.statusCode).toBe(200);
+      expect(ownerTilde.json().content).toBe('# Gemini Artifact');
+
+      // relative path symlink escape from cwd still rejected by resolveExistingInside
       const escapeFromCwd = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=linked-outside.txt` });
       expect(escapeFromCwd.statusCode).toBe(400);
 
@@ -81,10 +89,12 @@ describe('session file preview security & formats', () => {
       expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(insideFile)}`, headers: shared })).statusCode).toBe(200);
       expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(sessionUpload)}`, headers: shared })).statusCode).toBe(200);
 
-      // session: blocked from other session uploads, ~/.gemini, tempDir, symlink escape
+      // session: blocked from other session uploads, ~/.gemini, tempDir, outsideDir, ~/ paths, symlink escape
       expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(otherSessionUpload)}`, headers: shared })).statusCode).toBe(403);
       expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(geminiArtifact)}`, headers: shared })).statusCode).toBe(403);
       expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(tempArtifact)}`, headers: shared })).statusCode).toBe(403);
+      expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(outsideFile)}`, headers: shared })).statusCode).toBe(403);
+      expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent('~/.gemini/brain/report.md')}`, headers: shared })).statusCode).toBe(403);
       expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=linked-outside.txt`, headers: shared })).statusCode).toBe(400);
       expect((await app.inject({ url: `/api/sessions/ses_1/fs/list?path=${encodeURIComponent(root)}`, headers: shared })).statusCode).toBe(400);
     } finally {
@@ -92,20 +102,76 @@ describe('session file preview security & formats', () => {
     }
   });
 
-  it('blocks master from reading non-allowlisted system paths and symlink escapes to them', async () => {
+  it('allows master to read external workspace files while keeping session share links isolated', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agentdock-escape-'));
     directories.push(root);
     const workspace = join(root, 'workspace');
     const homeDir = join(root, 'home');
+    const externalWorkspace = join(homeDir, '.agentdock', 'workspace', 'ai-song-video');
     await mkdir(workspace, { recursive: true });
-    await mkdir(homeDir, { recursive: true });
-    // /etc/hosts exists on macOS/Linux and is outside cwd, ~/.gemini, /tmp
-    await symlink('/etc/hosts', join(workspace, 'hosts-link.txt'));
+    await mkdir(externalWorkspace, { recursive: true });
+    const readme = join(externalWorkspace, 'README.md');
+    await writeFile(readme, '# AI Song Demo');
+    await symlink(readme, join(workspace, 'external-link.md'));
 
     const app = await buildApp({ cwd: workspace, homeDir, tempDir: root });
     try {
-      expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent('/etc/hosts')}` })).statusCode).toBe(403);
-      expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=hosts-link.txt` })).statusCode).toBe(400);
+      // master can read external workspace via absolute path or ~/ path
+      const masterAbs = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(readme)}` });
+      expect(masterAbs.statusCode).toBe(200);
+      expect(masterAbs.json().content).toBe('# AI Song Demo');
+
+      const masterTilde = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent('~/.agentdock/workspace/ai-song-video/README.md')}` });
+      expect(masterTilde.statusCode).toBe(200);
+      expect(masterTilde.json().content).toBe('# AI Song Demo');
+
+      // session share link is still strictly isolated from external workspace and system paths
+      const shared = { 'x-test-claim': 'session' };
+      expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(readme)}`, headers: shared })).statusCode).toBe(403);
+      expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent('/etc/hosts')}`, headers: shared })).statusCode).toBe(403);
+      expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=external-link.md`, headers: shared })).statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('streams video and audio previews with HTTP Range support', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentdock-media-'));
+    directories.push(root);
+    const workspace = join(root, 'workspace');
+    const homeDir = join(root, 'home');
+    const videoDir = join(homeDir, '.agentdock', 'workspace', 'ai-song-video');
+    await mkdir(workspace, { recursive: true });
+    await mkdir(videoDir, { recursive: true });
+    const videoFile = join(videoDir, 'yibanlaishuo_ai_song.mp4');
+    const payload = Buffer.from('0123456789abcdef', 'utf8');
+    await writeFile(videoFile, payload);
+
+    const app = await buildApp({ cwd: workspace, homeDir, tempDir: root });
+    try {
+      const full = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(videoFile)}` });
+      expect(full.statusCode).toBe(200);
+      expect(full.headers['content-type']).toBe('video/mp4');
+      expect(full.headers['accept-ranges']).toBe('bytes');
+      expect(full.headers['content-length']).toBe(String(payload.length));
+      expect(full.rawPayload).toEqual(payload);
+
+      const partial = await app.inject({
+        url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(videoFile)}`,
+        headers: { range: 'bytes=4-9' }
+      });
+      expect(partial.statusCode).toBe(206);
+      expect(partial.headers['content-type']).toBe('video/mp4');
+      expect(partial.headers['content-range']).toBe('bytes 4-9/16');
+      expect(partial.headers['content-length']).toBe('6');
+      expect(partial.body).toBe('456789');
+
+      const invalidRange = await app.inject({
+        url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(videoFile)}`,
+        headers: { range: 'bytes=100-200' }
+      });
+      expect(invalidRange.statusCode).toBe(416);
+      expect(invalidRange.headers['content-range']).toBe('bytes */16');
     } finally {
       await app.close();
     }

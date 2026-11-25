@@ -19,9 +19,11 @@ import { api, type FsListEntry } from './api';
 import {
   filePreviewPath,
   formatLineRange,
+  isAudioFilePath,
   isImageFilePath,
   isMarkdownFilePath,
   isSvgFilePath,
+  isVideoFilePath,
   workspacePreviewPath
 } from './file-preview-link';
 import { MarkdownContent } from './MarkdownContent';
@@ -199,12 +201,14 @@ export function FileExplorerPanel({
 
   const selectedIsSvg = isSvgFilePath(selected);
   const selectedIsImage = isImageFilePath(selected);
+  const selectedIsVideo = isVideoFilePath(selected);
+  const selectedIsAudio = isAudioFilePath(selected);
   const selectedIsPdf = /\.pdf$/i.test(selected ?? '');
   const selectedIsMarkdown = isMarkdownFilePath(selected);
   const selectedName = selected ? splitPath(selected).at(-1) : undefined;
   const lineBadge = formatLineRange(activeLine, activeEndLine);
 
-  const shouldFetchText = Boolean(selected) && !disabledReason && !selectedIsPdf && (
+  const shouldFetchText = Boolean(selected) && !disabledReason && !selectedIsPdf && !selectedIsVideo && !selectedIsAudio && (
     !selectedIsImage || (selectedIsSvg && viewMode === 'source')
   );
 
@@ -384,7 +388,7 @@ export function FileExplorerPanel({
             <div className="p-4 text-[12px] leading-5 text-red-600">文件不在当前会话可预览范围内：{initialPath}</div>
           ) : !selected ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-[12px] text-zinc-400">
-              <span>选择文件预览（文本 ≤1MB / 图片、SVG、PDF ≤20MB）</span>
+              <span>选择文件预览（文本 ≤1MB / 图片、SVG、PDF ≤20MB / 音视频）</span>
               {!treeOpen && (
                 <button
                   type="button"
@@ -415,6 +419,23 @@ export function FileExplorerPanel({
             </div>
           ) : selectedIsPdf ? (
             <iframe src={rawUrl} title={selectedName ?? 'PDF 预览'} className="h-full w-full border-0" />
+          ) : selectedIsVideo ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 overflow-auto p-4">
+              <video
+                key={rawUrl}
+                src={rawUrl}
+                controls
+                playsInline
+                preload="metadata"
+                className="max-h-[75vh] max-w-full rounded-lg bg-black shadow-sm"
+              />
+              <div className="font-mono text-[12px] text-zinc-500">{selected}</div>
+            </div>
+          ) : selectedIsAudio ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 overflow-auto p-6">
+              <audio key={rawUrl} src={rawUrl} controls preload="metadata" className="w-full max-w-md" />
+              <div className="font-mono text-[12px] text-zinc-500">{selected}</div>
+            </div>
           ) : file.isLoading ? (
             <div className="flex items-center gap-2 p-4 text-[12px] text-zinc-400"><Spinner size={12} />读取中…</div>
           ) : file.error ? (

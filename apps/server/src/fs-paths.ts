@@ -4,11 +4,10 @@ import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 
 /**
  * 会话文件浏览的路径安全：
- * 1. 分层白名单：
- *    - session（分享链接）：仅允许当前会话 cwd 与本会话的 .agentdock/uploads/<sessionId>；
- *    - master（控制台所有者）：允许当前会话 cwd、.agentdock/uploads 及产物/临时目录（~/.gemini、/tmp、/private/tmp、os.tmpdir()）；
- * 2. 所有路径必须经 realpath 解析后校验 containment，防 symlink 逃逸；
- * 3. 全角色强制敏感文件黑名单：.env、.env.*、.npmrc、~/.ssh/**、*.key、*.pem、id_rsa*、auth.json 等一律拒绝。
+ * 1. 分层访问策略：
+ *    - session（分享链接）：严格白名单，仅允许当前会话 cwd 与本会话的 .agentdock/uploads/<sessionId>，并经 realpath 防 symlink 逃逸；
+ *    - master（本机控制台所有者）：允许通过绝对路径（及 ~/ 路径）读取本机任意非敏感可读文件；
+ * 2. 全角色强制敏感文件黑名单：.env、.env.*、.npmrc、~/.ssh/**、*.key、*.pem、id_rsa*、auth.json 等一律拒绝（含 realpath 后的软链目标）。
  */
 
 export interface ResolvedWorkspacePath {
@@ -190,11 +189,14 @@ export const textExtensions = new Set([
 ]);
 
 export const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif']);
+export const videoExtensions = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv']);
+export const audioExtensions = new Set(['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus']);
 
 export const maxTextPreviewBytes = 1024 * 1024;
 export const maxDocumentPreviewBytes = 20 * 1024 * 1024;
+export const maxMediaPreviewBytes = 500 * 1024 * 1024;
 
-export type PreviewKind = 'text' | 'image' | 'pdf' | 'unsupported';
+export type PreviewKind = 'text' | 'image' | 'pdf' | 'video' | 'audio' | 'unsupported';
 
 /** 按扩展名判定预览类型（纯函数；大小限制由调用方实施）。 */
 export function previewKindForName(name: string): PreviewKind {
@@ -203,6 +205,8 @@ export function previewKindForName(name: string): PreviewKind {
   // .gitignore 这类点开头无后缀名也要能按文本打开。
   const ext = dot >= 0 ? lower.slice(dot) : lower;
   if (imageExtensions.has(ext)) return 'image';
+  if (videoExtensions.has(ext)) return 'video';
+  if (audioExtensions.has(ext)) return 'audio';
   if (textExtensions.has(ext)) return 'text';
   if (ext === '.pdf') return 'pdf';
   return 'unsupported';
@@ -213,7 +217,17 @@ const imageMime: Record<string, string> = {
   '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.avif': 'image/avif'
 };
 
+const mediaMime: Record<string, string> = {
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v', '.ogv': 'video/ogg',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.flac': 'audio/flac', '.opus': 'audio/opus'
+};
+
 export function imageMimeForName(name: string): string | undefined {
   const dot = name.toLowerCase().lastIndexOf('.');
   return dot >= 0 ? imageMime[name.toLowerCase().slice(dot)] : undefined;
+}
+
+export function mediaMimeForName(name: string): string | undefined {
+  const dot = name.toLowerCase().lastIndexOf('.');
+  return dot >= 0 ? mediaMime[name.toLowerCase().slice(dot)] : undefined;
 }

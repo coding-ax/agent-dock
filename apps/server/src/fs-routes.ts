@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import { realpathSync } from 'node:fs';
+import { createReadStream, realpathSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { basename, isAbsolute, relative, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, isAbsolute, join, relative, sep } from 'node:path';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { RuntimeError } from '@agent-dock/agent-dock-shared';
 import {
@@ -11,7 +12,9 @@ import {
   isRealPathWithinRoots,
   isSensitivePath,
   maxDocumentPreviewBytes,
+  maxMediaPreviewBytes,
   maxTextPreviewBytes,
+  mediaMimeForName,
   previewKindForName,
   resolveExistingInside,
   WorkspacePathError
@@ -43,12 +46,37 @@ function contentDispositionAttachment(filename: string): string {
   return `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
+function parseSingleByteRange(rangeHeader: string, totalSize: number): { start: number; end: number } | 'invalid' | undefined {
+  if (!rangeHeader.startsWith('bytes=')) return undefined;
+  const spec = rangeHeader.slice('bytes='.length).split(',')[0]?.trim();
+  if (!spec) return 'invalid';
+  const match = /^(\d*)-(\d*)$/.exec(spec);
+  if (!match) return 'invalid';
+  const [, startText, endText] = match;
+  if (!startText && !endText) return 'invalid';
+  if (totalSize === 0) return 'invalid';
+  if (!startText) {
+    const suffixLength = Number(endText);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return 'invalid';
+    const start = Math.max(0, totalSize - suffixLength);
+    return { start, end: totalSize - 1 };
+  }
+  const start = Number(startText);
+  const end = endText ? Math.min(Number(endText), totalSize - 1) : totalSize - 1;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= totalSize || end < start) {
+    return 'invalid';
+  }
+  return { start, end };
+}
+
 /**
  * 会话文件浏览与预览路由：
  * - 拦截 SSH 远端会话误走本机文件系统；
- * - 分层白名单（session 仅 cwd + 本会话 uploads；master 增放行 ~/.gemini、/tmp、/private/tmp 等产物/临时目录）；
+ * - 分层访问控制：
+ *   - session（分享链接）严格限制在 cwd + 本会话 uploads；
+ *   - master（本机控制台所有者）允许通过绝对路径或 ~/ 路径预览/下载本机任意非敏感文件；
  * - realpath 防 symlink 逃逸 + 全角色强制敏感文件黑名单；
- * - SVG raw 响应强制 CSP sandbox + nosniff，并支持 ?format=text 源码读取与 ?download=1 下载。
+ * - SVG raw 响应强制 CSP sandbox + nosniff，支持 ?format=text 源码读取、?download=1 流式下载与音视频 Range 流式预览。
  */
 export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockRuntime, options: FsRoutesOptions = {}): Promise<void> {
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/fs/list', async request => {
@@ -85,7 +113,10 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
     }
     const userPath = request.query.path;
     if (!userPath) throw new RuntimeError('INVALID_PATH', '缺少 path 参数', 400);
-    if (isSensitivePath(userPath)) {
+    const expandedPath = userPath.startsWith('~/')
+      ? join(options.homeDir ?? homedir(), userPath.slice(2))
+      : userPath;
+    if (isSensitivePath(userPath) || isSensitivePath(expandedPath)) {
       throw new RuntimeError('SENSITIVE_FILE_BLOCKED', '禁止预览或下载敏感文件', 403);
     }
 
@@ -94,26 +125,22 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
 
     let resolved: { absolute: string; relative: string };
     try {
-      if (isAbsolute(userPath)) {
-        const realTarget = realpathSync(userPath);
-        const roots = allowedReadRoots({
-          role,
-          cwd: session.cwd,
-          sessionId: request.params.id,
-          ...(options.homeDir ? { homeDir: options.homeDir } : {}),
-          ...(options.tempDir ? { tempDir: options.tempDir } : {}),
-          ...(options.extraMasterRoots ? { extraMasterRoots: options.extraMasterRoots } : {})
-        });
-        if (!isRealPathWithinRoots(realTarget, roots)) {
-          throw new RuntimeError(
-            'FORBIDDEN',
-            role === 'session'
-              ? '会话分享链接只能预览该会话工作区及上传目录内的文件'
-              : '路径不在允许预览的目录范围内',
-            403
-          );
+      if (isAbsolute(expandedPath)) {
+        const realTarget = realpathSync(expandedPath);
+        if (role === 'session') {
+          const roots = allowedReadRoots({
+            role,
+            cwd: session.cwd,
+            sessionId: request.params.id,
+            ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+            ...(options.tempDir ? { tempDir: options.tempDir } : {}),
+            ...(options.extraMasterRoots ? { extraMasterRoots: options.extraMasterRoots } : {})
+          });
+          if (!isRealPathWithinRoots(realTarget, roots)) {
+            throw new RuntimeError('FORBIDDEN', '会话分享链接只能预览该会话工作区及上传目录内的文件', 403);
+          }
         }
-        let rel = userPath;
+        let rel = expandedPath;
         try {
           const realCwd = realpathSync(session.cwd);
           if (realTarget === realCwd || realTarget.startsWith(`${realCwd}${sep}`)) {
@@ -122,7 +149,7 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
         } catch { /* cwd 不存在时退回绝对路径展示。 */ }
         resolved = { absolute: realTarget, relative: rel };
       } else {
-        resolved = resolveExistingInside(session.cwd, userPath);
+        resolved = resolveExistingInside(session.cwd, expandedPath);
       }
     } catch (error) { badPath(error); }
 
@@ -142,16 +169,16 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
     const wantText = request.query.format === 'text';
 
     if (wantDownload) {
-      if (info.size > maxDocumentPreviewBytes) {
-        throw new RuntimeError('FILE_TOO_LARGE', `文件超过 20MB 下载上限（实际 ${info.size} 字节），请在终端中处理`, 415);
-      }
-      const buffer = await readFile(resolved.absolute);
-      reply.header('Content-Type', imageMimeForName(filename) ?? (filename.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'));
+      const contentType = imageMimeForName(filename)
+        ?? mediaMimeForName(filename)
+        ?? (filename.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream');
+      reply.header('Content-Type', contentType);
+      reply.header('Content-Length', String(info.size));
       reply.header('Content-Disposition', contentDispositionAttachment(filename));
       reply.header('X-Content-Type-Options', 'nosniff');
       if (isSvg) reply.header('Content-Security-Policy', 'sandbox');
       reply.header('Cache-Control', 'private, no-store');
-      return reply.send(buffer);
+      return reply.send(createReadStream(resolved.absolute));
     }
 
     const baseKind = previewKindForName(filename);
@@ -160,6 +187,34 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
     if (effectiveKind === 'unsupported') {
       throw new RuntimeError('UNSUPPORTED_PREVIEW', '不支持预览的文件类型，请在终端中查看或下载', 415);
     }
+    if (effectiveKind === 'video' || effectiveKind === 'audio') {
+      if (info.size > maxMediaPreviewBytes) {
+        throw new RuntimeError('FILE_TOO_LARGE', `音视频文件超过 500MB 预览上限（实际 ${info.size} 字节），请下载或用本机播放器查看`, 415);
+      }
+      const contentType = mediaMimeForName(filename) ?? 'application/octet-stream';
+      reply.header('Content-Type', contentType);
+      reply.header('Accept-Ranges', 'bytes');
+      reply.header('X-Content-Type-Options', 'nosniff');
+      reply.header('Cache-Control', 'private, max-age=60');
+      const rangeHeader = typeof request.headers.range === 'string' ? request.headers.range : undefined;
+      if (rangeHeader) {
+        const parsed = parseSingleByteRange(rangeHeader, info.size);
+        if (parsed === 'invalid') {
+          reply.code(416);
+          reply.header('Content-Range', `bytes */${info.size}`);
+          return reply.send();
+        }
+        if (parsed) {
+          reply.code(206);
+          reply.header('Content-Range', `bytes ${parsed.start}-${parsed.end}/${info.size}`);
+          reply.header('Content-Length', String(parsed.end - parsed.start + 1));
+          return reply.send(createReadStream(resolved.absolute, { start: parsed.start, end: parsed.end }));
+        }
+      }
+      reply.header('Content-Length', String(info.size));
+      return reply.send(createReadStream(resolved.absolute));
+    }
+
     const maxBytes = effectiveKind === 'text' ? maxTextPreviewBytes : maxDocumentPreviewBytes;
     if (info.size > maxBytes) {
       throw new RuntimeError('FILE_TOO_LARGE', `文件超过 ${effectiveKind === 'text' ? '1MB' : '20MB'} 预览上限（实际 ${info.size} 字节），请在终端中查看或下载`, 415);

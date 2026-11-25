@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   filePreviewPath,
   formatLineRange,
+  isAudioFilePath,
   isImageFilePath,
   isSvgFilePath,
+  isVideoFilePath,
   localFileLink,
   parseFileLink,
   workspacePreviewPath
@@ -45,20 +47,27 @@ describe('workspace file links', () => {
     expect(formatLineRange(undefined)).toBeUndefined();
   });
 
-  it('recognizes image and SVG file paths', () => {
+  it('recognizes image, SVG, video and audio file paths', () => {
     expect(isImageFilePath('/tmp/demo.png')).toBe(true);
     expect(isImageFilePath('/tmp/diagram.svg')).toBe(true);
     expect(isSvgFilePath('/tmp/diagram.svg')).toBe(true);
     expect(isImageFilePath('/tmp/notes.md')).toBe(false);
+    expect(isVideoFilePath('/tmp/yibanlaishuo_ai_song.mp4')).toBe(true);
+    expect(isVideoFilePath('/tmp/clip.MOV')).toBe(true);
+    expect(isAudioFilePath('/tmp/audio.wav')).toBe(true);
+    expect(isAudioFilePath('/tmp/song.mp3')).toBe(true);
+    expect(isVideoFilePath('/tmp/notes.md')).toBe(false);
   });
 
-  it('leaves web links alone and rejects paths outside the workspace', () => {
+  it('leaves web links alone and supports absolute & ~/ preview paths', () => {
     expect(localFileLink('https://example.com/a.md')).toBeUndefined();
     expect(localFileLink('#section')).toBeUndefined();
     expect(workspacePreviewPath('/repository/a.md', '/repo')).toBeUndefined();
     expect(workspacePreviewPath('../secret', '/repo')).toBeUndefined();
+    expect(workspacePreviewPath('~/.agentdock/workspace/demo.mp4', '/repo')).toBeUndefined();
     expect(filePreviewPath('/Users/example/.codex/skills/example/SKILL.md', '/repo')).toBe('/Users/example/.codex/skills/example/SKILL.md');
     expect(filePreviewPath('file:///Users/example/.codex/skills/example/SKILL.md', '/repo')).toBe('/Users/example/.codex/skills/example/SKILL.md');
+    expect(filePreviewPath('~/.agentdock/workspace/ai-song-video/yibanlaishuo_ai_song.mp4', '/repo')).toBe('~/.agentdock/workspace/ai-song-video/yibanlaishuo_ai_song.mp4');
     expect(filePreviewPath('https://example.com/a.md', '/repo')).toBeUndefined();
     expect(filePreviewPath('../secret', '/repo')).toBeUndefined();
   });
