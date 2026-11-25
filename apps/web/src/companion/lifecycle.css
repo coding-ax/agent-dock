@@ -11,11 +11,13 @@
 }
 
 /* ---------- 阶段徽标（侧栏卡片、主会话标题栏） ---------- */
-.ui-stage-chip { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 500; line-height: 17px; background: rgb(244 244 245); color: rgb(113 113 122); }
+:where(.ui-stage-chip) { display: inline-flex; }
+.ui-stage-chip { align-items: center; gap: 3px; flex-shrink: 0; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 500; line-height: 17px; background: rgb(244 244 245); color: rgb(113 113 122); }
 .ui-stage-chip[data-stage="kitten"] { background: rgb(254 243 199 / .8); color: rgb(146 64 14); }
 .ui-stage-chip[data-stage="senior"] { background: rgb(224 231 255 / .8); color: rgb(67 56 202); }
 .ui-stage-chip[data-stage="elder"] { background: rgb(237 233 254); color: rgb(91 33 182); }
-.ui-handoff-flag { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 600; line-height: 17px; background: rgb(255 237 213); color: rgb(194 65 12); }
+:where(.ui-handoff-flag) { display: inline-flex; }
+.ui-handoff-flag { align-items: center; gap: 3px; flex-shrink: 0; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 600; line-height: 17px; background: rgb(255 237 213); color: rgb(194 65 12); }
 .ui-handoff-flag:hover { background: rgb(254 215 170); }
 .ui-handoff-flag[data-compact] { justify-content: center; width: 17px; height: 17px; padding: 0; }
 

@@ -454,7 +454,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     <section className="flex min-w-0 flex-1 flex-col">
       <header className="ui-session-topbar flex shrink-0 items-center gap-1 border-b border-zinc-200 bg-canvas px-3 sm:px-4">
         <span className="mr-1 md:hidden"><IconButton label="打开会话列表" onClick={onOpenSidebar}><Menu size={16}/></IconButton></span>
-        {isMain ? <CompanionHeader agentId={session.agentId} agentName={agent?.name}/> : <div className="min-w-0 flex-1">
+        {isMain ? <CompanionHeader agentId={session.agentId} agentName={agent?.name}/> : <div className="min-w-0 flex-1 overflow-hidden">
           <div className="truncate text-[14px] font-semibold text-zinc-900">{sessionLabel(session, agent?.name)}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500">
             <AgentIcon agentId={session.agentId} agentName={agent?.name} size={13}/>

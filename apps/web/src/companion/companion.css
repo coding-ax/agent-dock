@@ -293,7 +293,8 @@ html[data-theme="dark"] .ui-note-meta { color: rgb(var(--zinc-600)); }
 @keyframes ui-note-progress { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 /* 悬停露出的小工具条。 */
 .ui-note-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 0 8px 8px; }
-.ui-note-action { display: inline-flex; height: 26px; align-items: center; gap: 4px; padding: 0 8px; border-radius: 8px; font-size: 11.5px; font-weight: 500; color: rgb(var(--zinc-700)); transition: background-color .15s ease, color .15s ease, transform .25s var(--spring-bouncy); }
+:where(.ui-note-action) { display: inline-flex; }
+.ui-note-action { height: 26px; align-items: center; gap: 4px; padding: 0 8px; border-radius: 8px; font-size: 11.5px; font-weight: 500; color: rgb(var(--zinc-700)); transition: background-color .15s ease, color .15s ease, transform .25s var(--spring-bouncy); }
 html[data-theme="dark"] .ui-note-action { color: rgb(var(--zinc-800)); }
 .ui-note-action:hover { background: rgb(var(--paper-ink) / .1); color: rgb(var(--zinc-900)); }
 .ui-note-action:active { transform: scale(.94); }
@@ -376,7 +377,8 @@ html[data-theme="dark"] .ui-note-stamp { mix-blend-mode: normal; }
 .ui-collapse[data-collapsed] { grid-template-rows: 0fr; opacity: 0; transform: translateY(8px); pointer-events: none; }
 .ui-collapse > div { min-height: 0; overflow: hidden; }
 .ui-collapse:not([data-collapsed]) > div { overflow: visible; }
-.ui-status-chip { display: inline-flex; height: 26px; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: rgb(var(--zinc-100)); font-size: 12px; color: rgb(var(--zinc-600)); transition: background-color .15s ease, color .15s ease, transform .3s var(--spring-bouncy); }
+:where(.ui-status-chip) { display: inline-flex; }
+.ui-status-chip { height: 26px; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: rgb(var(--zinc-100)); font-size: 12px; color: rgb(var(--zinc-600)); transition: background-color .15s ease, color .15s ease, transform .3s var(--spring-bouncy); }
 .ui-status-chip:hover { background: rgb(var(--zinc-200)); color: rgb(var(--zinc-900)); }
 .ui-status-chip:active { transform: scale(.95); }
 .ui-status-chip .ui-note-swatch { width: 10px; height: 10px; border-radius: 3px; }

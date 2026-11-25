@@ -59,7 +59,7 @@ export function CompanionHeader({ agentId, agentName }: { agentId: string; agent
     <span ref={anchor} className="shrink-0">
       <Kitten variant="face" size={36} mood={info.mood} stage={info.stage} collar track celebrateKey={celebrateNonce} viewTransitionName={KITTEN_TRANSITION_NAME} label={`${info.name}：${info.status}`}/>
     </span>
-    <div className="min-w-0">
+    <div className="min-w-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 items-center gap-1.5">
         {editing
           ? <span className="flex items-center gap-1">
@@ -68,10 +68,10 @@ export function CompanionHeader({ agentId, agentName }: { agentId: string; agent
           </span>
           : <button type="button" onClick={() => { setDraft(info.name); setEditing(true); }} title="给它改个名字" className="ui-companion-head-name group/name flex min-w-0 items-center gap-1 text-[14px] font-semibold text-zinc-900">
             <span className="truncate">{rename.isPending ? rename.variables : info.name}</span>
-            <PencilLine size={12} className="shrink-0 text-zinc-400 opacity-0 transition-opacity group-hover/name:opacity-100"/>
+            <PencilLine size={12} className="shrink-0 text-zinc-400 opacity-0 transition-opacity group-hover/name:opacity-100 max-sm:hidden"/>
           </button>}
-        <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 text-[10.5px] font-medium leading-[17px] text-zinc-500">主会话</span>
-        <StageChip lifecycle={info.lifecycle}/>
+        <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 text-[10.5px] font-medium leading-[17px] text-zinc-500 max-sm:hidden">主会话</span>
+        <span className="inline-flex shrink-0 max-sm:hidden"><StageChip lifecycle={info.lifecycle}/></span>
         <HandoffFlag lifecycle={info.lifecycle} name={info.name}/>
       </div>
       <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500">
