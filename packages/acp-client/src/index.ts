@@ -179,11 +179,134 @@ export class AgentIdleTimeoutError extends Error {
   }
 }
 
+export interface NormalizedAcpxUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+}
+
+/**
+ * 规范化 acpx 单条 request_token_usage：
+ * OpenAI / Codex / Gemini 等主流实现经 ACP 上报时，output_tokens 已包含 thought_tokens
+ * （total_tokens === input + output + cache_read + cache_write）。
+ * 仅当上游明确把 thought_tokens 算在 output_tokens 之外（total_tokens 恰好多了 thought_tokens）时，
+ * 才合并为 outputTokens = out + thought，避免 TPS 分子重复计数或漏算。
+ */
+export function normalizeAcpxUsageEntry(entry: Record<string, unknown>): NormalizedAcpxUsage {
+  const toNonNeg = (value: unknown) => {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const inputTokens = toNonNeg(entry.input_tokens);
+  const rawOutput = toNonNeg(entry.output_tokens);
+  const cacheReadTokens = toNonNeg(entry.cache_read_input_tokens);
+  const cacheWriteTokens = toNonNeg(entry.cache_creation_input_tokens);
+  const thoughtTokens = toNonNeg(entry.thought_tokens);
+  const rawTotal = toNonNeg(entry.total_tokens);
+  const baseSum = inputTokens + rawOutput + cacheReadTokens + cacheWriteTokens;
+  const thoughtExcludedFromOutput = thoughtTokens > 0 && rawTotal > 0 && rawTotal === baseSum + thoughtTokens;
+  const outputTokens = thoughtExcludedFromOutput ? rawOutput + thoughtTokens : rawOutput;
+  const totalTokens = rawTotal > 0 ? rawTotal : inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+  return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, thoughtTokens, totalTokens };
+}
+
+/**
+ * 追踪单轮 LLM 有效生成耗时（generationMs = 整轮耗时 - TTFT - 工具执行等待 - 权限审批等待）。
+ *
+ * 与整轮汇总的 output_tokens 口径保持对等：
+ * - 首条 LLM 输出事件（text / thinking / 首个 tool_call）记为 TTFT 终点；
+ * - 工具执行期间（tool_call → tool_result）与等待用户权限审批期间暂停计时；
+ * - 所有工具完成返回 tool_result 后立即恢复计时，覆盖下一轮推理、隐藏思考以及生成下一个 tool_call 参数的完整耗时，
+ *   避免旧实现「只在 text/thinking 露头时计时」导致多工具轮次分母缩水、TPS 虚高 2x~8x。
+ */
+export class TurnTimingTracker {
+  private firstOutputAt?: number;
+  private llmActiveMs = 0;
+  private activeSegmentStart?: number;
+  private readonly activeToolCallIds = new Set<string>();
+  private readonly pendingPermissionIds = new Set<string>();
+
+  constructor(private readonly turnStartedAt: number) {}
+
+  get activeToolCount(): number {
+    return this.activeToolCallIds.size;
+  }
+
+  private closeSegment(at: number) {
+    if (this.activeSegmentStart !== undefined) {
+      this.llmActiveMs += Math.max(0, at - this.activeSegmentStart);
+      this.activeSegmentStart = undefined;
+    }
+  }
+
+  private startSegmentIfReady(at: number) {
+    if (this.activeSegmentStart !== undefined) return;
+    if (this.activeToolCallIds.size > 0 || this.pendingPermissionIds.size > 0) return;
+    this.activeSegmentStart = at;
+  }
+
+  onPermissionPending(id: string, at: number) {
+    this.pendingPermissionIds.add(id);
+    this.closeSegment(at);
+  }
+
+  onPermissionResolved(id: string, at: number) {
+    this.pendingPermissionIds.delete(id);
+    if (this.firstOutputAt !== undefined) this.startSegmentIfReady(at);
+  }
+
+  onEvent(event: NormalizedDriverEvent, at: number) {
+    const toolCallId = typeof event.data?.id === 'string' ? event.data.id : undefined;
+    if (event.type === 'permission_request') {
+      const status = event.data?.status;
+      if (toolCallId && (!status || status === 'pending')) this.onPermissionPending(toolCallId, at);
+      return;
+    }
+    if (event.type === 'tool_call') {
+      if (this.firstOutputAt === undefined) this.firstOutputAt = at;
+      this.closeSegment(at);
+      if (toolCallId) this.activeToolCallIds.add(toolCallId);
+      return;
+    }
+    if (event.type === 'tool_result') {
+      if (toolCallId) {
+        this.activeToolCallIds.delete(toolCallId);
+        this.pendingPermissionIds.delete(toolCallId);
+      } else {
+        this.activeToolCallIds.clear();
+      }
+      if (this.firstOutputAt !== undefined) this.startSegmentIfReady(at);
+      return;
+    }
+    if (event.type === 'text' || event.type === 'thinking') {
+      if (this.firstOutputAt === undefined) this.firstOutputAt = at;
+      // 收到新的正文/思考流说明模型已处于输出态；即便上游漏发了某个 tool_result 导致集合残留，也不应永久锁死计时。
+      if (this.pendingPermissionIds.size === 0 && this.activeSegmentStart === undefined) {
+        this.activeSegmentStart = at;
+      }
+    }
+  }
+
+  finish(streamEndedAt: number, finishedAt = streamEndedAt): { durationMs: number; generationMs?: number; ttftMs?: number } {
+    this.closeSegment(streamEndedAt);
+    const durationMs = Math.max(1, finishedAt - this.turnStartedAt);
+    return {
+      durationMs,
+      ...(this.llmActiveMs > 0 ? { generationMs: Math.min(durationMs, this.llmActiveMs) } : {}),
+      ...(this.firstOutputAt !== undefined ? { ttftMs: Math.max(0, this.firstOutputAt - this.turnStartedAt) } : {})
+    };
+  }
+}
+
 export class AcpxAdapter {
   private readonly runtime: AcpRuntime;
   private readonly sessionStore: AcpSessionStore;
   private handle?: AcpRuntimeHandle;
   private turn?: AcpRuntimeTurn;
+  private activeTiming?: TurnTimingTracker;
   private readonly pendingPermissions = new Map<string, (decision: AcpPermissionDecision) => void>();
   private readonly sessionKey: string;
   private reportedTitle?: string;
@@ -217,6 +340,7 @@ export class AcpxAdapter {
         if (this.permissionMode === 'full-trust') return { outcome: 'allow_once' };
         if (this.permissionMode === 'deny-all') return { outcome: 'reject_once' };
         if (this.permissionMode === 'approve-reads' && /read|search|fetch/i.test(String(request.inferredKind ?? ''))) return { outcome: 'allow_once' };
+        this.activeTiming?.onPermissionPending(id, Date.now());
         this.options.onEvent({ type: 'permission_request', data: { id, toolCallId: raw.toolCall?.toolCallId, title: raw.toolCall?.title ?? 'Permission required', options: raw.options ?? [], status: 'pending' } });
         return new Promise<AcpPermissionDecision>(resolve => this.pendingPermissions.set(id, resolve));
       }
@@ -379,21 +503,16 @@ export class AcpxAdapter {
     for (const key of newKeys) {
       const entry = reqMap[key];
       if (!entry || typeof entry !== 'object') continue;
-      const inp = Number(entry.input_tokens ?? 0);
-      const out = Number(entry.output_tokens ?? 0);
-      const cRead = Number(entry.cache_read_input_tokens ?? 0);
-      const cWrite = Number(entry.cache_creation_input_tokens ?? 0);
-      const thought = Number(entry.thought_tokens ?? 0);
-      const total = Number(entry.total_tokens ?? (inp + out + cRead + cWrite + thought));
-      if (Number.isFinite(inp) && inp > 0) inputTokens += inp;
-      if (Number.isFinite(out) && out > 0) outputTokens += out;
-      if (Number.isFinite(cRead) && cRead > 0) cacheReadTokens += cRead;
-      if (Number.isFinite(cWrite) && cWrite > 0) cacheWriteTokens += cWrite;
-      if (Number.isFinite(thought) && thought > 0) thoughtTokens += thought;
-      if (Number.isFinite(total) && total > 0) totalTokens += total;
+      const normalized = normalizeAcpxUsageEntry(entry);
+      inputTokens += normalized.inputTokens;
+      outputTokens += normalized.outputTokens;
+      cacheReadTokens += normalized.cacheReadTokens;
+      cacheWriteTokens += normalized.cacheWriteTokens;
+      thoughtTokens += normalized.thoughtTokens;
+      totalTokens += normalized.totalTokens;
     }
     if (totalTokens <= 0 && inputTokens <= 0 && outputTokens <= 0) return;
-    if (totalTokens <= 0) totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens + thoughtTokens;
+    if (totalTokens <= 0) totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
 
     const afterCost = typeof record?.cumulative_cost?.amount === 'number' && Number.isFinite(record.cumulative_cost.amount)
       ? record.cumulative_cost.amount
@@ -428,16 +547,8 @@ export class AcpxAdapter {
     const prevCostUsd = typeof beforeRecord?.cumulative_cost?.amount === 'number' && Number.isFinite(beforeRecord.cumulative_cost.amount)
       ? beforeRecord.cumulative_cost.amount
       : 0;
-    const turnStartedAt = Date.now();
-    let firstOutputAt: number | undefined;
-    let activeOutputMs = 0;
-    let outputSegmentStart: number | undefined;
-    const closeOutputSegment = (at: number) => {
-      if (outputSegmentStart !== undefined) {
-        activeOutputMs += Math.max(0, at - outputSegmentStart);
-        outputSegmentStart = undefined;
-      }
-    };
+    const timing = new TurnTimingTracker(Date.now());
+    this.activeTiming = timing;
     // ACPX 的 timeoutMs 是整轮墙钟超时，流式事件和工具调用都不会续期。
     // 禁用它，在 AgentDock 边界按每个 ACP 事件重置“无活动”计时，避免正常长任务被固定时长误杀。
     // 工具调用执行期间 Agent 处于等待工具结果的状态，不属于“无活动”，因此用更长的一档。
@@ -446,13 +557,10 @@ export class AcpxAdapter {
     this.turn = turn;
     try {
       const iterator = turn.events[Symbol.asyncIterator]();
-      // 按 toolCallId 去重跟踪未完成的工具调用：tool_call_update 会对同一调用重复推送，
-      // 用计数器会漂移（多次 +1、一次 -1），导致空闲超时被永久钉在 30 分钟档。
-      const activeToolCallIds = new Set<string>();
       while (true) {
         let timer: NodeJS.Timeout | undefined;
         // 有未完成工具调用时使用更长超时；否则使用正常空闲超时。
-        const effectiveTimeout = activeToolCallIds.size > 0 ? toolCallTimeoutMs : idleTimeoutMs;
+        const effectiveTimeout = timing.activeToolCount > 0 ? toolCallTimeoutMs : idleTimeoutMs;
         const idle = new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => reject(new AgentIdleTimeoutError(effectiveTimeout)), effectiveTimeout);
         });
@@ -470,36 +578,21 @@ export class AcpxAdapter {
         if (next.done) break;
         const normalized = normalizeAcpxEvent(next.value);
         if (normalized) {
-          const eventAt = Date.now();
-          // 按 toolCallId 维护未完成工具调用集合，用于决定空闲超时策略与扣除工具等待耗时。
-          const toolCallId = typeof normalized.data?.id === 'string' ? normalized.data.id : undefined;
-          if (normalized.type === 'tool_call') {
-            if (activeToolCallIds.size === 0) closeOutputSegment(eventAt);
-            if (toolCallId) activeToolCallIds.add(toolCallId);
-          } else if (normalized.type === 'tool_result') {
-            if (toolCallId) activeToolCallIds.delete(toolCallId); else activeToolCallIds.clear();
-          } else if ((normalized.type === 'text' || normalized.type === 'thinking') && activeToolCallIds.size === 0) {
-            if (firstOutputAt === undefined) firstOutputAt = eventAt;
-            if (outputSegmentStart === undefined) outputSegmentStart = eventAt;
-          }
+          timing.onEvent(normalized, Date.now());
           this.options.onEvent(normalized);
         }
       }
       const streamEndedAt = Date.now();
-      closeOutputSegment(streamEndedAt);
       const result = await turn.result;
       if (result.status === 'failed') throw new Error(result.error.message);
       const finishedAt = Date.now();
       // 先报标题与本轮真实消耗，再报 completed：确保轮次收尾前库里已有最新元数据与统计。
       await this.reportAgentTitle();
-      await this.reportTurnUsage(prevUsageKeys, prevCostUsd, requestId, {
-        durationMs: Math.max(1, finishedAt - turnStartedAt),
-        ...(activeOutputMs > 0 ? { generationMs: activeOutputMs } : {}),
-        ...(firstOutputAt !== undefined ? { ttftMs: Math.max(0, firstOutputAt - turnStartedAt) } : {})
-      });
+      await this.reportTurnUsage(prevUsageKeys, prevCostUsd, requestId, timing.finish(streamEndedAt, finishedAt));
       this.options.onEvent({ type: 'completed', data: { stopReason: result.stopReason ?? result.status } });
     } finally {
       if (this.turn === turn) this.turn = undefined;
+      if (this.activeTiming === timing) this.activeTiming = undefined;
     }
   }
   async send(prompt: string) {
@@ -530,7 +623,7 @@ export class AcpxAdapter {
     if (handle) await this.runtime.close({ handle, reason: 'AgentDock stop' });
     if (options.discardSession) await this.resetPersistentState();
   }
-  async resolvePermission(id: string, approved: boolean) { const resolve = this.pendingPermissions.get(id); if (!resolve) return false; this.pendingPermissions.delete(id); resolve({ outcome: approved ? 'allow_once' : 'reject_once' }); return true; }
+  async resolvePermission(id: string, approved: boolean) { const resolve = this.pendingPermissions.get(id); if (!resolve) return false; this.pendingPermissions.delete(id); this.activeTiming?.onPermissionResolved(id, Date.now()); resolve({ outcome: approved ? 'allow_once' : 'reject_once' }); return true; }
   async setModel(model: string) {
     if (!this.handle) await this.start();
     const status = await this.runtime.getStatus?.({ handle: this.handle! });

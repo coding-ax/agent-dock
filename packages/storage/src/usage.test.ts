@@ -44,12 +44,14 @@ describe('turn_usage 统计仓储', () => {
       expect(detail.totals.cacheReadTokens).toBe(1500);
       expect(detail.totals.costUsd).toBeCloseTo(0.02, 6);
       expect(detail.totals.turnCount).toBe(2);
-      // (200+100 + 400+0) / (9000ms / 1000) = 700 / 9 = 77.8
-      expect(detail.totals.avgTps).toBe(77.8);
+      // outputTokens 已包含 thoughtTokens（ACP / OpenAI / Gemini 规范），不再重复相加：
+      // (200 + 400) / (9000ms / 1000) = 600 / 9 = 66.7
+      expect(detail.totals.avgTps).toBe(66.7);
       // 最近一轮：400 / 4s = 100
       expect(detail.totals.lastTps).toBe(100);
       expect(detail.turns).toHaveLength(2);
-      expect(detail.turns[0]!.tps).toBe(60);
+      // 第一轮：200 / 5s = 40（不把 thoughtTokens=100 再加一次）
+      expect(detail.turns[0]!.tps).toBe(40);
       expect(detail.turns[1]!.tps).toBe(100);
     } finally {
       repos.close();
@@ -109,8 +111,9 @@ describe('turn_usage 统计仓储', () => {
       const byModel = await repos.usage.breakdown('model');
       expect(byModel.items.map(i => i.key)).toEqual(['gemini-4-neon', 'claude-opus']);
 
-      expect(computeTps(0, 0, 1000)).toBeNull();
-      expect(computeTps(100, 50, 0)).toBeNull();
+      expect(computeTps(0, 1000)).toBeNull();
+      expect(computeTps(100, 0)).toBeNull();
+      expect(computeTps(769, 6049)).toBe(127.1);
     } finally {
       repos.close();
     }

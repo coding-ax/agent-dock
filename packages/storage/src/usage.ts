@@ -33,9 +33,9 @@ export function normalizeUsageDateBound(raw: string | undefined, endOfDay: boole
   return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 }
 
-export function computeTps(outputTokens: number, thoughtTokens: number, generationMs: number | null | undefined): number | null {
+export function computeTps(outputTokens: number, generationMs: number | null | undefined): number | null {
   if (!generationMs || !Number.isFinite(generationMs) || generationMs <= 0) return null;
-  const generated = Math.max(0, outputTokens) + Math.max(0, thoughtTokens);
+  const generated = Math.max(0, outputTokens);
   if (generated <= 0) return null;
   return Math.round((generated / (generationMs / 1000)) * 10) / 10;
 }
@@ -53,7 +53,6 @@ type AggRow = {
   total_generation_ms: number | null;
   total_duration_ms: number | null;
   gen_output_tokens: number | null;
-  gen_thought_tokens: number | null;
 };
 
 function rowToTotals(row: AggRow | undefined): UsageTotals {
@@ -68,7 +67,7 @@ function rowToTotals(row: AggRow | undefined): UsageTotals {
   const sessionCount = Number(row?.session_count ?? 0);
   const totalGenerationMs = Number(row?.total_generation_ms ?? 0);
   const totalDurationMs = Number(row?.total_duration_ms ?? 0);
-  const avgTps = computeTps(Number(row?.gen_output_tokens ?? 0), Number(row?.gen_thought_tokens ?? 0), totalGenerationMs);
+  const avgTps = computeTps(Number(row?.gen_output_tokens ?? 0), totalGenerationMs);
   return {
     inputTokens,
     outputTokens,
@@ -97,8 +96,7 @@ const AGG_COLUMNS = `
   COUNT(DISTINCT u.session_id) AS session_count,
   COALESCE(SUM(CASE WHEN u.generation_ms > 0 THEN u.generation_ms ELSE 0 END), 0) AS total_generation_ms,
   COALESCE(SUM(CASE WHEN u.duration_ms > 0 THEN u.duration_ms ELSE 0 END), 0) AS total_duration_ms,
-  COALESCE(SUM(CASE WHEN u.generation_ms > 0 THEN u.output_tokens ELSE 0 END), 0) AS gen_output_tokens,
-  COALESCE(SUM(CASE WHEN u.generation_ms > 0 THEN u.thought_tokens ELSE 0 END), 0) AS gen_thought_tokens
+  COALESCE(SUM(CASE WHEN u.generation_ms > 0 THEN u.output_tokens ELSE 0 END), 0) AS gen_output_tokens
 `;
 
 function buildFilterWhere(filter: UsageQueryFilter | undefined) {
@@ -240,7 +238,7 @@ export function createUsageRepository(sqlite: Database.Database): UsageRepositor
         durationMs: row.duration_ms,
         generationMs: row.generation_ms,
         ttftMs: row.ttft_ms,
-        tps: computeTps(row.output_tokens, row.thought_tokens, row.generation_ms),
+        tps: computeTps(row.output_tokens, row.generation_ms),
         createdAt: row.created_at
       }));
 

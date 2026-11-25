@@ -213,7 +213,7 @@ export function UsageDashboardDialog({
                 {formatTps(totals?.avgTps)}
               </div>
               <div className="mt-1.5 text-[11px] text-zinc-500">
-                扣除工具等待后的纯生成速率
+                扣除工具与审批等待后的有效输出速率
               </div>
             </div>
 

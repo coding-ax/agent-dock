@@ -429,7 +429,7 @@ export interface UsageTotals {
   sessionCount: number;
   totalGenerationMs: number;
   totalDurationMs: number;
-  /** 平均生成速度：(outputTokens + thoughtTokens) / (generationMs / 1000)；无有效生成耗时为 null。 */
+  /** 平均生成速度：outputTokens / (generationMs / 1000)（outputTokens 已含思考 token）；无有效生成耗时为 null。 */
   avgTps: number | null;
   /** 最近一轮生成速度；仅会话级统计返回。 */
   lastTps?: number | null;

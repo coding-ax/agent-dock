@@ -34,8 +34,10 @@ const toNonNegInt = (value: unknown): number => {
  * 写入走 (session_id, request_id) 唯一索引幂等去重，不会与实时采集重复记账；
  * 并按文件 mtime 做内存缓存，避免频繁请求看板时重复读盘。
  */
-export function createUsageBackfiller(target: UsageBackfillTarget) {
+export function createUsageBackfiller(target: UsageBackfillTarget, options: { minIntervalMs?: number } = {}) {
   const scannedMtime = new Map<string, number>();
+  const minIntervalMs = Math.max(0, options.minIntervalMs ?? 60_000);
+  let lastSyncedAt = 0;
   let inFlight: Promise<number> | undefined;
 
   async function runOnce(): Promise<number> {
@@ -68,12 +70,14 @@ export function createUsageBackfiller(target: UsageBackfillTarget) {
       const entries = Object.entries(reqMap)
         .map(([requestId, raw]) => {
           const inputTokens = toNonNegInt(raw?.input_tokens);
-          const outputTokens = toNonNegInt(raw?.output_tokens);
+          const rawOutput = toNonNegInt(raw?.output_tokens);
           const cacheReadTokens = toNonNegInt(raw?.cache_read_input_tokens);
           const cacheWriteTokens = toNonNegInt(raw?.cache_creation_input_tokens);
           const thoughtTokens = toNonNegInt(raw?.thought_tokens);
           const rawTotal = toNonNegInt(raw?.total_tokens);
-          const totalTokens = rawTotal > 0 ? rawTotal : inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens + thoughtTokens;
+          const baseSum = inputTokens + rawOutput + cacheReadTokens + cacheWriteTokens;
+          const outputTokens = thoughtTokens > 0 && rawTotal > 0 && rawTotal === baseSum + thoughtTokens ? rawOutput + thoughtTokens : rawOutput;
+          const totalTokens = rawTotal > 0 ? rawTotal : inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
           return { requestId, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, thoughtTokens, totalTokens };
         })
         .filter(item => item.totalTokens > 0 || item.inputTokens > 0 || item.outputTokens > 0);
@@ -119,9 +123,14 @@ export function createUsageBackfiller(target: UsageBackfillTarget) {
   }
 
   return {
-    async sync(): Promise<number> {
+    async sync(force = false): Promise<number> {
+      const nowMs = Date.now();
+      if (!force && lastSyncedAt > 0 && nowMs - lastSyncedAt < minIntervalMs) return 0;
       if (!inFlight) {
-        inFlight = runOnce().finally(() => { inFlight = undefined; });
+        inFlight = runOnce().finally(() => {
+          lastSyncedAt = Date.now();
+          inFlight = undefined;
+        });
       }
       return inFlight;
     }

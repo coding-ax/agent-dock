@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRuntimeStore } from 'acpx/runtime';
-import { AcpxAdapter, buildAcpxSessionOptions, normalizeAcpxEvent, renderAgentCommand, resolveTurnTimeouts } from './index.js';
+import { AcpxAdapter, TurnTimingTracker, buildAcpxSessionOptions, normalizeAcpxEvent, normalizeAcpxUsageEntry, renderAgentCommand, resolveTurnTimeouts } from './index.js';
 
 const dirs: string[] = [];
 afterEach(async () => Promise.all(dirs.splice(0).map(path => rm(path, { recursive: true, force: true }))));
@@ -406,5 +406,67 @@ describe('会话名采集', () => {
     await adapter.send('随便聊聊');
     expect(titles()).toEqual([]);
     await adapter.stop();
+  });
+});
+
+describe('TPS 计时与用量归一化', () => {
+  it('output_tokens 已包含 thought_tokens 时不重复叠加（OpenAI / Gemini / Codex 标准）', () => {
+    const normalized = normalizeAcpxUsageEntry({
+      input_tokens: 2633,
+      output_tokens: 533,
+      cache_read_input_tokens: 310451,
+      cache_creation_input_tokens: 0,
+      thought_tokens: 267,
+      total_tokens: 313617
+    });
+    expect(normalized.outputTokens).toBe(533);
+    expect(normalized.thoughtTokens).toBe(267);
+    expect(normalized.totalTokens).toBe(313617);
+  });
+
+  it('上游明确把 thought_tokens 算在 output_tokens 之外时自动合并', () => {
+    const normalized = normalizeAcpxUsageEntry({
+      input_tokens: 1000,
+      output_tokens: 200,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      thought_tokens: 150,
+      total_tokens: 1350
+    });
+    expect(normalized.outputTokens).toBe(350);
+    expect(normalized.totalTokens).toBe(1350);
+  });
+
+  it('TurnTimingTracker 扣除工具执行与权限等待，但完整保留多步工具参数生成耗时', () => {
+    const tracker = new TurnTimingTracker(1000);
+    // 1000 -> 2000: TTFT (1000ms)
+    tracker.onEvent({ type: 'thinking', data: { text: '分析中' } }, 2000);
+    // 2000 -> 4000: LLM 思考与生成第一个 tool_call (2000ms)
+    tracker.onEvent({ type: 'tool_call', data: { id: 'tc1', status: 'running' } }, 4000);
+    // 4000 -> 9000: 本地工具执行 5000ms（应扣除）
+    tracker.onEvent({ type: 'tool_result', data: { id: 'tc1', status: 'completed' } }, 9000);
+    // 9000 -> 13000: 无 text/thinking，直接隐藏思考并生成第二个 tool_call 参数 (4000ms，必须计入！)
+    tracker.onEvent({ type: 'tool_call', data: { id: 'tc2', status: 'running' } }, 13000);
+    // 13000 -> 15000: 等待用户权限审批 2000ms + 工具执行至 16000ms（均应扣除）
+    tracker.onPermissionPending('tc2', 13000);
+    tracker.onPermissionResolved('tc2', 15000);
+    tracker.onEvent({ type: 'tool_result', data: { id: 'tc2', status: 'completed' } }, 16000);
+    // 16000 -> 18500: 生成最终回复 (2500ms)
+    tracker.onEvent({ type: 'text', data: { text: '完成' } }, 17000);
+    const result = tracker.finish(18500, 18500);
+    expect(result.ttftMs).toBe(1000);
+    expect(result.durationMs).toBe(17500);
+    // 有效生成耗时 = 2000 + 4000 + 2500 = 8500ms
+    expect(result.generationMs).toBe(8500);
+  });
+
+  it('上游漏发 tool_result 时，后续新 text/thinking 能自愈恢复计时而不锁死', () => {
+    const tracker = new TurnTimingTracker(0);
+    tracker.onEvent({ type: 'tool_call', data: { id: 'orphan', status: 'running' } }, 1000);
+    // orphan 从未收到 tool_result，但模型在 3000ms 开始输出正文，持续到 5000ms
+    tracker.onEvent({ type: 'text', data: { text: '答案' } }, 3000);
+    const result = tracker.finish(5000, 5000);
+    expect(result.ttftMs).toBe(1000);
+    expect(result.generationMs).toBe(2000);
   });
 });
