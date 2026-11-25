@@ -748,7 +748,15 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     }
     const filePath = join(globalUploadRoot, session.id, filename);
     const ext = extname(filename).toLowerCase();
-    const data = await readFile(filePath);
+    let data: Buffer;
+    try {
+      data = await readFile(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        throw new RuntimeError('UPLOAD_NOT_FOUND', 'Upload not found', 404);
+      }
+      throw error;
+    }
     reply.header('Content-Type', contentTypes[ext] ?? 'application/octet-stream');
     reply.header('Cache-Control', 'public, max-age=31536000, immutable');
     // 上传内容来自外部（用户粘贴/拖拽的任意文件），不能让浏览器直接执行：

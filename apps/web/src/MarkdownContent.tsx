@@ -4,7 +4,7 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markd
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { rehypeTextUnits } from './rehype-text-units';
-import { Check, Copy, FileText } from 'lucide-react';
+import { Check, Copy, FileText, ImageOff } from 'lucide-react';
 import { Highlight, Prism, themes } from 'prism-react-renderer';
 import { formatLineRange, isImageFilePath, localFileLink, parseFileLink } from './file-preview-link';
 import { useDockStore } from './store';
@@ -32,9 +32,12 @@ export function resolveImageSrc(src: string, sessionId: string | undefined): str
   if (!sessionId) return src;
   const filePath = localFileLink(src);
   if (!filePath || !isImageFilePath(filePath)) return src;
-  if (filePath.includes('.agentdock/uploads')) {
-    const filename = filePath.split(/[/\\]/).pop();
-    if (filename) return `/api/sessions/${sessionId}/uploads/${filename}`;
+  const uploadMatch = /(?:^|[/\\])\.agentdock[/\\]uploads[/\\]([^/\\]+)[/\\]([^/\\]+)$/.exec(filePath);
+  if (uploadMatch) {
+    // 跨会话引用（例如侧边会话引用主会话上传的截图）时，必须使用路径里实际的 uploadSessionId，
+    // 否则请求落到当前 sessionId 的上传目录下会 404，导致缩略图裂开。
+    const [, uploadSessionId, filename] = uploadMatch;
+    return `/api/sessions/${encodeURIComponent(uploadSessionId!)}/uploads/${encodeURIComponent(filename!)}`;
   }
   return `/api/sessions/${sessionId}/fs/read?path=${encodeURIComponent(filePath)}`;
 }
@@ -227,33 +230,46 @@ function LinkedImageThumbnails({ images }: { images: LinkedImageItem[] }) {
   const [expanded, setExpanded] = useState(false);
   const [opened, setOpened] = useState(false);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [failedSrcs, setFailedSrcs] = useState<Record<string, true>>({});
   const visible = expanded ? images : images.slice(0, MAX_AUTO_IMAGE_THUMBNAILS);
   const hiddenCount = images.length - visible.length;
   const slides = useMemo(() => images.map(item => ({ src: item.src, alt: item.alt })), [images]);
 
   return (
     <div className="mt-2.5 flex flex-wrap items-stretch gap-2" data-testid="linked-image-thumbnails">
-      {visible.map((item, idx) => (
-        <button
-          key={item.src}
-          type="button"
-          onClick={() => { setOpened(true); setActiveIndex(idx); }}
-          title={item.filePath}
-          className="group flex w-[132px] flex-col overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50/70 text-left transition-all hover:border-zinc-300 hover:shadow-sm"
-        >
-          <div className="flex h-[78px] w-full items-center justify-center overflow-hidden bg-white/80 p-1">
-            <img
-              src={item.src}
-              alt={item.alt}
-              loading="lazy"
-              className="max-h-full max-w-full cursor-zoom-in object-contain transition-transform duration-150 group-hover:scale-[1.03]"
-            />
-          </div>
-          <span className="truncate border-t border-zinc-100 px-2 py-1 font-mono text-[11px] text-zinc-500 group-hover:text-zinc-800">
-            {item.alt}
-          </span>
-        </button>
-      ))}
+      {visible.map((item, idx) => {
+        const failed = Boolean(failedSrcs[item.src]);
+        return (
+          <button
+            key={item.src}
+            type="button"
+            disabled={failed}
+            onClick={() => { setOpened(true); setActiveIndex(idx); }}
+            title={item.filePath}
+            className={`group flex w-[132px] flex-col overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50/70 text-left transition-all ${failed ? 'cursor-default opacity-80' : 'hover:border-zinc-300 hover:shadow-sm'}`}
+          >
+            <div className="flex h-[78px] w-full items-center justify-center overflow-hidden bg-white/80 p-1">
+              {failed ? (
+                <div className="flex flex-col items-center justify-center gap-1 text-zinc-400">
+                  <ImageOff size={18} className="text-zinc-300" />
+                  <span className="text-[11px]">图片无法加载</span>
+                </div>
+              ) : (
+                <img
+                  src={item.src}
+                  alt={item.alt}
+                  loading="lazy"
+                  onError={() => setFailedSrcs(prev => prev[item.src] ? prev : { ...prev, [item.src]: true })}
+                  className="max-h-full max-w-full cursor-zoom-in object-contain transition-transform duration-150 group-hover:scale-[1.03]"
+                />
+              )}
+            </div>
+            <span className="truncate border-t border-zinc-100 px-2 py-1 font-mono text-[11px] text-zinc-500 group-hover:text-zinc-800">
+              {item.alt}
+            </span>
+          </button>
+        );
+      })}
       {hiddenCount > 0 && (
         <button
           type="button"

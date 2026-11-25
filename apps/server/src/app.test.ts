@@ -732,6 +732,15 @@ describe('HTTP API boundary', () => {
       expect(response.statusCode).toBe(400);
       expect(response.json().error).toMatchObject({ code: 'INVALID_UPLOAD', message: expect.stringContaining('空') });
     });
+
+    it('returns 404 instead of 500 when fetching a missing upload file', async () => {
+      const app = await buildApp(uploadRuntime()); apps.push(app);
+      const response = await app.inject({
+        method: 'GET', url: '/api/sessions/ses_missing_file/uploads/does-not-exist.png'
+      });
+      expect(response.statusCode).toBe(404);
+      expect(response.json().error).toMatchObject({ code: 'UPLOAD_NOT_FOUND' });
+    });
   });
 
 });

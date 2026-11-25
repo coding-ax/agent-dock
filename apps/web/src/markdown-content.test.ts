@@ -95,9 +95,30 @@ describe('workspace file preview links', () => {
 
   it('resolves workspace, artifact, and uploads image sources', () => {
     expect(resolveImageSrc('/Users/me/.agentdock/uploads/ses_1/shot.png', 'ses_1')).toBe('/api/sessions/ses_1/uploads/shot.png');
+    // 跨会话引用（例如侧边会话引用主会话上传的截图）必须保留路径中的原始 uploadSessionId，而非误用当前 sessionId。
+    expect(resolveImageSrc('/Users/me/.agentdock/uploads/ses_main/1795626341008-9716ec55483c.png', 'ses_side'))
+      .toBe('/api/sessions/ses_main/uploads/1795626341008-9716ec55483c.png');
+    expect(resolveImageSrc('file:///Users/me/.agentdock/uploads/ses_main/1795626341008-9716ec55483c.png', 'ses_side'))
+      .toBe('/api/sessions/ses_main/uploads/1795626341008-9716ec55483c.png');
+    expect(resolveImageSrc('/Users/me/.agentdock/uploads/ses_main/sub/nested.png', 'ses_side'))
+      .toBe('/api/sessions/ses_side/fs/read?path=%2FUsers%2Fme%2F.agentdock%2Fuploads%2Fses_main%2Fsub%2Fnested.png');
     expect(resolveImageSrc('file:///Users/me/.gemini/brain/chart.svg', 'ses_1')).toBe('/api/sessions/ses_1/fs/read?path=%2FUsers%2Fme%2F.gemini%2Fbrain%2Fchart.svg');
     expect(resolveImageSrc('./assets/pic.png', 'ses_1')).toBe('/api/sessions/ses_1/fs/read?path=.%2Fassets%2Fpic.png');
     expect(resolveImageSrc('https://example.com/a.png', 'ses_1')).toBe('https://example.com/a.png');
+  });
+
+  it('resolves cross-session upload links in linked image thumbnails to the source session', () => {
+    const md = '已通过 `read_file` 读取 [1795626341008-9716ec55483c.png](file:///Users/me/.agentdock/uploads/ses_main/1795626341008-9716ec55483c.png)';
+    const items = extractLinkedImages(md, 'ses_side');
+    expect(items).toEqual([
+      {
+        src: '/api/sessions/ses_main/uploads/1795626341008-9716ec55483c.png',
+        alt: '1795626341008-9716ec55483c.png',
+        filePath: '/Users/me/.agentdock/uploads/ses_main/1795626341008-9716ec55483c.png'
+      }
+    ]);
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_side', children: md }));
+    expect(html).toContain('src="/api/sessions/ses_main/uploads/1795626341008-9716ec55483c.png"');
   });
 
   it('extracts linked local images/SVGs and caps auto thumbnails at 4 with expand button', () => {
