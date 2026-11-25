@@ -5,7 +5,7 @@ import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type DockEvent, type Session, type Task } from './api';
 import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, EMOJI_TRIGGER_ORIGIN, groupTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, turnTimeBadge, waitingQueuedTasks, type OptimisticMessage } from './timeline';
-import { ActivityPanel, TimelineItem } from './TimelineItems';
+import { ActivityPanel, SystemPromptBubble, TimelineItem } from './TimelineItems';
 import { TimelineTurn } from './SendTimeHint';
 import { Composer } from './Composer';
 import type { ComposerEditorHandle } from './ComposerEditor';
@@ -208,6 +208,11 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const activeSchedules = schedules.data?.filter(item => item.enabled).length ?? 0;
   const timeline = useMemo(() => buildTimeline(events.data, tasks.data, optimisticMessages), [events.data, tasks.data, optimisticMessages]); const timelineSections = useMemo(() => buildTimelineSections(timeline, tasks.data), [timeline, tasks.data]);
   const timelineTurns = useMemo(() => groupTimelineSections(timelineSections), [timelineSections]);
+  const sentPromptByTaskId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const task of tasks.data ?? []) if (task.sentPrompt) map.set(task.id, task.sentPrompt);
+    return map;
+  }, [tasks.data]);
   const rowKeys = useMemo(() => optimisticRowKeys(optimisticMessages), [optimisticMessages]);
   let latestUserIndex = -1;
   for (let index = timeline.length - 1; index >= 0; index--) if (timeline[index].type === 'text' && timeline[index].data.role === 'user') { latestUserIndex = index; break; }
@@ -486,11 +491,11 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
       <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
-        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{timelineTurns.map(turn => {
+        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{session.systemPrompt?.trim() && <SystemPromptBubble prompt={session.systemPrompt.trim()}/>}{timelineTurns.map(turn => {
           const time = turnTimeBadge(turn);
           return <TimelineTurn key={turn.turnId} turnId={turn.turnId} time={time}>
             {turn.sections.map(section => section.kind === 'event'
-              ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} final={section.final} streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/>
+              ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} sentPrompt={typeof section.event.data.taskId === 'string' ? sentPromptByTaskId.get(section.event.data.taskId) : undefined} final={section.final} streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/>
               : <ActivityPanel key={section.id} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}
           </TimelineTurn>;
         })}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}

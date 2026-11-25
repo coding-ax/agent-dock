@@ -4,6 +4,7 @@ import { noteTilt, noteTone, parseSupervisionDetail, supervisionChipTone, superv
 import { supervisionSystemRoundCopy } from './supervision-notice-copy';
 import { useCompanion } from './useCompanion';
 import { useCompanionStore } from './companion-store';
+import { Disclosure } from '../Disclosure';
 
 /**
  * daemon 注入主会话的督办信号。以前是一行灰色 details，现在把每条信号画成一张迷你便签：
@@ -53,6 +54,8 @@ export function SupervisionNotice({ text, detail, timestamp }: { text?: string; 
     {detail && <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} className="mt-2 inline-flex items-center gap-1 text-[11.5px] text-zinc-400 transition-colors hover:text-zinc-700">
       {open ? '收起全文' : '查看全文'}<ChevronDown size={11} className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`}/>
     </button>}
-    {open && <pre className="ui-disclosure-body mt-1.5 max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-sans text-[12px] leading-5 text-zinc-500">{detail}</pre>}
+    {detail && <Disclosure open={open}>
+      <pre className="mt-1.5 max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-sans text-[12px] leading-5 text-zinc-500">{detail}</pre>
+    </Disclosure>}
   </div>;
 }

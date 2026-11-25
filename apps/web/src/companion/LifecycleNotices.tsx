@@ -4,6 +4,7 @@ import { Brush, ChevronDown, Eye, LoaderCircle, PawPrint, RotateCcw } from 'luci
 import { api, type MaintenanceRun } from '../api';
 import { systemRoundCopy, type SystemRoundOrigin } from './lifecycle-model';
 import { useCompanionNav, useLifecycleOverview } from './useCompanion';
+import { Disclosure } from '../Disclosure';
 
 const runStateText: Record<MaintenanceRun['state'], string> = { running: '正在整理', completed: '整理完了', failed: '整理失败', interrupted: '被打断了' };
 
@@ -31,7 +32,9 @@ export function SystemRoundNotice({ origin, text, detail, timestamp, taskId, ses
     {detail && <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} className="mt-2 inline-flex items-center gap-1 text-[11.5px] text-zinc-400 transition-colors hover:text-zinc-700">
       {open ? '收起完整指令' : '查看完整指令'}<ChevronDown size={11} className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`}/>
     </button>}
-    {open && <pre className="ui-disclosure-body mt-1.5 max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-sans text-[12px] leading-5 text-zinc-500">{detail}</pre>}
+    {detail && <Disclosure open={open}>
+      <pre className="mt-1.5 max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-sans text-[12px] leading-5 text-zinc-500">{detail}</pre>
+    </Disclosure>}
   </div>;
 }
 

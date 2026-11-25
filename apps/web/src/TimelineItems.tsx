@@ -1,7 +1,8 @@
-import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Database, FilePenLine, FlaskConical, GitBranch, Globe2, MessageSquare, Search, Square, StickyNote, Terminal, Users, Wrench } from 'lucide-react';
+import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Database, FilePenLine, FlaskConical, GitBranch, Globe2, MessageSquare, Search, Sparkles, Square, StickyNote, Terminal, Users, Wrench } from 'lucide-react';
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Spinner } from './Loaders';
 import { buildActivitySteps, thinkingTitle, EMOJI_TRIGGER_ORIGIN, eventRenderSignature, groupRenderSignature, type ActivityStep, type TimelineActivityGroup, type TimelineEvent } from './timeline';
+import { extractBubbleInjection, type BubbleInjection } from './bubble-injection';
 import { MarkdownContent } from './MarkdownContent';
 import { AssistantMarkdown, ThinkingMarkdown } from './TypewriterText';
 import { elapsedMilliseconds, formatElapsed, summarizeTools, toolActionLabel, toolPresentation, type ToolKind } from './tool-presentation';
@@ -10,6 +11,7 @@ import { SupervisionNotice } from './companion/SupervisionNotice';
 import { SystemRoundNotice } from './companion/LifecycleNotices';
 import { isSystemRoundOrigin } from './companion/lifecycle-model';
 import { UserMessageTime } from './SendTimeHint';
+import { Disclosure } from './Disclosure';
 
 /**
  * 时间线的渲染单元。原先这些组件都藏在 SessionPane 内部，只有它能用；「实际请求」轨迹面板
@@ -32,16 +34,6 @@ function ToolKindIcon({ kind, size = 16 }: { kind: ToolKind; size?: number }) {
 }
 
 const isToolTerminal = (event: TimelineEvent) => event.data.status === 'completed' || event.data.status === 'failed';
-
-/** 展开容器：grid-template-rows 0fr → 1fr 加透明度，内容常驻 DOM，避免高度跳变。
- *  首次展开前不渲染内容（历史长会话默认折叠时不必为每一步建 DOM）；展开过之后保留，才能播收起动画。 */
-function Disclosure({ open, children }: { open: boolean; children: ReactNode }) {
-  const [everOpened, setEverOpened] = useState(open);
-  if (open && !everOpened) setEverOpened(true);
-  return <div aria-hidden={!open} inert={!open} className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(.2,0,0,1)] ${open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
-    <div className="overflow-hidden">{everOpened ? children : null}</div>
-  </div>;
-}
 
 /** 命令输出默认只露最后 40 行，避免一次工具调用把整条时间线撑开。 */
 function CommandOutput({ text }: { text: string }) {
@@ -279,7 +271,45 @@ const PermissionCard = memo(function PermissionCard({ event }: { event: Timeline
   </div>;
 });
 
-export const TimelineItem = memo(function TimelineItem({ event, final = false, streaming = false, replay = false, assistantLabel = 'Agent', sessionId }: { event: TimelineEvent; final?: boolean; streaming?: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; assistantLabel?: string; sessionId?: string }) {
+/** 嵌在用户气泡顶部的隐式注入块：默认折叠成一行摘要（标出注入类别与字数），点开即可查看完整原文。
+ *  通过 Disclosure 的 unmountOnClose 兼顾 200ms 展开/收起动画与收起后卸载 <pre>，避免隐藏内容撑住气泡宽度。 */
+function BubbleInjectionBlock({ injection, labelOverride }: { injection: BubbleInjection; labelOverride?: string }) {
+  const [open, setOpen] = useState(false);
+  const label = labelOverride ?? (injection.kind === 'prefix' ? '注入' : '实际发送');
+  const summary = injection.tags.length ? injection.tags.join(' · ') : '系统注入';
+  return <div className="mb-2 overflow-hidden rounded-xl border border-zinc-200/90 bg-white/75 text-left">
+    <button type="button" data-timeline-disclosure aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-zinc-600 transition-colors hover:bg-zinc-100/80 hover:text-zinc-900">
+      <Sparkles size={12} className="shrink-0 text-zinc-400"/>
+      <span className="shrink-0 font-medium text-zinc-700">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-zinc-500">{summary}</span>
+      <span className="shrink-0 tabular-nums text-[11px] text-zinc-400">{injection.charCount} 字</span>
+      <ChevronRight size={12} className={`shrink-0 text-zinc-400 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>
+    </button>
+    <Disclosure open={open} unmountOnClose>
+      <pre className="m-0 max-h-64 overflow-y-auto whitespace-pre-wrap break-words border-t border-zinc-200/70 bg-zinc-50/80 px-2.5 py-2 font-mono text-[12px] leading-5 text-zinc-600">{injection.text}</pre>
+    </Disclosure>
+  </div>;
+}
+
+/** 会话创建时写入 ACP 的 System Prompt：放在时间线最顶部，默认折叠，方便一眼看到本会话的底层注入。 */
+export const SystemPromptBubble = memo(function SystemPromptBubble({ prompt }: { prompt: string }) {
+  const [open, setOpen] = useState(false);
+  return <div className="ui-timeline-item mb-5 flex justify-end">
+    <div className="min-w-0 max-w-[80%] overflow-hidden rounded-[16px] border border-zinc-200/90 bg-zinc-50/90 text-left">
+      <button type="button" data-timeline-disclosure aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[12px] text-zinc-600 transition-colors hover:bg-zinc-100/80 hover:text-zinc-900">
+        <Sparkles size={12} className="shrink-0 text-zinc-400"/>
+        <span className="shrink-0 font-medium text-zinc-700">会话 System Prompt</span>
+        <span className="shrink-0 tabular-nums text-[11px] text-zinc-400">{prompt.length} 字</span>
+        <ChevronRight size={12} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>
+      </button>
+      <Disclosure open={open} unmountOnClose>
+        <pre className="m-0 max-h-72 overflow-y-auto whitespace-pre-wrap break-words border-t border-zinc-200/70 bg-white/90 px-3 py-2.5 font-mono text-[12px] leading-5 text-zinc-600">{prompt}</pre>
+      </Disclosure>
+    </div>
+  </div>;
+});
+
+export const TimelineItem = memo(function TimelineItem({ event, final = false, streaming = false, replay = false, assistantLabel = 'Agent', sessionId, sentPrompt }: { event: TimelineEvent; final?: boolean; streaming?: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; assistantLabel?: string; sessionId?: string; /** 该轮实际提交给 Agent 的完整文本，用于拆出隐式注入前缀并展示在气泡内。 */ sentPrompt?: string | null }) {
   if (event.type === 'tool_call' || event.type === 'tool_result') return <ToolCard event={event}/>;
   if (event.type === 'permission_request') return <PermissionCard event={event}/>;
   if (event.type === 'warning') return <aside role="status" className="ui-timeline-item my-4 overflow-hidden rounded-xl border border-amber-200 bg-amber-50/60">
@@ -289,27 +319,43 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
     <div className="flex items-start gap-2.5 px-4 py-3"><CircleX size={15} className="mt-0.5 shrink-0 text-red-600"/><div className="min-w-0"><div className="text-[13px] font-semibold text-red-950">Agent 错误</div><div className="mt-1 text-[13px] leading-5 text-red-800"><MarkdownContent sessionId={sessionId}>{event.data.message ?? 'Agent 运行失败'}</MarkdownContent></div></div></div>
   </aside>;
   if (event.type === 'thinking') return null;
-  // 表情触发轮次的锚点也要落库才能保证轮次边界，但它不是用户说过的话：不渲染气泡。
-  if (event.data.origin === EMOJI_TRIGGER_ORIGIN) return null;
+  // 表情触发轮次：展示成带折叠注入块的特殊气泡，方便直观看到触发来源与完整注入正文。
+  if (event.data.origin === EMOJI_TRIGGER_ORIGIN) {
+    const injection = extractBubbleInjection(event.data.text ?? '', sentPrompt);
+    return <div className="ui-user-send-time-row group/msg ui-timeline-item relative my-6 flex flex-col items-end">
+      <div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] border border-zinc-200/80 bg-[rgb(var(--bubble))] px-4 py-2.5 text-[14px] leading-[1.6] text-zinc-800">
+        {injection && <BubbleInjectionBlock injection={injection} labelOverride="表情触发注入"/>}
+        <div className="text-zinc-700">{event.data.text ?? '飞书表情触发'}</div>
+      </div>
+      <div className="ui-user-send-time-slot mt-1 flex max-w-[80%] items-center justify-end gap-2"><UserMessageTime timestamp={event.timestamp}/></div>
+    </div>;
+  }
   // daemon 注入的督办/提醒：不是用户气泡。每条信号画成一张迷你便签，点了在抽屉里定位；全文可展开。
   if (event.data.origin === 'injected') {
-    const detail = typeof event.data.detail === 'string' ? event.data.detail : '';
+    const baseDetail = typeof event.data.detail === 'string' ? event.data.detail : '';
+    const detail = sentPrompt && sentPrompt.length > baseDetail.length ? sentPrompt : baseDetail;
     return <SupervisionNotice text={event.data.text} detail={detail} timestamp={event.timestamp}/>;
   }
   // 整理轮次 / 交接说明：系统发起的轮次，同样不是用户气泡。
   if (isSystemRoundOrigin(event.data.origin)) {
-    const detail = typeof event.data.detail === 'string' ? event.data.detail : '';
+    const baseDetail = typeof event.data.detail === 'string' ? event.data.detail : '';
+    const detail = sentPrompt && sentPrompt.length > baseDetail.length ? sentPrompt : baseDetail;
     return <SystemRoundNotice origin={event.data.origin} text={event.data.text} detail={detail} timestamp={event.timestamp} taskId={typeof event.data.taskId === 'string' ? event.data.taskId : undefined} sessionId={sessionId}/>;
   }
   const user = event.data.role === 'user';
   if (user) {
     const text = markLeadingSlashCommand(stripImageReferenceLines(event.data.text ?? ''));
+    const injection = extractBubbleInjection(event.data.text ?? '', sentPrompt);
     // 「发送中」是气泡左侧的绝对定位圆环，对齐最后一行文字：不占位，确认后消失也不会让气泡跳动。
     // 用 bottom 而不是 translate 定位，避免和 animate-spin 的 transform 冲突。
     // 时间放在气泡下方独立行：桌面端绝对定位、悬停整条消息出现，不挤正文也不触发跳动；
     // 触摸屏没有 hover，CSS 让它常驻。
     return <div className="ui-user-send-time-row group/msg ui-timeline-item relative my-6 flex flex-col items-end">
-      <div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900"><MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>{event.data.optimistic && <Spinner size={14} label="发送中" className="absolute bottom-4 right-full mr-2 text-zinc-400"/>}</div>
+      <div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900">
+        {injection && <BubbleInjectionBlock injection={injection}/>}
+        <MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>
+        {event.data.optimistic && <Spinner size={14} label="发送中" className="absolute bottom-4 right-full mr-2 text-zinc-400"/>}
+      </div>
       <div className="ui-user-send-time-slot mt-1 flex max-w-[80%] items-center justify-end gap-2"><UserMessageTime timestamp={event.timestamp}/></div>
     </div>;
   }
@@ -323,6 +369,7 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
     : <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} assistantLabel={assistantLabel} sessionId={sessionId}/>;
   return assistant;
 }, (prev, next) => prev.final === next.final && prev.streaming === next.streaming && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId
+  && prev.sentPrompt === next.sentPrompt
   && prev.event.timestamp === next.event.timestamp
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event)
   // error/warning/permission 卡片的 payload 变化也要刷新；text 长度已在签名内。
