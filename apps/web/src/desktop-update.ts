@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import type { UpdateBadgeState } from './self-update-progress';
 
 /**
  * 桌面壳通过 preload 暴露的更新接口。
@@ -31,6 +32,24 @@ export type DesktopUpdateApi = {
   unsubscribe(id: number): void;
 };
 
+let desktopInstalling = false;
+const desktopInstallingListeners = new Set<() => void>();
+
+function subscribeDesktopInstalling(listener: () => void): () => void {
+  desktopInstallingListeners.add(listener);
+  return () => { desktopInstallingListeners.delete(listener); };
+}
+
+function getDesktopInstalling(): boolean {
+  return desktopInstalling;
+}
+
+export function setDesktopInstalling(installing: boolean) {
+  if (desktopInstalling === installing) return;
+  desktopInstalling = installing;
+  for (const listener of desktopInstallingListeners) listener();
+}
+
 export function desktopUpdateApi(): DesktopUpdateApi | undefined {
   return typeof window === 'undefined' ? undefined : window.agentdockDesktop?.update;
 }
@@ -38,10 +57,15 @@ export function desktopUpdateApi(): DesktopUpdateApi | undefined {
 export function useDesktopUpdate() {
   const api = desktopUpdateApi();
   const [state, setState] = useState<DesktopUpdateState>();
+  const installing = useSyncExternalStore(subscribeDesktopInstalling, getDesktopInstalling, getDesktopInstalling);
   useEffect(() => {
     if (!api) return;
     let alive = true;
-    const id = api.subscribe(next => { if (alive) setState(next); });
+    const id = api.subscribe(next => {
+      if (!alive) return;
+      if (next.phase !== 'installing') setDesktopInstalling(false);
+      setState(next);
+    });
     void api.getState().then(next => { if (alive) setState(next); }).catch(() => { /* shell 未就绪时忽略 */ });
     return () => {
       alive = false;
@@ -55,17 +79,40 @@ export function useDesktopUpdate() {
     setState(next);
     return next;
   }, [api]);
+  const install = useCallback(async () => {
+    if (!api) return undefined;
+    setDesktopInstalling(true);
+    try {
+      const next = await api.install();
+      setState(next);
+      return next;
+    } catch (error) {
+      setDesktopInstalling(false);
+      throw error;
+    }
+  }, [api]);
   return {
     api,
     state,
+    installing,
     check: () => run('check'),
     download: () => run('download'),
-    install: () => run('install')
+    install
   };
 }
 
 export function isDesktopUpdatePhase(state: DesktopUpdateState | undefined): boolean {
   return Boolean(state && ['available', 'downloading', 'downloaded', 'installing'].includes(state.phase));
+}
+
+export function isDesktopUpdatingPhase(state: DesktopUpdateState | undefined): boolean {
+  return Boolean(state && ['downloading', 'installing'].includes(state.phase));
+}
+
+export function resolveDesktopUpdateBadge(state: DesktopUpdateState | undefined, installing = false): UpdateBadgeState {
+  if (installing || isDesktopUpdatingPhase(state)) return 'updating';
+  if (isDesktopUpdatePhase(state)) return 'available';
+  return 'none';
 }
 
 export function formatBytes(bytes?: number): string {

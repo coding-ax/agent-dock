@@ -20,13 +20,12 @@ export function DesktopUpdateNotice() {
   const toast = useToast(8_000);
   const desktop = useDesktopUpdate();
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [installing, setInstalling] = useState(false);
   const data = desktop.state;
   if (!data) return null;
 
   const checking = data.phase === 'checking';
   const downloading = data.phase === 'downloading';
-  const installingNow = data.phase === 'installing' || installing;
+  const installingNow = data.phase === 'installing' || desktop.installing;
   const busy = checking || downloading || installingNow;
   const target = data.latestVersion;
   const percent = downloadPercent(data);
@@ -36,6 +35,7 @@ export function DesktopUpdateNotice() {
   const showBanner = ['available', 'downloading', 'downloaded', 'installing', 'error'].includes(data.phase);
 
   const check = async () => {
+    if (!canCheck) return;
     const next = await desktop.check();
     if (!next) return;
     if (next.phase === 'idle') toast.show(`已是最新版本（${shortVersion(next.currentVersion)}）`, 'info');
@@ -44,16 +44,16 @@ export function DesktopUpdateNotice() {
   };
 
   const download = async () => {
+    if (busy) return;
     const next = await desktop.download();
     if (next?.phase === 'error') toast.show(next.error ?? '下载更新失败');
   };
 
   const install = async () => {
-    setInstalling(true);
+    if (installingNow) return;
     try {
       await desktop.install();
     } catch (error) {
-      setInstalling(false);
       toast.show(error instanceof Error ? error.message : String(error));
     }
   };

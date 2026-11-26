@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import type { SelfUpdateStatus } from './api';
 
 export type UpdateProgress =
@@ -5,8 +6,71 @@ export type UpdateProgress =
   | { phase: 'done'; version: string }
   | { phase: 'failed'; message: string };
 
+export type SelfUpdateWatch = {
+  fromVersion: string;
+  targetVersion?: string;
+  startedAt: number;
+};
+
+export type SelfUpdateClientState = {
+  starting: boolean;
+  watch?: SelfUpdateWatch;
+};
+
+export type UpdateBadgeState = 'none' | 'available' | 'updating';
+
+export const SELF_UPDATE_QUERY_KEY = ['self-update'] as const;
+export const SELF_UPDATE_REFETCH_INTERVAL_MS = 5 * 60_000;
+
 /** 升级包含安装 + 重启，慢网下 npm install 可能要一两分钟。 */
 export const UPDATE_TIMEOUT_MS = 5 * 60_000;
+
+let clientState: SelfUpdateClientState = { starting: false };
+const listeners = new Set<() => void>();
+
+function emitClientState() {
+  for (const listener of listeners) listener();
+}
+
+export function subscribeSelfUpdateClientState(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+export function getSelfUpdateClientState(): SelfUpdateClientState {
+  return clientState;
+}
+
+export function setSelfUpdateStarting(starting: boolean) {
+  if (clientState.starting === starting) return;
+  clientState = { ...clientState, starting };
+  emitClientState();
+}
+
+export function setSelfUpdateWatch(watch: SelfUpdateWatch | undefined) {
+  clientState = watch ? { ...clientState, watch } : { starting: clientState.starting };
+  emitClientState();
+}
+
+export function resetSelfUpdateClientState() {
+  clientState = { starting: false };
+  emitClientState();
+}
+
+/** 共享客户端侧的升级启动/轮询状态，让外层「设置」入口与内部升级横幅保持同步。 */
+export function useSelfUpdateClientState(): SelfUpdateClientState {
+  return useSyncExternalStore(subscribeSelfUpdateClientState, getSelfUpdateClientState, getSelfUpdateClientState);
+}
+
+/** 根据服务端状态和客户端共享状态推导外层入口应展示的徽标形态。 */
+export function resolveServerUpdateBadge(
+  status: SelfUpdateStatus | undefined,
+  client: SelfUpdateClientState
+): UpdateBadgeState {
+  if (client.starting || client.watch || status?.updating) return 'updating';
+  if (status?.updateAvailable) return 'available';
+  return 'none';
+}
 
 /**
  * 根据轮询到的服务端状态判断一次界面升级走到哪了。

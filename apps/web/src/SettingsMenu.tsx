@@ -5,9 +5,16 @@ import { AlarmClock, Archive, BarChart3, Bot, FolderOpen, MessagesSquare, PawPri
 import { api } from './api';
 import { AutostartToggle } from './AutostartToggle';
 import { KeepAwakeToggle } from './KeepAwakeToggle';
-import { isDesktopUpdatePhase, useDesktopUpdate } from './desktop-update';
+import { resolveDesktopUpdateBadge, useDesktopUpdate } from './desktop-update';
 import { SelfUpdateNotice } from './SelfUpdateNotice';
 import { HoverTooltip } from './HoverTooltip';
+import { Spinner } from './Loaders';
+import {
+  resolveServerUpdateBadge,
+  SELF_UPDATE_QUERY_KEY,
+  SELF_UPDATE_REFETCH_INTERVAL_MS,
+  useSelfUpdateClientState
+} from './self-update-progress';
 import { ThemeSegmented } from './ThemeToggle';
 import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
 
@@ -37,11 +44,14 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
   const root = useRef<HTMLDivElement>(null);
   useDismissOnOutsidePointer(root, open, () => setOpen(false));
   useEventListener('keydown', (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); }, { target: () => document, enable: open });
-  // 与 SelfUpdateNotice 同一个 queryKey 和选项，只用来在入口上点一个「有新版本」的小红点。
+  // 与 SelfUpdateNotice 同一个 queryKey、选项和客户端升级状态，让外层入口同步显示「有新版本」或「正在更新…」。
   // 桌面壳有 preload 更新通道时用它的状态，服务端那条 npm 查询不再有意义。
   const desktopUpdate = useDesktopUpdate();
-  const update = useQuery({ queryKey: ['self-update'], queryFn: () => api.selfUpdateStatus(), enabled: !webDenied && !desktopUpdate.api, retry: false, refetchInterval: 5 * 60_000, refetchOnWindowFocus: false });
-  const hasUpdate = desktopUpdate.api ? isDesktopUpdatePhase(desktopUpdate.state) : Boolean(update.data?.updateAvailable || update.data?.updating);
+  const selfUpdateClient = useSelfUpdateClientState();
+  const update = useQuery({ queryKey: SELF_UPDATE_QUERY_KEY, queryFn: () => api.selfUpdateStatus(), enabled: !webDenied && !desktopUpdate.api, retry: false, refetchInterval: SELF_UPDATE_REFETCH_INTERVAL_MS, refetchOnWindowFocus: false });
+  const updateBadge = desktopUpdate.api
+    ? resolveDesktopUpdateBadge(desktopUpdate.state, desktopUpdate.installing)
+    : resolveServerUpdateBadge(update.data, selfUpdateClient);
   const pick = (action: () => void) => () => { setOpen(false); action(); };
 
   return <div ref={root} className="relative flex min-w-[268px] items-center gap-1 border-t border-zinc-200 p-2">
@@ -63,7 +73,8 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
     </div>
     <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)} className={`flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium transition-colors duration-150 ${open ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'}`}>
       <Settings size={16} className={`transition-transform duration-300 ease-[cubic-bezier(.2,0,0,1)] ${open ? 'rotate-90' : ''}`}/><span>设置</span>
-      {hasUpdate && <span className="ml-auto flex items-center gap-1 text-[12px] font-normal text-emerald-600"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500 ui-status-pulse"/>有新版本</span>}
+      {updateBadge === 'updating' && <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[12px] font-normal text-zinc-500"><Spinner size={12} label="正在更新" className="text-zinc-500"/>正在更新…</span>}
+      {updateBadge === 'available' && <span className="ml-auto flex shrink-0 items-center gap-1 text-[12px] font-normal text-emerald-600"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500 ui-status-pulse"/>有新版本</span>}
     </button>
     <HoverTooltip content="在手机上打开（扫码）">
       <button type="button" onClick={() => { setOpen(false); onShare(); }} aria-label="在手机上打开" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-zinc-600 transition-colors duration-150 hover:bg-zinc-100 hover:text-zinc-900"><Smartphone size={16}/></button>

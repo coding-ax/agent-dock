@@ -1,5 +1,5 @@
 import { Spinner } from './Loaders';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useInterval } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -10,7 +10,15 @@ import { HoverTooltip } from './HoverTooltip';
 import { useToast } from './Toast';
 import { DesktopUpdateNotice } from './DesktopUpdateNotice';
 import { desktopUpdateApi } from './desktop-update';
-import { resolveUpdateProgress, shortVersion } from './self-update-progress';
+import {
+  resolveUpdateProgress,
+  SELF_UPDATE_QUERY_KEY,
+  SELF_UPDATE_REFETCH_INTERVAL_MS,
+  setSelfUpdateStarting,
+  setSelfUpdateWatch,
+  shortVersion,
+  useSelfUpdateClientState
+} from './self-update-progress';
 
 /**
  * 侧边栏底部的版本行：显示当前 AgentDock 版本，有新版本时变成「升级到 x」入口。
@@ -33,16 +41,17 @@ function ServerUpdateNotice({ enabled }: { enabled: boolean }) {
   const toast = useToast(8_000);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [hintOpen, setHintOpen] = useState(false);
-  const [watch, setWatch] = useState<{ fromVersion: string; targetVersion?: string; startedAt: number }>();
+  const client = useSelfUpdateClientState();
+  const watch = client.watch;
   const qc = useQueryClient();
   // 服务端缓存 registry 结果 30 分钟，前端 5 分钟问一次基本都命中缓存，换来更短的发现延迟；
   // 会话 token 没权限时静默失败、不显示入口。
-  const status = useQuery({ queryKey: ['self-update'], queryFn: () => api.selfUpdateStatus(), enabled, retry: false, refetchInterval: 5 * 60_000, refetchOnWindowFocus: false });
+  const status = useQuery({ queryKey: SELF_UPDATE_QUERY_KEY, queryFn: () => api.selfUpdateStatus(), enabled, retry: false, refetchInterval: SELF_UPDATE_REFETCH_INTERVAL_MS, refetchOnWindowFocus: false });
   // 手动检查跳过服务端缓存：刚发完版想马上升级时不必等缓存过期。
   const check = useMutation({
     mutationFn: () => api.selfUpdateStatus(true),
     onSuccess: next => {
-      qc.setQueryData(['self-update'], next);
+      qc.setQueryData(SELF_UPDATE_QUERY_KEY, next);
       if (next.checkError) toast.show(next.checkError);
       else if (!next.updateAvailable) toast.show(`已是最新版本（${shortVersion(next.currentVersion)}）`, 'info');
     },
@@ -50,23 +59,47 @@ function ServerUpdateNotice({ enabled }: { enabled: boolean }) {
   });
   const start = useMutation({
     mutationFn: api.startSelfUpdate,
-    onSuccess: (next: SelfUpdateStatus) => { setConfirmOpen(false); setWatch({ fromVersion: next.currentVersion, ...(next.latestVersion ? { targetVersion: next.latestVersion } : {}), startedAt: Date.now() }); }
+    onMutate: () => { setSelfUpdateStarting(true); },
+    onSuccess: (next: SelfUpdateStatus) => {
+      setConfirmOpen(false);
+      qc.setQueryData(SELF_UPDATE_QUERY_KEY, next);
+      setSelfUpdateWatch({ fromVersion: next.currentVersion, ...(next.latestVersion ? { targetVersion: next.latestVersion } : {}), startedAt: Date.now() });
+      setSelfUpdateStarting(false);
+    },
+    onError: () => { setSelfUpdateStarting(false); }
   });
+
+  // 页面在升级进行中刷新或打开时，服务端已返回 updating=true；自动补上轮询，完成后才能恢复状态并刷新。
+  useEffect(() => {
+    const current = status.data;
+    if (!current?.updating || watch) return;
+    setSelfUpdateWatch({
+      fromVersion: current.currentVersion,
+      ...(current.latestVersion ? { targetVersion: current.latestVersion } : {}),
+      startedAt: Date.now()
+    });
+  }, [status.data?.updating, status.data?.currentVersion, status.data?.latestVersion, watch]);
 
   useInterval(async () => {
     if (!watch) return;
     const latest = await api.selfUpdateStatus().catch(() => undefined);
+    if (latest) qc.setQueryData(SELF_UPDATE_QUERY_KEY, latest);
     const progress = resolveUpdateProgress(watch.fromVersion, latest, Date.now() - watch.startedAt);
     if (progress.phase === 'pending') return;
-    setWatch(undefined);
-    if (progress.phase === 'failed') { toast.show(progress.message); void status.refetch(); return; }
+    setSelfUpdateWatch(undefined);
+    if (progress.phase === 'failed') {
+      if (!latest) qc.setQueryData<SelfUpdateStatus>(SELF_UPDATE_QUERY_KEY, prev => prev ? { ...prev, updating: false } : prev);
+      toast.show(progress.message);
+      void status.refetch();
+      return;
+    }
     toast.show(`已升级到 ${progress.version}，即将刷新页面`, 'info');
     window.setTimeout(() => window.location.reload(), 1_500);
   }, watch ? 2_000 : undefined);
 
   const data = status.data;
   if (!data) return null;
-  const updating = Boolean(watch) || data.updating;
+  const updating = client.starting || Boolean(watch) || data.updating;
   const target = watch?.targetVersion ?? data.latestVersion;
   const showBanner = updating || (data.updateAvailable && data.latestVersion);
   // 前台进程没有被 supervisor 托管，界面没法重启它；不要只禁用按钮，把可执行的
@@ -81,7 +114,7 @@ function ServerUpdateNotice({ enabled }: { enabled: boolean }) {
         <span className="min-w-0 flex-1 truncate">{updating ? '正在升级，完成后自动刷新' : <>新版本 <span className="font-mono text-zinc-800">{shortVersion(target!)}</span> 可用</>}</span>
       </HoverTooltip>
       {!updating && <HoverTooltip content={data.canUpdate ? '安装新版本并重启服务' : '查看手动升级方式'}>
-        <button type="button" onClick={() => { if (!data.canUpdate) { setHintOpen(true); return; } start.reset(); setConfirmOpen(true); }} className="h-7 shrink-0 rounded-md px-2 text-[12px] font-medium text-zinc-900 transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">升级</button>
+        <button type="button" onClick={() => { if (updating) return; if (!data.canUpdate) { setHintOpen(true); return; } start.reset(); setConfirmOpen(true); }} className="h-7 shrink-0 rounded-md px-2 text-[12px] font-medium text-zinc-900 transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">升级</button>
       </HoverTooltip>}
     </div>}
     <div className="flex h-8 items-center gap-1 text-[12px]">
@@ -99,9 +132,9 @@ function ServerUpdateNotice({ enabled }: { enabled: boolean }) {
       title={`升级到 ${data.latestVersion ? shortVersion(data.latestVersion) : '新版本'}？`}
       description="会安装新版本并重启 AgentDock 服务，正在执行的任务会被中断，页面会在升级完成后自动刷新。"
       confirmLabel="升级并重启"
-      busy={start.isPending}
+      busy={start.isPending || updating}
       {...(start.error ? { error: start.error.message } : {})}
-      onConfirm={() => start.mutate()}
+      onConfirm={() => { if (!start.isPending && !updating) start.mutate(); }}
       onCancel={() => setConfirmOpen(false)}
     />
     <ConfirmDialog

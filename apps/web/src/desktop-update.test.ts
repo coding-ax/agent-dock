@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { downloadPercent, formatBytes, formatSpeed, formatTransferred, isDesktopUpdatePhase, type DesktopUpdateState } from './desktop-update';
+import { downloadPercent, formatBytes, formatSpeed, formatTransferred, isDesktopUpdatePhase, isDesktopUpdatingPhase, resolveDesktopUpdateBadge, type DesktopUpdateState } from './desktop-update';
 
 const state = (patch: Partial<DesktopUpdateState>): DesktopUpdateState => ({ phase: 'idle', currentVersion: '0.2.1', ...patch });
 
@@ -33,5 +33,21 @@ describe('desktop update helpers', () => {
     expect(isDesktopUpdatePhase(state({ phase: 'idle' }))).toBe(false);
     expect(isDesktopUpdatePhase(state({ phase: 'checking' }))).toBe(false);
     expect(isDesktopUpdatePhase(undefined)).toBe(false);
+  });
+
+  it('distinguishes updating phases from available phases for the outer badge', () => {
+    expect(isDesktopUpdatingPhase(state({ phase: 'downloading' }))).toBe(true);
+    expect(isDesktopUpdatingPhase(state({ phase: 'installing' }))).toBe(true);
+    expect(isDesktopUpdatingPhase(state({ phase: 'available' }))).toBe(false);
+    expect(isDesktopUpdatingPhase(state({ phase: 'downloaded' }))).toBe(false);
+
+    expect(resolveDesktopUpdateBadge(state({ phase: 'available' }))).toBe('available');
+    expect(resolveDesktopUpdateBadge(state({ phase: 'downloaded' }))).toBe('available');
+    expect(resolveDesktopUpdateBadge(state({ phase: 'downloading' }))).toBe('updating');
+    expect(resolveDesktopUpdateBadge(state({ phase: 'installing' }))).toBe('updating');
+    expect(resolveDesktopUpdateBadge(state({ phase: 'downloaded' }), true)).toBe('updating');
+    expect(resolveDesktopUpdateBadge(state({ phase: 'idle' }))).toBe('none');
+    expect(resolveDesktopUpdateBadge(state({ phase: 'error' }))).toBe('none');
+    expect(resolveDesktopUpdateBadge(undefined)).toBe('none');
   });
 });
