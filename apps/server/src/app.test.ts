@@ -1045,3 +1045,27 @@ describe('autostart routes', () => {
     await bare.close();
   });
 });
+
+describe('PWA static assets', () => {
+  it('serves manifest.webmanifest and sw.js with proper MIME types and no-cache headers', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'agent-dock-pwa-'));
+    try {
+      await writeFile(join(dir, 'index.html'), '<!doctype html><title>AgentDock</title>');
+      await writeFile(join(dir, 'manifest.webmanifest'), JSON.stringify({ name: 'AgentDock', display: 'standalone' }));
+      await writeFile(join(dir, 'sw.js'), 'self.addEventListener("fetch", () => {});');
+      const app = await buildApp({} as any, { webRoot: dir });
+      const manifestRes = await app.inject({ method: 'GET', url: '/manifest.webmanifest' });
+      expect(manifestRes.statusCode).toBe(200);
+      expect(manifestRes.headers['content-type']).toContain('application/manifest+json');
+      expect(manifestRes.headers['cache-control']).toBe('no-cache, must-revalidate');
+
+      const swRes = await app.inject({ method: 'GET', url: '/sw.js' });
+      expect(swRes.statusCode).toBe(200);
+      expect(swRes.headers['content-type']).toContain('text/javascript');
+      expect(swRes.headers['cache-control']).toBe('no-cache, must-revalidate');
+      await app.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

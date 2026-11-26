@@ -2,6 +2,7 @@ import { DialogHost } from './DialogHost';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { closeAppDialog, openAppDialog } from './dialog-store';
 import { SettingsMenu } from './SettingsMenu';
+import { triggerPwaInstall, usePwaInstall } from './pwa-install';
 import { LarkRegistrationDialog } from './LarkRegistrationDialog';
 import { LarkAvatarPanel } from './LarkAvatarPanel';
 import { SuggestedValueInput } from './SuggestedValueInput';
@@ -9,7 +10,7 @@ import { WebBaseUrlInput } from './WebBaseUrlInput';
 import { KeyboardEvent, lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { useMount, useEventListener, useUpdateEffect, useLocalStorageState, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlarmClock, AlertTriangle, Archive, BarChart3, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MessageSquare, PanelLeftOpen, Pin, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, StickyNote, Trash2, Wrench, X } from 'lucide-react';
+import { AlarmClock, AlertTriangle, Archive, BarChart3, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MessageSquare, MonitorDown, PanelLeftOpen, Pin, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, StickyNote, Trash2, Wrench, X } from 'lucide-react';
 import { Input, InputNumber, Select, Switch } from 'antd';
 import { defaultLarkTraceLimit, validateHighRiskPattern } from '@agent-dock/agent-dock-shared';
 import { api, WebAccessDeniedError, type Agent, type AssistantTask, type Project, type Session } from './api';
@@ -480,6 +481,7 @@ export default function App() {
     void qc.cancelQueries({ predicate: shouldCancelOnAccessDenied });
   }, { target: () => window });
   const [sidebarOpen, setSidebarOpen] = useState(false); const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set()); const [collapsedAgentGroups, setCollapsedAgentGroups] = useState<Set<string>>(new Set()); const [sessionFilter, setSessionFilter] = useState('all');
+  const pwa = usePwaInstall();
   // iOS 键盘弹出不缩小 layout viewport，100dvh 仍是全高 → 整页可滚。
   // 根容器的高度与位移由 useVisualViewportShell 直接在事件回调里命令式写入（不走 state，
   // 否则重渲染跟不上键盘动画，顶栏会先滚出去再被拽回来）：锁高度防整页橡皮筋滚动，
@@ -959,6 +961,7 @@ export default function App() {
           <HoverTooltip content="定时任务"><button type="button" onClick={() => openAppDialog('schedule')} aria-label="定时任务" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><AlarmClock size={15}/></button></HoverTooltip><HoverTooltip content="归档会话"><button type="button" onClick={() => openAppDialog('archived')} aria-label="归档会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Archive size={15}/></button></HoverTooltip>
           <HoverTooltip content="导入外部会话"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('import'); }} aria-label="导入外部会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><FolderOpen size={15}/></button></HoverTooltip><HoverTooltip content="Agent 设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('agent'); }} aria-label="Agent 设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Bot size={15}/></button></HoverTooltip>
           <HoverTooltip content="飞书设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('lark'); }} aria-label="飞书设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Settings2 size={15}/></button></HoverTooltip>
+          {pwa.visible && pwa.canPrompt && <HoverTooltip content="安装为桌面应用"><button type="button" disabled={pwa.installing} onClick={() => void triggerPwaInstall()} aria-label="安装为桌面应用" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900 disabled:opacity-50"><MonitorDown size={15}/></button></HoverTooltip>}
           <HoverTooltip content="在手机上打开"><button type="button" onClick={() => openAppDialog('share')} aria-label="在手机上打开" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Smartphone size={15}/></button></HoverTooltip>
         </span>
       </div>

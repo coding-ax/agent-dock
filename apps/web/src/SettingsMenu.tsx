@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react';
 import { useEventListener } from 'ahooks';
 import { useQuery } from '@tanstack/react-query';
-import { AlarmClock, Archive, BarChart3, Bot, FolderOpen, MessagesSquare, PawPrint, Settings, Settings2, Smartphone } from 'lucide-react';
+import { AlarmClock, Archive, BarChart3, Bot, FolderOpen, MessagesSquare, MonitorDown, PawPrint, Settings, Settings2, Smartphone } from 'lucide-react';
 import { api } from './api';
 import { AutostartToggle } from './AutostartToggle';
 import { KeepAwakeToggle } from './KeepAwakeToggle';
 import { resolveDesktopUpdateBadge, useDesktopUpdate } from './desktop-update';
+import { triggerPwaInstall, usePwaInstall } from './pwa-install';
 import { SelfUpdateNotice } from './SelfUpdateNotice';
 import { HoverTooltip } from './HoverTooltip';
 import { Spinner } from './Loaders';
@@ -41,18 +42,30 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
   onShare(): void;
 }) {
   const [open, setOpen] = useState(false);
+  const [showPwaGuide, setShowPwaGuide] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  useDismissOnOutsidePointer(root, open, () => setOpen(false));
-  useEventListener('keydown', (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); }, { target: () => document, enable: open });
+  const closeMenu = () => { setOpen(false); setShowPwaGuide(false); };
+  useDismissOnOutsidePointer(root, open, closeMenu);
+  useEventListener('keydown', (event: KeyboardEvent) => { if (event.key === 'Escape') closeMenu(); }, { target: () => document, enable: open });
   // 与 SelfUpdateNotice 同一个 queryKey、选项和客户端升级状态，让外层入口同步显示「有新版本」或「正在更新…」。
   // 桌面壳有 preload 更新通道时用它的状态，服务端那条 npm 查询不再有意义。
   const desktopUpdate = useDesktopUpdate();
+  const pwa = usePwaInstall();
   const selfUpdateClient = useSelfUpdateClientState();
   const update = useQuery({ queryKey: SELF_UPDATE_QUERY_KEY, queryFn: () => api.selfUpdateStatus(), enabled: !webDenied && !desktopUpdate.api, retry: false, refetchInterval: SELF_UPDATE_REFETCH_INTERVAL_MS, refetchOnWindowFocus: false });
   const updateBadge = desktopUpdate.api
     ? resolveDesktopUpdateBadge(desktopUpdate.state, desktopUpdate.installing)
     : resolveServerUpdateBadge(update.data, selfUpdateClient);
-  const pick = (action: () => void) => () => { setOpen(false); action(); };
+  const pick = (action: () => void) => () => { closeMenu(); action(); };
+  const handlePwaInstall = async () => {
+    if (!pwa.canPrompt) {
+      setShowPwaGuide(current => !current);
+      return;
+    }
+    const result = await triggerPwaInstall();
+    if (result === 'accepted') closeMenu();
+    else if (result === 'manual') setShowPwaGuide(true);
+  };
 
   return <div ref={root} className="relative flex min-w-[268px] items-center gap-1 border-t border-zinc-200 p-2">
     <div role="menu" aria-label="设置" style={{ transformOrigin: 'bottom center' }} aria-hidden={!open} inert={!open} className={`absolute inset-x-2 bottom-full z-30 mb-1 max-h-[75dvh] overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_-12px_36px_rgba(12,13,16,.14)] transition-[opacity,transform,visibility] duration-200 ease-[cubic-bezier(.2,0,0,1)] ${open ? 'visible translate-y-0 opacity-100' : 'invisible translate-y-1.5 opacity-0'}`}>
@@ -66,6 +79,15 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
       <button type="button" role="menuitem" onClick={pick(onAssistant)} className={itemClass}><PawPrint size={16}/><span>小猫与督办</span></button>
       <button type="button" role="menuitem" onClick={pick(onLark)} className={itemClass}><Settings2 size={16}/><span>飞书设置</span></button>
       <button type="button" role="menuitem" onClick={pick(onLarkAvatar)} className={itemClass}><Bot size={16}/><span>AI 飞书替身</span></button>
+      {pwa.visible && <>
+        <div className="my-1 border-t border-zinc-200/70"/>
+        <button type="button" role="menuitem" disabled={pwa.installing} onClick={() => void handlePwaInstall()} className={`${itemClass} disabled:opacity-60`}>
+          {pwa.installing ? <Spinner size={15} label="正在打开安装弹窗" className="text-zinc-500"/> : <MonitorDown size={16}/>}
+          <span>{pwa.installing ? '等待确认安装…' : '安装为桌面应用'}</span>
+          {pwa.canPrompt && <span className="ml-auto rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-normal text-zinc-500">PWA</span>}
+        </button>
+        {showPwaGuide && !pwa.canPrompt && <div className="mx-1.5 mb-1 mt-0.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-[12px] leading-5 text-zinc-600">{pwa.manualHint}</div>}
+      </>}
       <div className="my-1 border-t border-zinc-200/70"/>
       <div className="px-2.5 py-1"><div className="mb-1.5 text-[12px] text-zinc-500">外观</div><ThemeSegmented/></div>
       <div className="px-2.5 py-1 text-[12px] text-zinc-600"><AutostartToggle enabled={!webDenied}/><KeepAwakeToggle enabled={!webDenied}/></div>

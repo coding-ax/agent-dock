@@ -4,7 +4,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { AntdScope } from './AntdScope';
 import { WebAccessDeniedError } from './api';
+import { initPwaInstall, registerPwaServiceWorker } from './pwa-install';
 import './index.css';
+
+initPwaInstall();
+registerPwaServiceWorker();
 // 401/403（访问门拒绝）不重试：凭证缺失时重试只会刷一屏 401，轮询间隔再兜底就是截图里的死循环。
 const client = new QueryClient({
   defaultOptions: {
