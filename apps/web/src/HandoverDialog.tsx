@@ -11,6 +11,12 @@ import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { parseLarkSourceId } from './lark-session-link';
 import { defaultHandoverPicked, filterHandoverCandidates, toggleHandoverPicked } from './handover-members';
 
+/** 为内置小猫头像追加版本号参数，避免旧版 immutable 强缓存继续展示旧线条猫。 */
+export function handoverKittenAvatarSrc(avatarUrl: string): string {
+  if (avatarUrl === '/api/lark/kitten-avatar.png') return `${avatarUrl}?v=2`;
+  return avatarUrl;
+}
+
 /**
  * 「托管给机器人」：给已存在的会话建飞书群并绑定，之后用群聊继续这个会话。
  *
@@ -128,7 +134,7 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <DeferredMount placeholder={<DeferredSkeleton/>}>
         {kitten && <div data-testid="handover-kitten" className="mb-3 flex items-center gap-2.5 rounded-lg border border-amber-100 bg-amber-50/60 px-2.5 py-2">
-          <img src={kitten.avatarUrl} alt={`${kitten.name}的头像`} className="h-9 w-9 shrink-0 rounded-full object-cover"/>
+          <img src={handoverKittenAvatarSrc(kitten.avatarUrl)} alt={`${kitten.name}的头像`} className="ui-pixelated h-9 w-9 shrink-0 rounded-full object-cover"/>
           <div className="min-w-0 text-[12px] leading-4">
             <div className="font-medium text-zinc-800">当前小猫：{kitten.name} · 第 {kitten.generation} 代</div>
             <div className="text-zinc-500">建群后会尝试把飞书机器人名称和头像同步成这只小猫；不支持时会提示你手动处理。</div>

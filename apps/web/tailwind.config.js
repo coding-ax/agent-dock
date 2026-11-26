@@ -11,6 +11,7 @@ const tinted = name => ({ ...colors[name], ...scale(name, [50, 100, 200]) });
  */
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: ['selector', '[data-theme="dark"]'],
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {

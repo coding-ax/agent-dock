@@ -553,19 +553,30 @@ async function handleDaemonExit(code, signal) {
   else app.quit();
 }
 
+function splashLogoMarkup() {
+  try {
+    const iconPath = path.join(__dirname, '..', 'build', 'icon.png');
+    const base64 = fs.readFileSync(iconPath).toString('base64');
+    return `<img class="logo" src="data:image/png;base64,${base64}" alt="${APP_NAME}"/>`;
+  } catch {
+    return `<div class="logo logo-fallback" aria-hidden="true">A</div>`;
+  }
+}
+
 function splashHtml() {
   return `<!doctype html><meta charset="utf-8"><title>${APP_NAME}</title>
 <style>
 :root{color-scheme:light dark}html,body{height:100%;margin:0;background:#fafafa;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-@media (prefers-color-scheme:dark){html,body{background:#09090b;color:#e4e4e7}.sub{color:#a1a1aa!important}.spinner{border-color:#3f3f46!important;border-top-color:#a78bfa!important}}
+@media (prefers-color-scheme:dark){html,body{background:#09090b;color:#e4e4e7}.sub{color:#a1a1aa!important}.spinner{border-color:#3f3f46!important;border-top-color:#e4e4e7!important}}
 body{display:grid;place-items:center}.box{display:flex;flex-direction:column;align-items:center;gap:18px}
-.logo{width:72px;height:72px;border-radius:18px;box-shadow:0 8px 30px rgba(0,0,0,.18)}
+.logo{width:72px;height:72px;border-radius:18px;box-shadow:0 8px 30px rgba(0,0,0,.14);image-rendering:pixelated;object-fit:cover}
+.logo-fallback{display:grid;place-items:center;background:#faf5ec;color:#3f3143;font-size:28px;font-weight:700}
 .title{font-size:15px;font-weight:600;letter-spacing:.01em}.sub{font-size:12px;color:#71717a;display:flex;align-items:center;gap:8px}
-.spinner{width:12px;height:12px;border-radius:50%;border:2px solid #e4e4e7;border-top-color:#7c3aed;animation:spin .8s linear infinite}
+.spinner{width:12px;height:12px;border-radius:50%;border:2px solid #e4e4e7;border-top-color:#3f3f46;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 <div class="box">
-<svg class="logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="bg" x1="8" y1="5" x2="57" y2="61" gradientUnits="userSpaceOnUse"><stop stop-color="#292b31"/><stop offset="1" stop-color="#090a0d"/></linearGradient><linearGradient id="beam" x1="18" y1="45" x2="48" y2="17" gradientUnits="userSpaceOnUse"><stop stop-color="#fff"/><stop offset="1" stop-color="#b8b9c2"/></linearGradient><linearGradient id="pulse" x1="38" y1="20" x2="50" y2="31" gradientUnits="userSpaceOnUse"><stop stop-color="#c4b5fd"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs><rect width="64" height="64" rx="16" fill="url(#bg)"/><path d="M42 17H29c-8.3 0-15 6.7-15 15s6.7 15 15 15h13" fill="none" stroke="url(#beam)" stroke-width="5" stroke-linecap="round"/><path d="M42 25H30a7 7 0 0 0 0 14h12" fill="none" stroke="#71717a" stroke-width="4" stroke-linecap="round"/><circle cx="45" cy="25" r="5" fill="url(#pulse)" stroke="#ddd6fe" stroke-width="1.5"/><circle cx="45" cy="39" r="3" fill="#f4f4f5"/></svg>
+${splashLogoMarkup()}
 <div class="title">${APP_NAME}</div>
 <div class="sub"><span class="spinner"></span>正在启动本地服务…</div>
 </div>`;

@@ -53,6 +53,7 @@ describe('HTTP API boundary', () => {
     const runtime = { getSession: vi.fn(async (id: string) => sessions[id]) };
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, tenant_access_token: 'token', expire: 7200 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { image_key: 'img_v3_handover_avatar' } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { chat_id: 'oc_handover' } }), { status: 200 }));
     const app = await buildApp({} as any, { lark: { env: {}, config: repos.config, cardMappings: repos.channelMappings, fetcher: fetcher as typeof fetch, listener: listenerPool(), runtime: runtime as any } }); apps.push(app);
 
@@ -67,8 +68,9 @@ describe('HTTP API boundary', () => {
     const duplicate = await app.inject({ method: 'POST', url: '/api/sessions/ses_web/handover', payload: { appId: 'cli_bot' } });
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.json().error.code).toBe('SESSION_ALREADY_HANDED_OVER');
-    // 只建了一次群：token + createChat 各一次，重复提交没有触发飞书调用。
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    // 只建了一次群：token + 上传默认群头像 + createChat 各一次，重复提交没有触发飞书调用。
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String((fetcher.mock.calls[2] as unknown as [string, RequestInit])[1].body))).toMatchObject({ avatar: 'img_v3_handover_avatar' });
   });
 
   it('rejects invalid handover member ids before creating another chat', async () => {
@@ -95,6 +97,7 @@ describe('HTTP API boundary', () => {
     const runtime = { getSession: vi.fn(async (id: string) => id === 'ses_new' ? { id, agentId: 'codex', source: 'assistant-main', title: '主会话' } : undefined) };
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, tenant_access_token: 'token', expire: 7200 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { image_key: 'img_v3_kitten' } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { chat_id: 'oc_kitten' } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0 }), { status: 200 }));
     const app = await buildApp({} as any, { lark: { env: {}, config: repos.config, cardMappings: repos.channelMappings, fetcher: fetcher as typeof fetch, listener: listenerPool(), runtime: runtime as any, assistant } }); apps.push(app);
@@ -106,7 +109,7 @@ describe('HTTP API boundary', () => {
       kitten: { name: '小B同学', generation: 2 },
       botProfile: { ok: true, supported: true, updated: true, name: '小B同学', generation: 2, avatarUpdated: true }
     });
-    const [patchUrl, patchInit] = fetcher.mock.calls[2] as unknown as [string, RequestInit];
+    const [patchUrl, patchInit] = fetcher.mock.calls[3] as unknown as [string, RequestInit];
     expect(String(patchUrl)).toContain('/open-apis/application/v7/applications/cli_bot/base');
     expect(patchInit.method).toBe('PATCH');
     expect(JSON.parse(String(patchInit.body))).toMatchObject({
@@ -1043,5 +1046,29 @@ describe('autostart routes', () => {
     expect((await bare.inject({ method: 'GET', url: '/api/system/autostart' })).json()).toMatchObject({ supported: false, enabled: false });
     expect((await bare.inject({ method: 'PUT', url: '/api/system/autostart', payload: { enabled: true } })).statusCode).toBe(501);
     await bare.close();
+  });
+});
+
+describe('PWA static assets', () => {
+  it('serves manifest.webmanifest and sw.js with proper MIME types and no-cache headers', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'agent-dock-pwa-'));
+    try {
+      await writeFile(join(dir, 'index.html'), '<!doctype html><title>AgentDock</title>');
+      await writeFile(join(dir, 'manifest.webmanifest'), JSON.stringify({ name: 'AgentDock', display: 'standalone' }));
+      await writeFile(join(dir, 'sw.js'), 'self.addEventListener("fetch", () => {});');
+      const app = await buildApp({} as any, { webRoot: dir });
+      const manifestRes = await app.inject({ method: 'GET', url: '/manifest.webmanifest' });
+      expect(manifestRes.statusCode).toBe(200);
+      expect(manifestRes.headers['content-type']).toContain('application/manifest+json');
+      expect(manifestRes.headers['cache-control']).toBe('no-cache, must-revalidate');
+
+      const swRes = await app.inject({ method: 'GET', url: '/sw.js' });
+      expect(swRes.statusCode).toBe(200);
+      expect(swRes.headers['content-type']).toContain('text/javascript');
+      expect(swRes.headers['cache-control']).toBe('no-cache, must-revalidate');
+      await app.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

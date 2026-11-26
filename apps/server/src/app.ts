@@ -66,6 +66,7 @@ const contentTypes: Record<string, string> = {
   '.ttf': 'font/ttf',
   '.wav': 'audio/wav',
   '.webm': 'video/webm',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.webp': 'image/webp',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
@@ -820,7 +821,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       }
       const type = contentTypes[extname(file).toLowerCase()] ?? 'application/octet-stream';
       if (pathname.startsWith('/assets/')) reply.header('Cache-Control', 'public, max-age=31536000, immutable');
-      else if (file === indexFile) reply.header('Cache-Control', 'no-cache, must-revalidate');
+      else if (file === indexFile || pathname === '/sw.js' || pathname === '/manifest.webmanifest') reply.header('Cache-Control', 'no-cache, must-revalidate');
       return reply.type(type).send(request.method === 'HEAD' ? undefined : body);
     });
   }

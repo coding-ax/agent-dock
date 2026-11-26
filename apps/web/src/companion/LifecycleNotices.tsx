@@ -24,12 +24,12 @@ export function SystemRoundNotice({ origin, text, detail, timestamp, taskId, ses
       <span className="ui-system-badge">系统轮次 · 不是你发的</span>
       {time && <span className="ml-auto shrink-0 text-[11px] tabular-nums text-zinc-400">{time}</span>}
     </div>
-    {copy.subtitle && <p className="mt-1 text-[12.5px] leading-5 text-zinc-600">{copy.subtitle}</p>}
-    <p className="mt-0.5 text-[11.5px] leading-4 text-zinc-400">{origin === 'maintenance'
+    {copy.subtitle && <p className="mt-1 text-[12.5px] leading-5 text-zinc-700">{copy.subtitle}</p>}
+    <p className="mt-0.5 text-[11.5px] leading-4 text-zinc-500">{origin === 'maintenance'
       ? '小猫在汇总、分组、折叠已完成的便签；文件只做索引和归档建议，不删不改。这一轮不会派活。'
       : '这是交接包，不冒充你说话；前任的会话已归档只读，记录一条没删。'}</p>
     {origin === 'maintenance' ? <MaintenanceStatus taskId={taskId}/> : <HandoffLinks sessionId={sessionId}/>}
-    {detail && <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} className="mt-2 inline-flex items-center gap-1 text-[11.5px] text-zinc-400 transition-colors hover:text-zinc-700">
+    {detail && <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} className="mt-2 inline-flex items-center gap-1 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-800">
       {open ? '收起完整指令' : '查看完整指令'}<ChevronDown size={11} className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`}/>
     </button>}
     {detail && <Disclosure open={open}>
@@ -71,7 +71,7 @@ function HandoffLinks({ sessionId }: { sessionId?: string }) {
   const handoff = sessionId ? overview.data?.handoffs.find(item => item.toSessionId === sessionId) : undefined;
   if (!handoff) return null;
   return <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
-    <button type="button" onClick={() => nav.openSession(handoff.fromSessionId)} className="inline-flex h-6 items-center gap-1 rounded-md border border-violet-200 bg-white px-1.5 text-[11.5px] text-violet-700 hover:bg-violet-50"><Eye size={11}/>前任的会话（只读）</button>
-    <code className="truncate font-mono text-[10.5px] text-zinc-400" title={handoff.fromSessionId}>{handoff.fromSessionId}</code>
+    <button type="button" onClick={() => nav.openSession(handoff.fromSessionId)} className="ui-handoff-link"><Eye size={11}/>前任的会话（只读）</button>
+    <code className="truncate font-mono text-[10.5px] text-zinc-500" title={handoff.fromSessionId}>{handoff.fromSessionId}</code>
   </div>;
 }

@@ -400,7 +400,7 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
   app.get(larkKittenAvatarPath, async (_request, reply) => {
     try {
       const body = await readKittenAvatar();
-      return reply.type('image/png').header('Cache-Control', 'public, max-age=86400, immutable').send(body);
+      return reply.type('image/png').header('Cache-Control', 'public, max-age=86400').send(body);
     } catch {
       return reply.code(404).send({ error: { code: 'KITTEN_AVATAR_MISSING', message: '小猫头像文件缺失' } });
     }

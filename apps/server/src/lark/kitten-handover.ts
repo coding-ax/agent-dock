@@ -1,6 +1,7 @@
 import { cleanChatName } from '@agent-dock/agent-dock-shared';
-import { readFile } from 'node:fs/promises';
-import { LarkServiceError } from './service.js';
+import { LarkServiceError, readKittenAvatar } from './service.js';
+
+export { readKittenAvatar };
 
 /** 飞书要访问小猫头像时使用的 daemon 静态路由。 */
 export const larkKittenAvatarPath = '/api/lark/kitten-avatar.png';
@@ -11,13 +12,6 @@ export const larkKittenAvatarPath = '/api/lark/kitten-avatar.png';
  * 两者都没有时不更新头像，并明确提示用户手动处理。
  */
 export const larkKittenCdnBaseEnv = 'AGENTDOCK_LARK_CDN_BASE_URL';
-
-/** 源码里是 src/lark/assets；构建后 asset 被复制到 dist/assets，与 dist/cli.js 同级。 */
-const kittenAvatarFile = new URL('./assets/kitten-avatar.png', import.meta.url);
-
-export function readKittenAvatar(): Promise<Buffer> {
-  return readFile(kittenAvatarFile);
-}
 
 export interface HandoverCatLike {
   id: string;

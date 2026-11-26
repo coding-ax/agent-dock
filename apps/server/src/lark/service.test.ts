@@ -548,4 +548,86 @@ describe('Lark card service', () => {
     expect(body.content).toContain('执行中');
     expect(body.content).toContain('任务');
   });
+
+  it('parses chat name and userCount from getChat', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ code: 0, tenant_access_token: 'token', expire: 7200 }))
+      .mockResolvedValueOnce(response({ code: 0, data: { name: '小A同学 · AgentDock', user_count: '1', bot_count: '1' } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { name: '研发大群', user_count: '5' } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { name: '未知人数群' } }));
+    const service = createLarkCardService({ LARK_APP_ID: 'cli_test', LARK_APP_SECRET: 'secret_test' }, fetcher as typeof fetch);
+    await expect(service.getChat('oc_solo')).resolves.toEqual({ chatId: 'oc_solo', name: '小A同学 · AgentDock', userCount: 1 });
+    await expect(service.getChat('oc_multi')).resolves.toEqual({ chatId: 'oc_multi', name: '研发大群', userCount: 5 });
+    await expect(service.getChat('oc_unknown')).resolves.toEqual({ chatId: 'oc_unknown', name: '未知人数群' });
+  });
+
+  it('uploads the bundled kitten PNG as avatar and passes image_key when creating a chat, caching across calls', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ code: 0, tenant_access_token: 'token', expire: 7200 }))
+      .mockResolvedValueOnce(response({ code: 0, data: { image_key: 'img_v3_kitten_avatar' } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { chat_id: 'oc_first' } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { chat_id: 'oc_second' } }));
+    const service = createLarkCardService({ LARK_APP_ID: 'cli_test', LARK_APP_SECRET: 'secret_test' }, fetcher as typeof fetch);
+
+    await expect(service.createChat({ name: '小A同学 · AgentDock', memberOpenIds: ['ou_alice'] })).resolves.toEqual({ chatId: 'oc_first' });
+    await expect(service.createChat({ name: '第二群' })).resolves.toEqual({ chatId: 'oc_second' });
+
+    // 只上传一次头像，第二次建群复用缓存的 image_key：token + uploadImage + createChat * 2
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(String(fetcher.mock.calls[1]?.[0])).toContain('/open-apis/im/v1/images');
+    const uploadForm = fetcher.mock.calls[1]?.[1]?.body as FormData;
+    expect(uploadForm).toBeInstanceOf(FormData);
+    expect(uploadForm.get('image_type')).toBe('avatar');
+    const uploadedImage = uploadForm.get('image') as File;
+    expect(uploadedImage.type).toBe('image/png');
+    const header = new Uint8Array(await uploadedImage.arrayBuffer()).slice(0, 8);
+    expect(Array.from(header)).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    const firstChatBody = JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body));
+    expect(firstChatBody).toMatchObject({
+      name: '小A同学 · AgentDock',
+      chat_mode: 'group',
+      chat_type: 'private',
+      avatar: 'img_v3_kitten_avatar',
+      user_id_list: ['ou_alice']
+    });
+    const secondChatBody = JSON.parse(String(fetcher.mock.calls[3]?.[1]?.body));
+    expect(secondChatBody).toMatchObject({
+      name: '第二群',
+      avatar: 'img_v3_kitten_avatar'
+    });
+  });
+
+  it('gracefully creates a chat without avatar when avatar upload fails, and retries on the next chat', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const fetcher = vi.fn()
+        .mockResolvedValueOnce(response({ code: 0, tenant_access_token: 'token', expire: 7200 }))
+        .mockResolvedValueOnce(response({ code: 99991672, msg: 'no image permission' }, 403))
+        .mockResolvedValueOnce(response({ code: 0, data: { chat_id: 'oc_degraded' } }))
+        .mockResolvedValueOnce(response({ code: 0, data: { image_key: 'img_v3_retry_ok' } }))
+        .mockResolvedValueOnce(response({ code: 0, data: { chat_id: 'oc_recovered' } }));
+      const service = createLarkCardService({ LARK_APP_ID: 'cli_test', LARK_APP_SECRET: 'secret_test' }, fetcher as typeof fetch);
+
+      await expect(service.createChat({ name: '降级群' })).resolves.toEqual({ chatId: 'oc_degraded' });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).not.toHaveProperty('avatar');
+
+      await expect(service.createChat({ name: '恢复群' })).resolves.toEqual({ chatId: 'oc_recovered' });
+      expect(JSON.parse(String(fetcher.mock.calls[4]?.[1]?.body))).toMatchObject({ avatar: 'img_v3_retry_ok' });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('uses an explicit avatar image_key directly without uploading the default image', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ code: 0, tenant_access_token: 'token', expire: 7200 }))
+      .mockResolvedValueOnce(response({ code: 0, data: { chat_id: 'oc_custom' } }));
+    const service = createLarkCardService({ LARK_APP_ID: 'cli_test', LARK_APP_SECRET: 'secret_test' }, fetcher as typeof fetch);
+
+    await expect(service.createChat({ name: '自定义头像群', avatar: 'img_v3_custom' })).resolves.toEqual({ chatId: 'oc_custom' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ avatar: 'img_v3_custom' });
+  });
 });

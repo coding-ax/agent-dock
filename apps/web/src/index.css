@@ -335,16 +335,22 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
 /* ---------- 首页标题 ---------- */
 .ui-hero-title { color: rgb(var(--zinc-900)); }
 
-/* 暗色下：纯黑的单色品牌图标（Cursor 等）反相成浅色；饱和的 700/800 文字色提亮，否则深蓝 / 深绿压在同色系的深底上看不清。 */
+/* 暗色下：纯黑的单色品牌图标（Cursor 等）反相成浅色；饱和的 700/800/900/950 文字色提亮，否则深蓝 / 深绿 / 深红压在同色系的深底上看不清。 */
 html[data-theme="dark"] .ui-mono-brand:not(.invert) { filter: invert(1) hue-rotate(180deg); }
 html[data-theme="dark"] .text-red-500 { color: rgb(248 113 113); }
-html[data-theme="dark"] .text-red-600, html[data-theme="dark"] .text-red-700, html[data-theme="dark"] .text-red-800 { color: rgb(252 165 165); }
+html[data-theme="dark"] .text-red-600, html[data-theme="dark"] .text-red-700, html[data-theme="dark"] .text-red-800, html[data-theme="dark"] .text-red-900, html[data-theme="dark"] .text-red-950 { color: rgb(252 165 165); }
 html[data-theme="dark"] .text-amber-500, html[data-theme="dark"] .text-amber-600 { color: rgb(251 191 36); }
 html[data-theme="dark"] .text-amber-700, html[data-theme="dark"] .text-amber-800, html[data-theme="dark"] .text-amber-900, html[data-theme="dark"] .text-amber-950 { color: rgb(252 211 77); }
-html[data-theme="dark"] .text-orange-700 { color: rgb(253 186 116); }
-html[data-theme="dark"] .text-emerald-600, html[data-theme="dark"] .text-emerald-700, html[data-theme="dark"] .text-emerald-800 { color: rgb(110 231 183); }
-html[data-theme="dark"] .text-sky-500, html[data-theme="dark"] .text-sky-600, html[data-theme="dark"] .text-sky-700 { color: rgb(125 211 252); }
-html[data-theme="dark"] .text-blue-600, html[data-theme="dark"] .text-blue-700 { color: rgb(147 197 253); }
+html[data-theme="dark"] .text-orange-700, html[data-theme="dark"] .text-orange-800, html[data-theme="dark"] .text-orange-900, html[data-theme="dark"] .text-orange-950 { color: rgb(253 186 116); }
+html[data-theme="dark"] .text-emerald-600, html[data-theme="dark"] .text-emerald-700, html[data-theme="dark"] .text-emerald-800, html[data-theme="dark"] .text-emerald-900, html[data-theme="dark"] .text-emerald-950 { color: rgb(110 231 183); }
+html[data-theme="dark"] .text-sky-500, html[data-theme="dark"] .text-sky-600, html[data-theme="dark"] .text-sky-700, html[data-theme="dark"] .text-sky-800, html[data-theme="dark"] .text-sky-900, html[data-theme="dark"] .text-sky-950 { color: rgb(125 211 252); }
+html[data-theme="dark"] .text-blue-600, html[data-theme="dark"] .text-blue-700, html[data-theme="dark"] .text-blue-800, html[data-theme="dark"] .text-blue-900, html[data-theme="dark"] .text-blue-950 { color: rgb(147 197 253); }
+/* 暗色下 text-white 映射到 --surface（深灰），但落在高饱和彩色按钮/气泡（sky-600 / blue-500 / blue-600 / emerald-600）上应保持纯白字。 */
+html[data-theme="dark"] .bg-sky-600.text-white,
+html[data-theme="dark"] .bg-blue-500.text-white,
+html[data-theme="dark"] .bg-blue-600.text-white,
+html[data-theme="dark"] .bg-emerald-600.text-white,
+html[data-theme="dark"] .\!bg-emerald-600.\!text-white { color: rgb(255 255 255) !important; }
 
 /* ---------- 弹窗退出动画（配合 ExitGate） ---------- */
 [data-closing] { pointer-events: none; }
@@ -405,3 +411,29 @@ html[data-theme="dark"] .ui-selected-tile { background-color: rgb(var(--accent) 
 .ui-wordmark-dark { display: none; }
 html[data-theme="dark"] .ui-wordmark-light { display: none; }
 html[data-theme="dark"] .ui-wordmark-dark { display: block; }
+
+/* ---------- 对话流内搜索高亮（CSS Custom Highlight API + 焦点项提示） ---------- */
+::highlight(timeline-search) {
+  background-color: rgba(250, 204, 21, 0.36);
+}
+::highlight(timeline-search-active) {
+  background-color: rgba(249, 115, 22, 0.58);
+  color: rgb(24 24 27);
+}
+html[data-theme="dark"] ::highlight(timeline-search) {
+  background-color: rgba(250, 204, 21, 0.28);
+}
+html[data-theme="dark"] ::highlight(timeline-search-active) {
+  background-color: rgba(251, 146, 60, 0.72);
+  color: rgb(24 24 27);
+}
+.ui-search-active-item {
+  border-radius: 12px;
+  box-shadow: inset 3px 0 0 rgba(249, 115, 22, 0.75);
+  padding-left: 8px;
+  margin-left: -8px;
+  transition: box-shadow 160ms ease;
+}
+html[data-theme="dark"] .ui-search-active-item {
+  box-shadow: inset 3px 0 0 rgba(251, 146, 60, 0.85);
+}

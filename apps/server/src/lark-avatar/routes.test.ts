@@ -31,6 +31,20 @@ const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input: RequestIn
 
 const makeClient = (input: {
   chats?: LarkAvailableChat[];
+  history?: Array<{
+    messageId: string;
+    chatId: string;
+    fromId: string;
+    type: number;
+    chatType: number;
+    content: string;
+    createTime: number;
+    position: number;
+    rootId: string;
+    parentId: string;
+    threadId: string;
+    raw: Record<string, unknown>;
+  }>;
   nonNumericChatAlias?: string;
 } = {}) => {
   const sent: Array<Parameters<LarkProtocolClientLike['sendText']>[0]> = [];
@@ -44,15 +58,18 @@ const makeClient = (input: {
     },
     async lookup(chatIds, userIds) {
       return {
-        chats: new Map(chatIds.map(id => [id, {
-          id: input.nonNumericChatAlias === id ? 'oc_non_numeric' : id,
-          name: id === 'oc_group' ? '测试群' : '',
-          type: 2,
-          chatMode: 1,
-          userCount: 2,
-          memberCount: 2,
-          lastMessagePosition: 10
-        }])),
+        chats: new Map(chatIds.map(id => {
+          const matched = input.chats?.find(chat => chat.id === id);
+          return [id, {
+            id: input.nonNumericChatAlias === id ? 'oc_non_numeric' : id,
+            name: matched?.name || (id === 'oc_group' ? '测试群' : ''),
+            type: matched?.type ?? 2,
+            chatMode: matched?.chatMode ?? 1,
+            userCount: matched?.userCount ?? 2,
+            memberCount: matched?.memberCount ?? 2,
+            lastMessagePosition: matched?.lastMessagePosition ?? 10
+          }];
+        })),
         chatters: new Map(userIds.map(id => [id, {
           id,
           name: id === '42' ? '张三' : id,
@@ -60,7 +77,12 @@ const makeClient = (input: {
         }]))
       };
     },
-    async listChats() { return input.chats ?? []; }
+    async listChats() { return input.chats ?? []; },
+    async history(chatId) {
+      return (input.history ?? [])
+        .filter(item => item.chatId === chatId)
+        .map(item => ({ ...item, cid: '', atUserIds: [], atMe: false }));
+    }
   };
   return { client, sent };
 };
@@ -131,6 +153,64 @@ describe('Lark avatar routes', () => {
     });
     expect(saved.body).not.toContain('appSecret');
     expect(saved.body).not.toContain('cookies');
+  });
+
+  it('preserves trae agentId and agent settings when updating topic configuration via PUT /api/lark-avatar/config', async () => {
+    const { app } = await buildApp();
+    const initial = await app.inject({
+      method: 'PUT',
+      url: '/api/lark-avatar/config',
+      payload: {
+        agentId: 'trae',
+        model: 'glm-4',
+        reasoningEffort: 'medium',
+        workspace: '/tmp/trae-work',
+        replyInTopic: true,
+        replyMode: 'direct'
+      }
+    });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json().config.agentId).toBe('trae');
+
+    const updatedTopic = await app.inject({
+      method: 'PUT',
+      url: '/api/lark-avatar/config',
+      payload: {
+        replyInTopic: false,
+        replyMode: 'thread'
+      }
+    });
+    expect(updatedTopic.statusCode).toBe(200);
+    expect(updatedTopic.json().config).toMatchObject({
+      agentId: 'trae',
+      model: 'glm-4',
+      reasoningEffort: 'medium',
+      workspace: '/tmp/trae-work',
+      replyInTopic: false,
+      replyMode: 'thread'
+    });
+
+    const updatedWithBlankAgent = await app.inject({
+      method: 'PUT',
+      url: '/api/lark-avatar/config',
+      payload: {
+        replyMode: 'quote',
+        agentId: ''
+      }
+    });
+    expect(updatedWithBlankAgent.statusCode).toBe(200);
+    expect(updatedWithBlankAgent.json().config).toMatchObject({
+      agentId: 'trae',
+      model: 'glm-4',
+      reasoningEffort: 'medium',
+      workspace: '/tmp/trae-work',
+      replyInTopic: false,
+      replyMode: 'quote'
+    });
+
+    const fetched = await app.inject({ method: 'GET', url: '/api/lark-avatar/config' });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json().config.agentId).toBe('trae');
   });
 
   it('rejects invalid reaction settings and lists recent reaction triggers', async () => {
@@ -246,7 +326,12 @@ describe('Lark avatar routes', () => {
     it('resolves chat, reply target and mentions, then sends through the web gateway', async () => {
       const fake = makeClient();
       const { app } = await buildApp(fake.client);
-      await login(app);
+      const logged = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/login/cookie',
+        payload: { cookie: 'session=abc; swp_csrf_token=csrf; passport_web_did=did', region: 'feishu' }
+      });
+      expect(logged.statusCode).toBe(200);
 
       const response = await app.inject({
         method: 'POST',
@@ -274,7 +359,12 @@ describe('Lark avatar routes', () => {
     it('replies inside the thread when inThread is true', async () => {
       const fake = makeClient();
       const { app } = await buildApp(fake.client);
-      await login(app);
+      const logged = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/login/cookie',
+        payload: { cookie: 'session=abc; swp_csrf_token=csrf; passport_web_did=did', region: 'feishu' }
+      });
+      expect(logged.statusCode).toBe(200);
 
       const response = await app.inject({
         method: 'POST',
@@ -289,7 +379,12 @@ describe('Lark avatar routes', () => {
     it('accepts 19-digit chat, root and user ids as strings', async () => {
       const fake = makeClient();
       const { app } = await buildApp(fake.client);
-      await login(app);
+      const logged = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/login/cookie',
+        payload: { cookie: 'session=abc; swp_csrf_token=csrf; passport_web_did=did', region: 'feishu' }
+      });
+      expect(logged.statusCode).toBe(200);
       const chatId = '7246718914305097756';
       const rootId = '7246718914305097758';
       const userId = '7246718914305097757';
@@ -375,6 +470,136 @@ describe('Lark avatar routes', () => {
       expect(invalid.statusCode).toBe(404);
       expect(invalid.json().error.code).toBe('CHAT_NOT_FOUND');
       expect(invalid.json().error.hint).toContain('openChatId');
+    });
+  });
+
+  describe('private group analysis and anti-leak safeguards', () => {
+    it('persists privateReplyChatId and reactionTriggerIntent and validates invalid intent', async () => {
+      const { app } = await buildApp();
+      const saved = await app.inject({
+        method: 'PUT',
+        url: '/api/lark-avatar/config',
+        payload: {
+          reactionTriggerRoute: 'private_chat',
+          reactionTriggerIntent: 'summary',
+          privateReplyChatId: 'oc_my_private_notes'
+        }
+      });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().config).toMatchObject({
+        reactionTriggerRoute: 'private_chat',
+        reactionTriggerIntent: 'summary',
+        privateReplyChatId: 'oc_my_private_notes'
+      });
+
+      const badIntent = await app.inject({
+        method: 'PUT',
+        url: '/api/lark-avatar/config',
+        payload: { reactionTriggerIntent: 'leak_to_group' }
+      });
+      expect(badIntent.statusCode).toBe(400);
+      expect(badIntent.json().error.code).toBe('INVALID_REACTION_INTENT');
+    });
+
+    it('analyzes a group privately without sending anything to the target group and blocks same-chat forwarding', async () => {
+      const fake = makeClient({
+        chats: [
+          { id: '7001', openChatId: 'oc_boss_group', name: '老板核心群', type: 2, chatMode: 1, userCount: 8, memberCount: 8, lastMessagePosition: 2, updateTime: 0 },
+          { id: '7002', openChatId: 'oc_my_self', name: '我自己的私聊', type: 1, chatMode: 1, userCount: 2, memberCount: 2, lastMessagePosition: 1, updateTime: 0 }
+        ],
+        history: [{
+          messageId: 'm_boss_1',
+          chatId: '7001',
+          fromId: 'u_boss',
+          type: 4,
+          chatType: 2,
+          content: '周五前把重构方案发出来',
+          createTime: 1_700_000_000_000,
+          position: 2,
+          rootId: '',
+          parentId: '',
+          threadId: '',
+          raw: {}
+        }]
+      });
+      const { app } = await buildApp(fake.client);
+      const logged = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/login/cookie',
+        payload: { cookie: 'session=abc; swp_csrf_token=csrf; passport_web_did=did', region: 'feishu' }
+      });
+      expect(logged.statusCode).toBe(200);
+
+      // 1. 独立会话私密分析：不发任何消息到老板群
+      const independent = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/private-analyze',
+        payload: { chatId: '7001', mode: 'summary', delivery: 'independent', contextMessages: 20 }
+      });
+      expect(independent.statusCode).toBe(200);
+      expect(independent.json()).toMatchObject({
+        ok: true,
+        delivery: 'independent',
+        mode: 'summary',
+        chatId: '7001',
+        chatName: '老板核心群',
+        contextCount: 1,
+        sessionId: 'ses_test'
+      });
+      expect(fake.sent).toHaveLength(0);
+
+      // 2. 自定义模式缺少 prompt 返回 400
+      const missingPrompt = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/private-analyze',
+        payload: { chatId: '7001', mode: 'custom', delivery: 'independent' }
+      });
+      expect(missingPrompt.statusCode).toBe(400);
+      expect(missingPrompt.json().error.code).toBe('INVALID_INPUT');
+
+      // 3. 私密转发未配置目标会话时拦截
+      const noTarget = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/private-analyze',
+        payload: { chatId: '7001', mode: 'analyze', delivery: 'private_chat' }
+      });
+      expect(noTarget.statusCode).toBe(400);
+      expect(noTarget.json().error.code).toBe('PRIVATE_CHAT_NOT_CONFIGURED');
+
+      // 4. 私密转发目标与原群相同时拦截防泄密
+      await app.inject({
+        method: 'PUT',
+        url: '/api/lark-avatar/config',
+        payload: { privateReplyChatId: '7001' }
+      });
+      const sameTarget = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/private-analyze',
+        payload: { chatId: '7001', mode: 'analyze', delivery: 'private_chat' }
+      });
+      expect(sameTarget.statusCode).toBe(400);
+      expect(sameTarget.json().error.code).toBe('PRIVATE_CHAT_SAME_AS_TARGET');
+      expect(fake.sent).toHaveLength(0);
+
+      // 5. 配置合法私密接收会话后，只允许向私密接收会话转发，绝不发到老板群
+      await app.inject({
+        method: 'PUT',
+        url: '/api/lark-avatar/config',
+        payload: { privateReplyChatId: '7002' }
+      });
+      const forwarded = await app.inject({
+        method: 'POST',
+        url: '/api/lark-avatar/private-analyze',
+        payload: { chatId: '7001', mode: 'analyze', delivery: 'private_chat' }
+      });
+      expect(forwarded.statusCode).toBe(200);
+      expect(forwarded.json()).toMatchObject({
+        ok: true,
+        delivery: 'private_chat',
+        chatId: '7001',
+        targetChatId: '7002'
+      });
+      expect(fake.sent.every(item => item.chatId !== '7001')).toBe(true);
     });
   });
 });
