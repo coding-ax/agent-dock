@@ -1,6 +1,7 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  handoverGroupName, handoverKittenProfile, larkKittenAvatarPublicUrl, syncKittenBotProfile,
+  handoverGroupName, handoverKittenProfile, larkKittenAvatarPublicUrl, readKittenAvatar, syncKittenBotProfile,
   type HandoverCatLike
 } from './kitten-handover.js';
 import { LarkServiceError } from './service.js';
@@ -82,5 +83,12 @@ describe('sync kitten bot profile', () => {
     expect(result).toMatchObject({ ok: false, supported: false, updated: false, reason: 'BOT_UPDATE_UNSUPPORTED' });
     expect(result.message).toContain('飞书开放平台');
     expect(result.message).toContain('手动');
+  });
+
+  it('bundles the new pixel kitten PNG for both avatar serving and group chat avatar upload', async () => {
+    const bundled = await readKittenAvatar();
+    const pwaLogo = await readFile(new URL('../../../web/public/pwa-512.png', import.meta.url));
+    expect(Array.from(bundled.subarray(0, 8))).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(bundled.equals(pwaLogo)).toBe(true);
   });
 });

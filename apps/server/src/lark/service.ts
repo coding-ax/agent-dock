@@ -556,6 +556,13 @@ export function buildChoiceCard(input: LarkChoiceCardInput) {
   };
 }
 
+/** 源码里是 src/lark/assets；构建后 asset 被复制到 dist/assets，与 dist/cli.js 同级。 */
+export const kittenAvatarAssetUrl = new URL('./assets/kitten-avatar.png', import.meta.url);
+
+export function readKittenAvatar(): Promise<Buffer> {
+  return readFile(kittenAvatarAssetUrl);
+}
+
 type Fetch = typeof globalThis.fetch;
 
 export class LarkCardService {
@@ -563,6 +570,8 @@ export class LarkCardService {
   private tokenExpiresAt = 0;
   private loadingImageKey?: string;
   private loadingImagePromise?: Promise<string | undefined>;
+  private defaultChatAvatarKey?: string;
+  private defaultChatAvatarPromise?: Promise<string | undefined>;
   private readonly userNameCache = new Map<string, { name: string; expiresAt: number }>();
 
   constructor(private readonly config: LarkBotConfig, private readonly fetcher: Fetch = globalThis.fetch) {}
@@ -694,22 +703,47 @@ export class LarkCardService {
   /**
    * 创建群聊并把机器人放进群（机器人即群主），可选拉人。
    * 用于「托管给机器人」：建群后把该群与某个 AgentDock 会话绑定，群消息即驱动该会话。
+   * 默认自动上传内置的新猫咪 Logo PNG（image_type: 'avatar'）作为群头像；上传失败时记 warning 日志并降级为不带 avatar 建群。
    */
-  async createChat(input: { name: string; memberOpenIds?: string[] }): Promise<{ chatId: string }> {
+  async createChat(input: { name: string; memberOpenIds?: string[]; avatar?: string }): Promise<{ chatId: string }> {
     const name = input.name.trim();
     if (!name) throw new LarkServiceError('INVALID_CHAT_NAME', 'chat name is required', 400);
     const memberOpenIds = (input.memberOpenIds ?? []).map(id => id.trim()).filter(id => id.startsWith('ou_'));
+    const avatar = input.avatar?.trim() || await this.ensureDefaultChatAvatarKey();
     const payload = await this.request('/open-apis/im/v1/chats?user_id_type=open_id', {
       body: {
         name,
         chat_mode: 'group',
         chat_type: 'private',
+        ...(avatar ? { avatar } : {}),
         ...(memberOpenIds.length ? { user_id_list: memberOpenIds } : {})
       }
     });
     const chatId = String(payload.data?.chat_id ?? '').trim();
     if (!chatId.startsWith('oc_')) throw new LarkServiceError('INVALID_LARK_RESPONSE', 'create chat response did not include chat_id', 502);
     return { chatId };
+  }
+
+  /**
+   * 上传内置新猫咪 Logo PNG 为飞书 avatar 图片并缓存 image_key。
+   * 上传或读图失败时仅记 warning 日志并清空并发占位，让下次建群仍可重试，绝不阻断建群。
+   */
+  private ensureDefaultChatAvatarKey(): Promise<string | undefined> {
+    if (this.defaultChatAvatarKey) return Promise.resolve(this.defaultChatAvatarKey);
+    if (this.defaultChatAvatarPromise) return this.defaultChatAvatarPromise;
+    this.defaultChatAvatarPromise = (async () => {
+      try {
+        const bytes = await readKittenAvatar();
+        const imageKey = await this.uploadImage(bytes, 'kitten-avatar.png', 'avatar');
+        this.defaultChatAvatarKey = imageKey;
+        return imageKey;
+      } catch (error) {
+        this.defaultChatAvatarPromise = undefined;
+        console.warn('[lark] failed to upload default chat avatar; creating chat without avatar:', error instanceof Error ? error.message : String(error));
+        return undefined;
+      }
+    })();
+    return this.defaultChatAvatarPromise;
   }
 
   /**
@@ -969,11 +1003,11 @@ export class LarkCardService {
     return { messageId: replyId, chatId: payload.data?.chat_id };
   }
 
-  /** 上传图片为「消息」类型资源，返回飞书 image_key，供 image 消息或 post 内嵌 img 元素使用。 */
-  async uploadImage(bytes: Uint8Array, filename = 'image.png'): Promise<string> {
+  /** 上传图片到飞书开放平台，返回 image_key。默认 image_type 为 message，建群头像等场景可传 avatar。 */
+  async uploadImage(bytes: Uint8Array, filename = 'image.png', imageType: 'message' | 'avatar' = 'message'): Promise<string> {
     if (!bytes.length) throw new LarkServiceError('INVALID_IMAGE', '要发送的图片内容为空。', 400);
     const form = new FormData();
-    form.append('image_type', 'message');
+    form.append('image_type', imageType);
     const mime = imageMimeFromFilename(filename);
     form.append('image', new Blob([new Uint8Array(bytes)], { type: mime }), filename);
     const controller = new AbortController();

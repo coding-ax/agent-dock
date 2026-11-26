@@ -53,6 +53,7 @@ describe('HTTP API boundary', () => {
     const runtime = { getSession: vi.fn(async (id: string) => sessions[id]) };
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, tenant_access_token: 'token', expire: 7200 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { image_key: 'img_v3_handover_avatar' } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { chat_id: 'oc_handover' } }), { status: 200 }));
     const app = await buildApp({} as any, { lark: { env: {}, config: repos.config, cardMappings: repos.channelMappings, fetcher: fetcher as typeof fetch, listener: listenerPool(), runtime: runtime as any } }); apps.push(app);
 
@@ -67,8 +68,9 @@ describe('HTTP API boundary', () => {
     const duplicate = await app.inject({ method: 'POST', url: '/api/sessions/ses_web/handover', payload: { appId: 'cli_bot' } });
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.json().error.code).toBe('SESSION_ALREADY_HANDED_OVER');
-    // 只建了一次群：token + createChat 各一次，重复提交没有触发飞书调用。
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    // 只建了一次群：token + 上传默认群头像 + createChat 各一次，重复提交没有触发飞书调用。
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String((fetcher.mock.calls[2] as unknown as [string, RequestInit])[1].body))).toMatchObject({ avatar: 'img_v3_handover_avatar' });
   });
 
   it('rejects invalid handover member ids before creating another chat', async () => {
@@ -95,6 +97,7 @@ describe('HTTP API boundary', () => {
     const runtime = { getSession: vi.fn(async (id: string) => id === 'ses_new' ? { id, agentId: 'codex', source: 'assistant-main', title: '主会话' } : undefined) };
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, tenant_access_token: 'token', expire: 7200 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { image_key: 'img_v3_kitten' } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { chat_id: 'oc_kitten' } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0 }), { status: 200 }));
     const app = await buildApp({} as any, { lark: { env: {}, config: repos.config, cardMappings: repos.channelMappings, fetcher: fetcher as typeof fetch, listener: listenerPool(), runtime: runtime as any, assistant } }); apps.push(app);
@@ -106,7 +109,7 @@ describe('HTTP API boundary', () => {
       kitten: { name: '小B同学', generation: 2 },
       botProfile: { ok: true, supported: true, updated: true, name: '小B同学', generation: 2, avatarUpdated: true }
     });
-    const [patchUrl, patchInit] = fetcher.mock.calls[2] as unknown as [string, RequestInit];
+    const [patchUrl, patchInit] = fetcher.mock.calls[3] as unknown as [string, RequestInit];
     expect(String(patchUrl)).toContain('/open-apis/application/v7/applications/cli_bot/base');
     expect(patchInit.method).toBe('PATCH');
     expect(JSON.parse(String(patchInit.body))).toMatchObject({
