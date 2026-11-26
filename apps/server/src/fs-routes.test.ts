@@ -10,7 +10,7 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
-async function buildApp(options: { cwd: string; sshHost?: string; homeDir: string; tempDir: string }) {
+async function buildApp(options: { cwd: string; sshHost?: string; homeDir: string; tempDir: string; maxDirEntries?: number }) {
   const app = Fastify();
   app.addHook('onRequest', async request => {
     (request as unknown as { webClaim: { kind: string } }).webClaim = {
@@ -20,7 +20,11 @@ async function buildApp(options: { cwd: string; sshHost?: string; homeDir: strin
   await registerFsRoutes(
     app,
     { getSession: async () => ({ id: 'ses_1', cwd: options.cwd, ...(options.sshHost ? { sshHost: options.sshHost } : {}) }) } as any,
-    { homeDir: options.homeDir, tempDir: options.tempDir }
+    {
+      homeDir: options.homeDir,
+      tempDir: options.tempDir,
+      ...(options.maxDirEntries !== undefined ? { maxDirEntries: options.maxDirEntries } : {})
+    }
   );
   return app;
 }
@@ -257,6 +261,86 @@ describe('session file preview security & formats', () => {
     } finally {
       await localApp.close();
       await sshApp.close();
+    }
+  });
+
+  it('returns structured directory listings with sorting, hidden toggle, truncation, and security boundaries', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentdock-dir-preview-'));
+    directories.push(root);
+    const workspace = join(root, 'workspace');
+    const homeDir = join(root, 'home');
+    const externalDir = join(homeDir, 'projects', 'demo-site');
+    const nestedDir = join(externalDir, 'src');
+    const sshDir = join(homeDir, '.ssh');
+
+    await mkdir(join(workspace, 'docs'), { recursive: true });
+    await mkdir(nestedDir, { recursive: true });
+    await mkdir(join(externalDir, 'assets'), { recursive: true });
+    await mkdir(join(externalDir, '.github'), { recursive: true });
+    await mkdir(sshDir, { recursive: true });
+
+    await writeFile(join(workspace, 'docs', 'guide.md'), '# Guide');
+    await writeFile(join(externalDir, 'README.md'), '# Demo Site');
+    await writeFile(join(externalDir, 'package.json'), '{"name":"demo-site"}');
+    await writeFile(join(externalDir, '.gitignore'), 'node_modules\n');
+    await writeFile(join(externalDir, '.DS_Store'), 'junk');
+    await writeFile(join(nestedDir, 'index.ts'), 'export const ok = true;\n');
+
+    const app = await buildApp({ cwd: workspace, homeDir, tempDir: root, maxDirEntries: 3 });
+    try {
+      // 1. master previews external directory via absolute path (hidden filtered by default, folders first)
+      const extRes = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(externalDir)}` });
+      expect(extRes.statusCode).toBe(200);
+      const extBody = extRes.json();
+      expect(extBody.kind).toBe('directory');
+      expect(extBody.includeHidden).toBe(false);
+      expect(extBody.hiddenCount).toBe(2); // .github, .gitignore (.DS_Store ignored)
+      expect(extBody.totalCount).toBe(4); // assets, src, package.json, README.md
+      expect(extBody.truncated).toBe(true);
+      expect(extBody.entries.map((e: any) => [e.name, e.kind])).toEqual([
+        ['assets', 'directory'],
+        ['src', 'directory'],
+        ['package.json', 'file']
+      ]);
+      expect(extBody.entries[2].size).toBeGreaterThan(0);
+      expect(extBody.parentPath).toBeTruthy();
+
+      // 2. master previews via ~/ path with ?hidden=1
+      const tildeRes = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent('~/projects/demo-site')}&hidden=1` });
+      expect(tildeRes.statusCode).toBe(200);
+      const tildeBody = tildeRes.json();
+      expect(tildeBody.kind).toBe('directory');
+      expect(tildeBody.includeHidden).toBe(true);
+      expect(tildeBody.totalCount).toBe(6);
+      expect(tildeBody.entries.map((e: any) => e.name)).toEqual(['.github', 'assets', 'src']);
+
+      // 3. download=1 on directory is rejected
+      const dlRes = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(externalDir)}&download=1` });
+      expect(dlRes.statusCode).toBe(400);
+
+      // 4. sensitive directory (~/.ssh) blocked for master too
+      const sshRes = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent('~/.ssh')}` });
+      expect(sshRes.statusCode).toBe(403);
+
+      // 5. session share link can list workspace subdirectory, cannot escape above workspace root
+      const shared = { 'x-test-claim': 'session' };
+      const wsSubRes = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=docs`, headers: shared });
+      expect(wsSubRes.statusCode).toBe(200);
+      const wsSubBody = wsSubRes.json();
+      expect(wsSubBody.kind).toBe('directory');
+      expect(wsSubBody.entries).toHaveLength(1);
+      expect(wsSubBody.entries[0].path).toBe('docs/guide.md');
+      expect(wsSubBody.parentPath).toBeTruthy();
+
+      const wsRootRes = await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(wsSubBody.parentPath)}`, headers: shared });
+      expect(wsRootRes.statusCode).toBe(200);
+      expect(wsRootRes.json().parentPath).toBeNull();
+
+      // 6. session share link blocked from external directory and ~/
+      expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent(externalDir)}`, headers: shared })).statusCode).toBe(403);
+      expect((await app.inject({ url: `/api/sessions/ses_1/fs/read?path=${encodeURIComponent('~/projects/demo-site')}`, headers: shared })).statusCode).toBe(403);
+    } finally {
+      await app.close();
     }
   });
 });

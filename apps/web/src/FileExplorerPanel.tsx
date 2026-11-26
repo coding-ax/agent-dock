@@ -2,11 +2,18 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  ArrowUp,
   ChevronRight,
   Code2,
   Download,
   Eye,
+  EyeOff,
   File as FileIcon,
+  FileAudio,
+  FileCode2,
+  FileImage,
+  FileText,
+  FileVideo,
   Folder as FolderIcon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -15,8 +22,9 @@ import {
 import { Highlight, Prism, themes } from 'prism-react-renderer';
 import { Spinner } from './Loaders';
 import { HoverTooltip } from './HoverTooltip';
-import { api, type FsListEntry } from './api';
+import { api, type FsDirectoryEntry, type FsListEntry, type FsReadDirectoryResult } from './api';
 import {
+  buildDirectoryBreadcrumbs,
   filePreviewPath,
   formatLineRange,
   isAudioFilePath,
@@ -182,6 +190,9 @@ export function FileExplorerPanel({
     previewPath && isMarkdownFilePath(previewPath) && targetLine ? 'source' : 'preview'
   );
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
+  // 从目录预览点进文件时记住来源目录，便于一键返回所在目录。
+  const [returnDir, setReturnDir] = useState<string | undefined>(undefined);
 
   // 复用右栏单个文件预览 Tab：每次点击新文件/行号时同步选中状态并默认收起文件树。
   useEffect(() => {
@@ -197,6 +208,8 @@ export function FileExplorerPanel({
     setViewMode(nextPreview && isMarkdownFilePath(nextPreview) && targetLine ? 'source' : 'preview');
     setTreeOpen(false);
     setLightboxOpen(false);
+    setShowHidden(false);
+    setReturnDir(undefined);
   }, [initialPath, targetLine, targetEndLine, previewNonce, cwd]);
 
   const selectedIsSvg = isSvgFilePath(selected);
@@ -205,7 +218,7 @@ export function FileExplorerPanel({
   const selectedIsAudio = isAudioFilePath(selected);
   const selectedIsPdf = /\.pdf$/i.test(selected ?? '');
   const selectedIsMarkdown = isMarkdownFilePath(selected);
-  const selectedName = selected ? splitPath(selected).at(-1) : undefined;
+  const selectedName = selected ? (splitPath(selected).at(-1) ?? (selected === '/' ? '/' : selected)) : undefined;
   const lineBadge = formatLineRange(activeLine, activeEndLine);
 
   const shouldFetchText = Boolean(selected) && !disabledReason && !selectedIsPdf && !selectedIsVideo && !selectedIsAudio && (
@@ -221,15 +234,40 @@ export function FileExplorerPanel({
     staleTime: 10_000
   });
   const file = useQuery({
-    queryKey: ['fs-read', sessionId, selected, selectedIsSvg ? 'text' : 'default'],
-    queryFn: () => api.fsReadText(sessionId, selected!, selectedIsSvg ? { format: 'text' } : undefined),
+    queryKey: ['fs-read', sessionId, selected, selectedIsSvg ? 'text' : 'default', showHidden ? 'hidden' : 'visible'],
+    queryFn: () => api.fsReadText(sessionId, selected!, {
+      ...(selectedIsSvg ? { format: 'text' as const } : {}),
+      ...(showHidden ? { hidden: true } : {})
+    }),
     enabled: shouldFetchText,
     retry: false
   });
 
-  const canToggleMode = Boolean(selected && (selectedIsMarkdown || selectedIsSvg));
+  const dirData = file.data && file.data.kind === 'directory' ? file.data : undefined;
+  const textData = file.data && file.data.kind !== 'directory' ? file.data : undefined;
+  const isDirectory = Boolean(dirData);
+
+  const canToggleMode = Boolean(selected && !isDirectory && (selectedIsMarkdown || selectedIsSvg));
   const rawUrl = selected ? api.fsReadUrl(sessionId, selected) : undefined;
-  const downloadUrl = selected ? api.fsDownloadUrl(sessionId, selected) : undefined;
+  const downloadUrl = selected && !isDirectory ? api.fsDownloadUrl(sessionId, selected) : undefined;
+
+  const openDirectory = (dirPath: string) => {
+    setSelected(dirPath);
+    setReturnDir(undefined);
+    setActiveLine(undefined);
+    setActiveEndLine(undefined);
+    setViewMode('preview');
+    setLightboxOpen(false);
+  };
+
+  const openFileFromDirectory = (filePath: string, fromDir: string) => {
+    setReturnDir(fromDir);
+    setSelected(filePath);
+    setActiveLine(undefined);
+    setActiveEndLine(undefined);
+    setViewMode('preview');
+    setLightboxOpen(false);
+  };
 
   return <div className="flex h-full min-h-0 flex-col bg-white">
     <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-zinc-200 px-2.5 text-[12px]">
@@ -280,6 +318,18 @@ export function FileExplorerPanel({
         </div>
       ) : (
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          {returnDir && !isDirectory && (
+            <button
+              type="button"
+              onClick={() => openDirectory(returnDir)}
+              data-testid="back-to-directory-btn"
+              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-1.5 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+            >
+              <ArrowLeft size={11} />
+              <span>目录</span>
+            </button>
+          )}
+          {isDirectory && <FolderIcon size={13} className="shrink-0 text-amber-500" />}
           <span className="truncate font-mono text-[12px] font-medium text-zinc-700" title={selected ?? '文件预览'}>
             {selectedName ?? '文件预览'}
           </span>
@@ -367,6 +417,7 @@ export function FileExplorerPanel({
                     setPath(next);
                   } else {
                     setSelected(next);
+                    setReturnDir(undefined);
                     setActiveLine(undefined);
                     setActiveEndLine(undefined);
                     setViewMode('preview');
@@ -442,21 +493,30 @@ export function FileExplorerPanel({
             <div className="m-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-700">
               {file.error.message}
             </div>
-          ) : file.data && selectedIsMarkdown && viewMode === 'preview' ? (
+          ) : dirData ? (
+            <DirectoryPreviewView
+              dir={dirData}
+              cwd={cwd}
+              showHidden={showHidden}
+              onToggleHidden={() => setShowHidden(value => !value)}
+              onOpenDirectory={openDirectory}
+              onOpenFile={filePath => openFileFromDirectory(filePath, dirData.path)}
+            />
+          ) : textData && selectedIsMarkdown && viewMode === 'preview' ? (
             <div className="min-h-0 flex-1 overflow-auto">
               <div className="truncate border-b border-zinc-100 px-4 py-2 font-mono text-[11px] text-zinc-400" title={selected}>{selected}</div>
               <article className="markdown max-w-[78ch] p-4 text-[13px] leading-6 text-zinc-800">
-                <MarkdownContent sessionId={sessionId} showLinkedImageThumbnails={false}>{file.data.content}</MarkdownContent>
+                <MarkdownContent sessionId={sessionId} showLinkedImageThumbnails={false}>{textData.content}</MarkdownContent>
               </article>
             </div>
-          ) : file.data ? (
+          ) : textData ? (
             <div className="min-h-0 flex-1 overflow-auto">
               <div className="flex items-center justify-between gap-2 border-b border-zinc-100 px-3 py-1.5 font-mono text-[11px] text-zinc-400">
                 <span className="truncate" title={selected}>{selected}</span>
-                <span className="shrink-0 tabular-nums">{formatSize(file.data.size)}</span>
+                <span className="shrink-0 tabular-nums">{formatSize(textData.size)}</span>
               </div>
               <CodeFileViewer
-                content={file.data.content}
+                content={textData.content}
                 filename={selectedName}
                 targetLine={activeLine}
                 targetEndLine={activeEndLine}
@@ -468,6 +528,160 @@ export function FileExplorerPanel({
       </div>
     )}
   </div>;
+}
+
+function EntryIcon({ entry }: { entry: FsDirectoryEntry }) {
+  if (entry.kind === 'directory') {
+    return <FolderIcon size={15} className="shrink-0 text-amber-500" />;
+  }
+  if (isImageFilePath(entry.name)) {
+    return <FileImage size={15} className="shrink-0 text-sky-500" />;
+  }
+  if (isVideoFilePath(entry.name)) {
+    return <FileVideo size={15} className="shrink-0 text-blue-500" />;
+  }
+  if (isAudioFilePath(entry.name)) {
+    return <FileAudio size={15} className="shrink-0 text-emerald-500" />;
+  }
+  if (isMarkdownFilePath(entry.name)) {
+    return <FileText size={15} className="shrink-0 text-blue-500" />;
+  }
+  if (languageForFilename(entry.name) !== 'plain') {
+    return <FileCode2 size={15} className="shrink-0 text-zinc-500" />;
+  }
+  return <FileIcon size={15} className="shrink-0 text-zinc-400" />;
+}
+
+function DirectoryPreviewView({
+  dir,
+  cwd,
+  showHidden,
+  onToggleHidden,
+  onOpenDirectory,
+  onOpenFile
+}: {
+  dir: FsReadDirectoryResult;
+  cwd: string;
+  showHidden: boolean;
+  onToggleHidden(): void;
+  onOpenDirectory(path: string): void;
+  onOpenFile(path: string): void;
+}) {
+  const crumbs = useMemo(() => buildDirectoryBreadcrumbs(dir.path, cwd), [dir.path, cwd]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="directory-preview-view">
+      {/* 路径面包屑 + 返回上级 */}
+      <div className="flex shrink-0 items-center gap-1.5 border-b border-zinc-200 bg-zinc-50/70 px-3 py-2">
+        {dir.parentPath && (
+          <HoverTooltip content="返回上级目录">
+            <button
+              type="button"
+              onClick={() => onOpenDirectory(dir.parentPath!)}
+              aria-label="返回上级目录"
+              data-testid="directory-parent-btn"
+              className="grid h-6 w-6 shrink-0 place-items-center rounded-md border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+            >
+              <ArrowUp size={13} />
+            </button>
+          </HoverTooltip>
+        )}
+        <nav
+          aria-label="目录路径"
+          data-testid="directory-breadcrumbs"
+          className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto whitespace-nowrap text-[12px] text-zinc-500"
+        >
+          {crumbs.map((crumb, index) => {
+            const isLast = index === crumbs.length - 1;
+            return (
+              <span key={`${crumb.path}:${index}`} className="flex shrink-0 items-center gap-0.5">
+                {index > 0 && <ChevronRight size={11} className="shrink-0 text-zinc-300" />}
+                {isLast ? (
+                  <span className="rounded px-1 py-0.5 font-mono font-medium text-zinc-800" title={dir.absolutePath}>
+                    {crumb.label}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onOpenDirectory(crumb.path)}
+                    title={crumb.path}
+                    className="rounded px-1 py-0.5 font-mono transition-colors hover:bg-zinc-200/70 hover:text-zinc-900"
+                  >
+                    {crumb.label}
+                  </button>
+                )}
+              </span>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* 统计栏 + 隐藏文件开关 */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-3 py-1.5 text-[11px] text-zinc-500">
+        <span className="tabular-nums">
+          {dir.truncated ? `已展示 ${dir.entries.length} / ${dir.totalCount} 项` : `共 ${dir.totalCount} 项`}
+        </span>
+        {dir.hiddenCount > 0 && (
+          <button
+            type="button"
+            onClick={onToggleHidden}
+            data-testid="toggle-hidden-btn"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800"
+          >
+            {showHidden ? <EyeOff size={11} /> : <Eye size={11} />}
+            <span>{showHidden ? '隐藏点文件' : `显示隐藏文件 (${dir.hiddenCount})`}</span>
+          </button>
+        )}
+      </div>
+
+      {dir.truncated && (
+        <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800">
+          目录条目较多，仅展示前 {dir.entries.length} 项（共 {dir.totalCount} 项）
+        </div>
+      )}
+
+      {/* 目录项列表 */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {dir.entries.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-2 px-4 py-10 text-center text-[12px] text-zinc-400">
+            <span>空目录</span>
+            {dir.hiddenCount > 0 && !showHidden && (
+              <button
+                type="button"
+                onClick={onToggleHidden}
+                className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
+              >
+                显示 {dir.hiddenCount} 个隐藏项
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="divide-y divide-zinc-100 py-0.5" data-testid="directory-entry-list">
+            {dir.entries.map(entry => (
+              <button
+                key={entry.path}
+                type="button"
+                onClick={() => (entry.kind === 'directory' ? onOpenDirectory(entry.path) : onOpenFile(entry.path))}
+                title={entry.name}
+                data-testid={`directory-entry-${entry.kind}`}
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[12.5px] transition-colors hover:bg-zinc-100/80"
+              >
+                <EntryIcon entry={entry} />
+                <span className="min-w-0 flex-1 truncate font-mono text-zinc-800">{entry.name}</span>
+                {entry.kind === 'file' ? (
+                  <span className="shrink-0 font-mono text-[11px] tabular-nums text-zinc-400">
+                    {formatSize(entry.size)}
+                  </span>
+                ) : (
+                  <ChevronRight size={13} className="shrink-0 text-zinc-400" />
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function FileRow({ entry, active, onOpen }: { entry: FsListEntry; active: boolean; onOpen(): void }) {

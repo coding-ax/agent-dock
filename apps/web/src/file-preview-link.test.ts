@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildDirectoryBreadcrumbs,
   filePreviewPath,
   formatLineRange,
   isAudioFilePath,
@@ -68,7 +69,27 @@ describe('workspace file links', () => {
     expect(filePreviewPath('/Users/example/.codex/skills/example/SKILL.md', '/repo')).toBe('/Users/example/.codex/skills/example/SKILL.md');
     expect(filePreviewPath('file:///Users/example/.codex/skills/example/SKILL.md', '/repo')).toBe('/Users/example/.codex/skills/example/SKILL.md');
     expect(filePreviewPath('~/.agentdock/workspace/ai-song-video/yibanlaishuo_ai_song.mp4', '/repo')).toBe('~/.agentdock/workspace/ai-song-video/yibanlaishuo_ai_song.mp4');
+    expect(filePreviewPath('~', '/repo')).toBe('~');
     expect(filePreviewPath('https://example.com/a.md', '/repo')).toBeUndefined();
     expect(filePreviewPath('../secret', '/repo')).toBeUndefined();
+  });
+
+  it('builds directory breadcrumbs for absolute and workspace-relative paths', () => {
+    expect(buildDirectoryBreadcrumbs('/Users/codeax/workspace/agent-dock-site', '/Users/codeax/workspace/agent-dock')).toEqual([
+      { label: '/', path: '/' },
+      { label: 'Users', path: '/Users' },
+      { label: 'codeax', path: '/Users/codeax' },
+      { label: 'workspace', path: '/Users/codeax/workspace' },
+      { label: 'agent-dock-site', path: '/Users/codeax/workspace/agent-dock-site' }
+    ]);
+
+    expect(buildDirectoryBreadcrumbs('apps/web/src', '/Users/codeax/workspace/agent-dock')).toEqual([
+      { label: 'agent-dock', path: '/Users/codeax/workspace/agent-dock' },
+      { label: 'apps', path: 'apps' },
+      { label: 'web', path: 'apps/web' },
+      { label: 'src', path: 'apps/web/src' }
+    ]);
+
+    expect(buildDirectoryBreadcrumbs('/', '/repo')).toEqual([{ label: '/', path: '/' }]);
   });
 });

@@ -103,7 +103,8 @@ export const useDockStore = create<Store>(set => ({
     const owner = state.primarySessionId ?? input.sessionId;
     const key = paneKey(owner);
     const tabId = `files:${owner}`;
-    const title = input.title ?? (input.filePath.split('/').at(-1) || '文件');
+    const normalizedPath = input.filePath.replace(/\/+$/, '');
+    const title = input.title ?? (normalizedPath.split('/').at(-1) || (input.filePath.startsWith('/') ? '/' : '文件'));
     const existingIndex = state.tabs.findIndex(item => item.id === tabId);
     let tabs: PaneTab[];
     if (existingIndex >= 0) {

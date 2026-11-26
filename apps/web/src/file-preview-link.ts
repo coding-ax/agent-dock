@@ -132,5 +132,38 @@ export function workspacePreviewPath(link: string, cwd: string): string | undefi
 /** Keep workspace browsing relative, but allow absolute and ~/ links in the owner's read-only preview. */
 export function filePreviewPath(link: string, cwd: string): string | undefined {
   const local = localFileLink(link);
-  return workspacePreviewPath(link, cwd) ?? (local?.startsWith('/') || local?.startsWith('~/') ? local : undefined);
+  return workspacePreviewPath(link, cwd) ?? (local?.startsWith('/') || local?.startsWith('~/') || local === '~' ? local : undefined);
+}
+
+export interface DirectoryBreadcrumb {
+  label: string;
+  path: string;
+}
+
+/** 生成目录预览的面包屑节点，支持绝对路径与工作区相对路径。 */
+export function buildDirectoryBreadcrumbs(displayPath: string, cwd: string): DirectoryBreadcrumb[] {
+  const normalized = displayPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!normalized || displayPath === '/') {
+    return [{ label: '/', path: '/' }];
+  }
+  if (normalized.startsWith('/')) {
+    const parts = normalized.split('/').filter(Boolean);
+    const crumbs: DirectoryBreadcrumb[] = [{ label: '/', path: '/' }];
+    let acc = '';
+    for (const part of parts) {
+      acc += `/${part}`;
+      crumbs.push({ label: part, path: acc });
+    }
+    return crumbs;
+  }
+  const normalizedCwd = cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+  const rootLabel = normalizedCwd.split('/').at(-1) || '工作区';
+  const parts = normalized.split('/').filter(Boolean);
+  const crumbs: DirectoryBreadcrumb[] = [{ label: rootLabel, path: normalizedCwd || '.' }];
+  let acc = '';
+  for (const part of parts) {
+    acc = acc ? `${acc}/${part}` : part;
+    crumbs.push({ label: part, path: acc });
+  }
+  return crumbs;
 }

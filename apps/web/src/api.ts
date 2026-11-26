@@ -90,7 +90,21 @@ export type SshProbeResult = { host: string; ok: boolean; latencyMs: number; pla
 export type DockEvent = { id: string; sequence: number; type: string; timestamp: string; data: any; raw?: string };
 export type FsListEntry = { name: string; type: 'file' | 'dir'; size: number; mtime: string };
 export type FsListResult = { cwd: string; path: string; entries: FsListEntry[] };
-export type FsReadResult = { cwd: string; path: string; size: number; content: string };
+export type FsDirectoryEntry = { name: string; path: string; kind: 'directory' | 'file'; size: number; mtime: string };
+export type FsReadFileResult = { kind?: 'file'; cwd: string; path: string; size: number; content: string };
+export type FsReadDirectoryResult = {
+  kind: 'directory';
+  cwd: string;
+  path: string;
+  absolutePath: string;
+  parentPath: string | null;
+  entries: FsDirectoryEntry[];
+  totalCount: number;
+  truncated: boolean;
+  hiddenCount: number;
+  includeHidden: boolean;
+};
+export type FsReadResult = FsReadFileResult | FsReadDirectoryResult;
 export type Task = { id: string; sessionId: string; prompt: string; sentPrompt?: string | null; finalText?: string | null; status: string; origin?: string | null; createdAt: string; updatedAt: string };
 export type AssistantTaskState = 'running' | 'review' | 'needs_user' | 'closed';
 export type AssistantTask = {
@@ -605,9 +619,10 @@ export const api = {
   action: (id: string, action: string) => json(`/api/sessions/${id}/${action}`, { method: 'POST' }),
   permission: (id: string, permissionId: string, approved: boolean) => json(`/api/sessions/${id}/permissions/${permissionId}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved }) }),
   fsList: (id: string, path = '') => json<FsListResult>(`/api/sessions/${id}/fs/list?path=${encodeURIComponent(path)}`, undefined, true),
-  fsReadText: (id: string, path: string, options?: { format?: 'text' }) => {
+  fsReadText: (id: string, path: string, options?: { format?: 'text'; hidden?: boolean }) => {
     const query = new URLSearchParams({ path });
     if (options?.format) query.set('format', options.format);
+    if (options?.hidden) query.set('hidden', '1');
     // quietDenied=true：敏感文件黑名单或目录越界会返回 403，应在文件面板内联展示错误，不能把整页打成「访问被拒」。
     return json<FsReadResult>(`/api/sessions/${id}/fs/read?${query.toString()}`, undefined, true);
   },

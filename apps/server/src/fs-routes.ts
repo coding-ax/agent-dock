@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createReadStream, realpathSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { RuntimeError } from '@agent-dock/agent-dock-shared';
 import {
@@ -27,10 +27,26 @@ export interface FsListEntry {
   mtime: string;
 }
 
+export interface FsDirectoryEntry {
+  name: string;
+  path: string;
+  kind: 'directory' | 'file';
+  size: number;
+  mtime: string;
+}
+
 export interface FsRoutesOptions {
   homeDir?: string;
   tempDir?: string;
   extraMasterRoots?: string[];
+  /** 目录预览最大返回条数，防止 node_modules 等超大目录卡死接口或前端。 */
+  maxDirEntries?: number;
+}
+
+const DEFAULT_MAX_DIR_ENTRIES = 500;
+
+function compareEntryName(left: string, right: string): number {
+  return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
 }
 
 function badPath(error: unknown): never {
@@ -105,7 +121,7 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
     return { cwd: session.cwd, path: resolved.relative, entries };
   });
 
-  app.get<{ Params: { id: string }; Querystring: { path?: string; format?: string; download?: string } }>('/api/sessions/:id/fs/read', async (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { path?: string; format?: string; download?: string; hidden?: string } }>('/api/sessions/:id/fs/read', async (request, reply) => {
     const session = await runtime.getSession(request.params.id);
     if (!session) throw new RuntimeError('SESSION_NOT_FOUND', 'Session not found', 404);
     if (session.sshHost) {
@@ -113,40 +129,44 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
     }
     const userPath = request.query.path;
     if (!userPath) throw new RuntimeError('INVALID_PATH', '缺少 path 参数', 400);
-    const expandedPath = userPath.startsWith('~/')
-      ? join(options.homeDir ?? homedir(), userPath.slice(2))
-      : userPath;
+    const homeDir = options.homeDir ?? homedir();
+    const expandedPath = userPath === '~'
+      ? homeDir
+      : userPath.startsWith('~/')
+        ? join(homeDir, userPath.slice(2))
+        : userPath;
     if (isSensitivePath(userPath) || isSensitivePath(expandedPath)) {
       throw new RuntimeError('SENSITIVE_FILE_BLOCKED', '禁止预览或下载敏感文件', 403);
     }
 
     const claim = (request as unknown as { webClaim?: { kind: 'master' | 'session' } }).webClaim;
     const role: 'master' | 'session' = claim?.kind === 'session' ? 'session' : 'master';
+    const sessionRoots = role === 'session'
+      ? allowedReadRoots({
+          role,
+          cwd: session.cwd,
+          sessionId: request.params.id,
+          ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+          ...(options.tempDir ? { tempDir: options.tempDir } : {}),
+          ...(options.extraMasterRoots ? { extraMasterRoots: options.extraMasterRoots } : {})
+        })
+      : undefined;
+
+    let realCwd: string | undefined;
+    try { realCwd = realpathSync(session.cwd); }
+    catch { /* cwd 不存在时退回绝对路径展示。 */ }
 
     let resolved: { absolute: string; relative: string };
     try {
       if (isAbsolute(expandedPath)) {
         const realTarget = realpathSync(expandedPath);
-        if (role === 'session') {
-          const roots = allowedReadRoots({
-            role,
-            cwd: session.cwd,
-            sessionId: request.params.id,
-            ...(options.homeDir ? { homeDir: options.homeDir } : {}),
-            ...(options.tempDir ? { tempDir: options.tempDir } : {}),
-            ...(options.extraMasterRoots ? { extraMasterRoots: options.extraMasterRoots } : {})
-          });
-          if (!isRealPathWithinRoots(realTarget, roots)) {
-            throw new RuntimeError('FORBIDDEN', '会话分享链接只能预览该会话工作区及上传目录内的文件', 403);
-          }
+        if (role === 'session' && !isRealPathWithinRoots(realTarget, sessionRoots ?? [])) {
+          throw new RuntimeError('FORBIDDEN', '会话分享链接只能预览该会话工作区及上传目录内的文件', 403);
         }
         let rel = expandedPath;
-        try {
-          const realCwd = realpathSync(session.cwd);
-          if (realTarget === realCwd || realTarget.startsWith(`${realCwd}${sep}`)) {
-            rel = relative(realCwd, realTarget);
-          }
-        } catch { /* cwd 不存在时退回绝对路径展示。 */ }
+        if (realCwd && (realTarget === realCwd || realTarget.startsWith(`${realCwd}${sep}`))) {
+          rel = relative(realCwd, realTarget);
+        }
         resolved = { absolute: realTarget, relative: rel };
       } else {
         resolved = resolveExistingInside(session.cwd, expandedPath);
@@ -161,11 +181,108 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
     let info;
     try { info = await stat(resolved.absolute); }
     catch (error) { badPath(error); }
+
+    const wantDownload = request.query.download === '1' || request.query.download === 'true';
+
+    if (info.isDirectory()) {
+      if (wantDownload) {
+        throw new RuntimeError('NOT_A_FILE', '目录不支持直接下载', 400);
+      }
+      const includeHidden = request.query.hidden === '1' || request.query.hidden === 'true';
+      let dirents;
+      try { dirents = await readdir(resolved.absolute, { withFileTypes: true }); }
+      catch (error) { badPath(error); }
+
+      let hiddenCount = 0;
+      const candidates = [];
+      for (const dirent of dirents) {
+        if (dirent.name === '.DS_Store') continue;
+        const isHidden = dirent.name.startsWith('.');
+        if (isHidden) {
+          hiddenCount++;
+          if (!includeHidden) continue;
+        }
+        candidates.push(dirent);
+      }
+
+      // 先按目录优先 + 名称排序后再截断，避免超大目录先 stat 全量条目导致卡死。
+      candidates.sort((left, right) => {
+        const leftDir = left.isDirectory();
+        const rightDir = right.isDirectory();
+        if (leftDir !== rightDir) return leftDir ? -1 : 1;
+        return compareEntryName(left.name, right.name);
+      });
+
+      const limit = Math.max(1, options.maxDirEntries ?? DEFAULT_MAX_DIR_ENTRIES);
+      const totalCount = candidates.length;
+      const sliced = candidates.slice(0, limit);
+      const useAbsoluteEntryPath = !realCwd || !(resolved.absolute === realCwd || resolved.absolute.startsWith(`${realCwd}${sep}`));
+      const entries: FsDirectoryEntry[] = [];
+
+      await Promise.all(sliced.map(async dirent => {
+        const entryAbs = join(resolved.absolute, dirent.name);
+        const entryPath = useAbsoluteEntryPath
+          ? entryAbs
+          : (resolved.relative ? `${resolved.relative}/${dirent.name}` : dirent.name);
+        try {
+          const entryStat = await stat(entryAbs);
+          entries.push({
+            name: dirent.name,
+            path: entryPath,
+            kind: entryStat.isDirectory() ? 'directory' : 'file',
+            size: entryStat.isDirectory() ? 0 : entryStat.size,
+            mtime: entryStat.mtime.toISOString()
+          });
+        } catch {
+          // 权限错误、悬空软链或竞态删除：保留基本目录项信息或跳过。
+          if (!dirent.isSymbolicLink()) {
+            entries.push({
+              name: dirent.name,
+              path: entryPath,
+              kind: dirent.isDirectory() ? 'directory' : 'file',
+              size: 0,
+              mtime: ''
+            });
+          }
+        }
+      }));
+
+      entries.sort((left, right) => {
+        if (left.kind !== right.kind) return left.kind === 'directory' ? -1 : 1;
+        return compareEntryName(left.name, right.name);
+      });
+
+      const parentAbs = dirname(resolved.absolute);
+      let parentPath: string | null = null;
+      if (parentAbs !== resolved.absolute && !isSensitivePath(parentAbs)) {
+        const parentAllowed = role === 'master' || isRealPathWithinRoots(parentAbs, sessionRoots ?? []);
+        if (parentAllowed) {
+          if (realCwd && (parentAbs === realCwd || parentAbs.startsWith(`${realCwd}${sep}`))) {
+            parentPath = relative(realCwd, parentAbs) || realCwd;
+          } else {
+            parentPath = parentAbs;
+          }
+        }
+      }
+
+      return {
+        kind: 'directory' as const,
+        cwd: session.cwd,
+        path: resolved.relative || resolved.absolute,
+        absolutePath: resolved.absolute,
+        parentPath,
+        entries,
+        totalCount,
+        truncated: totalCount > entries.length,
+        hiddenCount,
+        includeHidden
+      };
+    }
+
     if (!info.isFile()) throw new RuntimeError('NOT_A_FILE', '目标不是文件', 400);
 
     const filename = basename(resolved.absolute);
     const isSvg = filename.toLowerCase().endsWith('.svg');
-    const wantDownload = request.query.download === '1' || request.query.download === 'true';
     const wantText = request.query.format === 'text';
 
     if (wantDownload) {
@@ -232,6 +349,6 @@ export async function registerFsRoutes(app: FastifyInstance, runtime: AgentDockR
     if (isBinaryBuffer(buffer)) {
       throw new RuntimeError('BINARY_FILE', '检测到二进制文件内容，暂不支持文本预览，请下载查看', 415);
     }
-    return { cwd: session.cwd, path: resolved.relative, size: info.size, content: buffer.toString('utf8') };
+    return { kind: 'file' as const, cwd: session.cwd, path: resolved.relative, size: info.size, content: buffer.toString('utf8') };
   });
 }
