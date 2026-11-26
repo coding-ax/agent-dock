@@ -1,0 +1,31 @@
+{
+  "name": "agent-dock-site",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AgentDock official brand site and interactive guide (agent.xieguangping.win)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5188",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4488 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "assets:logo": "node scripts/crop-logo.mjs",
+    "check:dist": "node scripts/check-dist.mjs",
+    "deploy": "npm run build && npm run check:dist && wrangler deploy"
+  },
+  "dependencies": {
+    "lucide-react": "^1.80.0",
+    "motion": "^14.14.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.3",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}

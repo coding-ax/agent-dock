@@ -1,0 +1,15 @@
+// Cloudflare Workers 静态资源部署：npm run deploy
+// 纯静态站点，没有 Worker 脚本；custom_domain 会自动创建 agent.xieguangping.win 的 DNS 记录和证书。
+{
+  "name": "agentdock-site",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "routes": [
+    { "pattern": "agent.xieguangping.win", "custom_domain": true }
+  ],
+  "workers_dev": false,
+  "preview_urls": false
+}

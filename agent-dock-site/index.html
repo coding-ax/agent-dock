@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
+    <title>AgentDock · 认领一只小猫，替你指挥所有 Agent</title>
+    <meta name="description" content="AgentDock 是开源的本地 Agent 工作台：统一托管 Claude Code、Codex、Gemini、Cursor 等 ACP Agent，小猫主会话替你拆活、派活、督办、验收；飞书 @ 一下、Web 里说一句，过程实时可见。" />
+    <meta name="keywords" content="AgentDock, Claude Code, Codex, Gemini, Cursor, ACP, acpx, 飞书机器人, Lark, AI Agent, 本地 Agent 工作台" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/svg+xml" href="/brand/kitten-mark.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="canonical" href="https://agent.xieguangping.win/" />
+    <link rel="preload" href="/fonts/FiraCode-VF.woff2" as="font" type="font/woff2" crossorigin />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="AgentDock" />
+    <meta property="og:url" content="https://agent.xieguangping.win/" />
+    <meta property="og:title" content="AgentDock · 认领一只小猫，替你指挥所有 Agent" />
+    <meta property="og:description" content="开源的本地 Agent 工作台：统一托管 Claude Code、Codex、Gemini 等 Agent，小猫主会话替你派活验收，飞书 @ 一下就开工。" />
+    <meta property="og:image" content="https://agent.xieguangping.win/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="AgentDock · Adopt a kitten. It runs your agents." />
+    <meta name="twitter:description" content="Open-source local agent workbench for Claude Code, Codex, Gemini and every ACP agent — with a kitten main session that dispatches, follows up and reviews." />
+    <meta name="twitter:image" content="https://agent.xieguangping.win/og.png" />
+    <script>
+      // Resolve theme + language before first paint so nothing flashes.
+      (function () {
+        var root = document.documentElement;
+        try {
+          var stored = localStorage.getItem('agentdock-site:theme');
+          var dark = stored ? stored === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          root.dataset.theme = dark ? 'dark' : 'light';
+        } catch (e) { root.dataset.theme = 'light'; }
+        try {
+          var q = new URLSearchParams(location.search).get('lang');
+          var lang = q === 'en' || q === 'zh' ? q : localStorage.getItem('agentdock-site:lang');
+          if (lang === 'en') { root.lang = 'en'; document.title = 'AgentDock · Adopt a kitten. It runs your agents.'; }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <div style="max-width:640px;margin:15vh auto;padding:0 24px;font-family:system-ui,-apple-system,'PingFang SC',sans-serif;line-height:1.7">
+        <h1>AgentDock</h1>
+        <p>开源的本地 Agent 工作台。<code>npm i -g @agent-dock/cli &amp;&amp; agent-dock start</code></p>
+        <p><a href="https://github.com/coding-ax/agent-dock">GitHub · coding-ax/agent-dock</a></p>
+      </div>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
