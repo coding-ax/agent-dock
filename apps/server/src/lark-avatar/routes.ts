@@ -3,7 +3,7 @@ import { RuntimeError } from '@agent-dock/agent-dock-shared';
 import { LarkAvatarService, type LarkReactionPort } from './service.js';
 import { LarkAvatarResolutionError, larkAvatarResolutionHttpStatus, type LarkChatMatchMode } from './id-resolution.js';
 import type { LarkRegionName } from './types.js';
-import type { LarkReactionRoute } from './reaction-trigger.js';
+import type { LarkReactionIntent, LarkReactionRoute } from './reaction-trigger.js';
 
 export interface LarkAvatarRouteOptions {
   /**
@@ -32,9 +32,21 @@ export function registerLarkAvatarRoutes(app: FastifyInstance, service: LarkAvat
   app.get('/api/lark-avatar/status', async () => service.status());
   app.get('/api/lark-avatar/config', async () => service.publicState() ?? null);
   app.get('/api/lark-avatar/chats', async () => service.availableChats());
-  app.put<{ Body: { region?: LarkRegionName; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: LarkReactionRoute; reactionTriggerIgnoreBots?: boolean; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string } }>('/api/lark-avatar/config', async (request, reply) => {
+  app.put<{ Body: { region?: LarkRegionName; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: LarkReactionRoute; reactionTriggerIntent?: LarkReactionIntent; reactionTriggerIgnoreBots?: boolean; privateReplyChatId?: string; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string } }>('/api/lark-avatar/config', async (request, reply) => {
     try { return await service.saveConfig(request.body ?? {}); }
     catch (error) { return handleError(reply, error); }
+  });
+  app.post<{ Body: { chatId?: string; mode?: string; prompt?: string; contextMessages?: number; delivery?: string } }>('/api/lark-avatar/private-analyze', async (request, reply) => {
+    try {
+      const body = request.body ?? {};
+      return await service.analyzeChatPrivately({
+        chatId: body.chatId ?? '',
+        ...(body.mode !== undefined ? { mode: body.mode } : {}),
+        ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+        ...(body.contextMessages !== undefined ? { contextMessages: body.contextMessages } : {}),
+        ...(body.delivery !== undefined ? { delivery: body.delivery } : {})
+      });
+    } catch (error) { return handleError(reply, error); }
   });
   app.post<{ Body: { region?: LarkRegionName } }>('/api/lark-avatar/login/qr', async request =>
     service.startQrLogin(request.body?.region)

@@ -1,4 +1,4 @@
-import type { LarkReactionRoute } from './reaction-trigger.js';
+import type { LarkReactionIntent, LarkReactionRoute } from './reaction-trigger.js';
 
 export const inboxTiers = ['action', 'fyi', 'noise'] as const;
 export type InboxTier = (typeof inboxTiers)[number];
@@ -72,10 +72,14 @@ export interface LarkAvatarConfig {
   reactionTriggerEnabled: boolean;
   /** 触发用的单个飞书 emoji_type，例如 THUMBSUP。 */
   reactionTriggerEmoji: string;
-  /** 命中后的默认路由：询问、发到主会话、或起独立轮次。 */
+  /** 命中后的默认路由：发到主会话、独立轮次、私密转发到指定飞书会话、或先询问。 */
   reactionTriggerRoute: LarkReactionRoute;
+  /** 表情触发的默认任务意图：自动处理、私密总结群消息、或私密分析群问题。 */
+  reactionTriggerIntent: LarkReactionIntent;
   /** 忽略机器人/应用添加的表情，默认 true。 */
   reactionTriggerIgnoreBots: boolean;
+  /** 私密分析/表情私密转发的目标飞书会话 ID（如个人私聊或私密群，绝不发往原群）。 */
+  privateReplyChatId: string;
   /** 加在 Agent 发出的每条消息末尾。 */
   replySignature: string;
   /** Agent 单轮超时秒数；0 表示不限制。 */
@@ -117,7 +121,9 @@ export interface PublicLarkAvatarConfig {
   reactionTriggerEnabled: boolean;
   reactionTriggerEmoji: string;
   reactionTriggerRoute: LarkReactionRoute;
+  reactionTriggerIntent: LarkReactionIntent;
   reactionTriggerIgnoreBots: boolean;
+  privateReplyChatId: string;
   replySignature: string;
   agentTimeoutSeconds: number;
   listening: boolean;

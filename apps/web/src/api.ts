@@ -39,10 +39,25 @@ export type LarkHookStatus = { agentId?: string; supported: boolean; installed: 
 export type LarkAvatarRegion = 'feishu' | 'lark';
 export type LarkAvatarAccount = { userId: string; name: string; avatarUrl?: string; email?: string };
 export type LarkAvatarStatus = { configured: boolean; connected: boolean; listening: boolean; state: 'disconnected' | 'connecting' | 'connected' | 'expired'; account?: LarkAvatarAccount; region: LarkAvatarRegion; listenChats: string[]; lastError?: string; lastSyncedAt?: string; syncIntervalSeconds: number; counts: { inbox: number; action: number; pendingDrafts: number } };
-export type LarkAvatarConfigRecord = { id: string; config: { region: LarkAvatarRegion; triggerPrefix: string; contextMessages: number; contextScope: 'anchor' | 'chat'; replyInTopic: boolean; replyMode: 'direct' | 'quote' | 'thread'; emojiReactions: boolean; reactionTriggerEnabled: boolean; reactionTriggerEmoji: string; reactionTriggerRoute: 'ask' | 'main' | 'independent'; reactionTriggerIgnoreBots: boolean; replySignature: string; agentTimeoutSeconds: number; listening: boolean; listenChats: string[]; allowedSenders: string[]; agentId: string; model: string; reasoningEffort: string; workspace: string }; account?: LarkAvatarAccount; state: 'disconnected' | 'connecting' | 'connected' | 'expired'; lastError?: string; createdAt: string; updatedAt: string };
-export type LarkAvatarReactionTrigger = { key: string; messageId: string; chatId?: string; operatorId?: string; operatorType?: string; emoji: string; route: 'ask' | 'main' | 'independent'; state: 'pending' | 'dispatching' | 'awaiting_route' | 'dispatched' | 'ignored' | 'failed'; actionTime?: string; reason?: string; sessionId?: string; taskId?: string; createdAt: string; updatedAt: string };
+export type LarkAvatarReactionRoute = 'ask' | 'main' | 'independent' | 'private_chat';
+export type LarkAvatarReactionIntent = 'auto' | 'summary' | 'analyze';
+export type LarkAvatarPrivateAnalyzeMode = 'summary' | 'analyze' | 'custom';
+export type LarkAvatarPrivateAnalyzeDelivery = 'main' | 'independent' | 'private_chat';
+export type LarkAvatarPrivateAnalyzeResult = {
+  ok: true;
+  delivery: LarkAvatarPrivateAnalyzeDelivery;
+  mode: LarkAvatarPrivateAnalyzeMode;
+  chatId: string;
+  chatName: string;
+  contextCount: number;
+  sessionId?: string;
+  taskId?: string;
+  targetChatId?: string;
+};
+export type LarkAvatarConfigRecord = { id: string; config: { region: LarkAvatarRegion; triggerPrefix: string; contextMessages: number; contextScope: 'anchor' | 'chat'; replyInTopic: boolean; replyMode: 'direct' | 'quote' | 'thread'; emojiReactions: boolean; reactionTriggerEnabled: boolean; reactionTriggerEmoji: string; reactionTriggerRoute: LarkAvatarReactionRoute; reactionTriggerIntent?: LarkAvatarReactionIntent; reactionTriggerIgnoreBots: boolean; privateReplyChatId?: string; replySignature: string; agentTimeoutSeconds: number; listening: boolean; listenChats: string[]; allowedSenders: string[]; agentId: string; model: string; reasoningEffort: string; workspace: string }; account?: LarkAvatarAccount; state: 'disconnected' | 'connecting' | 'connected' | 'expired'; lastError?: string; createdAt: string; updatedAt: string };
+export type LarkAvatarReactionTrigger = { key: string; messageId: string; chatId?: string; operatorId?: string; operatorType?: string; emoji: string; route: LarkAvatarReactionRoute; state: 'pending' | 'dispatching' | 'awaiting_route' | 'dispatched' | 'ignored' | 'failed'; actionTime?: string; reason?: string; sessionId?: string; taskId?: string; createdAt: string; updatedAt: string };
 export type LarkAvatarReactionDiagnostics = {
-  lastEvent?: { at: string; messageId: string; emojiType: string; operatorId?: string; operatorType?: string; appId?: string; actionTime?: string; chatId?: string; route?: 'ask' | 'main' | 'independent'; outcome: string; detail?: string; sessionId?: string; taskId?: string };
+  lastEvent?: { at: string; messageId: string; emojiType: string; operatorId?: string; operatorType?: string; appId?: string; actionTime?: string; chatId?: string; route?: LarkAvatarReactionRoute; outcome: string; detail?: string; sessionId?: string; taskId?: string };
   triggers: LarkAvatarReactionTrigger[];
   source?: { botConfigured: boolean; botEnabled: number; botAppIds: string[]; listenerActive: boolean; activeAppIds: string[]; listenerDisabled: boolean };
   lastOutboundReaction?: { at: string; messageId: string; picked: string[]; succeeded: Array<{ emoji: string; count: number }>; failed: Array<{ emoji: string; error: string }> };
@@ -524,7 +539,8 @@ export const api = {
   larkAvatarChats: () => json<LarkAvatarChatSummary[]>('/api/lark-avatar/chats'),
   // 排障页每 10 秒轮询一次；明确禁用 HTTP 缓存，手动刷新才能拿到新账本。
   larkAvatarReactionDiagnostics: (limit = 10) => json<LarkAvatarReactionDiagnostics>(`/api/lark-avatar/reaction-diagnostics?limit=${Math.min(100, Math.max(1, Math.floor(limit)))}`, { cache: 'no-store' }),
-  saveLarkAvatarConfig: (body: { region?: LarkAvatarRegion; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: 'ask' | 'main' | 'independent'; reactionTriggerIgnoreBots?: boolean; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string }) => json<LarkAvatarConfigRecord>('/api/lark-avatar/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  saveLarkAvatarConfig: (body: { region?: LarkAvatarRegion; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: LarkAvatarReactionRoute; reactionTriggerIntent?: LarkAvatarReactionIntent; reactionTriggerIgnoreBots?: boolean; privateReplyChatId?: string; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string }) => json<LarkAvatarConfigRecord>('/api/lark-avatar/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  analyzeLarkAvatarChatPrivately: (body: { chatId: string; mode?: LarkAvatarPrivateAnalyzeMode; prompt?: string; contextMessages?: number; delivery?: LarkAvatarPrivateAnalyzeDelivery }) => json<LarkAvatarPrivateAnalyzeResult>('/api/lark-avatar/private-analyze', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   startLarkAvatarLogin: (region: LarkAvatarRegion) => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/qr', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ region }) }),
   larkAvatarLoginStatus: () => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/status'),
   pollLarkAvatarLogin: () => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/poll', { method: 'POST' }),

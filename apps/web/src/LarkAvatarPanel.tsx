@@ -4,16 +4,29 @@ import { createPortal } from 'react-dom';
 import { Button, Switch } from 'antd';
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  ArrowLeft, Bot, Check, CheckCircle2, CircleAlert, FolderOpen, Hash, LoaderCircle, MessageCircle,
+  ArrowLeft, Bot, Check, CheckCircle2, CircleAlert, FolderOpen, Hash, LoaderCircle, Lock, MessageCircle,
   Pause, Play, RefreshCw, Search, Send, Settings2, ShieldCheck, Sparkles, UserRound, Users, Wifi, X
 } from 'lucide-react';
 import { CompactSelect } from './CompactSelect';
 import { ReactionEmojiPicker } from './ReactionEmojiPicker';
 import { reactionEmojiIsCustom, reactionEmojiPayload } from './lark-avatar-emoji';
+import {
+  PRIVATE_ANALYSIS_DELIVERIES,
+  PRIVATE_ANALYSIS_MODES,
+  REACTION_INTENT_OPTIONS,
+  REACTION_ROUTE_OPTIONS,
+  privateAnalysisSuccessMessage,
+  validatePrivateAnalysisSubmission
+} from './lark-avatar-private-analysis';
 import { reactionOutcomeLabel, reactionSourceStatus, reactionStateLabel } from './lark-avatar-reaction-diagnostics';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { SuggestedValueInput } from './SuggestedValueInput';
 import { useToast } from './Toast';
+import {
+  buildLarkAvatarAgentOptions,
+  resolveFallbackAgentId,
+  resolveSaveAgentId
+} from './lark-avatar-config-form';
 import { withSavedOption } from './lark-config-form';
 import {
   api,
@@ -22,6 +35,10 @@ import {
   type LarkAvatarDraft,
   type LarkAvatarInboxItem,
   type LarkAvatarLoginSnapshot,
+  type LarkAvatarPrivateAnalyzeDelivery,
+  type LarkAvatarPrivateAnalyzeMode,
+  type LarkAvatarReactionIntent,
+  type LarkAvatarReactionRoute,
   type LarkAvatarRegion,
   type LarkAvatarStatus
 } from './api';
@@ -306,8 +323,11 @@ export function LarkAvatarPanel() {
   const [emojiReactions, setEmojiReactions] = useState(false);
   const [reactionTriggerEnabled, setReactionTriggerEnabled] = useState(false);
   const [reactionTriggerEmoji, setReactionTriggerEmoji] = useState('');
-  const [reactionTriggerRoute, setReactionTriggerRoute] = useState<'ask' | 'main' | 'independent'>('ask');
+  const [reactionTriggerRoute, setReactionTriggerRoute] = useState<LarkAvatarReactionRoute>('main');
+  const [reactionTriggerIntent, setReactionTriggerIntent] = useState<LarkAvatarReactionIntent>('auto');
   const [reactionTriggerIgnoreBots, setReactionTriggerIgnoreBots] = useState(true);
+  const [privateReplyChatId, setPrivateReplyChatId] = useState('');
+  const [privateChatSearch, setPrivateChatSearch] = useState('');
   const [replySignature, setReplySignature] = useState('');
   const [agentTimeoutSeconds, setAgentTimeoutSeconds] = useState(7_200);
   const [listenMode, setListenMode] = useState<'all' | 'selected'>('all');
@@ -321,6 +341,12 @@ export function LarkAvatarPanel() {
   const [selectedKey, setSelectedKey] = useState<string>();
   const [search, setSearch] = useState('');
   const [composer, setComposer] = useState('');
+  const [privatePanelOpen, setPrivatePanelOpen] = useState(false);
+  const [privateMode, setPrivateMode] = useState<LarkAvatarPrivateAnalyzeMode>('summary');
+  const [privatePrompt, setPrivatePrompt] = useState('');
+  const [privateDelivery, setPrivateDelivery] = useState<LarkAvatarPrivateAnalyzeDelivery>('main');
+  const [privateCount, setPrivateCount] = useState(30);
+  const [privateFeedback, setPrivateFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const [draftBodies, setDraftBodies] = useState<Record<string, string>>({});
   // 排障区每 10 秒自动刷新，只有时间戳变化时很难看出手动刷新有没有生效；
   // 这里给按钮加一次性反馈（刷新中 / 已刷新 / 刷新失败），并保持按钮宽度不变。
@@ -382,8 +408,10 @@ export function LarkAvatarPanel() {
     setEmojiReactions(config.data.config.emojiReactions);
     setReactionTriggerEnabled(config.data.config.reactionTriggerEnabled ?? false);
     setReactionTriggerEmoji(config.data.config.reactionTriggerEmoji ?? '');
-    setReactionTriggerRoute(config.data.config.reactionTriggerRoute ?? 'ask');
+    setReactionTriggerRoute(config.data.config.reactionTriggerRoute ?? 'main');
+    setReactionTriggerIntent(config.data.config.reactionTriggerIntent ?? 'auto');
     setReactionTriggerIgnoreBots(config.data.config.reactionTriggerIgnoreBots ?? true);
+    setPrivateReplyChatId(config.data.config.privateReplyChatId ?? '');
     setReplySignature(config.data.config.replySignature);
     setAgentTimeoutSeconds(config.data.config.agentTimeoutSeconds);
     setListenChats(config.data.config.listenChats);
@@ -396,8 +424,14 @@ export function LarkAvatarPanel() {
   }, [config.data?.id, config.data?.updatedAt, connected]);
 
   useEffect(() => {
-    if (!agentId && agents.data?.length) setAgentId(agents.data[0]!.id);
-  }, [agentId, agents.data]);
+    const fallbackAgentId = resolveFallbackAgentId({
+      currentAgentId: agentId,
+      savedAgentId: config.data?.config.agentId,
+      configPending: config.isPending,
+      agents: agents.data
+    });
+    if (fallbackAgentId && fallbackAgentId !== agentId) setAgentId(fallbackAgentId);
+  }, [agentId, agents.data, config.data?.config.agentId, config.isPending]);
 
   useEffect(() => {
     if (connected) {
@@ -426,12 +460,14 @@ export function LarkAvatarPanel() {
       reactionTriggerEnabled,
       ...reactionEmojiPayload(reactionTriggerEmoji),
       reactionTriggerRoute,
+      reactionTriggerIntent,
       reactionTriggerIgnoreBots,
+      privateReplyChatId: privateReplyChatId.trim(),
       replySignature,
       agentTimeoutSeconds,
       listenChats: listenMode === 'all' ? [] : splitList(manualChatIds),
       allowedSenders: [],
-      agentId,
+      agentId: resolveSaveAgentId(agentId, config.data?.config.agentId),
       model,
       reasoningEffort,
       workspace
@@ -496,6 +532,37 @@ export function LarkAvatarPanel() {
       return api.sendLarkAvatarDraft(draft.id);
     },
     onSuccess: () => { setComposer(''); invalidate(); }
+  });
+  const runPrivateAnalysis = useMutation({
+    mutationFn: (input: {
+      chatId: string;
+      mode: LarkAvatarPrivateAnalyzeMode;
+      prompt: string;
+      contextMessages: number;
+      delivery: LarkAvatarPrivateAnalyzeDelivery;
+    }) => api.analyzeLarkAvatarChatPrivately({
+      chatId: input.chatId,
+      mode: input.mode,
+      ...(input.prompt.trim() ? { prompt: input.prompt.trim() } : {}),
+      contextMessages: input.contextMessages,
+      delivery: input.delivery
+    }),
+    onSuccess: result => {
+      const targetChatName = result.targetChatId
+        ? chatOptions.find(item => item.id === result.targetChatId)?.name || result.targetChatId
+        : undefined;
+      const text = privateAnalysisSuccessMessage({
+        delivery: result.delivery,
+        contextCount: result.contextCount,
+        ...(targetChatName ? { targetChatName } : {})
+      });
+      setPrivateFeedback({ ok: true, text });
+      toast.show(text, 'info');
+      setPrivatePrompt('');
+    },
+    onError: error => {
+      setPrivateFeedback({ ok: false, text: errorText(error) || '私密分析发起失败' });
+    }
   });
 
   const items = inbox.data ?? [];
@@ -573,7 +640,7 @@ export function LarkAvatarPanel() {
   const sentDrafts = draftList.filter(draft => draft.state === 'sent');
   const triggerCount = items.filter(item => item.title.trim().startsWith(triggerPrefix)).length;
   const selectedAgent = agents.data?.find(agent => agent.id === agentId);
-  const agentOptions = (agents.data ?? []).map(agent => ({ value: agent.id, label: agent.name, agentId: agent.id }));
+  const agentOptions = buildLarkAvatarAgentOptions(agents.data, agentId);
   const modelOptions = [
     { value: '', label: models.data?.defaultModel ? `Agent 默认（${models.data.defaultModel}）` : 'Agent 默认模型' },
     ...withSavedOption(models.data?.models ?? [], model).map(option => ({ value: option.id, label: option.name }))
@@ -623,6 +690,27 @@ export function LarkAvatarPanel() {
     const query = chatSearch.trim().toLowerCase();
     return !query || chat.name.toLowerCase().includes(query) || chat.id.toLowerCase().includes(query);
   });
+  const privateChatOptions = useMemo(() => {
+    const query = privateChatSearch.trim().toLowerCase();
+    return [...chatOptions]
+      .sort((left, right) =>
+        (left.type === 'p2p' ? 0 : 1) - (right.type === 'p2p' ? 0 : 1)
+        || (right.lastMessageAt ?? '').localeCompare(left.lastMessageAt ?? '')
+        || left.name.localeCompare(right.name, 'zh-CN')
+      )
+      .filter(chat => !query || chat.name.toLowerCase().includes(query) || chat.id.toLowerCase().includes(query));
+  }, [chatOptions, privateChatSearch]);
+  const selectedPrivateReplyChat = chatOptions.find(chat => chat.id === privateReplyChatId.trim());
+  const privateValidationError = selected
+    ? validatePrivateAnalysisSubmission({
+        chatId: selected.chatId,
+        mode: privateMode,
+        prompt: privatePrompt,
+        delivery: privateDelivery,
+        privateReplyChatId
+      })
+    : null;
+  const activePrivateModeMeta = PRIVATE_ANALYSIS_MODES.find(item => item.value === privateMode) ?? PRIVATE_ANALYSIS_MODES[0]!;
   const selectChats = (next: string[]) => {
     setListenChats(next);
     setManualChatIds(next.join(', '));
@@ -707,7 +795,7 @@ export function LarkAvatarPanel() {
           {!listening && <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200/70 bg-amber-50/70 px-4 py-3 text-[12px] leading-5 text-amber-900"><Pause size={15} className="mt-0.5 shrink-0"/><div><p className="font-medium">当前处于暂停状态</p><p className="mt-0.5 text-amber-800">新的飞书消息不会被读取，也不会触发 Agent。点击右上角「恢复监听」后会重新连接 WebSocket 并继续定时补拉。</p></div></div>}
           <div className="mb-4 rounded-xl border border-sky-100 bg-sky-50/60 px-4 py-3 text-[12px] leading-5 text-sky-900">
             在飞书聊天里发送 <code className="rounded bg-white/80 px-1 py-0.5 font-mono text-[11px]">{triggerPrefix} 你的问题</code>，
-            会自动带上最近 {contextMessages} 条聊天记录（文字消息，含本条触发消息）发起 Agent 轮次；Agent 的所有文本输出会直接以你的身份发回当前聊天。后台每 {status.data?.syncIntervalSeconds ?? 30} 秒补拉一次群聊，避免只依赖 WebSocket 推送。
+            会自动带上最近 {contextMessages} 条聊天记录（文字消息，含本条触发消息）发起 Agent 轮次并直接回复。如果不想内容发到群里（例如有老板或外部人员），可在「会话」页点「私密分析」直接总结/分析群消息，或使用表情触发静默派发。后台每 {status.data?.syncIntervalSeconds ?? 30} 秒补拉一次群聊。
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="收到消息" value={items.length}/>
@@ -732,8 +820,8 @@ export function LarkAvatarPanel() {
       )}
 
       {tab === 'chats' && (
-        <div className="flex min-h-0 flex-1">
-          <aside className="flex w-[270px] shrink-0 flex-col border-r border-zinc-100">
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <aside className="flex max-h-[180px] shrink-0 flex-col border-b border-zinc-100 sm:max-h-none sm:w-[270px] sm:border-b-0 sm:border-r">
             <div className="p-3"><div className="relative"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400"/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索会话" className="h-8 w-full rounded-lg bg-zinc-100 pl-8 pr-3 text-[12px] text-zinc-800 outline-none placeholder:text-zinc-400"/></div></div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
               {filtered.map(conversation => <button key={conversation.key} type="button" onClick={() => setSelectedKey(conversation.key)} className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2.5 text-left ${conversation.key === selectedKey ? 'bg-zinc-100' : 'hover:bg-zinc-50'}`}><Avatar name={conversation.title} src={conversation.avatarUrl} fallbackSrc={conversation.avatarFallbackUrl} size={32}/><div className="min-w-0 flex-1"><div className="flex items-center justify-between gap-2"><span className="truncate text-[12px] font-medium text-zinc-800">{conversation.title}</span><span className="shrink-0 text-[9px] text-zinc-400">{timeLabel(conversation.latestAt)}</span></div><p className="mt-0.5 truncate text-[11px] text-zinc-500">{conversation.latestText || '暂无消息'}</p>{conversation.drafts.some(draft => draft.state === 'pending' || draft.state === 'failed') && <span className="mt-1 inline-flex items-center gap-1 text-[10px] text-amber-700"><Sparkles size={10}/>有回复待补发</span>}</div></button>)}
@@ -742,7 +830,110 @@ export function LarkAvatarPanel() {
           </aside>
           <section className="flex min-w-0 flex-1 flex-col">
             {selected ? <>
-              <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3"><div className="flex min-w-0 items-center gap-2.5"><Avatar name={selected.title} src={selected.avatarUrl} fallbackSrc={selected.avatarFallbackUrl} size={30}/><div className="min-w-0"><h3 className="truncate text-[13px] font-semibold text-zinc-900">{selected.title}</h3><p className="text-[10px] text-zinc-400">{selected.chatType === 'p2p' ? '私聊' : selected.chatType === 'group' ? '群聊' : selected.chatType || '飞书会话'} · {selected.items.length} 条消息{selected.drafts.length ? ` · ${selected.drafts.length} 条回复` : ''}</p></div></div><span className="text-[10px] text-zinc-400">{pendingDrafts.filter(draft => selected.drafts.some(value => value.id === draft.id)).length} 条待补发</span></div>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <Avatar name={selected.title} src={selected.avatarUrl} fallbackSrc={selected.avatarFallbackUrl} size={30}/>
+                  <div className="min-w-0">
+                    <h3 className="truncate text-[13px] font-semibold text-zinc-900">{selected.title}</h3>
+                    <p className="text-[10px] text-zinc-400">{selected.chatType === 'p2p' ? '私聊' : selected.chatType === 'group' ? '群聊' : selected.chatType || '飞书会话'} · {selected.items.length} 条消息{selected.drafts.length ? ` · ${selected.drafts.length} 条回复` : ''}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="hidden text-[10px] text-zinc-400 sm:inline">{pendingDrafts.filter(draft => selected.drafts.some(value => value.id === draft.id)).length} 条待补发</span>
+                  <button
+                    type="button"
+                    onClick={() => { setPrivatePanelOpen(open => !open); setPrivateFeedback(null); }}
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${privatePanelOpen ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'}`}
+                  >
+                    <Lock size={12}/>
+                    <span>私密分析</span>
+                    <span className="rounded bg-emerald-100/80 px-1 py-0.5 text-[9px] font-medium text-emerald-700">不发群</span>
+                  </button>
+                </div>
+              </div>
+              {privatePanelOpen && (
+                <div className="border-b border-emerald-200/80 bg-emerald-50/40 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-800"><Lock size={12}/>私密总结 / 问 AI</span>
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">仅自己可见 · 绝不发到当前群</span>
+                    </div>
+                    <button type="button" onClick={() => setPrivatePanelOpen(false)} aria-label="收起私密分析" className="grid h-6 w-6 place-items-center rounded-md text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-700"><X size={12}/></button>
+                  </div>
+                  <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
+                    <div>
+                      <span className="text-[10px] font-medium text-zinc-500">分析方式</span>
+                      <Segmented<LarkAvatarPrivateAnalyzeMode>
+                        value={privateMode}
+                        onChange={value => { setPrivateMode(value); setPrivateFeedback(null); }}
+                        options={PRIVATE_ANALYSIS_MODES.map(item => ({ value: item.value, label: item.label }))}
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-medium text-zinc-500">输出去向</span>
+                      <Segmented<LarkAvatarPrivateAnalyzeDelivery>
+                        value={privateDelivery}
+                        onChange={value => { setPrivateDelivery(value); setPrivateFeedback(null); }}
+                        options={PRIVATE_ANALYSIS_DELIVERIES}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] font-medium text-zinc-500">读取最近消息</span>
+                    {[20, 30, 50].map(count => (
+                      <button
+                        key={count}
+                        type="button"
+                        onClick={() => setPrivateCount(count)}
+                        className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${privateCount === count ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-600 ring-1 ring-zinc-200 hover:bg-zinc-100'}`}
+                      >
+                        {count} 条
+                      </button>
+                    ))}
+                    {privateDelivery === 'private_chat' && selectedPrivateReplyChat && (
+                      <span className="ml-auto text-[10px] text-emerald-700">私密发往：{selectedPrivateReplyChat.name}</span>
+                    )}
+                  </div>
+                  <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:items-end">
+                    <textarea
+                      value={privatePrompt}
+                      onChange={event => { setPrivatePrompt(event.target.value); setPrivateFeedback(null); }}
+                      rows={2}
+                      placeholder={activePrivateModeMeta.placeholder}
+                      className={`${input} mt-0 min-h-[52px] flex-1 resize-y bg-white`}
+                    />
+                    <Button
+                      type="primary"
+                      size="small"
+                      loading={runPrivateAnalysis.isPending}
+                      disabled={Boolean(privateValidationError)}
+                      onClick={() => runPrivateAnalysis.mutate({
+                        chatId: selected.chatId,
+                        mode: privateMode,
+                        prompt: privatePrompt,
+                        contextMessages: privateCount,
+                        delivery: privateDelivery
+                      })}
+                      className="!h-9 !rounded-lg !border-0 !bg-emerald-600 !px-3.5 !text-white hover:!bg-emerald-700"
+                    >
+                      开始私密分析
+                    </Button>
+                  </div>
+                  {privateValidationError && (
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-800">
+                      <span>{privateValidationError}</span>
+                      {privateDelivery === 'private_chat' && (
+                        <button type="button" onClick={() => setTab('settings')} className="font-medium underline hover:text-amber-900">去设置私密接收会话</button>
+                      )}
+                    </div>
+                  )}
+                  {privateFeedback && (
+                    <p className={`mt-2 rounded-lg px-2.5 py-1.5 text-[10px] leading-4 ${privateFeedback.ok ? 'bg-emerald-100/70 text-emerald-800' : 'bg-red-50 text-red-700'}`}>
+                      {privateFeedback.text}
+                    </p>
+                  )}
+                </div>
+              )}
               <div ref={messagesRef} className="min-h-0 flex-1 overflow-y-auto bg-zinc-50/40 px-5 py-4">
                 {selectedTimeline.length ? <>
                   {selectedTimeline.map(entry => {
@@ -871,7 +1062,7 @@ export function LarkAvatarPanel() {
                 </div>
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">主会话的消息</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">私聊不支持话题，选择「开话题回复」时按引用发送。</p></div>
+                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">主会话的消息</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">单聊和普通群都支持直接发送、引用回复或开话题回复。</p></div>
                     <div className="w-[300px] shrink-0"><Segmented<'direct' | 'quote' | 'thread'> value={replyMode} onChange={setReplyMode} options={[{ value: 'direct', label: '直接发送' }, { value: 'quote', label: '引用回复' }, { value: 'thread', label: '开话题回复' }]}/></div>
                   </div>
                 </div>
@@ -907,8 +1098,54 @@ export function LarkAvatarPanel() {
 
             <section className="rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,.03)] sm:p-5">
               <div className="flex items-start gap-3">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><Lock size={15}/></span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-[14px] font-semibold text-zinc-900">私密分析与防发群</h3>
+                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">不发原群</span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-5 text-zinc-500">适合「想让 AI 总结群消息或分析群里的问题，但不想内容发到群里（有老板或外部人员）」的场景。在「会话」页点「私密分析」即可直接拉取任意已同步群聊，无需机器人在群内。</p>
+                </div>
+              </div>
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[12px] font-medium text-zinc-800">私密结果接收会话（可选）</p>
+                      <p className="mt-0.5 text-[11px] leading-5 text-zinc-500">选择「私密转发 / 私密发到飞书」时，分析结果会发到这里（建议选自己的私聊或个人专用私密群）。系统会自动拦截与原群相同的目标，防止误发泄密。</p>
+                    </div>
+                    {privateReplyChatId.trim() && (
+                      <button type="button" onClick={() => setPrivateReplyChatId('')} className="rounded-lg border border-zinc-200 px-2 py-1 text-[10px] text-zinc-500 hover:bg-zinc-50 hover:text-zinc-800">清空</button>
+                    )}
+                  </div>
+                  {privateReplyChatId.trim() && (
+                    <div className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50/70 px-2.5 py-1 text-[11px] text-emerald-800">
+                      <Lock size={11} className="shrink-0"/>
+                      <span className="truncate">{selectedPrivateReplyChat ? `${selectedPrivateReplyChat.name} (${selectedPrivateReplyChat.id})` : privateReplyChatId.trim()}</span>
+                    </div>
+                  )}
+                  <div className="mt-2.5 overflow-hidden rounded-xl border border-zinc-200">
+                    <div className="flex items-center gap-2 border-b border-zinc-100 bg-zinc-50/70 p-2">
+                      <div className="relative min-w-0 flex-1"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400"/><input value={privateChatSearch} onChange={event => setPrivateChatSearch(event.target.value)} placeholder="搜索私聊或个人私密群" className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-8 pr-3 text-[12px] text-zinc-800 outline-none placeholder:text-zinc-400 focus:border-zinc-400"/></div>
+                      <button type="button" disabled={availableChats.isFetching} onClick={() => void availableChats.refetch()} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-200 disabled:opacity-40" aria-label="刷新私密会话列表"><RefreshCw size={13} className={availableChats.isFetching ? 'animate-spin' : ''}/></button>
+                    </div>
+                    <div className="max-h-[180px] overflow-y-auto p-1.5">
+                      {privateChatOptions.map(chat => {
+                        const checked = privateReplyChatId.trim() === chat.id;
+                        return <button key={chat.id} type="button" onClick={() => setPrivateReplyChatId(checked ? '' : chat.id)} className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${checked ? 'bg-emerald-50/80' : 'hover:bg-zinc-50'}`}><Avatar name={chat.name} src={chat.avatarUrl} fallbackSrc={chat.avatarFallbackUrl} size={28}/><div className="min-w-0 flex-1"><p className="truncate text-[12px] font-medium text-zinc-800">{chat.name}</p><p className="truncate text-[10px] text-zinc-400">{chatTypeText(chat.type)}{chat.memberCount ? ` · ${chat.memberCount} 人` : ''} · {chat.id}</p></div><span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${checked ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-zinc-300 text-transparent'}`}><Check size={11}/></span></button>;
+                      })}
+                      {!privateChatOptions.length && <div className="px-3 py-6 text-center text-[11px] text-zinc-400">{availableChats.isFetching ? '正在读取飞书会话…' : '暂无可选会话，可在下方手动填写 Chat ID'}</div>}
+                    </div>
+                  </div>
+                  <input className={`${input} mt-2 font-mono`} value={privateReplyChatId} onChange={event => setPrivateReplyChatId(event.target.value)} placeholder="手动输入私密接收会话 Chat ID（留空则仅在 AgentDock 内查看）"/>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,.03)] sm:p-5">
+              <div className="flex items-start gap-3">
                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600"><Sparkles size={15}/></span>
-                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-[14px] font-semibold text-zinc-900">表情触发</h3><span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">Beta</span></div><p className="mt-1 text-[11px] leading-5 text-zinc-500">在飞书消息上添加一个指定表情，就会以这条消息为上下文开启一轮 Agent。和上面的「随机表情回应」是两个方向：那个是替身发出反馈，这个是替你发起任务。</p></div>
+                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-[14px] font-semibold text-zinc-900">表情触发</h3><span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">Beta</span></div><p className="mt-1 text-[11px] leading-5 text-zinc-500">在飞书消息上添加一个指定表情，就会以这条消息为上下文开启一轮私密 Agent。和上面的「随机表情回应」是两个方向：那个是替身发出反馈，这个是替你静默发起总结或分析。</p></div>
               </div>
               <div className="mt-4 space-y-3">
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
@@ -925,10 +1162,17 @@ export function LarkAvatarPanel() {
                     <p className="mt-1 text-[10px] leading-4 text-zinc-400">从常用飞书表情里选一个；已有配置如果不在列表，会显示为「当前配置」并保留。</p>
                   </div>
                   <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                    <p className="text-[12px] font-medium text-zinc-800">默认路由</p>
-                    <Segmented<'ask' | 'main' | 'independent'> value={reactionTriggerRoute} onChange={setReactionTriggerRoute} options={[{ value: 'ask', label: '先询问' }, { value: 'main', label: '主会话' }, { value: 'independent', label: '独立轮次' }]}/>
-                    <p className="mt-1 text-[10px] leading-4 text-zinc-400">询问：在飞书回一张卡片让你选；主会话：静默派活，不新增用户气泡；独立轮次：按消息/话题新开会话。</p>
+                    <p className="text-[12px] font-medium text-zinc-800">默认意图</p>
+                    <Segmented<LarkAvatarReactionIntent> value={reactionTriggerIntent} onChange={setReactionTriggerIntent} options={REACTION_INTENT_OPTIONS}/>
+                    <p className="mt-1 text-[10px] leading-4 text-zinc-400">自动处理：按目标消息直接处理；总结群消息 / 分析群问题：侧重梳理上下文要点、分歧与建议，绝不发回原群。</p>
                   </div>
+                </div>
+                <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
+                  <p className="text-[12px] font-medium text-zinc-800">默认路由</p>
+                  <Segmented<LarkAvatarReactionRoute> value={reactionTriggerRoute} onChange={setReactionTriggerRoute} options={REACTION_ROUTE_OPTIONS}/>
+                  <p className="mt-1 text-[10px] leading-4 text-zinc-400">主会话：静默派活到 AgentDock 主会话（推荐，不发群）；独立轮次：新开独立会话（不发群）；私密转发：发到上面配置的私密接收会话（不发原群）；先询问：在原群发卡片让你选。</p>
+                  {reactionTriggerRoute === 'ask' && <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] leading-4 text-amber-800">隐私提醒：「先询问」会在原飞书群发送交互卡片，群里所有人可见；含老板或外部人员的群请改用「主会话 / 独立轮次 / 私密转发」。</p>}
+                  {reactionTriggerRoute === 'private_chat' && !privateReplyChatId.trim() && <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] leading-4 text-amber-800">还没有配置上方的「私密结果接收会话」，保存后表情触发的私密转发会失败。</p>}
                 </div>
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -938,7 +1182,7 @@ export function LarkAvatarPanel() {
                 </div>
                 {reactionTriggerEnabled && !reactionTriggerEmoji.trim() && <p className="rounded-xl bg-amber-50 px-3.5 py-2.5 text-[11px] leading-5 text-amber-700">还没有填触发 emoji，保存后也不会触发。</p>}
                 <div className="rounded-xl bg-zinc-50 px-3.5 py-2.5 text-[11px] leading-5 text-zinc-500">
-                  reaction 事件由已配置的飞书机器人投递：机器人需要在目标会话里，并有消息读取权限。飞书只有 reaction 事件，没有 Pin 事件，所以 Pin 消息不会触发（Pin 只能走 OpenAPI 主动查询）。
+                  reaction 事件由已配置的飞书机器人投递：机器人需要在目标会话里，并有消息读取权限；飞书只有 reaction 事件，没有 Pin 事件。如果目标群不方便拉机器人（如老板群），可直接在「会话」页使用「私密分析」，无需机器人进群。
                 </div>
               </div>
             </section>

@@ -255,6 +255,47 @@ describe('Lark avatar service', () => {
     expect(service.publicState()?.config).toMatchObject({ emojiReactions: true, triggerPrefix: '!ai' });
   });
 
+  it('preserves saved non-default agentId (trae) and agent settings when updating topic config', async () => {
+    const service = createService();
+    await service.saveConfig({
+      agentId: 'trae',
+      model: 'glm-4',
+      reasoningEffort: 'high',
+      workspace: '/tmp/trae-work',
+      replyInTopic: true,
+      replyMode: 'direct'
+    });
+
+    const afterTopicUpdate = await service.saveConfig({
+      replyInTopic: false,
+      replyMode: 'thread'
+    });
+    expect(afterTopicUpdate.config).toMatchObject({
+      agentId: 'trae',
+      model: 'glm-4',
+      reasoningEffort: 'high',
+      workspace: '/tmp/trae-work',
+      replyInTopic: false,
+      replyMode: 'thread'
+    });
+
+    const afterBlankAgentUpdate = await service.saveConfig({
+      replyMode: 'quote',
+      agentId: ''
+    });
+    expect(afterBlankAgentUpdate.config).toMatchObject({
+      agentId: 'trae',
+      model: 'glm-4',
+      reasoningEffort: 'high',
+      workspace: '/tmp/trae-work',
+      replyInTopic: false,
+      replyMode: 'quote'
+    });
+
+    const afterExplicitSwitch = await service.saveConfig({ agentId: 'claude' });
+    expect(afterExplicitSwitch.config.agentId).toBe('claude');
+  });
+
   it('completes QR login, stores cookies locally and starts the protocol client', async () => {
     const fake = fakeClient();
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input: RequestInfo | URL) => {
@@ -687,7 +728,7 @@ describe('Lark avatar service', () => {
     expect(fake.sent[0]?.threadChat).toBeUndefined();
   });
 
-  it('falls back to a quote in private chats when topic mode is selected', async () => {
+  it('supports starting a topic in private chats when topic mode is selected', async () => {
     const fake = fakeClient();
     const service = createService({ client: fake.client });
     await service.connectWithCookie('session=session-1; passport_web_did=device-1');
@@ -699,7 +740,32 @@ describe('Lark avatar service', () => {
     });
 
     await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
-    expect(fake.sent[0]).toMatchObject({ chatId: 'oc_chat', rootId: 'om_p2p_thread', quote: true });
+    expect(fake.sent[0]).toMatchObject({ chatId: 'oc_chat', rootId: 'om_p2p_thread' });
+    expect(fake.sent[0]?.quote).toBeUndefined();
+    expect(fake.sent[0]?.threadChat).toBeUndefined();
+  });
+
+  it('supports quote replies and existing thread replies in private chats', async () => {
+    const fake = fakeClient();
+    const service = createService({ client: fake.client });
+    await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+    await service.saveConfig({ replyMode: 'quote', replyInTopic: true });
+
+    await fake.emit({
+      messageId: 'om_p2p_quote', fromId: '42', chatId: 'oc_chat', chatType: 1,
+      position: 7, content: '/ai 私聊引用'
+    });
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    expect(fake.sent[0]).toMatchObject({ chatId: 'oc_chat', rootId: 'om_p2p_quote', quote: true });
+
+    await fake.emit({
+      messageId: 'om_p2p_in_thread', fromId: '42', chatId: 'oc_chat', chatType: 1,
+      rootId: 'om_p2p_root', position: 8, content: '/ai 私聊话题内继续'
+    });
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(2));
+    expect(fake.sent[1]).toMatchObject({ chatId: 'oc_chat', rootId: 'om_p2p_root' });
+    expect(fake.sent[1]?.quote).toBeUndefined();
+    expect(fake.sent[1]?.threadChat).toBeUndefined();
   });
 
   it('appends the configured reply signature to Agent messages', async () => {

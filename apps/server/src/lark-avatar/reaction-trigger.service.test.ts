@@ -136,6 +136,7 @@ const harness = (input: {
   config?: Partial<LarkAvatarConfig>;
   mainSessionId?: string;
   withCredentials?: boolean;
+  sendReply?: string | null;
 } = {}) => {
   const store = new LarkAvatarStore(':memory:');
   stores.push(store);
@@ -172,7 +173,7 @@ const harness = (input: {
       });
       return { id: `task_${++sequence}`, status: 'queued' };
     },
-    async send() { return { finalText: null }; }
+    async send() { return { finalText: input.sendReply ?? null }; }
   };
   const mainDispatches: Array<{ prompt: string; agentPrompt: string; origin?: string; clientMessageId?: string }> = [];
   const mainSession: LarkAvatarMainSession = {
@@ -664,5 +665,48 @@ describe('Lark avatar reaction authorization and failure classification', () => 
     expect(mainDispatches).toHaveLength(0);
     client.releaseReactions();
     await emitting;
+  });
+
+  it('supports private_chat reaction route with summary intent and blocks unconfigured or same-group targets', async () => {
+    // 1. 未配置 privateReplyChatId 时记录明确失败原因
+    const unconfigured = harness({
+      config: { reactionTriggerRoute: 'private_chat', reactionTriggerIntent: 'summary', privateReplyChatId: '' },
+      withCredentials: true
+    });
+    unconfigured.service.start();
+    await expect(unconfigured.service.handleReaction(
+      { messageId: 'om_priv_1', emojiType: 'THUMBSUP', operatorId: 'ou_me', operatorType: 'user' },
+      port({ getMessage: vi.fn(async () => ({ ...message, messageId: 'om_priv_1', chatId: 'oc_boss' })) })
+    )).resolves.toMatchObject({ ok: false, action: 'failed', reason: 'private_chat_not_configured' });
+
+    // 2. privateReplyChatId 与原群相同时拦截防泄密
+    const sameGroup = harness({
+      config: { reactionTriggerRoute: 'private_chat', privateReplyChatId: 'oc_boss' },
+      withCredentials: true
+    });
+    sameGroup.service.start();
+    await expect(sameGroup.service.handleReaction(
+      { messageId: 'om_priv_2', emojiType: 'THUMBSUP', operatorId: 'ou_me', operatorType: 'user' },
+      port({ getMessage: vi.fn(async () => ({ ...message, messageId: 'om_priv_2', chatId: 'oc_boss' })) })
+    )).resolves.toMatchObject({ ok: false, action: 'failed', reason: 'private_chat_same_as_target' });
+
+    // 3. 配置合法私密接收会话后，带 summary 意图派发独立轮次并只转发到私密会话，绝不发往原群
+    const ok = harness({
+      config: { reactionTriggerRoute: 'private_chat', reactionTriggerIntent: 'summary', privateReplyChatId: 'oc_private_self' },
+      withCredentials: true,
+      sendReply: '核心结论：本周五前锁定发布范围。'
+    });
+    ok.service.start();
+    const res = await ok.service.handleReaction(
+      { messageId: 'om_priv_3', emojiType: 'THUMBSUP', operatorId: 'ou_me', operatorType: 'user' },
+      port({ getMessage: vi.fn(async () => ({ ...message, messageId: 'om_priv_3', chatId: 'oc_boss', chatName: '老板群' })) })
+    );
+    expect(res).toMatchObject({ ok: true, action: 'trigger' });
+    expect(ok.started).toHaveLength(1);
+    expect(ok.client.sent).toHaveLength(1);
+    expect(ok.client.sent[0]!.chatId).toBe('oc_private_self');
+    expect(ok.client.sent[0]!.text).toContain('【表情私密总结 · 老板群】');
+    expect(ok.client.sent.every(item => item.chatId !== 'oc_boss')).toBe(true);
+    expect(ok.service.reactionDiagnostics().lastEvent?.outcome).toBe('triggered:private_chat');
   });
 });

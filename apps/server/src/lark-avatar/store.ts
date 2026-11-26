@@ -7,7 +7,7 @@ import type {
   LarkAvatarState,
   LarkRegionName
 } from './types.js';
-import { normalizeReactionEmoji, routeFromUnknown } from './reaction-trigger.js';
+import { intentFromUnknown, normalizeReactionEmoji, routeFromUnknown } from './reaction-trigger.js';
 
 /**
  * 最近消息面板只用于回看刚刚发生的对话，不是归档。
@@ -105,8 +105,10 @@ const stateFromRow = (row: StateRow): LarkAvatarState => {
       emojiReactions: parsed.emojiReactions === true,
       reactionTriggerEnabled: parsed.reactionTriggerEnabled === true,
       reactionTriggerEmoji: normalizeReactionEmoji(parsed.reactionTriggerEmoji) ?? '',
-      reactionTriggerRoute: routeFromUnknown(parsed.reactionTriggerRoute) ?? 'ask',
+      reactionTriggerRoute: routeFromUnknown(parsed.reactionTriggerRoute) ?? 'main',
+      reactionTriggerIntent: intentFromUnknown(parsed.reactionTriggerIntent) ?? 'auto',
       reactionTriggerIgnoreBots: parsed.reactionTriggerIgnoreBots !== false,
+      privateReplyChatId: typeof parsed.privateReplyChatId === 'string' ? parsed.privateReplyChatId.trim() : '',
       replySignature: typeof parsed.replySignature === 'string' ? parsed.replySignature : '',
       agentTimeoutSeconds: Number.isFinite(Number(parsed.agentTimeoutSeconds))
         ? Math.min(86_400, Math.max(0, Math.floor(Number(parsed.agentTimeoutSeconds))))
