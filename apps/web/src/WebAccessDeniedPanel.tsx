@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, type Query } from '@tanstack/react-query';
 import { KeyRound, Lock } from 'lucide-react';
 import { api, type WebAccessDeniedError } from './api';
+import { BrandLogo } from './BrandLogo';
 
 export const AUTH_STATUS_QUERY_KEY = ['auth-status'] as const;
 
@@ -40,6 +41,7 @@ export function WebAccessDeniedPanel({ denied }: { denied: WebAccessDeniedError 
 
   return <div className="grid h-full place-items-center bg-canvas p-6">
     <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-[0_24px_80px_rgba(24,24,27,.08)]">
+      <div className="mb-4 flex justify-center"><BrandLogo iconSize={30} wordmarkHeight={15}/></div>
       <div className="mx-auto mb-3 grid h-10 w-10 place-items-center rounded-full bg-amber-50 text-amber-600"><Lock size={20}/></div>
       <h1 className="text-[15px] font-semibold text-zinc-900">{denied.status === 403 ? '该链接无权访问此资源' : '访问凭证缺失或已过期'}</h1>
       <p className="mt-2 text-[12px] leading-5 text-zinc-500">{denied.message || '请从飞书卡片上的「查看详情」重新打开；本机使用请用 agent-dock 启动输出的带凭证控制台地址。'}</p>

@@ -400,6 +400,8 @@ html[data-theme="dark"] .text-blue-600, html[data-theme="dark"] .text-blue-700 {
 /* ---------- 第二轮打磨：暗色细节与输入互动 ---------- */
 /* 暗色下选中项的图标底不要反相成纯白方块，改成强调色淡底 + 细描边。 */
 html[data-theme="dark"] .ui-selected-tile { background-color: rgb(var(--accent) / .22); color: rgb(var(--accent)); box-shadow: inset 0 0 0 1px rgb(var(--accent) / .35); }
-/* Logo 的深色底在暗色背景上没有边界：补一圈细描边。紫色只保留在 Logo 图形本身。 */
-.ui-logo-tile { border-radius: 25%; }
-html[data-theme="dark"] .ui-logo-tile { box-shadow: 0 0 0 1px rgb(255 255 255 / .14); }
+/* 像素风猫咪 Logo 与像素字标：保持锐利像素边缘，字标随 html[data-theme] 切换亮暗配色。 */
+.ui-pixelated { image-rendering: pixelated; }
+.ui-wordmark-dark { display: none; }
+html[data-theme="dark"] .ui-wordmark-light { display: none; }
+html[data-theme="dark"] .ui-wordmark-dark { display: block; }

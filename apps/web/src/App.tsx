@@ -71,14 +71,11 @@ import { CompanionNavProvider, useAssistantState, type CompanionNav } from './co
 import { useCompanionStore } from './companion/companion-store';
 import { isLineageSource } from './companion/lifecycle-model';
 import { withViewTransition } from './companion/effects';
+import { BrandLogo } from './BrandLogo';
 
 const PromptEditor = lazy(() => import('./PromptEditor'));
 
 const parseMemberNames = (value: string) => [...new Set(value.split(/[\n,，]/).map(item => item.trim()).filter(Boolean))];
-
-function AgentDockIcon({ className = '' }: { className?: string }) {
-  return <img src="/agent-dock.svg" alt="" aria-hidden="true" className={`${className} ui-logo-tile`}/>;
-}
 
 /** 工作区行「+」弹出的 agent 快速选择菜单；fixed 定位避免被列表的 overflow 裁切。 */
 function AgentPickerMenu({ cwd, top, left, agents, creatingPair, onSelect, onClose }: { cwd: string; top: number; left: number; agents: Agent[]; creatingPair?: { agentId: string; cwd: string }; onSelect(agentId: string): void; onClose(): void }) {
@@ -860,7 +857,7 @@ export default function App() {
     <aside style={{ ['--sb-w' as string]: `${clampedSidebarWidth}px` }} className={`ui-sidebar-safe fixed inset-y-0 left-0 z-50 flex shrink-0 flex-col overflow-hidden border-r border-zinc-200 bg-rail shadow-[12px_0_36px_rgba(24,24,27,.08)] transition-transform duration-300 ease-[cubic-bezier(.16,1,.3,1)] w-[286px] md:static md:z-20 md:translate-x-0 md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} ${sidebarCollapsed ? 'md:w-11' : 'md:w-[var(--sb-w)]'}`}>
       {!sidebarCollapsed && <div onPointerDown={event => { event.preventDefault(); resizeStart.current = { x: event.clientX, width: clampedSidebarWidth }; setResizingSidebar(true); }} title="拖拽调整宽度，拖到最窄可收起" className="absolute inset-y-0 right-0 z-20 hidden w-1.5 cursor-col-resize touch-none bg-transparent hover:bg-blue-400/30 md:block"/>}
       <div className={`flex h-full flex-col ${sidebarCollapsed ? 'md:hidden' : ''}`}>
-      <div className="flex min-w-[268px] items-center pr-3"><button type="button" onClick={() => { setSession(undefined); setSidebarOpen(false); setPaneMenuAnchor(undefined); }} title="回到首页" aria-label="回到首页" className="flex h-14 min-w-0 flex-1 items-center gap-2.5 px-4 text-left transition-colors hover:bg-zinc-100/70 active:bg-zinc-200/60"><AgentDockIcon className="h-7 w-7 shrink-0"/><span className="text-sm font-semibold tracking-[-.02em]">AgentDock</span></button></div>
+      <div className="flex min-w-[268px] items-center pr-3"><button type="button" onClick={() => { setSession(undefined); setSidebarOpen(false); setPaneMenuAnchor(undefined); }} title="回到首页" aria-label="回到首页" className="flex h-14 min-w-0 flex-1 items-center px-4 text-left transition-colors hover:bg-zinc-100/70 active:bg-zinc-200/60"><BrandLogo iconSize={28} wordmarkHeight={14}/></button></div>
       <div className="flex min-w-[268px] flex-col gap-1 px-2.5">
         <button onClick={startNewConversation} aria-label="新建对话" className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 active:bg-zinc-200/60"><Plus size={16}/>新建对话</button>
         <div className="flex items-center gap-1.5">

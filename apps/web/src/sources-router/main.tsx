@@ -1,6 +1,7 @@
 import { StrictMode, useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { sourcesRouterApi, type CaseDetail, type RouterCase, type RouterStatus, type Source } from './api';
+import { BrandLogo } from '../BrandLogo';
 import '../../src/index.css';
 import './index.css';
 
@@ -64,7 +65,7 @@ function App() {
 
   return <div className="sr-app">
     <aside className="sr-sidebar">
-      <div className="sr-brand"><span className="sr-dot"/>AgentDock</div>
+      <div className="sr-brand"><BrandLogo iconSize={24} wordmarkHeight={12}/></div>
       <h1>消息源与 Router</h1>
       <p className="sr-muted">外部事件进入 Case，Router 判断并委派 Worker；所有内容按不可信数据处理。</p>
       <nav>
