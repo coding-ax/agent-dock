@@ -866,6 +866,9 @@ export class LarkMessageCoordinator {
   private chatNames?: Map<string, string>;
   private chatNamesFetchedAt = 0;
   private chatNamesFetch?: Promise<Map<string, string>>;
+  /** 单人群聊免 @ 唤醒用的群人类成员数短缓存（15s TTL），避免连发消息反复查飞书接口，同时拉入第二个人后尽快失效。 */
+  private readonly chatUserCounts = new Map<string, { count?: number; fetchedAt: number }>();
+  private readonly chatUserCountFetches = new Map<string, Promise<number | undefined>>();
 
   constructor(
     private readonly runtime: LarkRuntime,
@@ -986,11 +989,45 @@ export class LarkMessageCoordinator {
     if (bound) return bound;
     try {
       const chat = await this.service.getChat(event.chatId);
+      if (chat?.userCount !== undefined) this.rememberChatUserCount(event.chatId, chat.userCount);
       if (chat?.name) return chat.name;
     } catch (error) {
       this.log.warn({ error, appId: config.appId, chatId: event.chatId }, '查询当前群信息失败，退回群列表解析群名');
     }
     return (await this.resolveChatNames(config))?.get(event.chatId);
+  }
+
+  private rememberChatUserCount(chatId: string, count: number | undefined) {
+    this.chatUserCounts.set(chatId, { ...(count !== undefined ? { count } : {}), fetchedAt: Date.now() });
+    if (this.chatUserCounts.size > 500) this.chatUserCounts.delete(this.chatUserCounts.values().next().value ? this.chatUserCounts.keys().next().value! : chatId);
+  }
+
+  /**
+   * 群内人类成员数（不含机器人）：用于「单人群聊免 @ 自动响应」判定。
+   * 仅当 `user_count === 1` 时返回 true；大于 1 人或查询失败一律返回 false（fail-closed，避免多人误触发）。
+   */
+  private async isSoloUserGroup(config: StoredLarkConfig, chatId: string): Promise<boolean> {
+    if (typeof this.service.getChat !== 'function') return false;
+    const cached = this.chatUserCounts.get(chatId);
+    if (cached && Date.now() - cached.fetchedAt < 15_000) return cached.count === 1;
+    let pending = this.chatUserCountFetches.get(chatId);
+    if (!pending) {
+      pending = Promise.resolve(this.service.getChat(chatId))
+        .then(chat => {
+          const count = chat?.userCount;
+          this.rememberChatUserCount(chatId, count);
+          return count;
+        })
+        .catch(error => {
+          this.log.warn({ error, appId: config.appId, chatId }, '查询群成员人数失败，跳过单人群免 @ 自动唤醒');
+          return undefined;
+        })
+        .finally(() => {
+          if (this.chatUserCountFetches.get(chatId) === pending) this.chatUserCountFetches.delete(chatId);
+        });
+      this.chatUserCountFetches.set(chatId, pending);
+    }
+    return (await pending) === 1;
   }
 
   /** 「托管给机器人」建群时群名已落库；直接读本地映射，不依赖任何飞书接口。 */
@@ -1382,7 +1419,21 @@ export class LarkMessageCoordinator {
     // 先查是否处于机器人已开启的侧聊话题中：在群聊侧聊话题下直接追问（且没有 @ 别人）时自动唤醒，无需每次再 @ 或敲 /btw。
     const existingSideThread = await this.lookupSideChatThread(config.appId, event);
     const inSideChatFollowUp = Boolean(existingSideThread) && (event.chatType === 'p2p' || mentionsBot || event.mentions.length === 0);
-    const shouldWake = event.chatType === 'p2p' || (event.chatType === 'group' && mentionsBot) || inSideChatFollowUp;
+    let shouldWake = event.chatType === 'p2p' || (event.chatType === 'group' && mentionsBot) || inSideChatFollowUp;
+    // 单人群聊（群内只有 1 名人类成员，不含机器人）且未 @ 别人时，免 @ 自动响应；群内超过 1 人自动关闭。
+    if (
+      !shouldWake
+      && !this.stopped
+      && !this.handledMessages.has(event.messageId)
+      && event.chatType === 'group'
+      && event.mentions.length === 0
+      && (!event.senderType || event.senderType === 'user')
+    ) {
+      if (await this.isSoloUserGroup(config, event.chatId)) {
+        shouldWake = true;
+        this.log.info({ messageId: event.messageId, chatId: event.chatId, appId: config.appId }, '单人群聊免 @ 自动唤醒');
+      }
+    }
     if (event.chatType === 'group' && !shouldWake && event.mentions.length) {
       // 有 @ 却没命中本机器人：多数是正常的（@ 的是别人），但也是「@ 不醒」类问题的第一现场。
       this.log.info({ messageId: event.messageId, chatId: event.chatId, appId: config.appId, botOpenId: this.botOpenId, mentions: event.mentions }, '飞书消息含 @ 但未命中本机器人，跳过');

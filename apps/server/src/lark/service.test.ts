@@ -548,4 +548,16 @@ describe('Lark card service', () => {
     expect(body.content).toContain('执行中');
     expect(body.content).toContain('任务');
   });
+
+  it('parses chat name and userCount from getChat', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ code: 0, tenant_access_token: 'token', expire: 7200 }))
+      .mockResolvedValueOnce(response({ code: 0, data: { name: '小A同学 · AgentDock', user_count: '1', bot_count: '1' } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { name: '研发大群', user_count: '5' } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { name: '未知人数群' } }));
+    const service = createLarkCardService({ LARK_APP_ID: 'cli_test', LARK_APP_SECRET: 'secret_test' }, fetcher as typeof fetch);
+    await expect(service.getChat('oc_solo')).resolves.toEqual({ chatId: 'oc_solo', name: '小A同学 · AgentDock', userCount: 1 });
+    await expect(service.getChat('oc_multi')).resolves.toEqual({ chatId: 'oc_multi', name: '研发大群', userCount: 5 });
+    await expect(service.getChat('oc_unknown')).resolves.toEqual({ chatId: 'oc_unknown', name: '未知人数群' });
+  });
 });

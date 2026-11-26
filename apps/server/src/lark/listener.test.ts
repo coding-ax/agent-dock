@@ -315,6 +315,75 @@ describe('Lark message coordinator', () => {
     expect(runtime.send).not.toHaveBeenCalled();
   });
 
+  it('wakes without @mention when a group has only 1 human user and disables it when userCount > 1', async () => {
+    const runtime = {
+      start: vi.fn(async () => session), getSession: vi.fn(async () => session),
+      subscribe: vi.fn(() => vi.fn()), send: vi.fn(async () => {}), interrupt: vi.fn(async () => {})
+    };
+    const getChat = vi.fn(async (chatId: string) => ({
+      chatId,
+      name: chatId === 'oc_solo' ? '小A同学 · AgentDock' : '多人讨论群',
+      userCount: chatId === 'oc_solo' ? 1 : 2
+    }));
+    const service = { getChat, addReaction: vi.fn(async () => ({})), send: vi.fn(async () => ({ messageId: 'card' })), reply: vi.fn(async () => ({ messageId: 'card' })), deleteReaction: vi.fn(async () => {}), update: vi.fn(async () => ({})) };
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const coordinator = new LarkMessageCoordinator(runtime as any, service as any, log, () => 0, 'ou_bot');
+
+    // 单人群不 @ 也能自动响应
+    await coordinator.handle({
+      messageId: 'om_solo_1', chatId: 'oc_solo', chatType: 'group', messageType: 'text',
+      content: JSON.stringify({ text: '看看有什么codex任务在跑' }), senderOpenId: 'ou_user', senderType: 'user',
+      mentions: []
+    }, config);
+    await vi.waitFor(() => expect(runtime.send).toHaveBeenCalledTimes(1));
+    expect(runtime.send).toHaveBeenCalledWith('ses_1', '看看有什么codex任务在跑', expect.any(String));
+
+    // 多人群（> 1 人）不 @ 时禁用自动响应
+    await coordinator.handle({
+      messageId: 'om_multi_1', chatId: 'oc_multi', chatType: 'group', messageType: 'text',
+      content: JSON.stringify({ text: '大家好' }), senderOpenId: 'ou_user', senderType: 'user',
+      mentions: []
+    }, config);
+    expect(runtime.send).toHaveBeenCalledTimes(1);
+
+    // 单人群但 @ 了别的机器人/人，不劫持
+    await coordinator.handle({
+      messageId: 'om_solo_other_mention', chatId: 'oc_solo', chatType: 'group', messageType: 'text',
+      content: JSON.stringify({ text: '@_user_1 你好' }), senderOpenId: 'ou_user', senderType: 'user',
+      mentions: [{ key: '@_user_1', name: 'Other Bot', appId: 'cli_other' }]
+    }, config);
+    expect(runtime.send).toHaveBeenCalledTimes(1);
+
+    // 单人群但发送者是机器人（app），不自动响应避免循环
+    await coordinator.handle({
+      messageId: 'om_solo_bot', chatId: 'oc_solo', chatType: 'group', messageType: 'text',
+      content: JSON.stringify({ text: 'bot message' }), senderOpenId: 'ou_other_bot', senderType: 'app',
+      mentions: []
+    }, config);
+    expect(runtime.send).toHaveBeenCalledTimes(1);
+
+    coordinator.stop();
+  });
+
+  it('fails closed when getChat throws while checking solo-user group', async () => {
+    const runtime = {
+      start: vi.fn(async () => session), getSession: vi.fn(async () => session),
+      subscribe: vi.fn(() => vi.fn()), send: vi.fn(async () => {}), interrupt: vi.fn(async () => {})
+    };
+    const service = { getChat: vi.fn(async () => { throw new Error('permission denied'); }), addReaction: vi.fn(), send: vi.fn(), reply: vi.fn(), deleteReaction: vi.fn(), update: vi.fn() };
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const coordinator = new LarkMessageCoordinator(runtime as any, service as any, log, () => 0, 'ou_bot');
+    await coordinator.handle({
+      messageId: 'om_solo_err', chatId: 'oc_err', chatType: 'group', messageType: 'text',
+      content: JSON.stringify({ text: '测试' }), senderOpenId: 'ou_user', senderType: 'user',
+      mentions: []
+    }, config);
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(runtime.send).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalled();
+    coordinator.stop();
+  });
+
   it('replies to the triggering message in a group so the card lands under it / inside its thread', async () => {
     let subscriber: ((event: AgentEvent) => void) | undefined;
     const runtime = {

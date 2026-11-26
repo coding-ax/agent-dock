@@ -713,18 +713,23 @@ export class LarkCardService {
   }
 
   /**
-   * 单群信息：问指定 chatId 拿群名。
+   * 单群信息：问指定 chatId 拿群名与群内人类成员数（user_count）。
    *
    * 和 `listChats` 的关键差别是**不受「机器人所在群列表」的缓存、分页和范围影响**：注入里
    * 「当前群聊」的名字必须可靠，而群列表那条路径有 5 分钟 TTL，新建的托管群在那之前根本
    * 不在里面。失败向上抛，由调用方决定降级，这里不返回空壳结果掩盖故障。
    */
-  async getChat(chatId: string): Promise<{ chatId: string; name?: string } | undefined> {
+  async getChat(chatId: string): Promise<{ chatId: string; name?: string; userCount?: number } | undefined> {
     const id = chatId.trim();
     if (!id.startsWith('oc_')) return undefined;
     const payload = await this.request(`/open-apis/im/v1/chats/${encodeURIComponent(id)}?user_id_type=open_id`, { method: 'GET' });
     const name = String(payload.data?.name ?? '').trim();
-    return { chatId: id, ...(name ? { name } : {}) };
+    const rawUserCount = payload.data?.user_count;
+    const parsedUserCount = rawUserCount !== undefined && rawUserCount !== null && String(rawUserCount).trim() !== ''
+      ? Number(rawUserCount)
+      : Number.NaN;
+    const userCount = Number.isInteger(parsedUserCount) && parsedUserCount >= 0 ? parsedUserCount : undefined;
+    return { chatId: id, ...(name ? { name } : {}), ...(userCount !== undefined ? { userCount } : {}) };
   }
 
   async listChats(pageToken?: string): Promise<LarkChatsResult> {
