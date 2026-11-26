@@ -10,7 +10,7 @@ import { WebBaseUrlInput } from './WebBaseUrlInput';
 import { KeyboardEvent, lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { useMount, useEventListener, useUpdateEffect, useLocalStorageState, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlarmClock, AlertTriangle, Archive, BarChart3, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MessageSquare, MonitorDown, PanelLeftOpen, Pin, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, StickyNote, Trash2, Wrench, X } from 'lucide-react';
+import { AlarmClock, AlertTriangle, Archive, BarChart3, Bot, Check, ChevronDown, ChevronRight, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MonitorDown, PanelLeftOpen, Pin, Plus, RefreshCw, Search, RotateCcw, Settings2, Smartphone, Trash2, Wrench, X } from 'lucide-react';
 import { Input, InputNumber, Select, Switch } from 'antd';
 import { defaultLarkTraceLimit, validateHighRiskPattern } from '@agent-dock/agent-dock-shared';
 import { api, WebAccessDeniedError, type Agent, type AssistantTask, type Project, type Session } from './api';
@@ -24,7 +24,7 @@ import { DEFAULT_SIDE_CHAT_CONFIG, findReusableSideChatSession, resolveSideChatS
 import { createClientMessageId } from './client-message-id';
 import { sideChatParentId } from './side-chat-link';
 import { ScheduleDialog } from './ScheduleDialog';
-import { isScheduledSession } from './schedule-view';
+import { SessionRowLeadingIcons, shouldShowSessionRowAgentIcon } from './sidebar-session-icon';
 import { ArchivedSessionsDialog } from './ArchivedSessionsDialog';
 import { parseRightParam, sessionUrl } from './session-url';
 import { useVisualViewportShell } from './useVisualViewportShell';
@@ -379,10 +379,7 @@ function SessionStateIndicator({ session, size = 12 }: { session: Session; size?
   return <span aria-label={sessionStateLabel(session.state, session.interruptIntent)} className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>;
 }
 
-function SessionRow({ session, agent, botName, parentLabel, active, drag, noteOf, renameRequest, onClick, onOpenContextMenu }: { session: Session; agent?: Agent; botName?: string; /** 侧边会话的父会话显示名，供 hover 卡片点出来处。 */ parentLabel?: string; active: boolean; /** 传入即表示这一行可拖拽：项目树里用于排序，时间列表里只用于拖到副屏。 */ drag?: ItemDrag; /** 小猫（主会话）派出的侧边会话：行首换成便签图标，悬停提示是谁派的。 */ noteOf?: string; /** 右键菜单发起改名的请求号。 */ renameRequest?: number; onClick(): void; onOpenContextMenu(point: { x: number; y: number }, anchor: HTMLElement): void }) {
-  // 定时任务新建的会话也是 side-chat，不加标记就和手动开的侧边会话混在一起。
-  const scheduled = isScheduledSession(session);
-  const sideChat = Boolean(sideChatParentId(session));
+function SessionRow({ session, agent, botName, parentLabel, active, drag, noteOf, showAgentIcon = true, renameRequest, onClick, onOpenContextMenu }: { session: Session; agent?: Agent; botName?: string; /** 侧边会话的父会话显示名，供 hover 卡片点出来处。 */ parentLabel?: string; active: boolean; /** 传入即表示这一行可拖拽：项目树里用于排序，时间列表里只用于拖到副屏。 */ drag?: ItemDrag; /** 小猫（主会话）派出的侧边会话：行首附加便签图标，悬停提示是谁派的。 */ noteOf?: string; /** 是否在行首展示 Agent 图标（时间视图展示，项目视图同组会话由分组头承载）。 */ showAgentIcon?: boolean; /** 右键菜单发起改名的请求号。 */ renameRequest?: number; onClick(): void; onOpenContextMenu(point: { x: number; y: number }, anchor: HTMLElement): void }) {
   const agentName = agent?.name ?? session.agentId;
   const primary = sessionLabel(session, agent?.name);
   // 整行一个 hover 目标：一行只该有一个提示。信息卡里已经含完整 cwd，所以副标题那个
@@ -450,10 +447,7 @@ function SessionRow({ session, agent, botName, parentLabel, active, drag, noteOf
     {...(drag?.props ?? {})}
     className={`group relative flex h-[34px] w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left transition-colors ${active ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-700 hover:bg-zinc-100/60'} ${drag?.dragging ? 'opacity-40' : ''} ${drag?.over ? 'ring-1 ring-zinc-300' : ''}`}
   >
-    {scheduled
-      ? <AlarmClock size={12} aria-label="定时任务会话" className="shrink-0 text-zinc-400"/>
-      : noteOf ? <StickyNote size={12} aria-label={`${noteOf}派出的便签`} className="shrink-0 text-amber-600/80"/>
-      : sideChat ? <MessageSquare size={12} aria-label="侧边会话" className="shrink-0 text-zinc-400"/> : null}
+    <SessionRowLeadingIcons session={session} agent={agent} noteOf={noteOf} showAgentIcon={showAgentIcon}/>
     {/* 行内不再放任何操作图标：重命名和归档都收进右键/长按菜单，避免 hover 时堆一排按钮。 */}
     <SessionTitleEditor session={session} label={primary} nameClassName="min-w-0 flex-1 truncate text-[14px]" editRequest={renameRequest}/>
     {session.pinnedAt && <Pin size={11} aria-label="已置顶" className="shrink-0 fill-current text-amber-500"/>}
@@ -845,13 +839,13 @@ export default function App() {
     const normalized = normalizeItemOrder(current);
     return { ...normalized, sessions: { ...normalized.sessions, [key]: moveInList(ids, from, to) } };
   });
-  const renderSessionRow = (session: Session, drag?: ItemDrag) => {
+  const renderSessionRow = (session: Session, drag?: ItemDrag, options?: { showAgentIcon?: boolean }) => {
     // 侧边会话的父标题在这儿查好再传下去，卡片自己不去翻会话列表（它只是展示层）。
     // 父会话被归档或不在当前筛选里就查不到，卡片会降级成不带出处。
     const parent = session.sourceId ? sortedSessions.find(item => item.id === session.sourceId) : undefined;
     // 交接后，前几代小猫派出的侧边会话仍是这只猫家的便签。
     const noteOf = mainSessionId && isLineageSource(session.sourceId, mainSessionId, assistantState.data?.lifecycle?.ancestorSessionIds) && sideChatParentId(session) ? assistantState.data?.companion?.name ?? '小猫' : undefined;
-    return <SessionRow key={session.id} session={session} drag={drag} noteOf={noteOf} agent={agents.data?.find(item => item.id === session.agentId)} botName={larkConfig.data?.bots.find(bot => session.sourceId?.startsWith(`${bot.appId}:`))?.name} parentLabel={parent ? sessionLabel(parent, agents.data?.find(item => item.id === parent.agentId)?.name) : undefined} active={primarySessionId === session.id || tabs.some(tab => (tab.kind === 'session' || tab.kind === 'side-chat') && tab.sessionId === session.id)} renameRequest={renameRequest?.sessionId === session.id ? renameRequest.nonce : undefined} onClick={() => selectSession(session.id)} onOpenContextMenu={(point, anchor) => setSessionMenu({ sessionId: session.id, point, anchor })}/>;
+    return <SessionRow key={session.id} session={session} drag={drag} noteOf={noteOf} showAgentIcon={options?.showAgentIcon ?? true} agent={agents.data?.find(item => item.id === session.agentId)} botName={larkConfig.data?.bots.find(bot => session.sourceId?.startsWith(`${bot.appId}:`))?.name} parentLabel={parent ? sessionLabel(parent, agents.data?.find(item => item.id === parent.agentId)?.name) : undefined} active={primarySessionId === session.id || tabs.some(tab => (tab.kind === 'session' || tab.kind === 'side-chat') && tab.sessionId === session.id)} renameRequest={renameRequest?.sessionId === session.id ? renameRequest.nonce : undefined} onClick={() => selectSession(session.id)} onOpenContextMenu={(point, anchor) => setSessionMenu({ sessionId: session.id, point, anchor })}/>;
   };
   // TooltipProvider 必须挂在根部：Radix 用它统一管理「同一时刻只显示一个提示」与交错延迟。
   return <TooltipProvider><CompanionNavProvider value={companionNav}><div ref={shellRef} className="ui-shell relative flex h-full overflow-hidden bg-canvas font-sans text-zinc-900">
@@ -921,9 +915,9 @@ export default function App() {
                       const agentDrag = itemDrag(`agents:${workspace.cwd}`, group.agentId, (from, to) => reorderAgents(workspace.cwd, from, to));
                       const agentBusy = group.sessions.some(session => busyStates.has(session.state));
                       return <div key={`${workspace.cwd}:${group.agentId}`} className="group/agent">
-                        <div role="button" tabIndex={0} {...agentDrag.props} onClick={() => toggleAgentGroup(groupKey)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleAgentGroup(groupKey); } }} title={agentCollapsed ? `展开 ${group.agentName}（拖拽可换位）` : `收起 ${group.agentName}（拖拽可换位）`} className={`flex h-7 w-full cursor-pointer items-center gap-1 rounded-lg px-2 text-left text-[12px] text-zinc-500 transition-opacity hover:bg-zinc-100/70 hover:text-zinc-700 ${agentDrag.dragging ? 'opacity-40' : ''} ${agentDrag.over ? 'ring-1 ring-zinc-300' : ''}`}>
+                        <div role="button" tabIndex={0} {...agentDrag.props} onClick={() => toggleAgentGroup(groupKey)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleAgentGroup(groupKey); } }} title={agentCollapsed ? `展开 ${group.agentName}（拖拽可换位）` : `收起 ${group.agentName}（拖拽可换位）`} className={`flex h-7 w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 text-left text-[12px] text-zinc-500 transition-opacity hover:bg-zinc-100/70 hover:text-zinc-700 ${agentDrag.dragging ? 'opacity-40' : ''} ${agentDrag.over ? 'ring-1 ring-zinc-300' : ''}`}>
                           {agentCollapsed ? <ChevronRight size={11} className="shrink-0"/> : <ChevronDown size={11} className="shrink-0"/>}
-                          <AgentIcon agentId={group.agentId} agentName={group.agentName} size={12}/>
+                          <AgentIcon agentId={group.agentId} agentName={group.agentName} size={14}/>
                           <span className="min-w-0 flex-1 truncate">{group.agentName}</span>
                           {agentBusy && !agentCollapsed && <span className="ui-status-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"/>}
                           <button type="button" title={`用 ${group.agentName} 在此工作区新建会话`} disabled={Boolean(creatingPair)} onClick={event => { event.stopPropagation(); quickCreate.mutate({ agentId: group.agentId, cwd: workspace.cwd }); }} className="grid h-4 w-4 shrink-0 place-items-center rounded opacity-0 transition-opacity hover:bg-zinc-200 hover:text-zinc-800 focus:opacity-100 group-hover/agent:opacity-100 max-md:opacity-100 disabled:opacity-50">{creatingPair?.agentId === group.agentId && creatingPair.cwd === workspace.cwd ? <RefreshCw size={10} className="animate-spin"/> : <Plus size={10}/>}</button>
@@ -931,9 +925,9 @@ export default function App() {
                           <span className="shrink-0 tabular-nums">{group.sessions.length}</span>
                         </div>
                         {!agentCollapsed && <div className="ml-1.5 border-l border-zinc-200 pl-1">{group.sessions.map(session => <div key={session.id}>
-                          {renderSessionRow(session, itemDrag(`sessions:${groupKey}`, session.id, (from, to) => reorderSessions(groupKey, from, to), session.id))}
+                          {renderSessionRow(session, itemDrag(`sessions:${groupKey}`, session.id, (from, to) => reorderSessions(groupKey, from, to), session.id), { showAgentIcon: shouldShowSessionRowAgentIcon('project', session.agentId, group.agentId) })}
                           {/* 侧边会话只出现一次：项目视图里跟在父会话下面，时间视图里按活跃时间平铺并带前缀图标。 */}
-                          {(group.sideChats.get(session.id) ?? []).map(child => renderSessionRow(child, sessionDrag(child.id)))}
+                          {(group.sideChats.get(session.id) ?? []).map(child => renderSessionRow(child, sessionDrag(child.id), { showAgentIcon: shouldShowSessionRowAgentIcon('project', child.agentId, group.agentId) }))}
                         </div>)}</div>}
                       </div>;
                     }) : <div className="px-2 py-1.5 text-[12px] text-zinc-400">还没有会话，点上面的 + 新建</div>}</div>}
