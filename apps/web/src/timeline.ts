@@ -16,7 +16,7 @@ export type TimelineEvent = DockEvent & { data: DockEvent['data'] & { role?: 'us
  * settled：任务已开始（或已取消/结束），这条不再渲染；保留下来只为把 id 借给这个任务的用户行做
  * React key（见 timelineRowKey），让气泡从「发送中」到真实事件始终是同一个 DOM 节点。
  */
-export type OptimisticMessage = { id: string; prompt: string; createdAt: string; placement: 'timeline' | 'queue'; taskId?: string; settled?: boolean };
+export type OptimisticMessage = { id: string; prompt: string; createdAt: string; placement: 'timeline' | 'queue'; interrupting?: boolean; taskId?: string; settled?: boolean };
 /** 「等待发送」面板的一行：服务端已入队的任务；pending 是刚提交、服务端还没确认的消息，不能操作。 */
 export type QueuedTask = Task & { pending?: true };
 export type TimelineActivityGroup = { id: string; label: string; labelTitle: string; events: TimelineEvent[]; startedAt: string; completedAt?: string };
@@ -50,7 +50,7 @@ export function eventRenderSignature(event: TimelineEvent): string {
   if (cached !== undefined) return cached;
   const data = event.data as Record<string, unknown>;
   const text = typeof data.text === 'string' ? data.text.length : 0;
-  const optimistic = data.optimistic ? ':optimistic' : '';
+  const optimistic = data.optimistic ? (data.interrupting ? ':optimistic:interrupting' : ':optimistic') : '';
   const toolPayload = event.type === 'tool_call' || event.type === 'tool_result'
     ? `:${data.status as string ?? ''}:${typeof data.completedAt === 'string' ? 1 : 0}:${JSON.stringify(data.input ?? '').length + JSON.stringify(data.output ?? '').length}`
     : '';
@@ -374,7 +374,7 @@ function pendingOptimisticRows(events: DockEvent[], tasks: Task[], optimisticMes
     const received = events.some(event => event.type === 'text' && event.data?.role === 'user'
       && ((optimistic.taskId && event.data.taskId === optimistic.taskId) || (event.data.text === optimistic.prompt && event.timestamp >= optimistic.createdAt)));
     if (!received && (!matchingTask || matchingTask.status === 'queued')) {
-      rows.push({ id: optimistic.id, sequence: -1, type: 'text', timestamp: optimistic.createdAt, data: { text: optimistic.prompt, role: 'user', taskId: optimistic.id, optimistic: true } });
+      rows.push({ id: optimistic.id, sequence: -1, type: 'text', timestamp: optimistic.createdAt, data: { text: optimistic.prompt, role: 'user', taskId: optimistic.id, optimistic: true, ...(optimistic.interrupting ? { interrupting: true } : {}) } });
     }
   }
   return rows;

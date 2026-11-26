@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Database, FilePenLine, FlaskConical, GitBranch, Globe2, MessageSquare, Search, Sparkles, Square, StickyNote, Terminal, Users, Wrench } from 'lucide-react';
+import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Database, FilePenLine, FlaskConical, GitBranch, Globe2, MessageSquare, Search, Sparkles, Square, StickyNote, Terminal, Users, Wrench, Zap } from 'lucide-react';
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Spinner } from './Loaders';
 import { buildActivitySteps, thinkingTitle, EMOJI_TRIGGER_ORIGIN, eventRenderSignature, groupRenderSignature, type ActivityStep, type TimelineActivityGroup, type TimelineEvent } from './timeline';
@@ -350,13 +350,18 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
     // 用 bottom 而不是 translate 定位，避免和 animate-spin 的 transform 冲突。
     // 时间放在气泡下方独立行：桌面端绝对定位、悬停整条消息出现，不挤正文也不触发跳动；
     // 触摸屏没有 hover，CSS 让它常驻。
+    const interrupting = Boolean(event.data.optimistic && event.data.interrupting);
     return <div className="ui-user-send-time-row group/msg ui-timeline-item relative my-6 flex flex-col items-end">
-      <div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900">
+      <div className={`relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900 ${interrupting ? 'ring-1 ring-orange-200/90' : ''}`}>
         {injection && <BubbleInjectionBlock injection={injection}/>}
         <MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>
-        {event.data.optimistic && <Spinner size={14} label="发送中" className="absolute bottom-4 right-full mr-2 text-zinc-400"/>}
+        {event.data.optimistic && <Spinner size={14} label={interrupting ? '正在打断并发送' : '发送中'} className={`absolute bottom-4 right-full mr-2 ${interrupting ? 'text-orange-700' : 'text-zinc-400'}`}/>}
       </div>
-      <div className="ui-user-send-time-slot mt-1 flex max-w-[80%] items-center justify-end gap-2"><UserMessageTime timestamp={event.timestamp}/></div>
+      <div className="ui-user-send-time-slot mt-1 flex max-w-[80%] items-center justify-end gap-2">
+        {interrupting
+          ? <span role="status" data-interrupting-notice="" className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-700"><Zap size={11} className="shrink-0"/><span className="ui-shimmer-text">正在打断当前回复，即将发送…</span></span>
+          : <UserMessageTime timestamp={event.timestamp}/>}
+      </div>
     </div>;
   }
   // 挂载时已不在流式输出的正文直接给全文。轮次结束时最终回答会从执行面板搬成独立的 final 行（重新挂载），

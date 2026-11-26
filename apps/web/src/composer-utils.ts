@@ -287,3 +287,20 @@ export function workspaceLabel(path: string, homeDirectory?: string): string {
   if (!path) return '工作目录';
   return isHomeDirectory(path, homeDirectory) ? '主目录' : workspaceBasename(path);
 }
+
+/**
+ * 排队项「立即发送」的过渡态归属：
+ * - 请求在途（pendingTaskId）时始终返回该 taskId；
+ * - HTTP 200 返回后到 SSE / tasks 轮询把该任务切出 queued 之间存在短暂空窗，
+ *   只要该任务仍在可见排队列表里，继续沿用 heldTaskId 保持过渡态，避免按钮先闪回
+ *   「立即发送」再消失；一旦任务离开排队列表或请求失败清掉 heldTaskId，即刻收尾。
+ */
+export function resolveActiveSteeringTaskId(
+  pendingTaskId: string | undefined,
+  heldTaskId: string | undefined,
+  queuedTasks: ReadonlyArray<{ id: string }>
+): string | undefined {
+  if (pendingTaskId) return pendingTaskId;
+  if (heldTaskId && queuedTasks.some(task => task.id === heldTaskId)) return heldTaskId;
+  return undefined;
+}

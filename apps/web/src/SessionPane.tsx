@@ -11,7 +11,7 @@ import { Composer } from './Composer';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { AgentIcon } from './AgentIcon';
 import { elapsedText, resolveElapsed } from './elapsed';
-import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, parsePromptToDraft, queuedImageThumbnailUrl, type ComposerReference } from './composer-utils';
+import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, parsePromptToDraft, queuedImageThumbnailUrl, resolveActiveSteeringTaskId, type ComposerReference } from './composer-utils';
 import { computeLiveStreamTps, latestTurnUsageEventTps } from './live-tps';
 import { useTimelineAutoScroll } from './useTimelineAutoScroll';
 import { useHealOnFocus } from './useHealOnFocus';
@@ -123,6 +123,12 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const [prompt, setPrompt] = useState(() => loadSessionDraft(getBrowserDraftStorage(), session.id)); const [composerReferences, setComposerReferences] = useState<ComposerReference[]>([]); const [quotedText, setQuotedText] = useState<string>(); const [sendMode, setSendMode] = useState<SendMode>('queue');
   useEffect(() => { setQuotedText(undefined); }, [session.id]);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
+  const [heldSteeringTaskId, setHeldSteeringTaskId] = useState<string>();
+  const steerInFlight = useRef(false);
+  useEffect(() => {
+    steerInFlight.current = false;
+    setHeldSteeringTaskId(undefined);
+  }, [session.id]);
   const [actionError, setActionError] = useState<string>(); const [archiveConfirm, setArchiveConfirm] = useState(false); const [mainArchiveBlocked, setMainArchiveBlocked] = useState(false);
   const composerTextarea = useRef<ComposerEditorHandle>(null);
   const promptRef = useRef(prompt);
@@ -250,7 +256,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     mutationFn: ({ message, mode, clientMessageId }: { message: string; mode: SendMode; placement: OptimisticMessage['placement']; draft: string; references: ComposerReference[]; quote?: string; optimisticId: string; clientMessageId: string }) => api.send(session.id, message, mode, undefined, clientMessageId),
     onMutate: variables => {
       setActionError(undefined);
-      setOptimisticMessages(current => [...current, { id: variables.optimisticId, prompt: variables.message, createdAt: new Date().toISOString(), placement: variables.placement }]);
+      setOptimisticMessages(current => [...current, { id: variables.optimisticId, prompt: variables.message, createdAt: new Date().toISOString(), placement: variables.placement, ...(variables.mode === 'interrupt' ? { interrupting: true } : {}) }]);
       setPrompt('');
       setComposerReferences([]);
       setQuotedText(undefined);
@@ -291,6 +297,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
         setPrompt(variables.draft);
         setComposerReferences(current => current.length ? current : variables.references);
         setQuotedText(current => current ?? variables.quote);
+        setSendMode(variables.mode);
       }
       setActionError(error.message);
     },
@@ -300,7 +307,38 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 成功/失败后 isPending 变化会再触发一次，成功清空、失败把草稿写回去。
   const draftWriter = useSessionDraftWriter(session.id, prompt, { skipEmptyValue: send.isPending, enabled: !session.archivedAt });
   const cancelQueued = useMutation({ mutationFn: (taskId: string) => api.cancelQueued(session.id, taskId), onSuccess: result => qc.setQueryData<Task[]>(['tasks', session.id], current => current?.map(task => task.id === result.id ? result : task)), onError: error => setActionError(error.message) });
-  const steerQueued = useMutation({ mutationFn: (taskId: string) => api.steerQueued(session.id, taskId), onSuccess: () => { setActionError(undefined); void qc.invalidateQueries({ queryKey: ['tasks', session.id] }); }, onError: error => setActionError(error.message) });
+  const steerQueued = useMutation({
+    mutationFn: (taskId: string) => api.steerQueued(session.id, taskId),
+    onMutate: taskId => {
+      setActionError(undefined);
+      setHeldSteeringTaskId(taskId);
+    },
+    onSuccess: () => {
+      setActionError(undefined);
+      void qc.invalidateQueries({ queryKey: ['tasks', session.id] });
+    },
+    onError: error => {
+      setHeldSteeringTaskId(undefined);
+      setActionError(error.message);
+    },
+    onSettled: () => { steerInFlight.current = false; }
+  });
+  const activeSteeringTaskId = resolveActiveSteeringTaskId(steerQueued.isPending ? steerQueued.variables : undefined, heldSteeringTaskId, queuedTasks);
+  useEffect(() => {
+    if (!heldSteeringTaskId || steerQueued.isPending) return;
+    if (!queuedTasks.some(task => task.id === heldSteeringTaskId)) {
+      setHeldSteeringTaskId(undefined);
+      return;
+    }
+    const timer = window.setTimeout(() => setHeldSteeringTaskId(undefined), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [heldSteeringTaskId, queuedTasks, steerQueued.isPending]);
+  const handleSteerQueued = (taskId: string) => {
+    if (steerInFlight.current || steerQueued.isPending || activeSteeringTaskId) return;
+    steerInFlight.current = true;
+    timelineScroll.scrollToBottom();
+    steerQueued.mutate(taskId);
+  };
   const editQueued = useMutation({
     mutationFn: (taskId: string) => api.cancelQueued(session.id, taskId),
     onSuccess: result => {
@@ -538,7 +576,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             </button>
           </div>
           : <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已归档，仅支持查看。</div>
-        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} quotedText={quotedText} onClearQuote={() => setQuotedText(undefined)} sending={send.isPending} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={steerQueued.isPending ? steerQueued.variables : undefined} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} sessionUsage={effectiveSessionUsage} liveTps={liveStreamTps} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={taskId => { timelineScroll.scrollToBottom(); steerQueued.mutate(taskId); }} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
+        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} quotedText={quotedText} onClearQuote={() => setQuotedText(undefined)} sending={send.isPending} sendingMode={send.isPending ? send.variables?.mode : undefined} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={activeSteeringTaskId} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} sessionUsage={effectiveSessionUsage} liveTps={liveStreamTps} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={handleSteerQueued} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>
       </div>
     </section>
