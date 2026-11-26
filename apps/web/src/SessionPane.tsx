@@ -1,6 +1,6 @@
 import { ExitGate } from './ExitGate';
-import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Square, Archive, X, RefreshCw, RotateCcw, ScrollText, MoreHorizontal } from 'lucide-react';
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Search, Square, Archive, X, RefreshCw, RotateCcw, ScrollText, MoreHorizontal } from 'lucide-react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type DockEvent, type Session, type Task } from './api';
@@ -20,7 +20,11 @@ import { healBoundary, mergeEventBatch, replaceEventTail } from './event-buffer'
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { sessionStateLabel, stateLabels, stateTone, busyStates } from './session-states';
 import { ConfirmDialog, IconButton } from './ui-controls';
-import { openAppDialog } from './dialog-store';
+import { getActiveAppDialog, openAppDialog } from './dialog-store';
+import { shortcutLabel } from './useShortcuts';
+import { TimelineSearchBar } from './TimelineSearchBar';
+import { isTimelineFindShortcut, normalizeSearchQuery, searchTimeline, shouldHandleTimelineFindShortcut, stepSearchIndex, SYSTEM_PROMPT_SEARCH_KEY } from './timeline-search';
+import { applyTimelineSearchHighlights, clearTimelineSearchHighlights, findTextRangesInElement, scrollMatchIntoView } from './timeline-search-highlight';
 import { larkSessionAppLink } from './lark-session-link';
 import { fetchTaskSnapshot, mergeTaskSnapshots, upsertTask } from './task-snapshots';
 import { sessionLabel, workspaceLabel } from './session-groups';
@@ -248,6 +252,138 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 只对「回到底部」按钮的显隐做 120ms 去抖：滞回阈值已经消除边界翻转，
   // 这里再兜一层，避免快速抖动/极窄视口下按钮闪一下又消失。跟随逻辑本身不去抖。
   const showScrollToBottom = useDebounce(!timelineScroll.isFollowing, { wait: 120 });
+
+  // 对话流内搜索（Cmd/Ctrl+F 或顶栏/菜单按钮唤起）：按会话隔离，切会话自动重置。
+  const paneRootRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearchQuery = useDebounce(searchQuery, { wait: 80 });
+  const [searchIndex, setSearchIndex] = useState(0);
+  const searchPaneKey = `${pane}:${session.id}`;
+  const effectiveSearchQuery = searchOpen ? normalizeSearchQuery(debouncedSearchQuery) : '';
+  const searchMatches = useMemo(
+    () => (effectiveSearchQuery ? searchTimeline({ turns: timelineTurns, rowKeys, systemPrompt: session.systemPrompt, query: effectiveSearchQuery }) : []),
+    [effectiveSearchQuery, timelineTurns, rowKeys, session.systemPrompt]
+  );
+  const clampedSearchIndex = searchMatches.length ? Math.min(searchIndex, searchMatches.length - 1) : -1;
+  const activeSearchMatch = clampedSearchIndex >= 0 ? searchMatches[clampedSearchIndex] : undefined;
+
+  const openTimelineSearch = useCallback(() => {
+    setSearchOpen(true);
+    requestAnimationFrame(() => {
+      const input = searchInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.select();
+    });
+  }, []);
+
+  const closeTimelineSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setSearchIndex(0);
+    clearTimelineSearchHighlights(searchPaneKey);
+  }, [searchPaneKey]);
+
+  const goToNextMatch = useCallback(() => {
+    setSearchIndex(current => stepSearchIndex(current, searchMatches.length, 1));
+  }, [searchMatches.length]);
+
+  const goToPrevMatch = useCallback(() => {
+    setSearchIndex(current => stepSearchIndex(current, searchMatches.length, -1));
+  }, [searchMatches.length]);
+
+  useEffect(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setSearchIndex(0);
+    clearTimelineSearchHighlights(searchPaneKey);
+    return () => clearTimelineSearchHighlights(searchPaneKey);
+  }, [session.id, searchPaneKey]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      if (!isTimelineFindShortcut(event)) return;
+      const target = event.target instanceof Node ? event.target : document.activeElement;
+      const paneRoot = paneRootRef.current;
+      const targetInsidePane = Boolean(paneRoot && target && paneRoot.contains(target));
+      const targetEl = target instanceof Element ? target : target?.parentElement;
+      const targetInsideSecondaryPane = Boolean(targetEl?.closest('[data-session-pane="secondary"]'));
+      const canHandle = shouldHandleTimelineFindShortcut({
+        hasActiveDialog: getActiveAppDialog() !== null,
+        hasAriaModal: Boolean(document.querySelector('[aria-modal="true"]')),
+        pane,
+        targetInsidePane,
+        targetInsideSecondaryPane
+      });
+      if (!canHandle) return;
+      event.preventDefault();
+      openTimelineSearch();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [pane, openTimelineSearch]);
+
+  useEffect(() => {
+    if (!searchOpen || !effectiveSearchQuery) {
+      clearTimelineSearchHighlights(searchPaneKey);
+      return;
+    }
+    const content = timelineScroll.contentRef.current;
+    const container = timelineScroll.containerRef.current;
+    if (!content || !container) return;
+
+    const escapeAttr = (value: string) =>
+      typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(value)
+        : value.replace(/["\\]/g, '\\$&');
+
+    const syncHighlightAndScroll = (shouldScroll: boolean) => {
+      const allRanges = findTextRangesInElement(content, effectiveSearchQuery);
+      let activeRange: Range | null = null;
+      let fallbackTarget: Element | null = null;
+
+      if (activeSearchMatch) {
+        const itemEl = content.querySelector(`[data-search-item-key="${escapeAttr(activeSearchMatch.itemKey)}"]`);
+        const stepEl = activeSearchMatch.stepId && itemEl
+          ? itemEl.querySelector(`[data-search-step-id="${escapeAttr(activeSearchMatch.stepId)}"]`)
+          : null;
+        const scopeEl = stepEl ?? itemEl;
+        fallbackTarget = scopeEl;
+        if (scopeEl) {
+          const scopeRanges = findTextRangesInElement(scopeEl, effectiveSearchQuery);
+          if (scopeRanges.length) {
+            const targetRange = scopeRanges[Math.min(activeSearchMatch.occurrenceIndex, scopeRanges.length - 1)]!;
+            activeRange = allRanges.find(range =>
+              range.startContainer === targetRange.startContainer
+              && range.startOffset === targetRange.startOffset
+              && range.endContainer === targetRange.endContainer
+              && range.endOffset === targetRange.endOffset
+            ) ?? targetRange;
+          }
+        }
+      }
+
+      applyTimelineSearchHighlights(searchPaneKey, allRanges, activeRange);
+      if (shouldScroll && activeSearchMatch) {
+        timelineScroll.pauseFollowing();
+        const scrollTarget = activeRange ?? fallbackTarget;
+        if (scrollTarget) scrollMatchIntoView(container, scrollTarget);
+      }
+    };
+
+    const frame = requestAnimationFrame(() => syncHighlightAndScroll(true));
+    // 折叠的过程块 / System Prompt 自动展开有 200ms 过渡，展开后再补一次高亮与居中定位。
+    const needsExpandFollowup = activeSearchMatch?.sectionKind === 'activity' || activeSearchMatch?.sectionKind === 'system-prompt';
+    const timer = needsExpandFollowup ? window.setTimeout(() => syncHighlightAndScroll(true), 230) : undefined;
+    return () => {
+      cancelAnimationFrame(frame);
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [searchOpen, effectiveSearchQuery, activeSearchMatch, timelineTurns, searchPaneKey, timelineScroll]);
 
   // in-flight 单飞：网络卡住时 send.isPending 会一直是 true，光靠它挡不住同一帧里的
   // 两次触发（Enter + 点击）；重复请求最终由服务端的 clientMessageId 兜底。
@@ -490,6 +626,13 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 常用入口另外在标题栏常驻，避免 0.1.x 的老用户找不到它们。
   const menuGroups: SessionMenuGroup[] = [
     { items: [
+      {
+        id: 'search-timeline',
+        label: '搜索对话内容',
+        icon: <Search size={16}/>,
+        trailing: <span className="shrink-0 font-mono text-[11px] text-zinc-400">{shortcutLabel('f')}</span>,
+        onSelect: openTimelineSearch
+      } satisfies SessionMenuItem,
       ...(!session.archivedAt ? [{
         id: 'schedules', label: '定时任务', icon: <AlarmClock size={16}/>,
         ...(activeSchedules ? { trailing: <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[12px] tabular-nums text-zinc-500">{activeSchedules}</span> } : {}),
@@ -516,7 +659,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // h-full w-full：本组件既被当作并排的 flex 子项（主区），也被塞进 PaneHost 的
   // absolute inset-0 容器（右栏标签）。后者不是 flex 上下文，只写 flex-1 会撑不满，
   // 表现为右栏内容只占左上角一块。
-  return <div className={`flex h-full min-w-0 w-full ${secondary ? 'border-l border-zinc-200' : ''}`}>
+  return <div ref={paneRootRef} data-session-pane={pane} className={`flex h-full min-w-0 w-full ${secondary ? 'border-l border-zinc-200' : ''}`}>
     <section className="flex min-w-0 flex-1 flex-col">
       <header className="ui-session-topbar flex shrink-0 items-center gap-1 border-b border-zinc-200 bg-canvas px-3 sm:px-4">
         <span className="mr-1 md:hidden"><IconButton label="打开会话列表" onClick={onOpenSidebar}><Menu size={16}/></IconButton></span>
@@ -549,6 +692,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
               : !session.archivedAt && session.source !== 'lark' && <IconButton label="托管给飞书机器人" onClick={() => openAppDialog('handover', { sessionId: session.id })}><Bot size={15}/></IconButton>}
           </span>
           {!handoverInfo && larkLink && <span className="max-sm:hidden"><IconButton label={larkLink.exact ? '在飞书中打开该会话' : '在飞书中打开该话题（若未定位请在群内查找）'} onClick={() => window.open(larkLink.url, '_blank', 'noopener,noreferrer')}><ExternalLink size={15}/></IconButton></span>}
+          <IconButton label={`搜索对话内容（${shortcutLabel('f')}）`} active={searchOpen} onClick={() => { if (searchOpen) closeTimelineSearch(); else openTimelineSearch(); }}><Search size={15}/></IconButton>
           {!secondary && onTogglePane && <PaneToggleButton open={Boolean(paneOpen)} onToggle={onTogglePane}/>}
           <SessionMenu groups={menuGroups.filter(group => group.items.length)}/>
         </div>
@@ -557,15 +701,25 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
       <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
-        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{session.systemPrompt?.trim() && <SystemPromptBubble prompt={session.systemPrompt.trim()}/>}{timelineTurns.map(turn => {
+        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{session.systemPrompt?.trim() && <div data-search-item-key={SYSTEM_PROMPT_SEARCH_KEY} data-search-active={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY ? 'true' : undefined} className={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY ? 'ui-search-active-item' : undefined}><SystemPromptBubble prompt={session.systemPrompt.trim()} forceOpen={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY}/></div>}{timelineTurns.map(turn => {
           const time = turnTimeBadge(turn);
           return <TimelineTurn key={turn.turnId} turnId={turn.turnId} time={time}>
-            {turn.sections.map(section => section.kind === 'event'
-              ? <TimelineItem key={timelineRowKey(section.event, rowKeys)} event={section.event} sentPrompt={typeof section.event.data.taskId === 'string' ? sentPromptByTaskId.get(section.event.data.taskId) : undefined} final={section.final} streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/>
-              : <ActivityPanel key={section.id} groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt}/>)}
+            {turn.sections.map(section => {
+              if (section.kind === 'event') {
+                const itemKey = timelineRowKey(section.event, rowKeys);
+                const isSearchActive = activeSearchMatch?.itemKey === itemKey;
+                return <div key={itemKey} data-search-item-key={itemKey} data-search-active={isSearchActive ? 'true' : undefined} className={isSearchActive ? 'ui-search-active-item' : undefined}>
+                  <TimelineItem event={section.event} sentPrompt={typeof section.event.data.taskId === 'string' ? sentPromptByTaskId.get(section.event.data.taskId) : undefined} final={section.final} streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/>
+                </div>;
+              }
+              const isSearchActive = activeSearchMatch?.itemKey === section.id;
+              return <div key={section.id} data-search-item-key={section.id} data-search-active={isSearchActive ? 'true' : undefined} className={isSearchActive ? 'ui-search-active-item' : undefined}>
+                <ActivityPanel groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt} forceOpen={isSearchActive} activeStepId={isSearchActive ? activeSearchMatch?.stepId : undefined}/>
+              </div>;
+            })}
           </TimelineTurn>;
         })}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
-        </div></div>{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}<SelectionQuotePopover containerRef={timelineScroll.containerRef} enabled={!session.archivedAt && !mainNeedsRestart} onQuote={handleQuoteReply}/></div>
+        </div></div>{searchOpen && <TimelineSearchBar inputRef={searchInputRef} query={searchQuery} hasQuery={Boolean(normalizeSearchQuery(searchQuery))} activeIndex={clampedSearchIndex} total={searchMatches.length} onQueryChange={next => { setSearchQuery(next); setSearchIndex(0); }} onNext={goToNextMatch} onPrev={goToPrevMatch} onClear={() => { setSearchQuery(''); setSearchIndex(0); }} onClose={closeTimelineSearch}/>}{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}<SelectionQuotePopover containerRef={timelineScroll.containerRef} enabled={!session.archivedAt && !mainNeedsRestart} onQuote={handleQuoteReply}/></div>
       {!session.archivedAt && prompt.length > MAX_DRAFT_CHARS && <div role="status" className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-center text-[12px] text-amber-700">草稿超过 {MAX_DRAFT_CHARS.toLocaleString()} 字符，超出部分不会保存，刷新后会丢失。</div>}
       {session.archivedAt || mainNeedsRestart
         ? mainNeedsRestart

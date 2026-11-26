@@ -98,10 +98,13 @@ const ToolCard = memo(function ToolCard({ event }: { event: TimelineEvent }) {
 }, (prev, next) => eventRenderSignature(prev.event) === eventRenderSignature(next.event));
 
 /** 一行可展开的步骤：只露一句话描述 + 状态，点开才看细节。展开状态完全由用户决定，不随流式输出自动开合。 */
-function StepDisclosure({ icon, title, subtitle, meta, running, failed, children }: { icon: ReactNode; title: ReactNode; subtitle?: ReactNode; meta?: ReactNode; running: boolean; failed?: boolean; children?: ReactNode }) {
-  const [open, setOpen] = useState(false);
+function StepDisclosure({ icon, title, subtitle, meta, running, failed, forceOpen = false, stepId, children }: { icon: ReactNode; title: ReactNode; subtitle?: ReactNode; meta?: ReactNode; running: boolean; failed?: boolean; forceOpen?: boolean; stepId?: string; children?: ReactNode }) {
+  const [open, setOpen] = useState(forceOpen);
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
   const hasBody = children !== undefined && children !== null && children !== false;
-  return <div className="ui-timeline-item relative">
+  return <div data-search-step-id={stepId} className="ui-timeline-item relative">
     <button type="button" data-timeline-disclosure aria-expanded={open} disabled={!hasBody} onClick={() => setOpen(value => !value)} className="group/step flex min-h-8 w-full items-start gap-2 py-1 text-left text-[13px] text-zinc-500 transition-colors hover:text-zinc-900 disabled:cursor-default disabled:hover:text-zinc-500">
       <span className={`relative z-10 mt-0.5 grid h-4 w-4 shrink-0 place-items-center bg-canvas ${failed ? 'text-red-500' : running ? 'text-zinc-800' : 'text-zinc-400'}`}>{icon}</span>
       <span className="min-w-0 flex-1">
@@ -145,7 +148,7 @@ function useStepElapsed(live: boolean) {
   return (end ?? now) - start.current;
 }
 
-const ToolsStep = memo(function ToolsStep({ events }: { events: TimelineEvent[] }) {
+const ToolsStep = memo(function ToolsStep({ events, forceOpen = false, stepId }: { events: TimelineEvent[]; forceOpen?: boolean; stepId?: string }) {
   const runningEvent = events.find(event => !isToolTerminal(event));
   const running = Boolean(runningEvent);
   const failedCount = events.filter(event => event.data.status === 'failed').length;
@@ -167,27 +170,30 @@ const ToolsStep = memo(function ToolsStep({ events }: { events: TimelineEvent[] 
     {elapsed && <span>{elapsed}</span>}
   </>;
   return <StepDisclosure icon={<ToolKindIcon kind={first.kind}/>} running={running} failed={!running && failedCount > 0}
+    forceOpen={forceOpen}
+    stepId={stepId}
     title={running ? runningLabel : summary}
     subtitle={subtitle}
     meta={meta}>
     <div className="space-y-0.5 py-0.5">{events.map(event => <ToolCard key={event.id} event={event}/>)}</div>
   </StepDisclosure>;
-}, (prev, next) => prev.events.length === next.events.length
+}, (prev, next) => prev.forceOpen === next.forceOpen && prev.stepId === next.stepId && prev.events.length === next.events.length
   && prev.events.every((event, index) => eventRenderSignature(event) === eventRenderSignature(next.events[index]!)));
 
-const ThinkingStep = memo(function ThinkingStep({ event, live, replay, sessionId }: { event: TimelineEvent; live: boolean; replay: boolean; sessionId: string | undefined }) {
+const ThinkingStep = memo(function ThinkingStep({ event, live, replay, sessionId, forceOpen = false, stepId }: { event: TimelineEvent; live: boolean; replay: boolean; sessionId: string | undefined; forceOpen?: boolean; stepId?: string }) {
   const elapsedValue = formatElapsed(useStepElapsed(live));
   const title = thinkingTitle(event.data.text, live);
   // 结束后没有标题时把耗时并进标题（「已思考 8 秒」）；有标题时耗时放右侧。
   const main = live ? (title ?? '思考中') : (title ?? (elapsedValue ? `已思考 ${elapsedValue}` : '已思考'));
   const meta = title && elapsedValue ? elapsedValue : undefined;
-  return <StepDisclosure icon={<BrainCircuit size={16}/>} running={live} title={main} meta={meta}>
+  return <StepDisclosure icon={<BrainCircuit size={16}/>} running={live} forceOpen={forceOpen} stepId={stepId} title={main} meta={meta}>
     <div className="max-h-80 overflow-y-auto"><ThinkingMarkdown text={event.data.text ?? ''} active={live} replay={replay || !live} sessionId={sessionId}/></div>
   </StepDisclosure>;
 }, (prev, next) => prev.live === next.live && prev.replay === next.replay && prev.sessionId === next.sessionId
+  && prev.forceOpen === next.forceOpen && prev.stepId === next.stepId
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event));
 
-function ActivitySteps({ steps, ongoing, replay, sessionId, reservePending = false, pending = false, pendingLabel }: { steps: ActivityStep[]; ongoing: boolean; replay: boolean; sessionId: string | undefined; /** 留出「处理中」这一行的位置，即便此刻不显示。 */ reservePending?: boolean; pending?: boolean; pendingLabel?: string }) {
+function ActivitySteps({ steps, ongoing, replay, sessionId, activeStepId, reservePending = false, pending = false, pendingLabel }: { steps: ActivityStep[]; ongoing: boolean; replay: boolean; sessionId: string | undefined; activeStepId?: string; /** 留出「处理中」这一行的位置，即便此刻不显示。 */ reservePending?: boolean; pending?: boolean; pendingLabel?: string }) {
   const last = steps.at(-1);
   const slot = reservePending || pending;
   return <div className="relative">
@@ -195,10 +201,10 @@ function ActivitySteps({ steps, ongoing, replay, sessionId, reservePending = fal
     <span aria-hidden="true" className={`absolute left-2 top-2 w-px bg-zinc-200 ${slot && !pending ? 'bottom-11' : 'bottom-3'}`}/>
     {steps.map(step => {
       const isLast = step === last;
-      if (step.kind === 'thinking') return <ThinkingStep key={step.id} event={step.event} live={ongoing && isLast} replay={replay} sessionId={sessionId}/>;
-      if (step.kind === 'tools') return <ToolsStep key={step.id} events={step.events}/>;
+      if (step.kind === 'thinking') return <ThinkingStep key={step.id} stepId={step.id} forceOpen={activeStepId === step.id} event={step.event} live={ongoing && isLast} replay={replay} sessionId={sessionId}/>;
+      if (step.kind === 'tools') return <ToolsStep key={step.id} stepId={step.id} forceOpen={activeStepId === step.id} events={step.events}/>;
       const streaming = ongoing && isLast;
-      return <div key={step.id} className="relative pl-6"><AssistantMarkdown text={step.event.data.text ?? ''} active={streaming} replay={replay || !streaming} sessionId={sessionId}/></div>;
+      return <div key={step.id} data-search-step-id={step.id} className="relative pl-6"><AssistantMarkdown text={step.event.data.text ?? ''} active={streaming} replay={replay || !streaming} sessionId={sessionId}/></div>;
     })}
     {slot && <div aria-hidden={pending ? undefined : true} className="relative min-h-8 py-1 text-[13px] text-zinc-400">
       {pending && <div className="ui-timeline-item flex min-h-6 items-center pl-6">
@@ -209,9 +215,12 @@ function ActivitySteps({ steps, ongoing, replay, sessionId, reservePending = fal
   </div>;
 }
 
-export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, replay = false, sessionId, hasAnswer = false, taskStatus = 'running', modelLabel, startedAt, completedAt }: { groups: TimelineActivityGroup[]; ongoing: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; sessionId: string | undefined; hasAnswer?: boolean; taskStatus?: string; modelLabel: string; startedAt?: string; completedAt?: string }) {
+export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, replay = false, sessionId, hasAnswer = false, taskStatus = 'running', modelLabel, startedAt, completedAt, forceOpen = false, activeStepId }: { groups: TimelineActivityGroup[]; ongoing: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; sessionId: string | undefined; hasAnswer?: boolean; taskStatus?: string; modelLabel: string; startedAt?: string; completedAt?: string; forceOpen?: boolean; activeStepId?: string }) {
   const steps = useMemo(() => buildActivitySteps(groups), [groups]);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(forceOpen);
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
   const now = useNow(ongoing);
   const elapsed = formatElapsed(elapsedMilliseconds(startedAt ?? groups[0]?.startedAt, ongoing ? undefined : completedAt ?? groups.at(-1)?.completedAt, now));
   const interrupted = taskStatus === 'interrupted' || taskStatus === 'cancelled';
@@ -231,7 +240,7 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
   if (ongoing) return <section aria-live="polite" aria-label={`${modelLabel} 执行过程`} className="my-3">
     {/* 当前有思考/工具/正文在跑时，「处理中」占位行不显示；耗时挪到过程区右上角，仍然每秒刷新。 */}
     {!idle && elapsed && <div className="mb-1 flex justify-end pr-1 text-[11px] tabular-nums text-zinc-400">已用时 {elapsed}</div>}
-    <ActivitySteps steps={steps} ongoing replay={replay} sessionId={sessionId} reservePending={reservePending} pending={idle} pendingLabel={`处理中${elapsed ? ` · ${elapsed}` : ''}`}/>
+    <ActivitySteps steps={steps} ongoing replay={replay} sessionId={sessionId} activeStepId={activeStepId} reservePending={reservePending} pending={idle} pendingLabel={`处理中${elapsed ? ` · ${elapsed}` : ''}`}/>
   </section>;
 
   // 结束后：中间过程全部收进一行「已处理 xx」，只留最终输出；点开才看完整过程。
@@ -248,7 +257,7 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
         {statusText && <span className={`text-[12px] ${statusTone}`}>{statusText}</span>}
         <ChevronRight size={13} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>
       </button>
-      <Disclosure open={open}><div className="pb-1 pt-1"><ActivitySteps steps={steps} ongoing={false} replay sessionId={sessionId}/></div></Disclosure>
+      <Disclosure open={open}><div className="pb-1 pt-1"><ActivitySteps steps={steps} ongoing={false} replay sessionId={sessionId} activeStepId={activeStepId}/></div></Disclosure>
     </div>}
     {steps.length === 0 && elapsed && <div className="ui-timeline-item my-3 flex min-h-8 items-center gap-2 text-[13px] text-zinc-500">
       <StatusIcon size={14} className={`shrink-0 ${statusTone}`}/>
@@ -260,6 +269,7 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
 }, (prev, next) => prev.ongoing === next.ongoing && prev.sessionId === next.sessionId && prev.hasAnswer === next.hasAnswer
   && prev.taskStatus === next.taskStatus && prev.modelLabel === next.modelLabel
   && prev.startedAt === next.startedAt && prev.completedAt === next.completedAt
+  && prev.forceOpen === next.forceOpen && prev.activeStepId === next.activeStepId
   && prev.groups.length === next.groups.length
   && prev.groups.every((group, index) => group.id === next.groups[index]!.id && groupRenderSignature(group) === groupRenderSignature(next.groups[index]!)));
 
@@ -292,8 +302,11 @@ function BubbleInjectionBlock({ injection, labelOverride }: { injection: BubbleI
 }
 
 /** 会话创建时写入 ACP 的 System Prompt：放在时间线最顶部，默认折叠，方便一眼看到本会话的底层注入。 */
-export const SystemPromptBubble = memo(function SystemPromptBubble({ prompt }: { prompt: string }) {
-  const [open, setOpen] = useState(false);
+export const SystemPromptBubble = memo(function SystemPromptBubble({ prompt, forceOpen = false }: { prompt: string; forceOpen?: boolean }) {
+  const [open, setOpen] = useState(forceOpen);
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
   return <div className="ui-timeline-item mb-5 flex justify-end">
     <div className="min-w-0 max-w-[80%] overflow-hidden rounded-[16px] border border-zinc-200/90 bg-zinc-50/90 text-left">
       <button type="button" data-timeline-disclosure aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[12px] text-zinc-600 transition-colors hover:bg-zinc-100/80 hover:text-zinc-900">
