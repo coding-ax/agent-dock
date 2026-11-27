@@ -25,6 +25,9 @@ import {
   runNotifyChannelCommandSet, runNotifyChannelLarkSet, runNotifyConfigSet, runNotifyStatus,
   runNotifyTest, runNotifyWebhookAdd, runNotifyWebhookList, runNotifyWebhookRemove, runNotifyWebhookUpdate
 } from './notifications/cli.js';
+import {
+  runThemeApply, runThemeCreate, runThemeDelete, runThemeExport, runThemeImportVsCode, runThemeList, runThemeReset
+} from './themes/cli.js';
 import { acpxPassThroughArgs, runAcpx } from './acpx.js';
 import { AgentGroupToolCliError, runGroupBots, runGroupMembers, runGroupMessage, runGroupMessages, runGroupPeers, runGroupReplyMode, runGroupSelf, runGroupSend, runGroupWait } from './lark/agent-tools-cli.js';
 import { agentDockGroupToolsCommand } from './lark/agent-tools.js';
@@ -319,7 +322,14 @@ async function main() {
     boardCardAdd: async (boardId, options) => { process.stdout.write(await runBoardCardAdd(boardId, options)); },
     boardCardMove: async (cardIds, options) => { process.stdout.write(await runBoardCardMove(cardIds, options)); },
     boardCardUpdate: async (cardId, options) => { process.stdout.write(await runBoardCardUpdate(cardId, options)); },
-    boardCardRemove: async (cardIds, options) => { process.stdout.write(await runBoardCardRemove(cardIds, options)); }
+    boardCardRemove: async (cardIds, options) => { process.stdout.write(await runBoardCardRemove(cardIds, options)); },
+    themeList: async options => { process.stdout.write(await runThemeList(options)); },
+    themeCreate: async options => { process.stdout.write(await runThemeCreate(options)); },
+    themeImportVsCode: async (source, options) => { process.stdout.write(await runThemeImportVsCode(source, options)); },
+    themeApply: async (idOrName, options) => { process.stdout.write(await runThemeApply(idOrName, options)); },
+    themeReset: async options => { process.stdout.write(await runThemeReset(options)); },
+    themeDelete: async (id, options) => { process.stdout.write(await runThemeDelete(id, options)); },
+    themeExport: async (idOrName, options) => { process.stdout.write(await runThemeExport(idOrName, options)); }
   });
   await program.parseAsync();
 }

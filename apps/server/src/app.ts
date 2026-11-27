@@ -35,6 +35,8 @@ import { registerNotificationRoutes } from './notifications/routes.js';
 import type { NotificationService } from './notifications/service.js';
 import { registerBoardRoutes } from './boards/routes.js';
 import type { BoardService } from './boards/service.js';
+import { registerThemeRoutes } from './themes/routes.js';
+import type { ThemeService } from './themes/service.js';
 import { registerJsonCompression } from './json-compression.js';
 import { LoginRateLimiter, readWebPasswordHash, verifyWebPassword, webPasswordPath } from './web-password.js';
 import { isLocalOwnerRequest, issueMasterToken, parseCookieHeader, sessionTokenAllows, verifyWebToken, webAccessCookieName, webAccessCookieNameFor, webAccessSessionCookieName, type VerifiedWebToken } from './web-access.js';
@@ -53,6 +55,7 @@ const contentTypes: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.jsonc': 'application/json; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
   '.mov': 'video/quicktime',
   '.mp3': 'audio/mpeg',
@@ -65,6 +68,7 @@ const contentTypes: Record<string, string> = {
   '.tar': 'application/x-tar',
   '.txt': 'text/plain; charset=utf-8',
   '.ttf': 'font/ttf',
+  '.vsix': 'application/vsix',
   '.wav': 'audio/wav',
   '.webm': 'video/webm',
   '.webmanifest': 'application/manifest+json; charset=utf-8',
@@ -108,6 +112,8 @@ export interface BuildAppOptions {
   notifications?: NotificationService;
   /** 自由拖拽看板模式与全局多路复用看板 SSE；不传表示这套路由不挂。 */
   boards?: BoardService;
+  /** 自定义主题配色与 VS Code 主题导入（含 SSE 实时推送）；不传表示不挂。 */
+  themes?: ThemeService;
   /** 本地 Web 访问凭证防护；不传（或 enabled=false）时不挂防护中间件。 */
   webAuth?: { enabled?: boolean; secret?: string; /** 访问密码哈希文件；默认 ~/.agentdock/web-password，文件不存在即未启用密码。 */ passwordFile?: string; /** 会话分享令牌寿命；与启动时的 AGENTDOCK_WEB_TOKEN_TTL_DAYS 对齐。 */ sessionTokenTtlMs?: number };
   /** 扫码链接；不传表示这套路由不挂。 */
@@ -202,6 +208,13 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   const terminalManager = registerTerminalWebSockets(app.server, runtime, { webAuth: options.webAuth });
   // 兜底 parser：任何未显式注册的类型都按原始 Buffer 交给路由。
   app.addContentTypeParser('*', { parseAs: 'buffer' }, (_request, body, done) => done(null, body));
+  // Fastify 内置的 text/plain parser 默认会解析成 string；上传路由必须拿到原始 Buffer，
+  // 否则浏览器以 text/plain 上传 .txt / .jsonc 等主题或文本文件会触发 415 报错。
+  app.addContentTypeParser('text/plain', { parseAs: 'buffer' }, (request, body, done) => {
+    const buffer = body as Buffer;
+    if (isUploadRequest(request)) return done(null, buffer);
+    return done(null, buffer.toString('utf8'));
+  });
   // application/json 仍需为其余路由解析成对象，但上传路由要拿到原始 Buffer——
   // 否则上传 .json 文件时 writeFile 会收到已解析对象并抛 ERR_INVALID_ARG_TYPE。
   app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
@@ -749,6 +762,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   if (options.sideChatConfig) registerSideChatConfigRoutes(app, options.sideChatConfig);
   if (options.notifications) registerNotificationRoutes(app, options.notifications, streams);
   if (options.boards) registerBoardRoutes(app, options.boards, streams);
+  if (options.themes) registerThemeRoutes(app, options.themes, streams);
 
   const mimeToExt: Record<string, string> = {
     'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',
@@ -798,14 +812,18 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   const uploadGcTimer = setInterval(() => void collectExpiredUploads().catch(() => undefined), 24 * 60 * 60_000);
   uploadGcTimer.unref();
   app.addHook('onClose', async () => clearInterval(uploadGcTimer));
-  // 未知 content-type 时按扩展名兜底：浏览器对 .md/.heic/.zip 等的类型上报很不一致
-  // （Chrome 发 text/markdown、Windows 发 application/x-zip-compressed），
-  // 这些都应正常落盘，而不是被拒绝。
+  // 未知 content-type 或通用二进制流（application/octet-stream）按原始文件名扩展名兜底；
+  // 浏览器上传 .vsix / .jsonc 时常报 application/octet-stream、application/zip 或 text/plain，
+  // 优先保留 .vsix / .jsonc 扩展名，确保会话中传给 Agent 的本地文件路径可直接被 `agent-dock theme import-vscode` 识别。
+  const preservedUploadExts = new Set(['.vsix', '.jsonc']);
   const extFromContentType = (contentType: string, fallbackName?: string) => {
+    const suffix = fallbackName ? extname(fallbackName).toLowerCase() : '';
+    const safeSuffix = /^\.[a-z0-9]{1,8}$/.test(suffix) ? suffix : '';
+    if (safeSuffix && preservedUploadExts.has(safeSuffix)) return safeSuffix;
+    if (contentType === 'application/octet-stream' && safeSuffix) return safeSuffix;
     const known = mimeToExt[contentType];
     if (known !== undefined) return known;
-    const suffix = fallbackName ? extname(fallbackName).toLowerCase() : '';
-    return /^\.[a-z0-9]{1,8}$/.test(suffix) ? suffix : '';
+    return safeSuffix;
   };
 
   app.post<{ Params: { id: string } }>('/api/sessions/:id/uploads', async (request, reply) => {
@@ -831,7 +849,12 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     const filename = `${Date.now()}-${randomBytes(6).toString('hex')}${ext}`;
     const filePath = join(uploadDir, filename);
     await writeFile(filePath, buffer);
-    return reply.code(201).send({ path: filePath, url: `/api/sessions/${session.id}/uploads/${filename}`, filename });
+    return reply.code(201).send({
+      path: filePath,
+      url: `/api/sessions/${session.id}/uploads/${filename}`,
+      filename,
+      ...(originalName ? { originalName } : {})
+    });
   });
   app.get<{ Params: { id: string; filename: string } }>('/api/sessions/:id/uploads/:filename', async (request, reply) => {
     const session = await runtime.getSession(request.params.id);

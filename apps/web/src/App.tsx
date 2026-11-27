@@ -13,7 +13,7 @@ import { WebBaseUrlInput } from './WebBaseUrlInput';
 import { KeyboardEvent, lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { useMount, useEventListener, useUpdateEffect, useLocalStorageState, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlarmClock, AlertTriangle, Archive, BarChart3, Bell, Bot, Check, ChevronRight, Columns3, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MonitorDown, PanelLeftOpen, Pin, Plus, RefreshCw, Regex, Search, RotateCcw, Settings2, Smartphone, Trash2, Wrench, X } from 'lucide-react';
+import { AlarmClock, AlertTriangle, Archive, BarChart3, Bell, Bot, Check, ChevronRight, Columns3, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MonitorDown, Palette, PanelLeftOpen, Pin, Plus, RefreshCw, Regex, Search, RotateCcw, Settings2, Smartphone, Trash2, Wrench, X } from 'lucide-react';
 import { Input, InputNumber, Switch } from 'antd';
 import { defaultLarkTraceLimit, validateHighRiskPattern } from '@agent-dock/agent-dock-shared';
 import { api, WebAccessDeniedError, type Agent, type AssistantTask, type Project, type Session } from './api';
@@ -58,6 +58,8 @@ import { ImportSessionDialog } from './ImportSessionDialog';
 import { ImportProjectDialog } from './ImportProjectDialog';
 import { SystemPromptDialog } from './SystemPromptDialog';
 import { ShareAppDialog } from './ShareAppDialog';
+import { ThemeStudioDialog } from './ThemeStudioDialog';
+import { useThemeSync } from './themes';
 import { AutostartToggle } from './AutostartToggle';
 import { SelfUpdateNotice } from './SelfUpdateNotice';
 import { SessionPane } from './SessionPane';
@@ -720,6 +722,7 @@ export default function App() {
     secondaryActiveSessionId: paneOpen ? activeTab?.sessionId : undefined,
     onNavigateSession: id => selectSession(id)
   });
+  useThemeSync({ enabled: !webDenied });
   /**
    * 把一个**已有**会话放进副屏。此前副屏只有「新建侧边聊天」一条创建路径（sideChat），
    * 标签一关就再也回不来——会话还在，但没有任何入口能把它放回右栏。
@@ -1021,7 +1024,7 @@ export default function App() {
           aria-label="任务看板（⌘⇧B）"
           className={`ui-press flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium ${
             boardRoute.active
-              ? 'bg-zinc-900 text-white shadow-sm'
+              ? 'bg-accent text-accent-fg shadow-sm'
               : 'text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200/60'
           }`}
         >
@@ -1128,7 +1131,7 @@ export default function App() {
               </div>}
       </div>
       {/* 两个入口都开弹窗：归档列表早先挂在会话树最底部，点了要滚到底才看得见，看起来像点不开。 */}
-      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onUsage={() => { setSidebarOpen(false); openAppDialog('usage'); }} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onSideChatConfig={() => { setSidebarOpen(false); openAppDialog('side-chat'); }} onAssistant={openAssistantSettings} onNotifications={() => { setSidebarOpen(false); openAppDialog('notifications'); }} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkRegexTriggers={() => { setSidebarOpen(false); openAppDialog('lark-regex'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
+      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onUsage={() => { setSidebarOpen(false); openAppDialog('usage'); }} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onSideChatConfig={() => { setSidebarOpen(false); openAppDialog('side-chat'); }} onAssistant={openAssistantSettings} onNotifications={() => { setSidebarOpen(false); openAppDialog('notifications'); }} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkRegexTriggers={() => { setSidebarOpen(false); openAppDialog('lark-regex'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onThemeStudio={() => { setSidebarOpen(false); openAppDialog('theme-studio'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
       </div>
       {/* 收起态细条（仅桌面）：展开 + 快捷新建 + 两个设置入口 */}
       <div className={`hidden h-full w-full flex-col items-center gap-1 py-3 ${sidebarCollapsed ? 'md:flex' : ''}`}>
@@ -1145,6 +1148,7 @@ export default function App() {
           <HoverTooltip content="通知设置"><button type="button" onClick={() => openAppDialog('notifications')} aria-label="通知设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Bell size={15}/></button></HoverTooltip>
           <HoverTooltip content="飞书设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('lark'); }} aria-label="飞书设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Settings2 size={15}/></button></HoverTooltip>
           {pwa.visible && pwa.canPrompt && <HoverTooltip content="安装为桌面应用"><button type="button" disabled={pwa.installing} onClick={() => void triggerPwaInstall()} aria-label="安装为桌面应用" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900 disabled:opacity-50"><MonitorDown size={15}/></button></HoverTooltip>}
+          <HoverTooltip content="主题工坊"><button type="button" onClick={() => openAppDialog('theme-studio')} aria-label="主题工坊" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Palette size={15}/></button></HoverTooltip>
           <HoverTooltip content="在手机上打开"><button type="button" onClick={() => openAppDialog('share')} aria-label="在手机上打开" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Smartphone size={15}/></button></HoverTooltip>
         </span>
       </div>
@@ -1223,6 +1227,7 @@ export default function App() {
         return session?.systemPrompt ? <SystemPromptDialog session={session} onClose={closeAppDialog}/> : null;
       },
       share: <ShareAppDialog onClose={closeAppDialog}/>,
+      'theme-studio': <ThemeStudioDialog onClose={closeAppDialog} onOpenLlmSettings={() => openAppDialog('agent')}/>,
       archived: <ArchivedSessionsDialog sessions={archivedSessions} agents={agents.data ?? []} mainSessionId={mainSessionId} onClose={closeAppDialog} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
       import: <ImportSessionDialog agents={agents.data ?? []} onClose={closeAppDialog} onImported={session => selectSession(session.id)}/>,
       'project-import': <ImportProjectDialog onClose={closeAppDialog} onImported={(project, duplicate) => {

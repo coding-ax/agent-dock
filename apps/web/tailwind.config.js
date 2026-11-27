@@ -19,7 +19,7 @@ export default {
         white: v('surface'),
         zinc: scale('zinc', [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]),
         red: tinted('red'), amber: tinted('amber'), orange: tinted('orange'), emerald: tinted('emerald'), blue: tinted('blue'), sky: tinted('sky'),
-        accent: v('accent'), canvas: v('bg'), rail: v('rail'), link: v('link'), ink: v('ink')
+        accent: v('accent'), 'accent-soft': v('accent-soft'), 'accent-fg': v('accent-fg'), canvas: v('bg'), rail: v('rail'), elevated: v('elevated'), link: v('link'), ink: v('ink')
       },
       fontFamily: { sans: ['"Fira Code"', '-apple-system', 'BlinkMacSystemFont', '"PingFang SC"', '"Segoe UI"', '"Helvetica Neue"', '"Microsoft YaHei"', 'sans-serif'], mono: ['"Fira Code"', 'SFMono-Regular', 'ui-monospace', 'Menlo', 'monospace'] }
     }

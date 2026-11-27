@@ -37,6 +37,9 @@ import type {
   NotifyChannelCommandSetCliOptions, NotifyChannelLarkSetCliOptions, NotifyCommonCliOptions, NotifyConfigSetCliOptions,
   NotifyTestCliOptions, NotifyWebhookAddCliOptions, NotifyWebhookUpdateCliOptions
 } from './notifications/cli.js';
+import type {
+  ThemeApplyCliOptions, ThemeCommonCliOptions, ThemeCreateCliOptions, ThemeExportCliOptions, ThemeImportVsCodeCliOptions
+} from './themes/cli.js';
 
 export interface CliOptions {
   host?: string;
@@ -249,6 +252,13 @@ export interface CliHandlers {
   larkAvatarDraftUpdate?(id: string, options: LarkAvatarDraftWriteCliOptions): void | Promise<void>;
   larkAvatarDraftSend?(id: string, options: LarkAvatarDraftWriteCliOptions): void | Promise<void>;
   larkAvatarDraftDiscard?(id: string, options: LarkAvatarCommonCliOptions): void | Promise<void>;
+  themeList?(options: ThemeCommonCliOptions): void | Promise<void>;
+  themeCreate?(options: ThemeCreateCliOptions): void | Promise<void>;
+  themeImportVsCode?(source: string, options: ThemeImportVsCodeCliOptions): void | Promise<void>;
+  themeApply?(idOrName: string | undefined, options: ThemeApplyCliOptions): void | Promise<void>;
+  themeReset?(options: ThemeCommonCliOptions): void | Promise<void>;
+  themeDelete?(id: string, options: ThemeCommonCliOptions): void | Promise<void>;
+  themeExport?(idOrName: string, options: ThemeExportCliOptions): void | Promise<void>;
 }
 
 const collect = (value: string, previous: string[] = []) => [...previous, value];
@@ -1308,6 +1318,53 @@ Changes take effect immediately; no restart needed.`);
     .option('--from <session-id>', '来源会话')
     .option('--json', '输出 JSON')
     .action((cardIds, options) => handlers.boardCardRemove?.(cardIds, options));
+
+  const theme = program.command('theme').description('管理自定义配色主题、导入 VS Code 主题插件（.vsix/.json/.jsonc/Marketplace）并实时换肤');
+  theme.command('list')
+    .description('列出全部内置精选与自定义主题及当前激活偏好')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.themeList?.(options));
+  theme.command('create')
+    .description('创建或更新自定义配色主题（自动执行 WCAG 对比度守护，--apply 实时热切换）')
+    .option('--id <id>', '指定主题 ID（更新已有自定义主题时使用）')
+    .option('--name <name>', '主题名称')
+    .option('--mode <mode>', '极性：light 或 dark')
+    .option('--tokens <json>', '语义色板 JSON（含 bgCanvas/bgSidebar/bgSurface/textPrimary/accent 等）')
+    .option('--from-file <path>', '从 JSON/JSONC 文件读取主题定义或色板')
+    .option('--description <text>', '主题简短描述')
+    .option('--source <source>', '来源标签：custom 或 ai（默认 custom）')
+    .option('--apply', '创建后立即生效并通过 SSE 实时广播到所有客户端')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.themeCreate?.(options));
+  theme.command('import-vscode')
+    .description('从 .vsix 插件包、.json/.jsonc 主题文件、本机扩展目录或 Marketplace 链接/ID 导入主题')
+    .argument('<source>', '.vsix / .json / .jsonc 路径、扩展目录、Marketplace URL 或 publisher.extension')
+    .option('--variant <labelOrIndex>', '多变体主题包时指定要导入的变体名称或序号')
+    .option('--all', '导入主题包内的全部变体')
+    .option('--apply', '导入后立即生效并通过 SSE 实时换肤')
+    .option('--json', '输出 JSON')
+    .action((source, options) => handlers.themeImportVsCode?.(source, options));
+  theme.command('apply')
+    .description('切换当前生效主题（按 ID 或名称），或切换亮/暗/跟随系统模式')
+    .argument('[id-or-name]', '主题 ID 或名称（如 builtin-tokyo-night 或 "京都抹茶浅色"）')
+    .option('--mode <mode>', '切换模式偏好：system / light / dark')
+    .option('--json', '输出 JSON')
+    .action((idOrName, options) => handlers.themeApply?.(idOrName, options));
+  theme.command('reset')
+    .description('恢复默认主题偏好（跟随系统 · 默认浅色 / 默认深色）')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.themeReset?.(options));
+  theme.command('delete')
+    .description('删除自定义主题（不可删除内置主题）')
+    .argument('<id>', '自定义主题 ID')
+    .option('--json', '输出 JSON')
+    .action((id, options) => handlers.themeDelete?.(id, options));
+  theme.command('export')
+    .description('将指定主题导出为完整 JSON')
+    .argument('<id-or-name>', '主题 ID 或名称')
+    .option('-o, --output <path>', '输出到文件路径；不传则打印到标准输出')
+    .option('--json', '输出 JSON（搭配 --output 时输出结构化结果）')
+    .action((idOrName, options) => handlers.themeExport?.(idOrName, options));
 
   return program
     .addHelpText('after', `

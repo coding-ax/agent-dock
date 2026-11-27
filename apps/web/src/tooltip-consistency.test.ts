@@ -27,7 +27,9 @@ const files = [
   'TerminalPanel.tsx',
   'FileExplorerPanel.tsx',
   'Composer.tsx',
-  'AiTextAssist.tsx'
+  'AiTextAssist.tsx',
+  'ThemeStudioDialog.tsx',
+  'ThemeToggle.tsx'
 ];
 
 const read = (name: string) => readFileSync(join(sourceDir, name), 'utf8');

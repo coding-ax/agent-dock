@@ -81,7 +81,13 @@ export function requireDaemon(daemonDir?: string) {
 }
 
 /** 用 daemon 状态里的本地地址与访问凭证调用 HTTP API，返回 JSON；非 2xx 时把服务端错误信息抛出来。 */
-export async function callDaemon<T = Record<string, unknown>>(state: { webConsoleUrl?: string; address?: string }, path: string, method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', body?: object): Promise<T> {
+export async function callDaemon<T = Record<string, unknown>>(
+  state: { webConsoleUrl?: string; address?: string },
+  path: string,
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  body?: object,
+  options: { timeoutMs?: number } = {}
+): Promise<T> {
   const entry = state.webConsoleUrl ?? state.address;
   if (!entry) throw new Error('daemon 未提供本地 API 地址。请运行 agent-dock status 检查状态。');
   const base = new URL(entry);
@@ -92,7 +98,7 @@ export async function callDaemon<T = Record<string, unknown>>(state: { webConsol
     method,
     headers: { ...(token ? { cookie: `agentdock_web=${encodeURIComponent(token)}` } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
-    signal: AbortSignal.timeout(15_000)
+    signal: AbortSignal.timeout(options.timeoutMs ?? 15_000)
   });
   const result = await response.json() as T & { error?: { message?: string; code?: string } };
   if (!response.ok) throw new Error(result.error?.message ?? `daemon 返回 HTTP ${response.status}`);

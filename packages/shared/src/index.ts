@@ -6,6 +6,7 @@ export * from './chat-name.js';
 export * from './lark-reaction-emoji.js';
 export * from './fractional-index.js';
 export * from './boards.js';
+export * from './themes.js';
 import type { BoardRepository } from './boards.js';
 
 export const highRiskPatternMaxLength = 4_096;

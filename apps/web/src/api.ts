@@ -13,9 +13,20 @@ import type {
   BoardTemplate,
   BoardTemplatePayload,
   BoardViewMode,
+  CustomTheme,
+  CustomThemeMode,
+  CustomThemeSource,
+  CustomThemeTokenKey,
+  CustomThemeTokens,
   HydratedBoard,
   HydratedBoardColumn,
-  HydratedBoardItem
+  HydratedBoardItem,
+  ThemeContrastAdjustment,
+  ThemeContrastReport,
+  ThemePreferenceMode,
+  ThemePreferences,
+  ThemesStateSnapshot,
+  VsCodeThemeMeta
 } from '@agent-dock/agent-dock-shared';
 
 export type BoardVisualState = BoardItemLiveDigest['visualState'];
@@ -35,10 +46,53 @@ export type {
   BoardTemplate,
   BoardTemplatePayload,
   BoardViewMode,
+  CustomTheme,
+  CustomThemeMode,
+  CustomThemeSource,
+  CustomThemeTokenKey,
+  CustomThemeTokens,
   HydratedBoard,
   HydratedBoardColumn,
-  HydratedBoardItem
+  HydratedBoardItem,
+  ThemeContrastAdjustment,
+  ThemeContrastReport,
+  ThemePreferenceMode,
+  ThemePreferences,
+  ThemesStateSnapshot,
+  VsCodeThemeMeta
 };
+
+export interface ParsedVsCodeThemeVariant {
+  theme: CustomTheme;
+  adjustments: ThemeContrastAdjustment[];
+  report: ThemeContrastReport;
+  label: string;
+  uiTheme?: string;
+  colorCount: number;
+}
+
+export interface ImportVsCodeThemeResponse {
+  sourceLabel: string;
+  extensionId?: string;
+  extensionName?: string;
+  publisher?: string;
+  version?: string;
+  marketplaceUrl?: string;
+  variants: ParsedVsCodeThemeVariant[];
+  imported: CustomTheme[];
+  appliedTheme?: CustomTheme;
+  state: ThemesStateSnapshot;
+}
+
+export interface GenerateThemeResponse {
+  theme: CustomTheme;
+  adjustments: ThemeContrastAdjustment[];
+  report: ThemeContrastReport;
+  saved: boolean;
+  applied: boolean;
+  model: string;
+  state: ThemesStateSnapshot;
+}
 
 export const protocols = ['auto', 'acp', 'jsonl', 'pipe', 'pty'] as const;
 export type Protocol = (typeof protocols)[number];
@@ -1101,5 +1155,20 @@ export const api = {
   exportBoard: (boardId: string, includeItems = false) =>
     json<BoardTemplatePayload>(`/api/boards/${encodeURIComponent(boardId)}/export${includeItems ? '?includeItems=1' : ''}`),
   importBoard: (body: { template: BoardTemplatePayload; name?: string; isDefault?: boolean }) =>
-    json<HydratedBoard>('/api/boards/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    json<HydratedBoard>('/api/boards/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+
+  // ---- 自定义主题配色与 VS Code 导入 ----
+  themes: () => json<ThemesStateSnapshot>('/api/themes', undefined, true),
+  saveTheme: (body: { id?: string; name: string; description?: string; mode: CustomThemeMode; source?: Exclude<CustomThemeSource, 'builtin'>; vscodeMeta?: VsCodeThemeMeta; tokens: Partial<CustomThemeTokens>; apply?: boolean }) =>
+    json<{ theme: CustomTheme; adjustments: ThemeContrastAdjustment[]; report: ThemeContrastReport; state: ThemesStateSnapshot }>('/api/themes', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  updateTheme: (id: string, body: { name?: string; description?: string; mode?: CustomThemeMode; tokens?: Partial<CustomThemeTokens>; apply?: boolean }) =>
+    json<{ theme: CustomTheme; adjustments: ThemeContrastAdjustment[]; report: ThemeContrastReport; state: ThemesStateSnapshot }>(`/api/themes/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  deleteTheme: (id: string) =>
+    json<{ deleted: true; id: string; state: ThemesStateSnapshot }>(`/api/themes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  activateTheme: (body: { themeId?: string; modePreference?: ThemePreferenceMode; preserveModePreference?: boolean; reset?: boolean }) =>
+    json<ThemesStateSnapshot>('/api/themes/active', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  generateTheme: (body: { prompt: string; mode?: 'auto' | CustomThemeMode; save?: boolean; apply?: boolean; timeoutMs?: number }, options: { signal?: AbortSignal } = {}) =>
+    json<GenerateThemeResponse>('/api/themes/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), ...(options.signal ? { signal: options.signal } : {}) }, true),
+  importVsCodeTheme: (body: { source?: string; fileBase64?: string; fileName?: string; jsonText?: string; variant?: string; all?: boolean; previewOnly?: boolean; apply?: boolean }) =>
+    json<ImportVsCodeThemeResponse>('/api/themes/import-vscode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, true)
 };

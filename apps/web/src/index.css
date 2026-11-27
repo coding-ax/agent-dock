@@ -11,7 +11,7 @@
  */
 :root {
   color-scheme: light;
-  --bg: 255 255 255; --rail: 249 249 249; --ink: 255 255 255; --surface: 255 255 255;
+  --bg: 255 255 255; --rail: 249 249 249; --ink: 255 255 255; --surface: 255 255 255; --elevated: 255 255 255;
   --zinc-50: 250 250 250; --zinc-100: 236 236 236; --zinc-200: 236 236 236; --zinc-300: 212 212 212; --zinc-400: 163 163 163;
   --zinc-500: 107 107 107; --zinc-600: 82 82 82; --zinc-700: 63 63 63; --zinc-800: 38 38 38; --zinc-900: 13 13 13; --zinc-950: 0 0 0;
   --red-50: 254 242 242; --red-100: 254 226 226; --red-200: 254 202 202;
@@ -20,11 +20,11 @@
   --emerald-50: 236 253 245; --emerald-100: 209 250 229; --emerald-200: 167 243 208;
   --sky-50: 240 249 255; --sky-100: 224 242 254; --sky-200: 186 230 253;
   --blue-50: 239 246 255; --blue-100: 219 234 254; --blue-200: 191 219 254;
-  --accent: 13 13 13; --link: 37 99 235; --bubble: 244 244 244; --code-bg: 247 247 247;
+  --accent: 13 13 13; --accent-soft: 236 236 236; --accent-fg: 255 255 255; --link: 37 99 235; --bubble: 244 244 244; --code-bg: 247 247 247;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: 33 33 33; --rail: 23 23 23; --ink: 33 33 33; --surface: 42 42 42;
+  --bg: 33 33 33; --rail: 23 23 23; --ink: 23 23 23; --surface: 42 42 42; --elevated: 47 47 47;
   --zinc-50: 39 39 39; --zinc-100: 47 47 47; --zinc-200: 51 51 51; --zinc-300: 69 69 69; --zinc-400: 111 111 111;
   --zinc-500: 155 155 155; --zinc-600: 180 180 180; --zinc-700: 204 204 204; --zinc-800: 222 222 222; --zinc-900: 236 236 236; --zinc-950: 250 250 250;
   --red-50: 62 25 29; --red-100: 84 31 37; --red-200: 122 44 51;
@@ -33,7 +33,7 @@
   --emerald-50: 16 48 38; --emerald-100: 20 66 52; --emerald-200: 28 96 74;
   --sky-50: 18 42 62; --sky-100: 22 58 86; --sky-200: 30 82 118;
   --blue-50: 22 38 70; --blue-100: 28 52 96; --blue-200: 38 70 126;
-  --accent: 236 236 236; --link: 122 167 255; --bubble: 47 47 47; --code-bg: 26 26 26;
+  --accent: 236 236 236; --accent-soft: 53 53 53; --accent-fg: 23 23 23; --link: 122 167 255; --bubble: 47 47 47; --code-bg: 26 26 26;
 }
 
 * { box-sizing: border-box; }
@@ -54,12 +54,12 @@ html, body { height: 100%; }
 body { margin: 0; overflow: hidden; background: rgb(var(--bg)); color: rgb(var(--zinc-900)); font-family: "Fira Code", -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Helvetica Neue", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
 button, input, textarea, select { font: inherit; }
 button:not(:disabled) { cursor: pointer; }
-::selection { background: rgb(var(--zinc-300)); color: rgb(var(--zinc-900)); }
+::selection { background: rgb(var(--accent) / .22); color: rgb(var(--zinc-900)); }
 * { scrollbar-color: rgb(var(--zinc-300)) transparent; scrollbar-width: thin; }
 /* 聚焦态：按钮只在键盘聚焦时给一圈细光晕；输入类控件不用外描边（原来的 2px 直角描边+2px 间隙
    在圆角输入框外套一层硬框，又粗又突兀），统一由 .ui-field 的边框加深 + 3px 柔光圈表达。
    没挂 .ui-field 的裸输入框（嵌在自带边框的容器里）由容器用 .ui-field-within 表达。 */
-button:focus-visible, summary:focus-visible, [role="button"]:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(113, 113, 122, .22); }
+button:focus-visible, summary:focus-visible, [role="button"]:focus-visible { outline: none; box-shadow: 0 0 0 3px rgb(var(--accent) / .24); }
 input:focus, input:focus-visible, textarea:focus, textarea:focus-visible, select:focus, select:focus-visible { outline: none; }
 /* Tailwind preflight 把 svg 设成 display:block，antd 里的内联图标（分段、前后缀）会被挤到单独一行。 */
 .ant-segmented-item-label { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
@@ -68,7 +68,7 @@ input:focus, input:focus-visible, textarea:focus, textarea:focus-visible, select
 .ui-field, .ui-field-within { transition: border-color .15s ease, box-shadow .15s ease; }
 .ui-field:hover:not(:disabled):not(:focus), .ui-field-within:hover:not(:focus-within) { border-color: rgb(var(--zinc-400)); }
 .ui-field:focus, .ui-field:focus-visible, .ui-field-within:focus-within,
-button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !important; box-shadow: 0 1px 2px rgb(0 0 0 / .05) !important; }
+button.ui-field[aria-expanded="true"] { border-color: rgb(var(--accent)) !important; box-shadow: 0 0 0 3px rgb(var(--accent) / .14) !important; }
 .ui-field[aria-invalid="true"], .ui-field[aria-invalid="true"]:focus { border-color: #fca5a5 !important; box-shadow: 0 0 0 3px rgba(248, 113, 113, .16) !important; }
 /* iOS Safari：聚焦字号 <16px 的输入控件时会自动放大整页（focus zoom，实测 scale≈1.14），
    导致气泡被裁、composer 被顶出可视区。触屏小屏下统一把可编辑控件字号锁到 16px，
@@ -152,7 +152,7 @@ html[data-theme="dark"] .ui-user-bubble .ui-inline-code {
   overflow-x: auto;
   border: 1px solid rgb(var(--zinc-200));
   border-radius: 10px;
-  background: rgb(var(--white));
+  background: rgb(var(--surface));
 }
 .markdown-table-scroll table { width: 100%; border-collapse: collapse; font-size: .875rem; line-height: 1.5; }
 /* 单元格不能被 .markdown 的 overflow-wrap:anywhere 硬断行，否则宽列就地折行、横向滚动永不触发；
@@ -340,6 +340,11 @@ html[data-theme="dark"] .ui-slash-command {
 .no-scrollbar::-webkit-scrollbar { display: none; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+
+/* 主题切换瞬间抑制各控件 150ms transition-colors 残留，避免浅↔暗切换时输入框/卡片短暂闪白 */
+html.ui-theme-switching *, html.ui-theme-switching *::before, html.ui-theme-switching *::after {
+  transition: none !important;
+}
 
 /* 图片灯箱（yet-another-react-lightbox）的样式在 ImageLightbox.css，随组件按需加载。 */
 

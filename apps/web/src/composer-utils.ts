@@ -247,13 +247,13 @@ export function formatTokens(value?: number) {
  * 上传一个文件到指定会话。Composer（已有会话）与 DraftComposer（草稿态先建会话再上传）
  * 共用这一段，避免两处各写一遍 fetch 与错误解析。
  */
-export async function uploadSessionFile(sessionId: string, file: File | Blob): Promise<{ path: string; url: string; filename: string }> {
+export async function uploadSessionFile(sessionId: string, file: File | Blob): Promise<{ path: string; url: string; filename: string; originalName?: string }> {
   const name = 'name' in file ? file.name : '（未命名文件）';
   const response = await fetch(`/api/sessions/${sessionId}/uploads`, {
     method: 'POST',
     headers: {
       'Content-Type': file.type || 'application/octet-stream',
-      // 浏览器对 .md/.heic/.zip 等类型上报不一致，带上原始文件名让服务端按扩展名兜底。
+      // 浏览器对 .md/.heic/.zip/.vsix/.jsonc 等类型上报不一致，带上原始文件名让服务端按扩展名兜底。
       ...(name ? { 'X-Upload-Filename': encodeURIComponent(name) } : {})
     },
     body: file
@@ -262,12 +262,12 @@ export async function uploadSessionFile(sessionId: string, file: File | Blob): P
     const detail = await response.json().catch(() => undefined) as { error?: { message?: string } } | undefined;
     throw new Error(detail?.error?.message ?? `上传失败（HTTP ${response.status}）`);
   }
-  return await response.json() as { path: string; url: string; filename: string };
+  return await response.json() as { path: string; url: string; filename: string; originalName?: string };
 }
 
-export function referenceFromUpload(result: { path: string; url: string; filename: string }, isImage: boolean): ComposerReference {
+export function referenceFromUpload(result: { path: string; url: string; filename: string; originalName?: string }, isImage: boolean): ComposerReference {
   const kind: ComposerReference['kind'] = isImage ? 'image' : 'file';
-  return { id: `${kind}-${result.path}`, kind, label: result.filename, value: result.path, url: isImage ? result.url : undefined };
+  return { id: `${kind}-${result.path}`, kind, label: result.originalName || result.filename, value: result.path, url: isImage ? result.url : undefined };
 }
 
 /** 工作目录 chip 只展示最后一段（me / agent-dock）；完整路径放 tooltip 和下拉里。 */

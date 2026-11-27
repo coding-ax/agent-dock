@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useEventListener } from 'ahooks';
 import { useQuery } from '@tanstack/react-query';
-import { AlarmClock, Archive, BarChart3, Bell, Bot, FolderOpen, MessagesSquare, MonitorDown, PawPrint, Regex, Settings, Settings2, Smartphone } from 'lucide-react';
+import { AlarmClock, Archive, BarChart3, Bell, Bot, FolderOpen, MessagesSquare, MonitorDown, Palette, PawPrint, Regex, Settings, Settings2, Smartphone } from 'lucide-react';
 import { api } from './api';
 import { AutostartToggle } from './AutostartToggle';
 import { KeepAwakeToggle } from './KeepAwakeToggle';
@@ -17,6 +17,7 @@ import {
   useSelfUpdateClientState
 } from './self-update-progress';
 import { ThemeSegmented } from './ThemeToggle';
+import { useActiveTheme } from './theme';
 import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
 
 const itemClass = 'ui-press flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900';
@@ -27,7 +28,7 @@ const itemClass = 'ui-press flex h-[34px] w-full items-center gap-2.5 rounded-lg
  *
  * 弹层只用 hidden 切换、不条件渲染：SelfUpdateNotice 里有「升级中轮询版本号、完成后刷新页面」的状态，卸载就丢了。
  */
-export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onAssistant, onNotifications, onLark, onLarkRegexTriggers, onLarkAvatar, onShare }: {
+export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onAssistant, onNotifications, onLark, onLarkRegexTriggers, onLarkAvatar, onThemeStudio, onShare }: {
   webDenied: boolean;
   archivedCount: number;
   onUsage(): void;
@@ -41,8 +42,10 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
   onLark(): void;
   onLarkRegexTriggers?(): void;
   onLarkAvatar(): void;
+  onThemeStudio?(): void;
   onShare(): void;
 }) {
+  const activeTheme = useActiveTheme();
   const [open, setOpen] = useState(false);
   const [showPwaGuide, setShowPwaGuide] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -93,7 +96,17 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
         {showPwaGuide && !pwa.canPrompt && Boolean(pwa.manualHint) && <div className="mx-1.5 mb-1 mt-0.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-[12px] leading-5 text-zinc-600">{pwa.manualHint}</div>}
       </>}
       <div className="my-1 border-t border-zinc-200/70"/>
-      <div className="px-2.5 py-1"><div className="mb-1.5 text-[12px] text-zinc-500">外观</div><ThemeSegmented/></div>
+      {onThemeStudio && (
+        <button type="button" role="menuitem" data-testid="settings-theme-studio-item" onClick={pick(onThemeStudio)} className={itemClass}>
+          <Palette size={16}/>
+          <span>主题工坊</span>
+          <span className="ml-auto flex max-w-[110px] items-center gap-1.5 truncate text-[11.5px] font-normal text-zinc-400">
+            <span className="h-2 w-2 shrink-0 rounded-full ring-1 ring-zinc-300" style={{ backgroundColor: activeTheme.tokens.accent }}/>
+            <span className="truncate">{activeTheme.name}</span>
+          </span>
+        </button>
+      )}
+      <div className="px-2.5 py-1"><div className="mb-1.5 text-[12px] text-zinc-500">外观</div><ThemeSegmented onOpenStudio={onThemeStudio ? pick(onThemeStudio) : undefined}/></div>
       <div className="px-2.5 py-1 text-[12px] text-zinc-600"><AutostartToggle enabled={!webDenied}/><KeepAwakeToggle enabled={!webDenied}/></div>
       <div className="mt-1 border-t border-zinc-200/70 px-2.5 pb-1 pt-2 text-[12px] text-zinc-400"><SelfUpdateNotice enabled={!webDenied}/></div>
     </div>
