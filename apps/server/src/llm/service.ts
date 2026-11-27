@@ -13,6 +13,7 @@ import { RuntimeError, type ConfigRepository } from '@agent-dock/agent-dock-shar
 import { LlmClient, type LlmClientOptions, type Fetch } from './client.js';
 import { llmFormatOptions } from './adapters.js';
 import { detectLlmEndpoints, publicDetectedLlmEndpoint, type DetectedLlmEndpoint } from './detect.js';
+import { runLlmAssist } from './assist.js';
 import {
   llmEndpointInputSchema, normalizeBaseUrl,
   type LlmEndpoint, type LlmAuthType, type PublicLlmEndpoint, type StoredLlmEndpoint
@@ -111,11 +112,18 @@ export class LlmEndpointService {
    * 因为一次 HTTP 往返没有轮次可言。失败一律抛（带码的 RuntimeError），
    * 不像 runOnce 那样把轮次内的失败藏在 result.status 里。
    */
-  async run(input: { prompt: string; timeoutMs?: number; onDelta?: (text: string) => void }) {
+  async run(input: { prompt: string; systemPrompt?: string; maxTokens?: number; temperature?: number; timeoutMs?: number; onDelta?: (text: string) => void }) {
     const endpoint = await this.resolve();
     const prompt = input.prompt?.trim();
     if (!prompt) throw new RuntimeError('INVALID_PROMPT', 'Prompt 不能为空', 400);
-    const result = await this.client.complete(endpoint, { prompt, timeoutMs: input.timeoutMs, onDelta: input.onDelta });
+    const result = await this.client.complete(endpoint, {
+      prompt,
+      ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt } : {}),
+      ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
+      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+      timeoutMs: input.timeoutMs,
+      onDelta: input.onDelta
+    });
     return {
       format: endpoint.format,
       model: endpoint.model,
@@ -163,6 +171,8 @@ export async function registerLlmRoutes(app: FastifyInstance, options?: LlmRoute
   const testPrompt = options?.testPrompt ?? defaultLlmTestPrompt;
   const detect = options?.detect ?? detectLlmEndpoints;
   app.get('/api/llm', async () => service.state());
+  // 全站统一的结构化 AI 文本辅助入口：按 mode 注入严谨系统提示词与场景上下文，返回干净文本或校验过的正则。
+  app.post('/api/llm/assist', async request => runLlmAssist(service, request.body));
   // 平台功能（自动写描述等）的一次性补全入口。与 /test 的区别是不带试跑语义，
   // 但仍然只挂在管理面，不向会话 token 开放。
   app.post<{ Body: { prompt?: string; timeoutMs?: number } }>('/api/llm/complete', async request => {

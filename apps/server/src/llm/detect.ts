@@ -106,10 +106,11 @@ function tomlValue(raw: string): string | undefined {
   }
   if (value.startsWith('\'') && value.endsWith('\'')) return value.slice(1, -1);
   if (/^(true|false|\d+(?:\.\d+)?)$/.test(value)) return value;
+  if (value.startsWith('{') && value.endsWith('}')) return value;
   return undefined;
 }
 
-function parseToml(text: string) {
+export function parseCodexToml(text: string) {
   const root: Record<string, string> = {};
   const providers: Record<string, Record<string, string>> = {};
   let current: Record<string, string> | undefined = root;
@@ -137,7 +138,7 @@ function parseToml(text: string) {
 }
 
 function codexCandidate(configText: string, env: NodeJS.ProcessEnv): DetectedLlmEndpoint | undefined {
-  const { root, providers } = parseToml(configText);
+  const { root, providers } = parseCodexToml(configText);
   const providerId = root.model_provider ?? Object.keys(providers)[0];
   if (!providerId) return undefined;
   const provider = providers[providerId];

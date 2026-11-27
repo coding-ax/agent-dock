@@ -1,7 +1,7 @@
 import { Spinner } from './Loaders';
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, RefreshCw, Trash2, Wand2 } from 'lucide-react';
+import { AlertTriangle, Check, RefreshCw, Trash2, Wand2 } from 'lucide-react';
 import { Input } from 'antd';
 import { api, WebAccessDeniedError, type LlmAuthType, type LlmFormat } from './api';
 import { CompactSelect } from './CompactSelect';
@@ -10,7 +10,7 @@ import { CompactSelect } from './CompactSelect';
 // 放一起会明显不齐，所以下拉一律用 CompactSelect。
 const labelClass = 'text-[12px] font-medium text-zinc-700';
 const hintClass = 'mt-1 text-[12px] leading-4 text-zinc-400';
-const buttonSecondary = 'flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40';
+const buttonSecondary = 'ui-press flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40';
 
 /** 表单草稿。apiKey 空串的语义是「沿用已存的那把」，所以它不参与「是否已配置」的判断。 */
 interface EndpointDraft {
@@ -125,7 +125,7 @@ export function LlmEndpointPanel() {
 
   const canSave = Boolean(draft.baseUrl.trim() && draft.model.trim() && draft.format);
 
-  return <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+  return <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-5">
     <div className="flex items-center gap-2">
       <span className="text-[13px] font-semibold text-zinc-800">模型端点</span>
       {saved?.configured
@@ -196,7 +196,7 @@ export function LlmEndpointPanel() {
     </div>
 
     <div className="mt-4 flex flex-wrap items-center gap-2">
-      <button type="button" disabled={!canSave || save.isPending} onClick={() => save.mutate()} className="flex h-9 items-center gap-1.5 rounded-md bg-zinc-900 px-4 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">{save.isPending && <Spinner size={13}/>}保存</button>
+      <button type="button" disabled={!canSave || save.isPending} onClick={() => save.mutate()} className="ui-press flex h-9 items-center gap-1.5 rounded-md bg-zinc-900 px-4 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">{save.isPending && <Spinner size={13}/>}保存</button>
       {saved?.configured && <>
         <button type="button" disabled={testing} onClick={runTest} className={buttonSecondary}>{testing ? <Spinner size={13}/> : <RefreshCw size={13}/>}{testing ? '试跑中…' : '试跑'}</button>
         <button type="button" disabled={clear.isPending} onClick={() => clear.mutate()} className={`${buttonSecondary} ml-auto text-zinc-500`}><Trash2 size={13}/>清除</button>
@@ -204,11 +204,11 @@ export function LlmEndpointPanel() {
     </div>
 
     {/* 流式试跑的实时输出。空串也占位，让用户看到「已经在出了」而不是没反应。 */}
-    {streamed !== undefined && <div className="mt-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
+    {streamed !== undefined && <div className="ui-status-banner-in mt-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
       <div className="text-[12px] font-medium text-zinc-400">模型输出{testing ? '（生成中…）' : ''}</div>
       <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-zinc-800">{streamed || (testing ? '…' : '（没有返回内容）')}</p>
     </div>}
 
-    {feedback && <div className={`mt-3 flex items-start gap-2 rounded-md border px-3 py-2 text-[12px] leading-5 ${feedback.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}><AlertTriangle size={13} className="mt-0.5 shrink-0"/><span className="min-w-0 break-words">{feedback.message}</span></div>}
+    {feedback && <div className={`ui-status-banner-in mt-3 flex items-start gap-2 rounded-md border px-3 py-2 text-[12px] leading-5 ${feedback.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>{feedback.ok ? <Check size={13} className="ui-icon-pop mt-0.5 shrink-0"/> : <AlertTriangle size={13} className="mt-0.5 shrink-0"/>}<span className="min-w-0 break-words">{feedback.message}</span></div>}
   </div>;
 }

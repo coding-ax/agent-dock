@@ -23,6 +23,12 @@ export interface UsageSessionCliOptions {
   daemonDir?: string;
 }
 
+export interface UsageQuotaCliOptions {
+  refresh?: boolean;
+  json?: boolean;
+  daemonDir?: string;
+}
+
 function localDateString(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -125,5 +131,59 @@ export async function runUsageSession(sessionId?: string, options: UsageSessionC
     `累计消耗: ${fmtTokens(t.totalTokens)} tokens（输入 ${fmtTokens(t.inputTokens)} · 缓存 ${fmtTokens(t.cacheReadTokens)} · 输出 ${fmtTokens(t.outputTokens)}${t.thoughtTokens > 0 ? ` · 思考 ${fmtTokens(t.thoughtTokens)}` : ''}）`,
     `速度/费用: 最近 ${fmtTps(t.lastTps)} · 平均 ${fmtTps(t.avgTps)} · 费用 ${fmtCost(t.costUsd)} · ${t.turnCount} 轮`
   ];
+  return `${lines.join('\n')}\n`;
+}
+
+interface QuotaProviderEntry {
+  id: string;
+  name: string;
+  usage: {
+    status: 'available' | 'unavailable';
+    plan?: string;
+    reason?: string;
+    source?: string;
+    windows: Array<{ label: string; usedPercent: number; resetsAt?: number }>;
+    checkedAt: number;
+  };
+}
+
+function fmtResetCountdown(resetsAt?: number): string {
+  if (!resetsAt || !Number.isFinite(resetsAt)) return '';
+  const diffMin = Math.ceil((resetsAt * 1000 - Date.now()) / 60_000);
+  if (diffMin <= 0) return '即将重置';
+  if (diffMin < 60) return `${diffMin}m 后重置`;
+  const h = Math.floor(diffMin / 60);
+  const m = diffMin % 60;
+  return h < 24 ? `${h}h${m ? `${m}m` : ''} 后重置` : `${Math.floor(h / 24)}d${h % 24 ? `${h % 24}h` : ''} 后重置`;
+}
+
+export async function runUsageQuota(agent?: string, options: UsageQuotaCliOptions = {}): Promise<string> {
+  const params = new URLSearchParams();
+  if (agent?.trim()) params.set('agent', agent.trim());
+  if (options.refresh) params.set('refresh', '1');
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const data = await callDaemon<{ checkedAt: number; providers: QuotaProviderEntry[] }>(
+    requireDaemon(options.daemonDir),
+    `/api/usage/quotas${qs}`,
+    'GET'
+  );
+  if (options.json) return `${JSON.stringify({ ok: true, ...data }, null, 2)}\n`;
+  const lines: string[] = [];
+  for (const entry of data.providers) {
+    const u = entry.usage;
+    const plan = u.plan ? ` (${u.plan})` : '';
+    if (u.status !== 'available' || !u.windows.length) {
+      lines.push(`○ ${entry.name}${plan}：暂不可用${u.reason ? ` — ${u.reason}` : ''}`);
+      continue;
+    }
+    lines.push(`● ${entry.name}${plan}${u.source ? ` [${u.source}]` : ''}`);
+    for (const w of u.windows) {
+      const remaining = Math.max(0, Math.min(100, Math.round(100 - w.usedPercent)));
+      const filled = Math.round((w.usedPercent / 100) * 12);
+      const bar = '█'.repeat(Math.max(0, Math.min(12, filled))) + '░'.repeat(Math.max(0, 12 - filled));
+      const reset = fmtResetCountdown(w.resetsAt);
+      lines.push(`    ${w.label.padEnd(18, ' ')} [${bar}] 剩余 ${remaining}%${reset ? ` · ${reset}` : ''}`);
+    }
+  }
   return `${lines.join('\n')}\n`;
 }
