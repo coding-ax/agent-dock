@@ -54,6 +54,7 @@ export function TimelineSearchBar({
       role="search"
       aria-label="对话内容搜索"
       data-testid="timeline-search-bar"
+      data-placement="top-end"
       className="ui-popover absolute right-3 top-2.5 z-20 flex w-[min(360px,calc(100%-24px))] max-sm:left-3 max-sm:right-3 max-sm:top-2 max-sm:w-auto items-center gap-1 rounded-xl border border-zinc-200 bg-white/95 px-2.5 py-1.5 shadow-[0_10px_30px_rgba(0,0,0,.12)] backdrop-blur-md"
     >
       <Search size={14} aria-hidden="true" className="shrink-0 text-zinc-400" />

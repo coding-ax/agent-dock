@@ -1,0 +1,657 @@
+/*
+ * AgentDock 全局统一物理动效与微交互体系（Linear / Arc / Raycast / macOS 质感）
+ *
+ * 设计与性能铁律：
+ * 1. 统一缓动与时长阶梯：所有弹层、抽屉、浮层、控件反馈均消费本文件的 CSS 变量；
+ * 2. GPU 合成优先：动画仅驱动 transform / opacity（局部折叠项仅允许 grid-template-rows），
+ *    严禁在循环动画中驱动 width / height / margin / box-shadow / filter 重排重绘；
+ * 3. 不常驻滥用 will-change，不在长列表叠加多层 backdrop-filter；
+ * 4. 严格尊重 @media (prefers-reduced-motion: reduce)，自动降级为瞬时/极简状态切换；
+ * 5. Radix Tooltip 定位容器绝不写 transform，方向位移仅落在内层 .ui-tooltip-surface 上。
+ */
+
+:root {
+  /* 缓动曲线 */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.22, 1.22, 0.36, 1);
+  --ease-spring-snappy: cubic-bezier(0.34, 1.42, 0.64, 1);
+  --ease-swift: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 时长阶梯 */
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-panel: 240ms;
+  --dur-spring: 320ms;
+}
+
+/* 渐进增强：支持 CSS linear() 的浏览器使用真实微阻尼弹簧（约 2% 克制回弹，不拖泥带水） */
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring: linear(
+      0, 0.048, 0.168, 0.326, 0.491, 0.643, 0.772, 0.873, 0.946, 0.994,
+      1.021, 1.031, 1.031, 1.025, 1.017, 1.01, 1.004, 1.001, 0.999, 0.999, 1
+    );
+  }
+}
+
+/* ============================================================================
+ * 1. 核心关键帧（严格仅操作 transform / opacity）
+ * ============================================================================ */
+
+@keyframes ui-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ui-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes ui-dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-dialog-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(6px) scale(0.97); }
+}
+@keyframes ui-sheet-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ui-sheet-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(14px); }
+}
+
+@keyframes ui-popover-in-down {
+  from { opacity: 0; transform: translateY(-5px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-popover-in-up {
+  from { opacity: 0; transform: translateY(5px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-popover-out-down {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(-4px) scale(0.97); }
+}
+@keyframes ui-popover-out-up {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(4px) scale(0.97); }
+}
+
+/* Tooltip 内层微方向弹出（外层由 Radix 独占定位 transform，绝不冲突） */
+@keyframes ui-tooltip-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ui-tooltip-from-bottom {
+  from { opacity: 0; transform: translateY(4px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-tooltip-from-top {
+  from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-tooltip-from-left {
+  from { opacity: 0; transform: translateX(-5px) scale(0.97); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes ui-tooltip-from-right {
+  from { opacity: 0; transform: translateX(5px) scale(0.97); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes ui-side-panel-in {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes ui-timeline-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ui-empty-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ui-view-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ui-view-fade {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ui-disclosure-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ui-typewriter-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ui-fab-pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.84); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-fab-pop-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(6px) scale(0.88); }
+}
+@keyframes ui-queue-panel-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ui-queue-row-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-status-banner-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-icon-pop {
+  0% { opacity: 0.45; transform: scale(0.62) rotate(-10deg); }
+  58% { opacity: 1; transform: scale(1.12) rotate(2deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+
+/* 运行态脉冲：100% 合成层 transform / opacity（杜绝 box-shadow 重绘） */
+@keyframes ui-status-pulse {
+  0%, 100% { opacity: 0.52; }
+  50% { opacity: 1; }
+}
+@keyframes ui-live-dot {
+  0%, 100% { opacity: 0.55; transform: scale(0.82); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes ui-live-ring-pulse {
+  0% { opacity: 0.52; transform: scale(1); }
+  75%, 100% { opacity: 0; transform: scale(2.35); }
+}
+@keyframes ui-thinking-caret {
+  0%, 45% { opacity: 1; }
+  46%, 100% { opacity: 0; }
+}
+@keyframes ui-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+/* AI 辅助专属动效（与全站时长和曲线同源） */
+@keyframes ui-ai-shimmer-sweep {
+  0% { background-position: 180% 0; }
+  100% { background-position: -180% 0; }
+}
+@keyframes ui-chip-shimmer {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(110%); }
+}
+@keyframes ui-ai-sparkle-breathe {
+  0%, 100% { opacity: 0.65; transform: scale(0.92) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1.08) rotate(12deg); }
+}
+@keyframes ui-ai-undo-in {
+  from { opacity: 0; transform: translateX(-5px) scale(0.95); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes ui-ai-flash-ring {
+  0% {
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.36), 0 0 0 6px rgba(56, 189, 248, 0.13);
+    background-color: rgba(255, 251, 235, 0.76);
+  }
+  45% {
+    box-shadow: 0 0 0 1.5px rgba(245, 158, 11, 0.22), 0 0 0 4px rgba(56, 189, 248, 0.06);
+    background-color: rgba(255, 251, 235, 0.3);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0), 0 0 0 0 rgba(56, 189, 248, 0);
+  }
+}
+@keyframes ui-ai-flash-ring-dark {
+  0% {
+    box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.44), 0 0 0 6px rgba(56, 189, 248, 0.16);
+    background-color: rgba(60, 43, 14, 0.66);
+  }
+  45% {
+    box-shadow: 0 0 0 1.5px rgba(251, 191, 36, 0.24), 0 0 0 4px rgba(56, 189, 248, 0.08);
+    background-color: rgba(60, 43, 14, 0.28);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(251, 191, 36, 0), 0 0 0 0 rgba(56, 189, 248, 0);
+  }
+}
+
+/* Toast 弹性进退场 */
+@keyframes ui-toast-in {
+  from { opacity: 0; transform: translateY(-10px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ui-toast-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(-8px) scale(0.96); }
+}
+
+/* ============================================================================
+ * 2. 弹窗遮罩、浮层与移动端抽屉基础样式
+ * ============================================================================ */
+
+/* 统一柔焦磨砂遮罩（单层全屏，绝不在长列表内叠加） */
+.ui-overlay {
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+/* 移动端侧栏滑出遮罩：常驻 DOM、随打开态平滑淡入淡出，彻底消除关闭瞬间的硬闪 */
+.ui-mobile-scrim {
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  transition: opacity var(--dur-panel) var(--ease-out-expo), visibility 0s linear var(--dur-panel);
+}
+.ui-mobile-scrim[data-open="true"] {
+  transition: opacity var(--dur-panel) var(--ease-out-expo), visibility 0s;
+}
+
+/* 退出闸门期间禁止重复点击 */
+[data-closing] {
+  pointer-events: none;
+}
+
+/* 方向化 Popover transform-origin */
+.ui-popover {
+  transform-origin: top center;
+}
+.ui-popover[data-placement="top"],
+.ui-popover-up {
+  transform-origin: bottom center;
+}
+.ui-popover[data-placement="top-end"],
+.ui-popover-tr {
+  transform-origin: top right;
+}
+.ui-popover[data-placement="bottom-start"],
+.ui-popover-tl {
+  transform-origin: top left;
+}
+.ui-popover[data-placement="top-start"],
+.ui-popover-bl {
+  transform-origin: bottom left;
+}
+.ui-popover[data-placement="bottom-end"],
+.ui-popover-br {
+  transform-origin: bottom right;
+}
+
+/* Tooltip 内层视觉胶囊的 origin */
+[data-side="top"] > .ui-tooltip-surface { transform-origin: bottom center; }
+[data-side="bottom"] > .ui-tooltip-surface { transform-origin: top center; }
+[data-side="right"] > .ui-tooltip-surface { transform-origin: left center; }
+[data-side="left"] > .ui-tooltip-surface { transform-origin: right center; }
+
+/* 运行态脉冲环（用伪元素 transform+opacity，避免动画重绘阴影） */
+.ui-live-orbit,
+.ui-live-ring {
+  position: relative;
+}
+.ui-live-orbit::after,
+.ui-live-ring::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: inherit;
+  pointer-events: none;
+  opacity: 0;
+}
+.ui-live-orbit::after {
+  background: rgba(217, 119, 6, 0.55);
+}
+
+/* ============================================================================
+ * 3. 控件触感微交互（按钮按压、滑块分段、Switch 弹性、Toast 质感）
+ * ============================================================================ */
+
+/* 克制按压微反馈与平滑色过渡 */
+.ui-press {
+  transition:
+    color var(--dur-fast) var(--ease-swift),
+    background-color var(--dur-fast) var(--ease-swift),
+    border-color var(--dur-fast) var(--ease-swift),
+    opacity var(--dur-fast) var(--ease-swift),
+    transform var(--dur-fast) var(--ease-swift);
+}
+.ui-press:active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(0.97);
+}
+
+/* 展开内容微滑（配合 Disclosure 的 grid-template-rows 0fr → 1fr） */
+.ui-disclosure-content {
+  transition: transform var(--dur-panel) var(--ease-out-expo);
+}
+.ui-disclosure[data-open="false"] .ui-disclosure-content {
+  transform: translateY(-3px);
+}
+.ui-disclosure[data-open="true"] .ui-disclosure-content {
+  transform: translateY(0);
+}
+
+/* 自定义等宽滑块分段控件（纯 transform 滑动，零重排） */
+.ui-segmented-thumb {
+  transition: transform var(--dur-base) var(--ease-out-expo);
+}
+
+/* 输入框工具栏配置芯片（模型 / 思考深度）切换中与完成微反馈（纯合成层 opacity 脉动，零重排） */
+.ui-chip-loading {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(14, 165, 233, 0.36);
+  background: rgba(240, 249, 255, 0.92);
+  color: rgb(3, 105, 161);
+}
+html[data-theme="dark"] .ui-chip-loading {
+  border-color: rgba(56, 189, 248, 0.42);
+  background: rgba(12, 74, 110, 0.34);
+  color: rgb(125, 211, 252);
+}
+.ui-chip-loading::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 15%, rgba(56, 189, 248, 0.22) 50%, transparent 85%);
+  opacity: 0;
+}
+html[data-theme="dark"] .ui-chip-loading::after {
+  background: linear-gradient(100deg, transparent 15%, rgba(125, 211, 252, 0.18) 50%, transparent 85%);
+}
+.ui-chip-saved {
+  border-color: rgba(16, 185, 129, 0.34);
+  background: rgba(236, 253, 245, 0.88);
+  color: rgb(4, 120, 87);
+}
+html[data-theme="dark"] .ui-chip-saved {
+  border-color: rgba(52, 211, 153, 0.38);
+  background: rgba(6, 78, 59, 0.34);
+  color: rgb(110, 231, 183);
+}
+
+/* Antd Button 统一触感按压 */
+.ant-btn {
+  transition:
+    color var(--dur-fast) var(--ease-swift),
+    background-color var(--dur-fast) var(--ease-swift),
+    border-color var(--dur-fast) var(--ease-swift),
+    box-shadow var(--dur-fast) var(--ease-swift),
+    transform var(--dur-fast) var(--ease-swift) !important;
+}
+.ant-btn:not(:disabled):not(.ant-btn-disabled):active {
+  transform: scale(0.97);
+}
+
+/* Antd Switch 滑块弹性过渡与按压微拉伸（macOS / iOS 质感） */
+.ant-switch {
+  transition: background-color var(--dur-base) var(--ease-swift), opacity var(--dur-fast) ease !important;
+}
+.ant-switch .ant-switch-handle {
+  transition: inset-inline-start var(--dur-spring) var(--ease-spring), transform var(--dur-fast) var(--ease-swift) !important;
+}
+.ant-switch .ant-switch-handle::before {
+  transition: inset-inline-start var(--dur-fast) var(--ease-swift), inset-inline-end var(--dur-fast) var(--ease-swift), background-color var(--dur-fast) ease !important;
+}
+.ant-switch:not(.ant-switch-disabled):active .ant-switch-handle::before {
+  inset-inline-end: -22%;
+}
+.ant-switch.ant-switch-checked:not(.ant-switch-disabled):active .ant-switch-handle::before {
+  inset-inline-start: -22%;
+  inset-inline-end: 0;
+}
+
+/* Antd Segmented 选中滑块统一加速曲线 */
+.ant-segmented .ant-segmented-thumb {
+  transition: transform var(--dur-base) var(--ease-out-expo), width var(--dur-base) var(--ease-out-expo) !important;
+}
+.ant-segmented .ant-segmented-item {
+  transition: color var(--dur-fast) var(--ease-swift), background-color var(--dur-fast) var(--ease-swift) !important;
+}
+
+/* Antd Message（全局 Toast）精致卡片质感与弹性进退场 */
+.ant-message .ant-message-notice-content {
+  border-radius: 12px !important;
+  border: 1px solid rgb(var(--zinc-200)) !important;
+  background: rgb(var(--surface)) !important;
+  color: rgb(var(--zinc-800)) !important;
+  padding: 8px 14px !important;
+  font-size: 12.5px !important;
+  font-weight: 500 !important;
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.14), 0 2px 6px rgba(15, 23, 42, 0.06) !important;
+}
+html[data-theme="dark"] .ant-message .ant-message-notice-content {
+  border-color: rgb(var(--zinc-200)) !important;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+}
+
+/* ============================================================================
+ * 4. 仅在 prefers-reduced-motion: no-preference 下激活全部动效
+ * ============================================================================ */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* 弹窗与遮罩进退场（入场用 backwards，播完即释放合成层，不滞留 finished animation / stacking context） */
+  .ui-overlay {
+    animation: ui-overlay-in var(--dur-panel) var(--ease-out-expo) backwards;
+  }
+  .ui-dialog {
+    animation: ui-dialog-in var(--dur-panel) var(--ease-spring) backwards;
+    transform-origin: 50% 42%;
+  }
+  [data-closing] .ui-overlay {
+    animation: ui-overlay-out var(--dur-base) var(--ease-swift) forwards;
+  }
+  [data-closing] .ui-dialog {
+    animation: ui-dialog-out var(--dur-base) var(--ease-swift) forwards;
+  }
+  @media (max-width: 639px) {
+    .ui-overlay.ui-overlay-sheet > .ui-dialog {
+      animation: ui-sheet-in var(--dur-panel) var(--ease-out-expo) backwards;
+    }
+    [data-closing] .ui-overlay.ui-overlay-sheet > .ui-dialog {
+      animation: ui-sheet-out var(--dur-base) var(--ease-swift) forwards;
+    }
+  }
+
+  /* 方向化 Popover / 菜单进退场 */
+  .ui-popover {
+    animation: ui-popover-in-down var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  .ui-popover[data-placement="top"],
+  .ui-popover-up {
+    animation: ui-popover-in-up var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  [data-closing] .ui-popover {
+    animation: ui-popover-out-down var(--dur-fast) var(--ease-swift) forwards;
+  }
+  [data-closing] .ui-popover[data-placement="top"],
+  [data-closing] .ui-popover-up {
+    animation: ui-popover-out-up var(--dur-fast) var(--ease-swift) forwards;
+  }
+
+  /* Tooltip 方向化微弹入场 */
+  .ui-tooltip {
+    animation: ui-tooltip-in var(--dur-fast) var(--ease-swift) backwards;
+  }
+  [data-side="top"] > .ui-tooltip-surface {
+    animation: ui-tooltip-from-bottom var(--dur-fast) var(--ease-out-expo) backwards;
+  }
+  [data-side="bottom"] > .ui-tooltip-surface {
+    animation: ui-tooltip-from-top var(--dur-fast) var(--ease-out-expo) backwards;
+  }
+  [data-side="right"] > .ui-tooltip-surface {
+    animation: ui-tooltip-from-left var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  [data-side="left"] > .ui-tooltip-surface {
+    animation: ui-tooltip-from-right var(--dur-base) var(--ease-out-expo) backwards;
+  }
+
+  /* 副屏、视图切换、时间线、空态、折叠 */
+  .ui-side-panel {
+    animation: ui-side-panel-in var(--dur-panel) var(--ease-out-expo) backwards;
+  }
+  .ui-view-enter {
+    animation: ui-view-enter var(--dur-panel) var(--ease-out-expo) backwards;
+  }
+  .ui-view-fade {
+    animation: ui-view-fade var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  .ui-disclosure-body {
+    animation: ui-disclosure-in var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  .ui-typewriter {
+    animation: ui-typewriter-in var(--dur-base) var(--ease-swift) backwards;
+  }
+  .ui-timeline-item {
+    animation: ui-timeline-in var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  .ui-empty-state {
+    animation: ui-empty-in var(--dur-panel) var(--ease-out-expo) backwards;
+  }
+  .ui-session-row {
+    animation: ui-timeline-in var(--dur-base) var(--ease-out-expo) backwards;
+  }
+
+  /* 「回到底部」悬浮按钮弹性显隐 */
+  .ui-fab-in {
+    animation: ui-fab-pop-in var(--dur-panel) var(--ease-spring) backwards;
+  }
+  [data-closing] .ui-fab-in {
+    animation: ui-fab-pop-out var(--dur-fast) var(--ease-swift) forwards;
+  }
+
+  /* 等待发送队列面板与队列项入场 */
+  .ui-queue-panel {
+    animation: ui-queue-panel-in var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  .ui-queue-row {
+    animation: ui-queue-row-in var(--dur-base) var(--ease-out-expo) backwards;
+  }
+
+  /* 状态横幅与图标弹性微切换（Copy → Check、Save → Saved、Pin） */
+  .ui-status-banner-in {
+    animation: ui-status-banner-in var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  .ui-icon-pop {
+    animation: ui-icon-pop var(--dur-spring) var(--ease-spring-snappy) backwards;
+  }
+
+  /* 扫光文字与运行态脉冲 */
+  .ui-shimmer-text {
+    color: transparent;
+    background-image: linear-gradient(100deg, rgb(var(--zinc-500)) 35%, rgb(var(--zinc-900)) 50%, rgb(var(--zinc-500)) 65%);
+    background-size: 240% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: ui-shimmer 1.8s linear infinite;
+  }
+  .ui-status-pulse {
+    animation: ui-status-pulse 1.5s ease-in-out infinite;
+  }
+  .ui-live-dot {
+    animation: ui-live-dot 1.3s ease-in-out infinite;
+  }
+  .ui-thinking-caret {
+    animation: ui-thinking-caret 0.9s steps(1, end) infinite;
+  }
+  .ui-live-orbit::after,
+  .ui-live-ring::after {
+    animation: ui-live-ring-pulse 1.8s var(--ease-out-expo) infinite;
+  }
+  .ui-chip-loading::after {
+    opacity: 1;
+    animation: ui-chip-shimmer 1.25s ease-in-out infinite;
+  }
+
+  /* Toast 弹性进退场（只覆写激活态曲线与关键帧，不干扰 antd 首帧 opacity/fill-mode 生命周期） */
+  .ant-message-move-up-enter.ant-message-move-up-enter-active,
+  .ant-message-move-up-appear.ant-message-move-up-appear-active {
+    animation-name: ui-toast-in !important;
+    animation-duration: var(--dur-panel) !important;
+    animation-timing-function: var(--ease-spring) !important;
+  }
+  .ant-message-move-up-leave.ant-message-move-up-leave-active {
+    animation-name: ui-toast-out !important;
+    animation-duration: var(--dur-base) !important;
+    animation-timing-function: var(--ease-swift) !important;
+  }
+
+  /* AI 辅助统一动效语言 */
+  .ui-ai-trigger-busy {
+    animation: ui-ai-shimmer-sweep 1.8s linear infinite;
+  }
+  .ui-ai-shimmer-bar {
+    animation: ui-ai-shimmer-sweep 1.35s linear infinite;
+  }
+  .ui-ai-sparkle-busy {
+    animation: ui-ai-sparkle-breathe 1.25s ease-in-out infinite;
+  }
+  .ui-ai-flash {
+    animation: ui-ai-flash-ring 820ms var(--ease-out-expo) backwards;
+  }
+  html[data-theme="dark"] .ui-ai-flash {
+    animation: ui-ai-flash-ring-dark 820ms var(--ease-out-expo) backwards;
+  }
+  .ui-ai-undo-pill {
+    animation: ui-ai-undo-in var(--dur-base) var(--ease-spring) backwards;
+  }
+  .ui-ai-popover {
+    transform-origin: top center;
+    animation: ui-popover-in-down var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  .ui-ai-popover[data-side="top"] {
+    transform-origin: bottom center;
+    animation: ui-popover-in-up var(--dur-base) var(--ease-out-expo) backwards;
+  }
+  [data-closing] .ui-ai-popover {
+    animation: ui-popover-out-down var(--dur-fast) var(--ease-swift) forwards;
+  }
+  [data-closing] .ui-ai-popover[data-side="top"] {
+    animation: ui-popover-out-up var(--dur-fast) var(--ease-swift) forwards;
+  }
+}
+
+/* ============================================================================
+ * 5. 无障碍与减动效降级（prefers-reduced-motion: reduce）
+ * ============================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0.01ms;
+    --dur-base: 0.01ms;
+    --dur-panel: 0.01ms;
+    --dur-spring: 0.01ms;
+  }
+  .ui-disclosure[data-open="false"] .ui-disclosure-content,
+  .ui-disclosure[data-open="true"] .ui-disclosure-content {
+    transform: none !important;
+  }
+  .ui-press:active,
+  .ant-btn:active {
+    transform: none !important;
+  }
+  .ui-live-orbit::after,
+  .ui-live-ring::after,
+  .ui-chip-loading::after {
+    display: none;
+  }
+  .ui-shimmer-text {
+    color: rgb(var(--zinc-500));
+    background: none;
+    animation: none;
+  }
+  .ui-ai-flash {
+    box-shadow: 0 0 0 1.5px rgba(245, 158, 11, 0.32);
+  }
+  html[data-theme="dark"] .ui-ai-flash {
+    box-shadow: 0 0 0 1.5px rgba(251, 191, 36, 0.38);
+  }
+}

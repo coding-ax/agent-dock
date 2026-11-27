@@ -137,36 +137,51 @@ export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): 
   const builtins = sorted.filter(agent => agent.builtin);
   const customs = sorted.filter(agent => !agent.builtin);
 
-  return <div className="ui-overlay fixed inset-0 z-40 grid place-items-center bg-zinc-950/30 p-4">
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Agent 设置" className="ui-dialog flex h-[86dvh] w-full max-w-4xl flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)]">
-      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 px-4 py-2">
-        <div className="flex items-center gap-2 text-[16px] font-semibold text-zinc-900"><Bot size={16}/>Agent 设置</div>
-        <span className="md:ml-4"><Segmented<typeof tab> value={tab} onChange={setTab} options={[{ value: 'llm', label: '模型端点', icon: <Plug size={12}/> }, { value: 'agents', label: 'Agent', icon: <Bot size={12}/> }, { value: 'side-chat', label: '侧边对话', icon: <MessagesSquare size={12}/> }]}/></span>
-        <button type="button" onClick={requestClose} aria-label="关闭" className="ml-auto grid h-8 w-8 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={16}/></button>
+  return <div className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-0 sm:p-4">
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Agent 设置" className="ui-dialog flex h-[100dvh] w-full max-w-none flex-col overflow-hidden rounded-none border-0 border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)] sm:h-[86dvh] sm:max-w-4xl sm:rounded-[14px] sm:border">
+      <div className="flex shrink-0 flex-col gap-2 border-b border-zinc-100 px-3.5 py-2.5 md:min-h-12 md:flex-row md:items-center md:px-4 md:py-2">
+        <div className="flex items-center justify-between gap-2 md:contents">
+          <div className="flex items-center gap-2 text-[16px] font-semibold text-zinc-900"><Bot size={16}/>Agent 设置</div>
+          <button type="button" onClick={requestClose} aria-label="关闭" className="grid h-9 w-9 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800 md:order-3 md:ml-auto md:h-8 md:w-8"><X size={16}/></button>
+        </div>
+        <span className="w-full md:order-2 md:ml-4 md:w-auto"><Segmented<typeof tab> block value={tab} onChange={setTab} options={[{ value: 'llm', label: '模型端点', icon: <Plug size={12}/> }, { value: 'agents', label: 'Agent', icon: <Bot size={12}/> }, { value: 'side-chat', label: '侧边对话', icon: <MessagesSquare size={12}/> }]}/></span>
       </div>
 
-      <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-5 py-4"><DeferredSkeleton/></div>}>
+      <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5"><DeferredSkeleton/></div>}>
       {tab === 'llm'
         ? <LlmEndpointPanel/>
         : tab === 'side-chat'
           ? <SideChatConfigPanel/>
         : <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[220px_1fr]">
-          {/* 窄屏把 Agent 列表收成上方一条可滚动带，表单占满剩余高度；md 以上恢复左侧栏。 */}
-          <div className="max-h-[min(11rem,30dvh)] shrink-0 overflow-y-auto border-b border-zinc-100 bg-zinc-50/60 p-2 md:max-h-none md:border-b-0 md:border-r">
+          {/* 移动端使用横向胶囊条切换 Agent，避免列表占满上半屏挤压表单；md 以上恢复左侧栏。 */}
+          <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-zinc-100 bg-zinc-50/60 px-3 py-2 md:hidden">
+            <button type="button" onClick={() => { setIsNew(true); setSelectedId(null); }} className={`flex h-8 shrink-0 items-center gap-1 rounded-full border border-dashed px-3 text-[12px] font-medium transition-colors ${isNew ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300 bg-white text-zinc-600'}`}><Plus size={13}/>自定义</button>
+            {sorted.map(agent => {
+              const active = !isNew && selectedId === agent.id;
+              return <button key={agent.id} type="button" onClick={() => { setIsNew(false); setSelectedId(agent.id); }} className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${active ? 'border-zinc-900 bg-zinc-900 text-white' : agent.disabled ? 'border-zinc-200 bg-white text-zinc-400' : 'border-zinc-200 bg-white text-zinc-700'}`}>
+                <AgentIcon agentId={agent.id} agentName={agent.name} size={13} onDark={active}/>
+                <span>{agent.name}</span>
+                {agent.disabled && <span className={`text-[10px] ${active ? 'text-white/75' : 'text-zinc-400'}`}>停用</span>}
+              </button>;
+            })}
+            {agents.isLoading && <span className="flex shrink-0 items-center gap-1.5 px-2 text-[12px] text-zinc-400"><Spinner size={12}/>读取中…</span>}
+          </div>
+          <div className="hidden overflow-y-auto border-r border-zinc-100 bg-zinc-50/60 p-2 md:block">
             <button type="button" onClick={() => { setIsNew(true); setSelectedId(null); }} className={`mb-2 flex h-9 w-full items-center gap-2 rounded-lg border border-dashed border-zinc-300 px-3 text-[12px] font-medium ${isNew ? 'border-zinc-800 bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-white'}`}><Plus size={14}/>自定义 Agent</button>
             <AgentGroup label="内置" agents={builtins} selectedId={isNew ? null : selectedId} onSelect={id => { setIsNew(false); setSelectedId(id); }}/>
             <AgentGroup label="自定义" agents={customs} selectedId={isNew ? null : selectedId} onSelect={id => { setIsNew(false); setSelectedId(id); }}/>
             {agents.isLoading && <div className="flex items-center gap-2 px-2 py-2 text-[12px] text-zinc-400"><Spinner size={12}/>读取中…</div>}
             {agents.error && <div className="px-2 py-2 text-[12px] text-red-600">{agents.error instanceof Error ? agents.error.message : '读取失败（会话链接无权打开 Agent 设置，请用 master 地址）'}</div>}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-5">
+          <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-4 sm:px-4 md:px-5">
+            {agents.error && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-600 md:hidden">{agents.error instanceof Error ? agents.error.message : '读取失败（会话链接无权打开 Agent 设置，请用 master 地址）'}</div>}
             {(isNew || selected) ? <div className="space-y-4">
               {readOnly
                 ? <>
                   <div className="flex items-center gap-2"><AgentIcon agentId={selected!.id} agentName={selected!.name} size={16}/><div className="min-w-0 flex-1"><ReadOnlyField label="名称" value={selected!.name}/></div></div>
                   <ReadOnlyField label="启动命令" value={[selected!.command, ...(selected!.args ?? [])].join(' ')} mono/>
                   <ReadOnlyField label="工作目录" value={selected!.cwd} mono hint="跟随会话"/>
-                  {['codex', 'claude', 'cursor', 'antigravity'].includes(selected!.id) && <AgentUsagePanel agentId={selected!.id as 'codex' | 'claude' | 'cursor' | 'antigravity'}/>}
+                  {['codex', 'claude', 'cursor', 'antigravity', 'omp', 'opencode'].includes(selected!.id) && <AgentUsagePanel agentId={selected!.id}/>}
                   <p className="text-[12px] leading-5 text-zinc-400">内置 Agent 的参数由扫描得出（命令、参数、协议、版本），不需要也不能在这里修改；升级客户端后会自动刷新。你只能停用或重新启用它。</p>
                 </>
                 : <>
@@ -183,12 +198,12 @@ export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): 
         </div>}
       </DeferredMount>
 
-      {tab === 'agents' && (isNew || selected) && <div className="sticky bottom-0 flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-t border-zinc-100 bg-white px-4 py-2">
+      {tab === 'agents' && (isNew || selected) && <div className="sticky bottom-0 flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-t border-zinc-100 bg-white px-3.5 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-2">
         {readOnly
           ? <button type="button" disabled={toggleDisabled.isPending} onClick={() => setDeleteConfirm(true)} className={`flex h-9 items-center rounded-md border px-3 text-[12px] font-medium disabled:opacity-40 ${selected!.disabled ? 'border-zinc-300 text-zinc-700 hover:bg-zinc-50' : 'border-red-200 text-red-600 hover:bg-red-50'}`}>{selected!.disabled ? '重新启用' : '停用（内置）'}</button>
           : <button type="button" disabled={remove.isPending || save.isPending} onClick={() => setDeleteConfirm(true)} className="flex h-9 items-center rounded-md border border-red-200 px-3 text-[12px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40">删除</button>}
         <span className="hidden text-[12px] text-zinc-400 sm:inline">{selected?.version ? `版本 ${selected.version}` : ''}{selected ? `　${selected.id}` : ''}</span>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {!readOnly && <>
             <button type="button" disabled={!valid || probe.isPending} onClick={() => probe.mutate()} className="flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 px-3 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40">{probe.isPending ? <Spinner size={13}/> : <RefreshCw size={13}/>}保存并探测模型</button>
             <button type="button" onClick={requestClose} className="flex h-9 items-center rounded-md border border-zinc-300 px-4 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50">取消</button>

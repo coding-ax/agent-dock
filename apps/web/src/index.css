@@ -86,6 +86,26 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
 .ui-user-bubble > :first-child { margin-top: 0; }
 .ui-user-bubble > :last-child { margin-bottom: 0; }
 .ui-user-bubble p + p { margin-top: .5em; }
+.ui-user-bubble ul, .ui-user-bubble ol { margin: .35em 0; padding-left: 1.35rem; }
+.ui-user-bubble ul { list-style: disc; }
+.ui-user-bubble ul ul { list-style: circle; }
+.ui-user-bubble ol { list-style: decimal; }
+.ui-user-bubble ul.contains-task-list { list-style: none; padding-left: .25rem; }
+.ui-user-bubble li { margin: .15em 0; }
+.ui-user-bubble li > ul, .ui-user-bubble li > ol { margin: .2em 0; }
+/* 行内代码：长路径/长命令允许就地折行，且每段保持圆角与左右留白；
+   用户气泡在暗色下 --bubble 与 --zinc-100 同值，单独按 --zinc-900 叠一层半透明底色保对比度。 */
+.ui-inline-code {
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.ui-user-bubble .ui-inline-code {
+  background: rgb(var(--zinc-900) / .06);
+}
+html[data-theme="dark"] .ui-user-bubble .ui-inline-code {
+  background: rgb(var(--zinc-900) / .10);
+}
 .ui-user-bubble blockquote {
   margin: 0 0 .55rem 0;
   padding: .4rem .7rem;
@@ -125,12 +145,38 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
 /* 横向滚动必须放在真实的 div 包裹层上：直接给 table 设 display:block + overflow-x:auto 时，
    table 内部会生成匿名 table 盒，iOS WebKit 下其固有宽度会撑破 max-width，溢出一路传到
    时间线滚动容器，表现成整页横滑而不是表格内部滚动。包裹层见 MarkdownContent 的 table 覆盖。 */
-.markdown-table-scroll { max-width: 100%; min-width: 0; overflow-x: auto; }
-.markdown-table-scroll table { width: 100%; border-collapse: collapse; }
+.markdown-table-scroll {
+  max-width: 100%;
+  min-width: 0;
+  margin: .75rem 0;
+  overflow-x: auto;
+  border: 1px solid rgb(var(--zinc-200));
+  border-radius: 10px;
+  background: rgb(var(--white));
+}
+.markdown-table-scroll table { width: 100%; border-collapse: collapse; font-size: .875rem; line-height: 1.5; }
 /* 单元格不能被 .markdown 的 overflow-wrap:anywhere 硬断行，否则宽列就地折行、横向滚动永不触发；
    表格宽于包裹层时由上面的 .markdown-table-scroll 内部横滚（table 最小宽度超过 100% 时会自然撑宽）。 */
-.markdown th, .markdown td { border: 1px solid rgb(var(--zinc-200)); padding: .4rem .7rem; text-align: left; white-space: nowrap; overflow-wrap: normal; word-break: keep-all; }
-.markdown th { background: rgb(var(--zinc-100)); }
+.markdown th, .markdown td {
+  border-bottom: 1px solid rgb(var(--zinc-200) / .85);
+  border-right: 1px solid rgb(var(--zinc-200) / .55);
+  padding: .5rem .8rem;
+  text-align: left;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  font-variant-numeric: tabular-nums;
+}
+.markdown th:last-child, .markdown td:last-child { border-right: 0; }
+.markdown tbody tr:last-child td { border-bottom: 0; }
+.markdown th {
+  background: rgb(var(--zinc-50));
+  color: rgb(var(--zinc-600));
+  font-size: .8125rem;
+  font-weight: 600;
+  border-bottom-color: rgb(var(--zinc-200));
+}
+.markdown tbody tr:hover td { background: rgb(var(--zinc-50) / .7); }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown p { margin: .75em 0; }
@@ -139,12 +185,18 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
 .markdown h2 { font-size: 1.15rem; }
 .markdown h3 { font-size: 1rem; }
 .markdown ul, .markdown ol { margin: .7em 0; padding-left: 1.4rem; }
+.markdown ul { list-style: disc; }
+.markdown ul ul { list-style: circle; }
+.markdown ol { list-style: decimal; }
+.markdown ul.contains-task-list { list-style: none; padding-left: .25rem; }
 .markdown li { margin: .25em 0; }
 .markdown a { color: rgb(var(--link)); text-decoration: underline; text-underline-offset: 3px; }
-/* 用户消息开头的 /命令：低饱和蓝色 chip，和正文区分开，同时沿用全站链接/状态色。 */
+/* 用户消息开头的 /命令：低饱和蓝色 chip，和正文区分开，同时沿用全站链接/状态色。
+   用 inline + box-decoration-break: clone（而非 inline-block + nowrap），
+   短命令保持紧凑单行 chip，超长命令在窄屏气泡里也能自然折行而不撑破圆角边界。 */
 .ui-slash-command {
-  display: inline-block;
-  padding: 0 .34rem;
+  display: inline;
+  padding: .08rem .34rem;
   border-radius: .4rem;
   background: rgb(var(--link) / .08);
   box-shadow: inset 0 0 0 1px rgb(var(--link) / .14);
@@ -153,7 +205,13 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
   font-size: .9em;
   font-weight: 600;
   line-height: 1.5;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+html[data-theme="dark"] .ui-slash-command {
+  background: rgb(var(--link) / .14);
+  box-shadow: inset 0 0 0 1px rgb(var(--link) / .24);
 }
 .markdown blockquote { margin: .8em 0; border-left: 3px solid rgb(var(--zinc-300)); padding-left: 1em; color: rgb(var(--zinc-600)); }
 .code-renderer, .code-renderer * { overflow-wrap: normal; }
@@ -175,34 +233,23 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
   mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
 }
 
-@keyframes ui-overlay-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes ui-dialog-in { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: scale(1); } }
-@keyframes ui-popover-in { from { opacity: 0; transform: translateY(-4px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes ui-timeline-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes ui-empty-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes ui-side-panel-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
-@keyframes ui-status-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
-@keyframes ui-live-dot { 0%, 100% { opacity: .55; transform: scale(.82); } 50% { opacity: 1; transform: scale(1); } }
-@keyframes ui-thinking-caret { 0%, 45% { opacity: 1; } 46%, 100% { opacity: 0; } }
-@keyframes ui-live-orbit { 0%, 100% { box-shadow: 0 0 0 0 rgba(217, 119, 6, .08); } 50% { box-shadow: 0 0 0 5px rgba(217, 119, 6, 0); } }
-/* 提示层的定位 transform 由 Radix 以内联样式写在元素上（它负责贴边翻转与碰撞检测），
-   所以这里的动画只能改 opacity，绝不能animation 里再写 transform：加了位移会连同 Radix 的
-   定位一起被覆盖，表现为提示层跑到离锚点很远的地方。scale 放在同一 transform 里也不行。 */
-@keyframes ui-disclosure-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes ui-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
-@keyframes ui-tooltip-in { from { opacity: 0; } to { opacity: 1; } }
-
-/* 打字机：给流式追加的那一段文本做逐字浮现。
-   只用 opacity + 极小的 translateY，不碰宽度/高度，所以不会引起重排——
-   时间线是贴底视图，任何高度变化都会把用户正在看的内容整体上推。
-   动画施加在**最后一段**上：整篇套动画会让每次追加都重播全篇（满屏闪）。 */
-@keyframes ui-typewriter-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+/* 统一物理动效曲线、时长阶梯与进退场动画集中在 ./motion.css（由 main.tsx 紧随 index.css 载入）。 */
 
 /* 移动端安全区：iPhone 刘海和 Home 指示条不能压住弹窗。1rem 与常用 p-4 对齐；
    横向仍由各弹窗自己的 p-3/p-4 控制，避免桌面端被意外加宽。 */
 .ui-overlay {
   padding-top: max(1rem, env(safe-area-inset-top));
   padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+/* 移动端全屏弹窗容器（<640px）：贴齐 100dvh 视口边缘，避免外层安全区把全屏弹层顶出灰边；
+   顶部状态栏安全区交给内部 .ui-dialog，确保刘海/灵动岛不遮挡标题栏。 */
+@media (max-width: 639px) {
+  .ui-overlay.ui-overlay-sheet {
+    padding: 0;
+  }
+  .ui-overlay.ui-overlay-sheet > .ui-dialog {
+    padding-top: env(safe-area-inset-top);
+  }
 }
 /* 整页空态：桌面仍是原来的 py-8；刘海屏上让出状态栏和 Home 指示条。 */
 .ui-page {
@@ -227,27 +274,6 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
 .ant-picker-dropdown,
 .ant-dropdown {
   max-width: calc(100vw - 16px);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .ui-overlay { animation: ui-overlay-in 160ms ease-out both; }
-  .ui-dialog { animation: ui-dialog-in 200ms cubic-bezier(.2, 0, 0, 1) both; transform-origin: 50% 35%; }
-  .ui-popover { animation: ui-popover-in 160ms cubic-bezier(.2, 0, 0, 1) both; transform-origin: top; }
-  .ui-disclosure-body { animation: ui-disclosure-in 180ms cubic-bezier(.2, 0, 0, 1) both; }
-  /* 进行中的步骤：文字上扫过一道高光，比单纯转圈更能表达「正在处理」。 */
-  .ui-shimmer-text { color: transparent; background-image: linear-gradient(100deg, rgb(var(--zinc-500)) 35%, rgb(var(--zinc-900)) 50%, rgb(var(--zinc-500)) 65%); background-size: 240% 100%; -webkit-background-clip: text; background-clip: text; animation: ui-shimmer 1.8s linear infinite; }
-  .ui-tooltip { animation: ui-tooltip-in 120ms ease-out both; }
-  /* 流式文本的「正在生成」指示：只做一次短促浮现，不循环——
-     循环动画在长回答期间会持续占用合成层，且看起来像在闪。 */
-  .ui-typewriter { animation: ui-typewriter-in 180ms ease-out both; }
-  .ui-timeline-item { animation: ui-timeline-in 200ms cubic-bezier(.2, 0, 0, 1) both; }
-  .ui-empty-state { animation: ui-empty-in 220ms cubic-bezier(.2, 0, 0, 1) both; }
-  .ui-side-panel { animation: ui-side-panel-in 220ms cubic-bezier(.2, 0, 0, 1) both; }
-  .ui-session-row { animation: ui-timeline-in 180ms cubic-bezier(.2, 0, 0, 1) both; }
-  .ui-status-pulse { animation: ui-status-pulse 1.5s ease-in-out infinite; }
-  .ui-live-dot { animation: ui-live-dot 1.3s ease-in-out infinite; }
-  .ui-thinking-caret { animation: ui-thinking-caret .9s steps(1, end) infinite; }
-  .ui-live-orbit { animation: ui-live-orbit 1.8s ease-in-out infinite; }
 }
 
 /*
@@ -315,13 +341,7 @@ button.ui-field[aria-expanded="true"] { border-color: rgb(var(--zinc-500)) !impo
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
 
-/* yet-another-react-lightbox 自定义样式 */
-.yarl__button:hover {
-  background-color: rgba(255, 255, 255, 0.2) !important;
-}
-.yarl__toolbar {
-  gap: 8px;
-}
+/* 图片灯箱（yet-another-react-lightbox）的样式在 ImageLightbox.css，随组件按需加载。 */
 
 /* 线条小猫（DockMascot / Kitten）的样式在 companion/companion.css，随组件按需加载。 */
 
@@ -352,14 +372,7 @@ html[data-theme="dark"] .bg-blue-600.text-white,
 html[data-theme="dark"] .bg-emerald-600.text-white,
 html[data-theme="dark"] .\!bg-emerald-600.\!text-white { color: rgb(255 255 255) !important; }
 
-/* ---------- 弹窗退出动画（配合 ExitGate） ---------- */
-[data-closing] { pointer-events: none; }
-@keyframes ui-overlay-out { to { opacity: 0; } }
-@keyframes ui-dialog-out { to { opacity: 0; transform: translateY(8px) scale(.97); } }
-@media (prefers-reduced-motion: no-preference) {
-  [data-closing] .ui-overlay { animation: ui-overlay-out 180ms ease-in forwards; }
-  [data-closing] .ui-dialog { animation: ui-dialog-out 180ms cubic-bezier(.4, 0, 1, 1) forwards; }
-}
+/* ---------- 弹窗退出动画（由 motion.css 统一定义，配合 ExitGate） ---------- */
 
 /* ---------- Markdown 实时输入框（ComposerEditor / Milkdown） ---------- */
 .composer-editor { position: relative; width: 100%; min-width: 0; }
@@ -406,6 +419,25 @@ html[data-theme="dark"] .\!bg-emerald-600.\!text-white { color: rgb(255 255 255)
 /* ---------- 第二轮打磨：暗色细节与输入互动 ---------- */
 /* 暗色下选中项的图标底不要反相成纯白方块，改成强调色淡底 + 细描边。 */
 html[data-theme="dark"] .ui-selected-tile { background-color: rgb(var(--accent) / .22); color: rgb(var(--accent)); box-shadow: inset 0 0 0 1px rgb(var(--accent) / .35); }
+/* 侧栏会话行主图标右下角微角标的镂空切边：
+   切边必须是不透明色才能把底层 Agent 图标干净切开，且随行状态同步匹配底色——
+   常态用 --rail，非选中 hover 用 --rail 与 --zinc-100 的 40/60 混合色（与 hover:bg-zinc-100/60 像素级一致），
+   选中态固定用 --zinc-100。全部走 CSS 变量，亮/暗主题自动对齐。 */
+.ui-session-badge-cutout {
+  background-color: rgb(var(--rail));
+  box-shadow: 0 0 0 1.5px rgb(var(--rail));
+}
+.group:hover .ui-session-badge-cutout {
+  background-color: rgb(var(--zinc-100));
+  background-color: color-mix(in srgb, rgb(var(--rail)) 40%, rgb(var(--zinc-100)) 60%);
+  box-shadow: 0 0 0 1.5px rgb(var(--zinc-100));
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, rgb(var(--rail)) 40%, rgb(var(--zinc-100)) 60%);
+}
+.ui-session-badge-cutout[data-active="true"],
+.group:hover .ui-session-badge-cutout[data-active="true"] {
+  background-color: rgb(var(--zinc-100));
+  box-shadow: 0 0 0 1.5px rgb(var(--zinc-100));
+}
 /* 像素风猫咪 Logo 与像素字标：保持锐利像素边缘，字标随 html[data-theme] 切换亮暗配色。 */
 .ui-pixelated { image-rendering: pixelated; }
 .ui-wordmark-dark { display: none; }
@@ -436,4 +468,49 @@ html[data-theme="dark"] ::highlight(timeline-search-active) {
 }
 html[data-theme="dark"] .ui-search-active-item {
   box-shadow: inset 3px 0 0 rgba(251, 146, 60, 0.85);
+}
+
+/* ---------- 全站 AI 文本辅助（微光触发 / 流光条 / 卡片阴影；关键帧与动效曲线收口至 motion.css） ---------- */
+.ui-ai-trigger {
+  position: relative;
+  transition: color var(--dur-base, 180ms) var(--ease-swift, ease), background-color var(--dur-base, 180ms) var(--ease-swift, ease), border-color var(--dur-base, 180ms) var(--ease-swift, ease), box-shadow var(--dur-panel, 240ms) var(--ease-out-expo, ease), transform var(--dur-fast, 120ms) var(--ease-swift, ease);
+}
+.ui-ai-trigger:hover:not(:disabled) {
+  border-color: rgb(var(--amber-200));
+  background-image: linear-gradient(135deg, rgb(var(--amber-50) / .85), rgb(var(--sky-50) / .7));
+  box-shadow: 0 2px 10px rgba(217, 119, 6, .12), inset 0 1px 0 rgba(255, 255, 255, .6);
+}
+html[data-theme="dark"] .ui-ai-trigger:hover:not(:disabled) {
+  border-color: rgb(var(--amber-200));
+  background-image: linear-gradient(135deg, rgb(var(--amber-50) / .9), rgb(var(--sky-50) / .75));
+  box-shadow: 0 2px 12px rgba(251, 191, 36, .16), inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+
+.ui-ai-trigger-busy {
+  background-image: linear-gradient(110deg, rgb(var(--amber-50)) 0%, rgb(var(--sky-50)) 45%, rgb(var(--surface)) 65%, rgb(var(--amber-50)) 100%);
+  background-size: 240% 100%;
+  border-color: rgb(var(--amber-200));
+}
+html[data-theme="dark"] .ui-ai-trigger-busy {
+  background-image: linear-gradient(110deg, rgb(var(--amber-50)) 0%, rgb(var(--sky-50)) 45%, rgb(var(--zinc-100)) 65%, rgb(var(--amber-50)) 100%);
+  background-size: 240% 100%;
+  border-color: rgb(var(--amber-200));
+}
+
+.ui-ai-shimmer-bar {
+  height: 2.5px;
+  border-radius: 999px;
+  background-image: linear-gradient(90deg, rgb(var(--amber-100) / .45) 0%, rgba(245, 158, 11, .82) 38%, rgba(56, 189, 248, .82) 62%, rgb(var(--sky-100) / .45) 100%);
+  background-size: 220% 100%;
+}
+html[data-theme="dark"] .ui-ai-shimmer-bar {
+  background-image: linear-gradient(90deg, rgb(var(--amber-50) / .6) 0%, rgba(251, 191, 36, .9) 38%, rgba(56, 189, 248, .9) 62%, rgb(var(--sky-50) / .6) 100%);
+  background-size: 220% 100%;
+}
+
+.ui-ai-popover {
+  box-shadow: 0 18px 48px rgba(24, 24, 27, .16), 0 2px 8px rgba(24, 24, 27, .06);
+}
+html[data-theme="dark"] .ui-ai-popover {
+  box-shadow: 0 20px 56px rgba(0, 0, 0, .54), 0 0 0 1px rgba(255, 255, 255, .06);
 }

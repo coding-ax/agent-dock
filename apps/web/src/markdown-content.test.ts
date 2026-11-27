@@ -140,4 +140,67 @@ describe('workspace file preview links', () => {
     expect(html).toContain(`+${5 - MAX_AUTO_IMAGE_THUMBNAILS} 张`);
     expect(html).toContain('展开全部');
   });
+
+  it('keeps file preview link buttons bounded and wrappable for long path labels', () => {
+    const label = '/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_contact_sheet.jpg';
+    const md = `[${label}](file://${label})`;
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', children: md }));
+    expect(html).toMatch(/<button type="button" title="[^"]*" class="[^"]*\bmax-w-full\b[^"]*\btext-left\b/);
+    expect(html).toContain('[overflow-wrap:anywhere]');
+  });
+});
+
+describe('用户消息斜杠命令高亮边界', () => {
+  it('仅高亮消息最开头的单个 /命令（支持命名空间与软换行）', () => {
+    const simple = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', highlightSlashCommands: true, children: '/plan 帮我分析这个架构' }));
+    expect(simple).toContain('<code class="ui-slash-command">/plan</code>');
+
+    const withNewline = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', highlightSlashCommands: true, children: '/lark-doc\n帮我看这篇文档' }));
+    expect(withNewline).toContain('<code class="ui-slash-command">/lark-doc</code><br/>');
+
+    const namespaced = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', highlightSlashCommands: true, children: '/sc:analyze 检查一下' }));
+    expect(namespaced).toContain('<code class="ui-slash-command">/sc:analyze</code>');
+  });
+
+  it('正文中的反引号路径与命令绝不误判为 ui-slash-command', () => {
+    const md = [
+      '工作临时目录放在 `/Users/codeax/workspace/ai-video-studio/work/daily_YYYYMMDD_<slug>/`。',
+      '最终成品输出到：',
+      '`/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_<slug>.mp4`',
+      '`/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_<slug>_contact_sheet.jpg`',
+      '也不要误伤 `/compact` 或 `/api/v1/sessions`。'
+    ].join('\n');
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', highlightSlashCommands: true, children: md }));
+    expect(html).not.toContain('ui-slash-command');
+    expect(html).toContain('ui-inline-code');
+    expect(html).toContain('/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_&lt;slug&gt;_contact_sheet.jpg');
+  });
+
+  it('开头为真实命令且正文含反引号路径时，仅首 token 高亮', () => {
+    const md = '/plan 检查 `/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_<slug>.mp4` 和 `/compact`';
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', highlightSlashCommands: true, children: md }));
+    expect(html.match(/ui-slash-command/g)).toHaveLength(1);
+    expect(html).toContain('<code class="ui-slash-command">/plan</code>');
+    expect(html.match(/ui-inline-code/g)).toHaveLength(2);
+  });
+
+  it('开头为绝对路径、点文件、注释、带扩展名文件或手写反引号代码时不误判为命令', () => {
+    const samples = [
+      '/Users/codeax/workspace/ai-video-studio/output/demo.mp4 帮我看下',
+      '/.env 请检查配置',
+      '// 这是注释',
+      '/README.md 帮我润色',
+      '`/plan` 是计划命令',
+      '/plan**紧凑**'
+    ];
+    for (const sample of samples) {
+      const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', highlightSlashCommands: true, children: sample }));
+      expect(html, sample).not.toContain('ui-slash-command');
+    }
+  });
+
+  it('助手消息（highlightSlashCommands=false）不高亮开头的 /命令', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { sessionId: 'ses_1', children: '/plan 帮我分析' }));
+    expect(html).not.toContain('ui-slash-command');
+  });
 });

@@ -27,8 +27,7 @@ const validResult = (value: unknown): value is AgentModelsResult => {
 
 export const agentModelsQueryKey = (agentId?: string, model?: string, sshHost?: string) => ['agent-models', agentId ?? '', model ?? '', sshHost ?? 'local'] as const;
 
-export function readCachedAgentModels(agentId: string, model?: string, storage: ModelCacheStorage | undefined = browserStorage(), now = Date.now()): AgentModelsResult | undefined {
-  if (!agentId || !storage) return undefined;
+function readCachedEntry(agentId: string, model: string | undefined, storage: ModelCacheStorage, now: number): AgentModelsResult | undefined {
   try {
     const raw = storage.getItem(cacheKey(agentId, model));
     if (!raw) return undefined;
@@ -38,10 +37,33 @@ export function readCachedAgentModels(agentId: string, model?: string, storage: 
   } catch { return undefined; }
 }
 
+export function readCachedAgentModels(agentId: string, model?: string, storage: ModelCacheStorage | undefined = browserStorage(), now = Date.now()): AgentModelsResult | undefined {
+  if (!agentId || !storage) return undefined;
+  return readCachedEntry(agentId, model, storage, now);
+}
+
+/**
+ * 供 React Query `initialData`（SWR 初始占位）读取：精确命中优先，未命中时回落到同 Agent 的基础目录缓存，
+ * 让用户在切换新模型或打开草稿时立即展开下拉列表，同时由后台 SWR 静默补刷该模型对应的思考深度。
+ */
+export function readInitialAgentModels(agentId: string, model?: string, storage: ModelCacheStorage | undefined = browserStorage(), now = Date.now()): AgentModelsResult | undefined {
+  if (!agentId || !storage) return undefined;
+  const exact = readCachedEntry(agentId, model, storage, now);
+  if (exact) return exact;
+  if (model) return readCachedEntry(agentId, undefined, storage, now);
+  return undefined;
+}
+
 export function writeCachedAgentModels(agentId: string, model: string | undefined, value: AgentModelsResult, storage: ModelCacheStorage | undefined = browserStorage(), now = Date.now()): void {
   if (!agentId || !storage || !validResult(value)) return;
-  try { storage.setItem(cacheKey(agentId, model), JSON.stringify({ savedAt: now, value } satisfies CachedAgentModels)); }
-  catch { /* localStorage may be unavailable or full; the network result remains usable. */ }
+  try {
+    const payload = JSON.stringify({ savedAt: now, value } satisfies CachedAgentModels);
+    storage.setItem(cacheKey(agentId, model), payload);
+    // 同步维护同 Agent 基础目录缓存，确保草稿切换 Agent 或切往其他模型时可立即命中本地缓存。
+    if (model && value.models.length > 0 && !readCachedEntry(agentId, undefined, storage, now)) {
+      storage.setItem(cacheKey(agentId, undefined), payload);
+    }
+  } catch { /* localStorage may be unavailable or full; the network result remains usable. */ }
 }
 
 /** 降级信息不能覆盖上次成功的 ACP 能力；缓存内容也必须明确标记。 */

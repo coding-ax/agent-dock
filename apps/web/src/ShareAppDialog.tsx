@@ -106,8 +106,8 @@ export function ShareAppDialog({ onClose }: { onClose(): void }) {
           <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50/70 px-2.5 py-2">
             <QrCode size={14} className="shrink-0 text-zinc-400"/>
             <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-zinc-600" title={displayShareUrl(chosen.url)}>{shareUrlHost(chosen.url)}<span className="text-zinc-400">{new URL(displayShareUrl(chosen.url)).pathname}</span></span>
-            <button type="button" onClick={() => void copy()} className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-zinc-700 transition-colors hover:bg-white hover:text-zinc-900">
-              {copied ? <Check size={12} className="text-emerald-600"/> : <Copy size={12}/>}{copied ? '已复制' : '复制'}
+            <button type="button" onClick={() => void copy()} className={`ui-press flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[12px] font-medium hover:bg-white ${copied ? 'text-emerald-600' : 'text-zinc-700 hover:text-zinc-900'}`}>
+              {copied ? <Check key="check" size={12} className="ui-icon-pop text-emerald-600"/> : <Copy key="copy" size={12}/>}{copied ? '已复制' : '复制'}
             </button>
           </div>
 

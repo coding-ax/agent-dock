@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Database, FilePenLine, FlaskConical, GitBranch, Globe2, MessageSquare, Search, Sparkles, Square, StickyNote, Terminal, Users, Wrench, Zap } from 'lucide-react';
+import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Clock, Compass, Database, FilePenLine, FlaskConical, FolderOpen, GitBranch, Globe2, Image, ListTodo, MessageCircleQuestion, MessageSquare, Plug, Search, Sparkles, Square, StickyNote, Terminal, Users, Workflow, Wrench, Zap } from 'lucide-react';
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Spinner } from './Loaders';
 import { buildActivitySteps, thinkingTitle, EMOJI_TRIGGER_ORIGIN, eventRenderSignature, groupRenderSignature, type ActivityStep, type TimelineActivityGroup, type TimelineEvent } from './timeline';
@@ -22,12 +22,21 @@ import { Disclosure } from './Disclosure';
 function ToolKindIcon({ kind, size = 16 }: { kind: ToolKind; size?: number }) {
   if (kind === 'read') return <BookOpen size={size}/>;
   if (kind === 'edit') return <FilePenLine size={size}/>;
+  if (kind === 'list') return <FolderOpen size={size}/>;
   if (kind === 'search') return <Search size={size}/>;
   if (kind === 'web') return <Globe2 size={size}/>;
+  if (kind === 'browser') return <Compass size={size}/>;
   if (kind === 'git') return <GitBranch size={size}/>;
   if (kind === 'test') return <FlaskConical size={size}/>;
   if (kind === 'database') return <Database size={size}/>;
   if (kind === 'agent') return <Users size={size}/>;
+  if (kind === 'workflow') return <Workflow size={size}/>;
+  if (kind === 'question') return <MessageCircleQuestion size={size}/>;
+  if (kind === 'plan') return <ListTodo size={size}/>;
+  if (kind === 'task') return <Clock size={size}/>;
+  if (kind === 'skill') return <Sparkles size={size}/>;
+  if (kind === 'image') return <Image size={size}/>;
+  if (kind === 'mcp') return <Plug size={size}/>;
   if (kind === 'note') return <StickyNote size={size}/>;
   if (kind === 'terminal') return <Terminal size={size}/>;
   return <Wrench size={size}/>;
@@ -50,7 +59,7 @@ function CollapsibleOutput({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const lines = text.split('\n');
   return <div>
-    <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex items-center gap-1 rounded px-1 py-0.5 text-[12px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"><ChevronRight size={12} className={`transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>输出{lines.length > 0 ? `（${lines.length} 行）` : ''}</button>
+    <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex items-center gap-1 rounded px-1 py-0.5 text-[12px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"><ChevronRight size={12} className={`transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>输出{lines.length > 0 ? `（${lines.length} 行）` : ''}</button>
     <Disclosure open={open}><CommandOutput text={text}/></Disclosure>
   </div>;
 }
@@ -90,8 +99,8 @@ const ToolCard = memo(function ToolCard({ event }: { event: TimelineEvent }) {
   const tone = failed ? 'text-red-500' : terminal ? 'text-zinc-400' : 'text-zinc-500';
   return <div className="ui-timeline-item">
     <button type="button" data-timeline-disclosure aria-expanded={open} disabled={!hasDetails} onClick={() => setOpen(value => !value)} className="group/tool flex min-h-8 w-full items-center gap-2 rounded-md px-1 py-1 text-left text-[12px] text-zinc-500 transition-colors hover:bg-zinc-50 disabled:cursor-default disabled:hover:bg-transparent">
-      <ToolKindIcon kind={presentation.kind} size={13}/><span className="min-w-0 flex-1 truncate">{presentation.label}{presentation.detail && <span title={presentation.detail} className="ml-1.5 font-mono text-zinc-400">{presentation.detail}</span>}</span>
-      <span className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap tabular-nums ${failed ? 'text-red-500' : 'text-zinc-400'}`}>{elapsed && <span>{elapsed}</span>}{!terminal && <Spinner size={12}/>}{failed && <span>失败</span>}{hasDetails && <ChevronRight size={12} className={`transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>}</span>
+      <ToolKindIcon kind={presentation.kind} size={13}/><span className="min-w-0 flex-1 truncate">{presentation.label}{presentation.detail && presentation.detail !== presentation.label && <span title={presentation.detail} className="ml-1.5 font-mono text-zinc-400">{presentation.detail}</span>}</span>
+      <span className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap tabular-nums ${failed ? 'text-red-500' : 'text-zinc-400'}`}>{elapsed && <span>{elapsed}</span>}{!terminal && <Spinner size={12}/>}{failed && <span>失败</span>}{hasDetails && <ChevronRight size={12} className={`transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>}</span>
     </button>
     <Disclosure open={open}>{hasDetails && <div className="mb-1 pl-2.5"><div className="border-l border-zinc-200 pl-3"><ToolDetail view={toolDetailView(event.data)}/></div></div>}</Disclosure>
   </div>;
@@ -111,7 +120,7 @@ function StepDisclosure({ icon, title, subtitle, meta, running, failed, forceOpe
         <span className="flex min-w-0 items-center gap-2">
           <span className={`min-w-0 truncate ${running ? 'ui-shimmer-text font-medium' : ''}`}>{title}</span>
           {meta && <span className="ml-auto shrink-0 whitespace-nowrap text-[12px] tabular-nums text-zinc-400">{meta}</span>}
-          {hasBody && <ChevronRight size={12} className={`shrink-0 text-zinc-400 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>}
+          {hasBody && <ChevronRight size={12} className={`shrink-0 text-zinc-400 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>}
         </span>
         {subtitle && <span className="mt-0.5 block truncate font-mono text-[12px] leading-4 text-zinc-400">{subtitle}</span>}
       </span>
@@ -158,7 +167,7 @@ const ToolsStep = memo(function ToolsStep({ events, forceOpen = false, stepId }:
   const current = toolPresentation((runningEvent ?? last).data);
   const now = useNow(running);
   const elapsed = formatElapsed(elapsedMilliseconds(events[0]!.data.startedAt ?? events[0]!.timestamp, running ? undefined : last.data.completedAt ?? last.timestamp, now));
-  // 进行中用进行时（「正在运行命令」），已经跑完的项补一句计数；完成后才用汇总（「运行了 3 条命令」）。
+  // 进行中用进行时（「正在执行命令」），已经跑完的项补一句计数；完成后才用汇总（「执行了 3 条命令」）。
   const doneCount = events.filter(isToolTerminal).length;
   const runningLabel = `${toolActionLabel(current, false)}${doneCount ? ` · 已完成 ${doneCount} 项` : ''}`;
   const subtitle = current.detail;
@@ -169,7 +178,7 @@ const ToolsStep = memo(function ToolsStep({ events, forceOpen = false, stepId }:
     {events.length > 1 && elapsed && <span className="mx-1 text-zinc-300">·</span>}
     {elapsed && <span>{elapsed}</span>}
   </>;
-  return <StepDisclosure icon={<ToolKindIcon kind={first.kind}/>} running={running} failed={!running && failedCount > 0}
+  return <StepDisclosure icon={<ToolKindIcon kind={(running ? current : first).kind}/>} running={running} failed={!running && failedCount > 0}
     forceOpen={forceOpen}
     stepId={stepId}
     title={running ? runningLabel : summary}
@@ -255,7 +264,7 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
         <span className="text-zinc-300">·</span>
         <span className="whitespace-nowrap">{steps.length} 步</span>
         {statusText && <span className={`text-[12px] ${statusTone}`}>{statusText}</span>}
-        <ChevronRight size={13} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>
+        <ChevronRight size={13} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>
       </button>
       <Disclosure open={open}><div className="pb-1 pt-1"><ActivitySteps steps={steps} ongoing={false} replay sessionId={sessionId} activeStepId={activeStepId}/></div></Disclosure>
     </div>}
@@ -293,7 +302,7 @@ function BubbleInjectionBlock({ injection, labelOverride }: { injection: BubbleI
       <span className="shrink-0 font-medium text-zinc-700">{label}</span>
       <span className="min-w-0 flex-1 truncate text-zinc-500">{summary}</span>
       <span className="shrink-0 tabular-nums text-[11px] text-zinc-400">{injection.charCount} 字</span>
-      <ChevronRight size={12} className={`shrink-0 text-zinc-400 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>
+      <ChevronRight size={12} className={`shrink-0 text-zinc-400 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>
     </button>
     <Disclosure open={open} unmountOnClose>
       <pre className="m-0 max-h-64 overflow-y-auto whitespace-pre-wrap break-words border-t border-zinc-200/70 bg-zinc-50/80 px-2.5 py-2 font-mono text-[12px] leading-5 text-zinc-600">{injection.text}</pre>
@@ -313,7 +322,7 @@ export const SystemPromptBubble = memo(function SystemPromptBubble({ prompt, for
         <Sparkles size={12} className="shrink-0 text-zinc-400"/>
         <span className="shrink-0 font-medium text-zinc-700">会话 System Prompt</span>
         <span className="shrink-0 tabular-nums text-[11px] text-zinc-400">{prompt.length} 字</span>
-        <ChevronRight size={12} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}/>
+        <ChevronRight size={12} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>
       </button>
       <Disclosure open={open} unmountOnClose>
         <pre className="m-0 max-h-72 overflow-y-auto whitespace-pre-wrap break-words border-t border-zinc-200/70 bg-white/90 px-3 py-2.5 font-mono text-[12px] leading-5 text-zinc-600">{prompt}</pre>
@@ -326,10 +335,10 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
   if (event.type === 'tool_call' || event.type === 'tool_result') return <ToolCard event={event}/>;
   if (event.type === 'permission_request') return <PermissionCard event={event}/>;
   if (event.type === 'warning') return <aside role="status" className="ui-timeline-item my-4 overflow-hidden rounded-xl border border-amber-200 bg-amber-50/60">
-    <div className="flex items-start gap-2.5 px-4 py-3"><AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-700"/><div className="min-w-0"><div className="text-[13px] font-semibold text-amber-950">{event.data.warningKind === 'skill' ? 'Skill 提示' : 'Agent 警告'}</div><div className="mt-1 text-[13px] leading-5 text-amber-800"><MarkdownContent sessionId={sessionId}>{event.data.text ?? ''}</MarkdownContent></div></div></div>
+    <div className="flex items-start gap-2.5 px-4 py-3"><AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-700"/><div className="min-w-0 flex-1 [overflow-wrap:anywhere]"><div className="text-[13px] font-semibold text-amber-950">{event.data.warningKind === 'skill' ? 'Skill 提示' : 'Agent 警告'}</div><div className="mt-1 text-[13px] leading-5 text-amber-800"><MarkdownContent sessionId={sessionId}>{event.data.text ?? ''}</MarkdownContent></div></div></div>
   </aside>;
   if (event.type === 'error') return <aside role="alert" className="ui-timeline-item my-4 overflow-hidden rounded-xl border border-red-200 bg-red-50/60">
-    <div className="flex items-start gap-2.5 px-4 py-3"><CircleX size={15} className="mt-0.5 shrink-0 text-red-600"/><div className="min-w-0"><div className="text-[13px] font-semibold text-red-950">Agent 错误</div><div className="mt-1 text-[13px] leading-5 text-red-800"><MarkdownContent sessionId={sessionId}>{event.data.message ?? 'Agent 运行失败'}</MarkdownContent></div></div></div>
+    <div className="flex items-start gap-2.5 px-4 py-3"><CircleX size={15} className="mt-0.5 shrink-0 text-red-600"/><div className="min-w-0 flex-1 [overflow-wrap:anywhere]"><div className="text-[13px] font-semibold text-red-950">Agent 错误</div><div className="mt-1 text-[13px] leading-5 text-red-800"><MarkdownContent sessionId={sessionId}>{event.data.message ?? 'Agent 运行失败'}</MarkdownContent></div></div></div>
   </aside>;
   if (event.type === 'thinking') return null;
   // 表情触发轮次：展示成带折叠注入块的特殊气泡，方便直观看到触发来源与完整注入正文。
@@ -357,7 +366,7 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
   }
   const user = event.data.role === 'user';
   if (user) {
-    const text = markLeadingSlashCommand(stripImageReferenceLines(event.data.text ?? ''));
+    const text = stripImageReferenceLines(event.data.text ?? '');
     const injection = extractBubbleInjection(event.data.text ?? '', sentPrompt);
     // 「发送中」是气泡左侧的绝对定位圆环，对齐最后一行文字：不占位，确认后消失也不会让气泡跳动。
     // 用 bottom 而不是 translate 定位，避免和 animate-spin 的 transform 冲突。
@@ -396,10 +405,6 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
   && (prev.event.data.title ?? '') === (next.event.data.title ?? ''));
 
 const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
-/** 用户消息开头的 /命令 包成行内代码，交给 MarkdownContent 渲染成命令 chip；只处理第一个 token。 */
-function markLeadingSlashCommand(text: string): string {
-  return text.replace(/^(\s*)(\/[^\s`]+)(?=\s|$)/, '$1`$2`');
-}
 function stripImageReferenceLines(text: string): string {
   return text.split('\n').filter(line => {
     const match = line.match(/^(?:\/file|\[文件\]|\[图片\])\s+(.+)$/);

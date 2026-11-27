@@ -11,9 +11,10 @@ export function useToast(durationMs = 6_000) {
   const key = 'agentdock-toast';
   return {
     toast,
-    show: (text: string | undefined, tone: 'error' | 'info' = 'error') => {
+    show: (text: string | undefined, tone: 'error' | 'info' | 'success' = 'error') => {
       if (!text) { api.destroy(key); return; }
-      void api.open({ key, type: tone === 'error' ? 'error' : 'info', content: text, duration: durationMs / 1000 });
+      const type = tone === 'error' ? 'error' : tone === 'success' ? 'success' : 'info';
+      void api.open({ key, type, content: text, duration: durationMs / 1000 });
     },
     clear: () => api.destroy(key)
   };

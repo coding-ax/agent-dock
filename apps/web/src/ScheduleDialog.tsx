@@ -9,6 +9,7 @@ import { api, type Agent, type Schedule, type ScheduleRun, type Session, type Up
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { describeCron, describeInterval, describeRunTime, intervalUnits, nextCronRuns, nextIntervalRuns, oncePresets, recurrenceKinds, recurrenceToTrigger, weekdayLabels, weekdayOrder, type IntervalUnit, type Recurrence } from './recurrence';
 import { ConfirmDialog } from './ui-controls';
+import { AiFieldHeader, AiTextAssistControl, useAiFlash } from './AiTextAssist';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { AgentIcon } from './AgentIcon';
 import { useModalFocusTrap } from './useModalFocusTrap';
@@ -87,7 +88,7 @@ function ScheduleRow({ schedule, sessionTitle, lastRun, now, actions, onOpenSess
   // 开关只表达「启用/暂停」；单次已执行、或失败停用且不可恢复的，用标签说明状态。
   const switchable = schedule.enabled || canResume(schedule);
   return <div className="group border-b border-zinc-100 last:border-b-0">
-    <div className={`flex min-w-0 items-start gap-3 px-4 py-3 transition-colors hover:bg-zinc-50/80 ${schedule.enabled ? '' : 'opacity-75'}`}>
+    <div className={`flex min-w-0 flex-wrap items-start gap-2.5 px-3.5 py-3 transition-colors hover:bg-zinc-50/80 sm:flex-nowrap sm:gap-3 sm:px-4 ${schedule.enabled ? '' : 'opacity-75'}`}>
       <button type="button" onClick={() => setOpen(value => !value)} aria-expanded={open} className="flex min-w-0 flex-1 items-start gap-2 text-left">
         <ChevronRight size={14} className={`mt-[3px] shrink-0 text-zinc-400 transition-transform ${open ? 'rotate-90' : ''}`}/>
         <div className="min-w-0 flex-1">
@@ -108,7 +109,7 @@ function ScheduleRow({ schedule, sessionTitle, lastRun, now, actions, onOpenSess
         <div className="text-[12px] font-medium tabular-nums text-zinc-800">{describeRunTime(nextAt, now)}</div>
         <div className="mt-0.5 text-[12px] tabular-nums text-zinc-400">{describeCountdown(nextAt, now)}</div>
       </div>}
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex w-full shrink-0 items-center justify-end gap-1 pl-5 sm:w-auto sm:pl-0">
         <Tooltip title="编辑"><Button type="text" size="small" aria-label="编辑" disabled={busy} icon={<Pencil size={14}/>} onClick={() => onEdit(schedule)} className="text-zinc-500"/></Tooltip>
         <Tooltip title="立即执行一次"><Button type="text" size="small" aria-label="立即执行一次" disabled={busy} loading={actions.run.isPending && actions.run.variables === schedule.id} icon={<Zap size={14}/>} onClick={() => actions.run.mutate(schedule.id)} className="text-zinc-500"/></Tooltip>
         <Tooltip title="删除"><Button type="text" size="small" danger aria-label="删除" disabled={busy} icon={<Trash2 size={14}/>} onClick={() => setConfirmDelete(true)} className="opacity-60 group-hover:opacity-100"/></Tooltip>
@@ -122,7 +123,7 @@ function ScheduleRow({ schedule, sessionTitle, lastRun, now, actions, onOpenSess
 
 /** 列表顶部的概览：一眼看到有多少在跑、今天还会触发几次、最近有没有失败。 */
 function ScheduleOverview({ summary, now }: { summary: ScheduleSummary; now: Date }) {
-  const cell = (label: string, value: ReactNode, tone = 'text-zinc-900') => <div className="min-w-0 rounded-lg bg-zinc-50 px-3 py-2">
+  const cell = (label: string, value: ReactNode, tone = 'text-zinc-900') => <div className="min-w-0 rounded-xl border border-zinc-200/70 bg-zinc-50/70 px-3 py-2">
     <div className="text-[12px] text-zinc-400">{label}</div>
     <div className={`mt-0.5 truncate text-[15px] font-semibold tabular-nums ${tone}`}>{value}</div>
   </div>;
@@ -241,15 +242,47 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
 
   const label = 'text-[12px] font-medium text-zinc-700';
   const sub = 'text-[12px] text-zinc-400';
+  const promptFlash = useAiFlash();
+  const nameFlash = useAiFlash();
+  const scheduleResetKey = editing?.id ?? 'new-schedule';
+  const selectedAgentName = enabledAgents.find(agent => agent.id === form.agentId)?.name;
   const agentOptions = enabledAgents.map(agent => ({ value: agent.id, label: <span className="flex items-center gap-2"><AgentIcon agentId={agent.id} agentName={agent.name} size={15}/>{agent.name}</span> }));
   const modelOptions = [{ value: '', label: models.data?.defaultModel ? `Agent 默认（${models.data.defaultModel}）` : 'Agent 默认' }, ...(models.data?.models ?? []).map(item => ({ value: item.id, label: item.name }))];
   const workspaceOptions = workspaces.map(path => ({ value: path, label: <span className="flex min-w-0 items-baseline gap-2"><span className="shrink-0">{path.split(/[\\/]/).filter(Boolean).pop() || path}</span><span className="min-w-0 truncate font-mono text-[12px] text-zinc-400">{path}</span></span> }));
   return <div className="flex min-h-0 flex-1 flex-col" onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); } }}>
-    <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-4">
-      <label className="flex flex-col gap-1.5"><span className={label}>到点让 Agent 做什么</span>
-        <Input.TextArea autoFocus value={form.prompt} onChange={event => update({ prompt: event.target.value })} autoSize={{ minRows: 3, maxRows: 8 }} placeholder="写成能独立执行的完整指令，例如：汇总昨天群里的消息，列出待办" className="text-[13px] leading-5"/>
+    <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-4 sm:px-5">
+      <div className="flex flex-col gap-1.5">
+        <AiFieldHeader
+          label="到点让 Agent 做什么"
+          htmlFor="schedule-prompt-input"
+          assist={
+            <AiTextAssistControl
+              mode="prompt_write"
+              variant="pill"
+              size="xs"
+              popoverSide="bottom"
+              popoverAlign="end"
+              value={form.prompt}
+              onChange={prompt => update({ prompt })}
+              onFlash={promptFlash.triggerFlash}
+              resetKey={scheduleResetKey}
+              context={() => ({
+                field: '定时任务执行指令（Prompt）',
+                purpose: '到点后发送给 Agent 独立执行的完整任务指令；到点时 Agent 可能看不到当前对话，需要自包含背景、目标和汇报要求',
+                scheduleSummary: `${when} · ${target}`,
+                ...(selectedAgentName ? { agentName: selectedAgentName } : {}),
+                ...(form.cwd.trim() ? { cwd: form.cwd.trim() } : {}),
+                ...(form.name.trim() ? { sessionTitle: form.name.trim() } : {})
+              })}
+              testId="schedule-prompt-ai"
+            />
+          }
+        />
+        <div className={`rounded-lg ${promptFlash.flashClass}`}>
+          <Input.TextArea id="schedule-prompt-input" autoFocus value={form.prompt} onChange={event => update({ prompt: event.target.value })} autoSize={{ minRows: 3, maxRows: 8 }} placeholder="写成能独立执行的完整指令，例如：汇总昨天群里的消息，列出待办" className="text-[13px] leading-5"/>
+        </div>
         <span className={sub}>到点时 Agent 看不到现在的对话，把背景写进去。</span>
-      </label>
+      </div>
 
       <div className="flex flex-col gap-2"><span className={label}>什么时候</span>
         <Segmented<ScheduleFormState['kind']> className="self-start" value={form.kind} onChange={kind => update({ kind })} options={[{ value: 'recurring', label: '重复' }, { value: 'once', label: '只一次' }]}/>
@@ -330,12 +363,40 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
           />}
       </div>
 
-      <label className="flex flex-col gap-1.5"><span className={label}>名称 <span className="font-normal text-zinc-400">可选</span></span>
-        <Input value={form.name} onChange={event => update({ name: event.target.value })} placeholder={form.prompt.trim() ? form.prompt.trim().slice(0, 24) : '不填则取内容开头'}/>
-      </label>
+      <div className="flex flex-col gap-1.5">
+        <AiFieldHeader
+          label="名称"
+          htmlFor="schedule-name-input"
+          hint="可选"
+          assist={
+            <AiTextAssistControl
+              mode="title_generate"
+              variant="pill"
+              size="xs"
+              popoverSide="top"
+              popoverAlign="end"
+              value={form.name}
+              onChange={name => update({ name })}
+              onFlash={nameFlash.triggerFlash}
+              resetKey={scheduleResetKey}
+              context={() => ({
+                field: '定时任务名称',
+                purpose: '用于定时任务列表展示的简短中文任务名称（6–18 字）',
+                scheduleSummary: `${when} · ${target}`,
+                maxChars: 20,
+                ...(form.prompt.trim() ? { recentMessages: [{ role: '定时任务内容', text: form.prompt.trim().slice(0, 600) }] } : {})
+              })}
+              testId="schedule-name-ai"
+            />
+          }
+        />
+        <div className={`rounded-lg ${nameFlash.flashClass}`}>
+          <Input id="schedule-name-input" value={form.name} onChange={event => update({ name: event.target.value })} placeholder={form.prompt.trim() ? form.prompt.trim().slice(0, 24) : '不填则取内容开头'}/>
+        </div>
+      </div>
     </div>
 
-    <div className="shrink-0 border-t border-zinc-100 bg-zinc-50 px-5 py-3">
+    <div className="shrink-0 border-t border-zinc-100 bg-zinc-50 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
       <div className="mb-2.5 flex min-w-0 items-start gap-2 text-[12px] leading-5">
         <AlarmClock size={13} className="mt-1 shrink-0 text-zinc-400"/>
         <div className="min-w-0">
@@ -383,8 +444,8 @@ export function ScheduleDialog({ session, mainSessionId, sessions, onClose, onOp
   const toast = useToast();
   useUpdateEffect(() => { if (loadError) toast.show(`读取定时任务失败：${loadError}`); }, [loadError]);
 
-  return <div className="ui-overlay fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-2 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="定时任务" className="ui-dialog flex h-[min(720px,86dvh)] w-full max-w-2xl flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)]">
+  return <div className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-0 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="定时任务" className="ui-dialog flex h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)] sm:h-[min(720px,86dvh)] sm:rounded-[14px] sm:border sm:border-zinc-200">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-100 px-4">
         {formOpen
           ? <><button type="button" onClick={closeForm} aria-label="返回列表" className="-ml-1.5 grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"><ArrowLeft size={16}/></button>
@@ -404,7 +465,7 @@ export function ScheduleDialog({ session, mainSessionId, sessions, onClose, onOp
           <ScheduleForm {...(session ? { session } : {})} {...(mainSessionId ? { mainSessionId } : {})} {...(editing ? { editing } : {})} agents={agents.data ?? []} sessions={sessions} onDone={name => { const wasEditing = Boolean(editing); closeForm(); toast.show(wasEditing ? `已保存「${name}」` : `已创建「${name}」`, 'info'); }} onCancel={closeForm}/>
         </DeferredMount>
         : <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-4 py-3"><DeferredSkeleton/></div>}>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             {schedules.isLoading && <div className="flex items-center gap-2 px-4 py-3 text-[12px] text-zinc-400"><Spinner size={13}/>读取中…</div>}
             {!schedules.isLoading && !items.length && <div className="flex h-full flex-col items-center justify-center gap-3 px-6 pb-10 text-center">
               <div className="grid h-10 w-10 place-items-center rounded-full bg-zinc-100 text-zinc-400"><AlarmClock size={18}/></div>

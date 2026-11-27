@@ -99,7 +99,7 @@ function compactCommand(value: unknown) {
 export function toolCommand(input: unknown) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return;
   const record = input as Record<string, unknown>;
-  return compactCommand(record.command) ?? compactCommand(record.cmd);
+  return compactCommand(record.command) ?? compactCommand(record.cmd) ?? compactCommand(record.CommandLine);
 }
 
 export function toolDisplayName(data: TimelineEvent['data']) {
@@ -108,14 +108,18 @@ export function toolDisplayName(data: TimelineEvent['data']) {
 
 export function toolDescription(data: TimelineEvent['data']) {
   const input = data.input && typeof data.input === 'object' && !Array.isArray(data.input) ? data.input as Record<string, unknown> : undefined;
-  const value = input?.description ?? data.description;
+  const value = input?.description ?? input?.command_description ?? input?.toolSummary ?? data.description;
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() || undefined : undefined;
 }
 
 function mergedToolName(previous: unknown, current: unknown) {
   const before = typeof previous === 'string' ? previous.trim() : '';
   const after = typeof current === 'string' ? current.trim() : '';
-  const specificity = (name: string) => /^(?:tool(?: call)?)$/i.test(name) ? 0 : /^terminal$/i.test(name) ? 1 : name ? 2 : -1;
+  const specificity = (name: string) => /^(?:tool(?: call)?)$/i.test(name)
+    ? 0
+    : /^(?:terminal|read file|edit|write|fetch|find|web search|preparing file…)$/i.test(name)
+      ? 1
+      : name ? 2 : -1;
   if (!after || specificity(after) < specificity(before)) return before || after || '工具调用';
   return after;
 }
@@ -303,10 +307,12 @@ function applyTimelineEvent(state: TimelineBuildState, event: DockEvent) {
       const existing = timeline[existingIndex];
       const completed = current.data.status === 'completed' || current.data.status === 'failed';
       existing.type = current.type;
+      const kind = current.data.kind ?? existing.data.kind;
       existing.data = {
         ...existing.data,
         ...current.data,
         name: mergedToolName(existing.data.name, current.data.name),
+        ...(kind !== undefined ? { kind } : {}),
         input: current.data.input ?? existing.data.input,
         output: current.data.output ?? existing.data.output,
         startedAt: existing.data.startedAt ?? existing.timestamp,

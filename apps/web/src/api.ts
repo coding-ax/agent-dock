@@ -1,3 +1,45 @@
+import type {
+  BoardActor,
+  BoardColumnColor,
+  BoardColumnRecord,
+  BoardColumnRule,
+  BoardDensity,
+  BoardDropAction,
+  BoardEntityKind,
+  BoardFilter,
+  BoardItemLiveDigest,
+  BoardItemRecord,
+  BoardRecord,
+  BoardTemplate,
+  BoardTemplatePayload,
+  BoardViewMode,
+  HydratedBoard,
+  HydratedBoardColumn,
+  HydratedBoardItem
+} from '@agent-dock/agent-dock-shared';
+
+export type BoardVisualState = BoardItemLiveDigest['visualState'];
+
+export type {
+  BoardActor,
+  BoardColumnColor,
+  BoardColumnRecord,
+  BoardColumnRule,
+  BoardDensity,
+  BoardDropAction,
+  BoardEntityKind,
+  BoardFilter,
+  BoardItemLiveDigest,
+  BoardItemRecord,
+  BoardRecord,
+  BoardTemplate,
+  BoardTemplatePayload,
+  BoardViewMode,
+  HydratedBoard,
+  HydratedBoardColumn,
+  HydratedBoardItem
+};
+
 export const protocols = ['auto', 'acp', 'jsonl', 'pipe', 'pty'] as const;
 export type Protocol = (typeof protocols)[number];
 export const permissionModes = ['ask', 'approve-reads', 'deny-all', 'full-trust'] as const;
@@ -28,33 +70,225 @@ export type Agent = {
   disabled?: boolean;
 };
 export type AgentModel = { id: string; name: string };
-export type CodexUsage = { status: 'available' | 'unavailable'; plan?: string; windows: { label: string; usedPercent: number; windowDurationMins: number; resetsAt?: number }[]; reason?: string; checkedAt: number };
-export type AgentUsage = { status: 'available' | 'unavailable'; plan?: string; windows: { label: string; usedPercent: number; resetsAt?: number }[]; reason?: string; source?: string; stale?: boolean; checkedAt: number };
+export type UsageSourceKind = 'official' | 'magpie';
+export type UsageMatchedBy = 'session_model' | 'magpie_route' | 'agent_config' | 'magpie_applied' | 'official_direct';
+export type UsageUnavailableCode = 'magpie_unreachable' | 'magpie_auth_required' | 'provider_no_quota' | 'official_unavailable';
+export type UsageWindowStatus = 'normal' | 'warning' | 'exhausted' | 'cooldown';
+export type UsageSourceMeta = {
+  service: UsageSourceKind;
+  providerId?: string;
+  providerName?: string;
+  endpoint?: string;
+  gatewayVersion?: string;
+  matchedBy: UsageMatchedBy;
+  matchedModel?: string;
+  activeAccount?: string;
+  accountCount?: number;
+};
+export type UsageBalance = { display: string; currency?: string; amount?: number };
+export type AgentUsageWindow = {
+  label: string;
+  usedPercent: number;
+  resetsAt?: number;
+  display?: string;
+  amount?: number;
+  limit?: number;
+  unit?: string;
+  runsOutAt?: number;
+  pool?: string;
+  status?: UsageWindowStatus;
+  aggregated?: boolean;
+};
+export type UsageAccountSummary = {
+  label: string;
+  plan?: string;
+  active?: boolean;
+  windows: AgentUsageWindow[];
+  balance?: UsageBalance;
+  readAt?: number;
+};
+export type UsageGatewayStats = {
+  period: 'today';
+  calls: number;
+  errors: number;
+  totalTokens: number;
+  costUsd?: number;
+  credits?: number;
+};
+export type UsageAlternateSource = { kind: UsageSourceKind; label: string };
+export type CodexUsage = {
+  status: 'available' | 'unavailable';
+  plan?: string;
+  windows: (AgentUsageWindow & { windowDurationMins?: number })[];
+  balance?: UsageBalance;
+  accounts?: UsageAccountSummary[];
+  gatewayStats?: UsageGatewayStats;
+  notices?: string[];
+  reason?: string;
+  unavailableCode?: UsageUnavailableCode;
+  source?: string;
+  sourceMeta?: UsageSourceMeta;
+  alternateSources?: UsageAlternateSource[];
+  stale?: boolean;
+  checkedAt: number;
+  cacheTtlMs?: number;
+};
+export type AgentUsage = {
+  status: 'available' | 'unavailable';
+  plan?: string;
+  windows: AgentUsageWindow[];
+  balance?: UsageBalance;
+  accounts?: UsageAccountSummary[];
+  gatewayStats?: UsageGatewayStats;
+  notices?: string[];
+  reason?: string;
+  unavailableCode?: UsageUnavailableCode;
+  source?: string;
+  sourceMeta?: UsageSourceMeta;
+  alternateSources?: UsageAlternateSource[];
+  stale?: boolean;
+  checkedAt: number;
+  cacheTtlMs?: number;
+};
+export type UsageQuotaParams = {
+  agentId: string;
+  model?: string;
+  sessionId?: string;
+  source?: 'auto' | UsageSourceKind;
+  refresh?: boolean;
+};
 export type AgentModelsResult = { models: AgentModel[]; defaultModel?: string; reasoningEfforts: AgentModel[]; defaultReasoningEffort?: string; source?: 'acp' | 'cli' | 'agent'; warning?: string };
 export type SkillReference = { name: string; description: string; path: string; source: 'workspace' | 'user' };
 export type LarkAllowedUser = { openId: string; name: string };
 export type LarkBotConfig = { configured: true; appId: string; name: string; tabLabel: string; setupComplete: boolean; avatarUrl?: string; workspace?: string; webBaseUrl?: string; defaultAgentId?: string; defaultModel?: string; defaultReasoningEffort?: string; preInjectPrompt: string; listening: boolean; activeListening: boolean; groupToolsEnabled: boolean; groupToolsAllowSend: boolean; groupSessionScope: 'user' | 'chat'; pushIntervalMs: number; traceLimit?: number; hideTraceOnComplete: boolean; quietReply: boolean; allowedUsers: LarkAllowedUser[]; allowedUserNames?: string[]; allowedEmails: string[]; allowedBots: LarkAllowedUser[]; allowedBotNames?: string[]; peerBotsAllowed: boolean; highRiskAllowedUsers: LarkAllowedUser[]; highRiskAllowedUserNames?: string[]; highRiskAllowedEmails: string[]; highRiskPattern: string; gateEnabled: boolean; softGateEnabled: boolean; hardGateEnabled: boolean; hookTrustConfirmed: boolean };
 export type LarkConfig = { configured: boolean; bots: LarkBotConfig[]; listeningDisabled: boolean };
 export type LarkHookStatus = { agentId?: string; supported: boolean; installed: boolean; writable: boolean; trustRequired: boolean; hooksPath?: string; reason?: string; trustInstructions?: string };
-export type LarkAvatarRegion = 'feishu' | 'lark';
-export type LarkAvatarAccount = { userId: string; name: string; avatarUrl?: string; email?: string };
-export type LarkAvatarStatus = { configured: boolean; connected: boolean; listening: boolean; state: 'disconnected' | 'connecting' | 'connected' | 'expired'; account?: LarkAvatarAccount; region: LarkAvatarRegion; listenChats: string[]; lastError?: string; lastSyncedAt?: string; syncIntervalSeconds: number; counts: { inbox: number; action: number; pendingDrafts: number } };
-export type LarkAvatarReactionRoute = 'ask' | 'main' | 'independent' | 'private_chat';
-export type LarkAvatarReactionIntent = 'auto' | 'summary' | 'analyze';
-export type LarkAvatarPrivateAnalyzeMode = 'summary' | 'analyze' | 'custom';
-export type LarkAvatarPrivateAnalyzeDelivery = 'main' | 'independent' | 'private_chat';
-export type LarkAvatarPrivateAnalyzeResult = {
-  ok: true;
-  delivery: LarkAvatarPrivateAnalyzeDelivery;
-  mode: LarkAvatarPrivateAnalyzeMode;
+export type LarkBotChatItem = { chatId: string; name: string; description?: string; avatar?: string; ownerId?: string; external?: boolean; chatMode?: string; chatStatus?: string };
+export type LarkRegexReplyMode = 'thread' | 'main';
+export type LarkRegexTriggerRule = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  botId: string;
   chatId: string;
   chatName: string;
-  contextCount: number;
-  sessionId?: string;
-  taskId?: string;
-  targetChatId?: string;
+  pattern: string;
+  flags: string;
+  replyMode: LarkRegexReplyMode;
+  promptTemplate: string;
+  presetId?: string;
+  ignoreBotMessages: boolean;
+  createdAt: string;
+  updatedAt: string;
+  hitCount?: number;
+  lastTriggeredAt?: string;
 };
-export type LarkAvatarConfigRecord = { id: string; config: { region: LarkAvatarRegion; triggerPrefix: string; contextMessages: number; contextScope: 'anchor' | 'chat'; replyInTopic: boolean; replyMode: 'direct' | 'quote' | 'thread'; emojiReactions: boolean; reactionTriggerEnabled: boolean; reactionTriggerEmoji: string; reactionTriggerRoute: LarkAvatarReactionRoute; reactionTriggerIntent?: LarkAvatarReactionIntent; reactionTriggerIgnoreBots: boolean; privateReplyChatId?: string; replySignature: string; agentTimeoutSeconds: number; listening: boolean; listenChats: string[]; allowedSenders: string[]; agentId: string; model: string; reasoningEffort: string; workspace: string }; account?: LarkAvatarAccount; state: 'disconnected' | 'connecting' | 'connected' | 'expired'; lastError?: string; createdAt: string; updatedAt: string };
+export type LarkRegexTriggerHit = {
+  id: string;
+  ruleId: string;
+  botId: string;
+  chatId: string;
+  messageId: string;
+  sessionId?: string;
+  cardMessageId?: string;
+  matchedText: string;
+  senderName?: string;
+  messagePreview?: string;
+  triggerType: 'realtime' | 'backfill';
+  status: 'triggered' | 'failed';
+  error?: string;
+  triggeredAt: string;
+};
+export type LarkRegexMatchSpan = { start: number; end: number; text: string };
+export type LarkPreviewChatMessage = {
+  messageId: string;
+  chatId: string;
+  threadId?: string;
+  rootId?: string;
+  parentId?: string;
+  senderId?: string;
+  senderName: string;
+  senderType: string;
+  text: string;
+  msgType: string;
+  createTime: string;
+  createdAt: string;
+  deleted?: boolean;
+  mentions?: Array<{ key?: string; name?: string; id?: string }>;
+};
+export type LarkRegexPromptTemplate = {
+  id: string;
+  name: string;
+  badge: string;
+  description: string;
+  suggestedPattern: string;
+  suggestedFlags: string;
+  suggestedReplyMode: LarkRegexReplyMode;
+  promptTemplate: string;
+};
+export type LarkRegexTemplateVariable = { key: string; token: string; label: string; description: string };
+export type LarkRegexTriggersResponse = {
+  rules: LarkRegexTriggerRule[];
+  templates: LarkRegexPromptTemplate[];
+  variables: LarkRegexTemplateVariable[];
+};
+export type LarkChatMessagesPreviewResponse = {
+  botId: string;
+  chatId: string;
+  items: LarkPreviewChatMessage[];
+  hasMore: boolean;
+  pageToken?: string;
+  hitsByMessageId: Record<string, LarkRegexTriggerHit[]>;
+};
+export type LarkRegexPreviewResponse = {
+  valid: boolean;
+  error?: string;
+  normalizedFlags: string;
+  totalCount: number;
+  matchedCount: number;
+  results: Array<{ messageId: string; matched: boolean; skippedBot?: boolean; matches: LarkRegexMatchSpan[] }>;
+  messages?: LarkPreviewChatMessage[];
+};
+export type LarkRegexBackfillItemResult = {
+  messageId: string;
+  status: 'triggered' | 'skipped' | 'failed';
+  sessionId?: string;
+  cardMessageId?: string;
+  matchedText?: string;
+  alreadyTriggered?: boolean;
+  reason?: string;
+};
+export type LarkRegexBackfillResponse = {
+  ruleId: string;
+  botId: string;
+  chatId: string;
+  replyMode: LarkRegexReplyMode;
+  triggeredCount: number;
+  skippedCount: number;
+  failedCount: number;
+  results: LarkRegexBackfillItemResult[];
+};
+export type SaveLarkRegexTriggerBody = {
+  name?: string;
+  enabled?: boolean;
+  botId?: string;
+  chatId?: string;
+  chatName?: string;
+  pattern?: string;
+  flags?: string;
+  replyMode?: LarkRegexReplyMode;
+  promptTemplate?: string;
+  presetId?: string | null;
+  ignoreBotMessages?: boolean;
+};
+export type LarkAvatarRegion = 'feishu' | 'lark';
+export type LarkAvatarAccount = { userId: string; name: string; avatarUrl?: string; email?: string };
+export type LarkAvatarRetentionStatus = { inboxMaxItems: number; inboxCleanupWarnThreshold: number; inboxCount: number; shouldWarnCleanup: boolean };
+export type LarkAvatarCleanupResult = { ok: true; deleted: number; remaining: number; keepLatest: number };
+export type LarkAvatarStatus = { configured: boolean; connected: boolean; listening: boolean; state: 'disconnected' | 'connecting' | 'connected' | 'expired'; account?: LarkAvatarAccount; region: LarkAvatarRegion; listenChats: string[]; lastError?: string; lastSyncedAt?: string; syncIntervalSeconds: number; counts: { inbox: number; action: number; pendingDrafts: number }; retention?: LarkAvatarRetentionStatus };
+export type LarkAvatarReactionRoute = 'ask' | 'main' | 'independent';
+export type LarkAvatarReplyForwardMode = 'all' | 'final_only' | 'none';
+export type LarkAvatarConfigRecord = { id: string; config: { region: LarkAvatarRegion; triggerPrefix: string; contextMessages: number; contextScope: 'anchor' | 'chat'; replyInTopic: boolean; replyMode: 'direct' | 'quote' | 'thread'; replyForwardMode?: LarkAvatarReplyForwardMode; emojiReactions: boolean; reactionTriggerEnabled: boolean; reactionTriggerEmoji: string; reactionTriggerRoute: LarkAvatarReactionRoute; reactionTriggerIgnoreBots: boolean; replySignature: string; agentTimeoutSeconds: number; listening: boolean; listenChats: string[]; inboxMaxItems?: number; inboxCleanupWarnThreshold?: number; allowedSenders: string[]; agentId: string; model: string; reasoningEffort: string; workspace: string }; account?: LarkAvatarAccount; state: 'disconnected' | 'connecting' | 'connected' | 'expired'; lastError?: string; createdAt: string; updatedAt: string };
 export type LarkAvatarReactionTrigger = { key: string; messageId: string; chatId?: string; operatorId?: string; operatorType?: string; emoji: string; route: LarkAvatarReactionRoute; state: 'pending' | 'dispatching' | 'awaiting_route' | 'dispatched' | 'ignored' | 'failed'; actionTime?: string; reason?: string; sessionId?: string; taskId?: string; createdAt: string; updatedAt: string };
 export type LarkAvatarReactionDiagnostics = {
   lastEvent?: { at: string; messageId: string; emojiType: string; operatorId?: string; operatorType?: string; appId?: string; actionTime?: string; chatId?: string; route?: LarkAvatarReactionRoute; outcome: string; detail?: string; sessionId?: string; taskId?: string };
@@ -67,7 +301,7 @@ export type LarkAvatarLoginState = 'idle' | 'starting' | 'waiting' | 'scanned' |
 export type LarkAvatarLoginSnapshot = { state: LarkAvatarLoginState; message: string; region: LarkAvatarRegion; qrContent?: string; attempt: number; expiresAt?: string };
 export type LarkAvatarInboxItem = { id: string; threadKey: string; chatId: string; chatType: string; chatName?: string; chatAvatarUrl?: string; senderId?: string; senderName?: string; senderAvatarUrl?: string; title: string; summary?: string; tier: 'action' | 'fyi' | 'noise'; state: 'new' | 'handled'; occurredAt: string; receivedAt: string };
 export type LarkAvatarDraft = { id: string; itemId?: string; threadKey?: string; target: string; replyRootId?: string; replyQuote?: boolean; replyThreadChat?: boolean; body: string; state: 'pending' | 'sent' | 'failed' | 'discarded'; sentMessageId?: string; attempts: number; lastError?: string; createdAt: string; updatedAt: string; sentAt?: string };
-export type Session = { id: string; agentId: string; state: string; interruptIntent?: 'user' | 'agent_cancelled' | 'daemon_restart'; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null; /** 非空即置顶；只影响「时间」视图。 */ pinnedAt?: string | null };
+export type Session = { id: string; agentId: string; state: string; interruptIntent?: 'user' | 'agent_cancelled' | 'daemon_restart'; error?: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null; /** 非空即置顶；只影响「时间」视图。 */ pinnedAt?: string | null };
 export type Project = { id: string; machineId?: string | null; name: string; cwd: string; pinnedAt?: string | null; exists: boolean; createdAt: string; updatedAt: string };
 export type RegisterProjectResult = { project: Project; created: boolean };
 export type AutostartStatus = { supported: boolean; enabled: boolean; reason?: string; plistPath?: string; entrypoint?: string };
@@ -253,6 +487,45 @@ export type LlmEndpointState = {
   authTypes?: Array<{ value: LlmAuthType; label: string }>;
 };
 export type LlmRunResult = { format: LlmFormat; model: string; baseUrl: string; text: string; truncated?: boolean };
+export const llmAssistModes = ['prompt_write', 'prompt_optimize', 'message_polish', 'title_generate', 'regex_generate', 'description_polish'] as const;
+export type LlmAssistMode = (typeof llmAssistModes)[number];
+export const llmAssistActions = ['write', 'optimize', 'concise', 'structure', 'generate'] as const;
+export type LlmAssistAction = (typeof llmAssistActions)[number];
+export type LlmAssistContext = {
+  field?: string;
+  purpose?: string;
+  variables?: string[];
+  cwd?: string;
+  agentName?: string;
+  model?: string;
+  sessionTitle?: string;
+  recentMessages?: Array<{ role?: string; text: string }>;
+  botContext?: string;
+  groupName?: string;
+  sampleMessages?: string[];
+  negativeSamples?: string[];
+  boardName?: string;
+  columnName?: string;
+  cards?: string[];
+  scheduleSummary?: string;
+  maxChars?: number;
+  extra?: string;
+  [key: string]: unknown;
+};
+export type LlmAssistInput = {
+  mode: LlmAssistMode;
+  text?: string;
+  instruction?: string;
+  action?: LlmAssistAction;
+  context?: LlmAssistContext;
+  timeoutMs?: number;
+};
+export type LlmAssistResult = LlmRunResult & {
+  mode: LlmAssistMode;
+  pattern?: string;
+  flags?: string;
+  explanation?: string;
+};
 /** 从本机 Agent 配置探测到的候选端点；永远不含密钥。 */
 export type DetectedLlmEndpoint = {
   id: string;
@@ -318,6 +591,112 @@ async function readEventStream(body: ReadableStream<Uint8Array>, onEvent: (event
       }
     }
   } finally { reader.releaseLock(); }
+}
+
+export type NotificationEventKind = 'completed' | 'failed' | 'waiting_approval' | 'notify';
+export type NotificationRuleEventKind = 'completed' | 'failed' | 'waiting_approval';
+export type ScheduledNotifyMode = 'all' | 'failed_only' | 'off';
+export type LarkNotifyTargetMode = 'auto_handover_then_fallback' | 'direct_user' | 'chat';
+export type WebhookPreset = 'generic' | 'lark_webhook' | 'dingtalk' | 'wecom' | 'bark' | 'ntfy' | 'slack' | 'discord';
+
+export interface NotificationWebhookHeader {
+  key: string;
+  value: string;
+  masked?: boolean;
+}
+
+export interface NotificationWebhookConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  preset: WebhookPreset;
+  url: string;
+  headers: NotificationWebhookHeader[];
+  hasSecret?: boolean;
+  /** 仅编辑/保存时填写：未改动时可传 '__AGENTDOCK_KEEP_SECRET__' 保留后端密文；空串表示清除。 */
+  secret?: string;
+  timeoutSec: number;
+  events?: NotificationRuleEventKind[];
+}
+
+export interface NotificationServerConfig {
+  enabled: boolean;
+  events: {
+    completed: boolean;
+    failed: boolean;
+    waitingApproval: boolean;
+  };
+  antiSpam: {
+    minDurationSec: number;
+    coalesceWindowMs: number;
+    remoteOnlyWhenAway: boolean;
+    awayAfterSec: number;
+  };
+  scopes: {
+    normalSessions: boolean;
+    assistantSubtasks: boolean;
+    scheduledSessions: ScheduledNotifyMode;
+  };
+  lark: {
+    enabled: boolean;
+    appId?: string;
+    mode: LarkNotifyTargetMode;
+    fallbackReceiveId?: string;
+    fallbackReceiveIdType: 'open_id' | 'chat_id';
+    skipOriginalLarkChat: boolean;
+    includeSummary: boolean;
+  };
+  webhooks: NotificationWebhookConfig[];
+  commandHook: {
+    enabled: boolean;
+    command: string;
+    timeoutSec: number;
+    trustConfirmed: boolean;
+  };
+}
+
+export interface NotificationChannelDeliveryStatus {
+  ok: boolean;
+  at: string;
+  durationMs: number;
+  statusCode?: number;
+  detail?: string;
+  error?: string;
+}
+
+export interface NotificationConfigState {
+  configured: boolean;
+  config: NotificationServerConfig;
+  lastDelivery: Record<string, NotificationChannelDeliveryStatus>;
+}
+
+export interface NotificationTestResult {
+  channel: string;
+  ok: boolean;
+  durationMs: number;
+  statusCode?: number;
+  detail?: string;
+  error?: string;
+  consoleUrl?: string;
+}
+
+export interface NotificationStreamPayload {
+  id: string;
+  kind: NotificationEventKind;
+  sessionId: string;
+  taskId?: string;
+  agentId: string;
+  sessionTitle: string;
+  sessionSource?: string;
+  sessionSourceId?: string;
+  durationMs?: number;
+  summary: string;
+  error?: string;
+  urgent?: boolean;
+  ask?: boolean;
+  batchCount?: number;
+  sessionUrl?: string;
+  timestamp: string;
 }
 
 export interface UsageTotals {
@@ -439,11 +818,21 @@ const agentModelsUrl = (id: string, model?: string, refresh = false, sshHost?: s
   const suffix = query.toString();
   return `/api/agents/${id}/models${suffix ? `?${suffix}` : ''}`;
 };
+const buildQuotaQuery = (params: UsageQuotaParams) => {
+  const qs = new URLSearchParams();
+  qs.set('agentId', params.agentId);
+  if (params.model) qs.set('model', params.model);
+  if (params.sessionId) qs.set('sessionId', params.sessionId);
+  if (params.source && params.source !== 'auto') qs.set('source', params.source);
+  if (params.refresh) qs.set('refresh', '1');
+  return `?${qs.toString()}`;
+};
 export const api = {
   codexUsage: (refresh = false) => json<CodexUsage>(`/api/codex/usage${refresh ? '?refresh=1' : ''}`, undefined, true),
   claudeUsage: (refresh = false) => json<AgentUsage>(`/api/claude/usage${refresh ? '?refresh=1' : ''}`, undefined, true),
   cursorUsage: (refresh = false) => json<AgentUsage>(`/api/cursor/usage${refresh ? '?refresh=1' : ''}`, undefined, true),
   antigravityUsage: (refresh = false) => json<AgentUsage>(`/api/antigravity/usage${refresh ? '?refresh=1' : ''}`, undefined, true),
+  agentQuota: (params: UsageQuotaParams) => json<AgentUsage>(`/api/usage/quota${buildQuotaQuery(params)}`, undefined, true),
   usageSummary: (params?: UsageQueryParams) => json<UsageSummary>(`/api/usage/summary${buildUsageQuery(params)}`, undefined, true),
   usageBreakdown: (groupBy: UsageBreakdownGroup, params?: UsageQueryParams) => json<UsageBreakdown>(`/api/usage/breakdown${buildUsageQuery(params, { groupBy })}`, undefined, true),
   sessionUsage: (sessionId: string) => json<SessionUsageDetail>(`/api/sessions/${encodeURIComponent(sessionId)}/usage`, undefined, true),
@@ -460,6 +849,8 @@ export const api = {
   /** apiKey 留空表示沿用已存的那把——只改模型名时不必重新粘贴密钥。 */
   saveLlm: (body: { format: LlmFormat; baseUrl: string; model: string; apiKey?: string; auth?: LlmAuthType; systemPrompt?: string; maxTokens?: number; timeoutMs?: number }) => json<LlmEndpointState>('/api/llm', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   clearLlm: () => json<LlmEndpointState>('/api/llm', { method: 'DELETE' }),
+  /** 全站统一的结构化 AI 文本辅助接口（写/优化 Prompt、润色消息、自动标题、生成正则、优化描述）。 */
+  assistLlm: (body: LlmAssistInput, options: { signal?: AbortSignal } = {}) => json<LlmAssistResult>('/api/llm/assist', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), ...(options.signal ? { signal: options.signal } : {}) }, true),
   /** 平台功能的一次性补全；prompt 由功能自己构造。 */
   completeLlm: (prompt: string, timeoutMs?: number, options: { signal?: AbortSignal } = {}) => json<LlmRunResult>('/api/llm/complete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, ...(timeoutMs ? { timeoutMs } : {}) }), ...(options.signal ? { signal: options.signal } : {}) }, true),
   detectLlm: () => json<{ candidates: DetectedLlmEndpoint[] }>('/api/llm/detect', undefined, true),
@@ -521,8 +912,8 @@ export const api = {
    * 服务端凭它认出是同一轮，返回同一个 task，而不是再跑一轮。
    */
   send: (id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue', origin?: string, clientMessageId?: string) => json<{ accepted: true; task: Task }>(`/api/sessions/${id}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, mode, ...(origin ? { origin } : {}), ...(clientMessageId ? { clientMessageId } : {}) }) }),
-  setSessionModel: (id: string, model: string) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model }) }),
-  setSessionReasoningEffort: (id: string, reasoningEffort: string) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reasoningEffort }) }),
+  setSessionModel: (id: string, model: string) => json<Session & { discoveredModels?: AgentModelsResult }>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model }) }),
+  setSessionReasoningEffort: (id: string, reasoningEffort: string) => json<Session & { discoveredModels?: AgentModelsResult }>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reasoningEffort }) }),
   // 传 null / 空串表示「恢复自动命名」，由服务端回落到 Agent 名或首条 prompt 摘要。
   setSessionTitle: (id: string, title: string | null) => json<Session>(`/api/sessions/${id}/title`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title }) }),
   cancelQueued: (id: string, taskId: string) => json<Task>(`/api/sessions/${id}/queue/${taskId}`, { method: 'DELETE' }),
@@ -539,8 +930,7 @@ export const api = {
   larkAvatarChats: () => json<LarkAvatarChatSummary[]>('/api/lark-avatar/chats'),
   // 排障页每 10 秒轮询一次；明确禁用 HTTP 缓存，手动刷新才能拿到新账本。
   larkAvatarReactionDiagnostics: (limit = 10) => json<LarkAvatarReactionDiagnostics>(`/api/lark-avatar/reaction-diagnostics?limit=${Math.min(100, Math.max(1, Math.floor(limit)))}`, { cache: 'no-store' }),
-  saveLarkAvatarConfig: (body: { region?: LarkAvatarRegion; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: LarkAvatarReactionRoute; reactionTriggerIntent?: LarkAvatarReactionIntent; reactionTriggerIgnoreBots?: boolean; privateReplyChatId?: string; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string }) => json<LarkAvatarConfigRecord>('/api/lark-avatar/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-  analyzeLarkAvatarChatPrivately: (body: { chatId: string; mode?: LarkAvatarPrivateAnalyzeMode; prompt?: string; contextMessages?: number; delivery?: LarkAvatarPrivateAnalyzeDelivery }) => json<LarkAvatarPrivateAnalyzeResult>('/api/lark-avatar/private-analyze', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  saveLarkAvatarConfig: (body: { region?: LarkAvatarRegion; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; replyForwardMode?: LarkAvatarReplyForwardMode; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: LarkAvatarReactionRoute; reactionTriggerIgnoreBots?: boolean; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; inboxMaxItems?: number; inboxCleanupWarnThreshold?: number; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string }) => json<LarkAvatarConfigRecord>('/api/lark-avatar/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   startLarkAvatarLogin: (region: LarkAvatarRegion) => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/qr', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ region }) }),
   larkAvatarLoginStatus: () => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/status'),
   pollLarkAvatarLogin: () => json<LarkAvatarLoginSnapshot>('/api/lark-avatar/login/poll', { method: 'POST' }),
@@ -549,11 +939,14 @@ export const api = {
   disconnectLarkAvatar: () => json<{ ok: boolean }>('/api/lark-avatar/disconnect', { method: 'POST' }),
   pollLarkAvatar: () => json<{ created: number; dispatched: number }>('/api/lark-avatar/poll', { method: 'POST' }),
   setLarkAvatarListening: (enabled: boolean) => json<{ ok: boolean; listening: boolean }>('/api/lark-avatar/listening', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) }),
-  larkAvatarInbox: (query: { state?: string; tier?: string } = {}) => {
+  larkAvatarInbox: (query: { state?: string; tier?: string; limit?: number } = {}) => {
     const search = new URLSearchParams();
-    for (const [key, value] of Object.entries(query)) if (value) search.set(key, value);
+    if (query.state) search.set('state', query.state);
+    if (query.tier) search.set('tier', query.tier);
+    if (query.limit && query.limit > 0) search.set('limit', String(Math.floor(query.limit)));
     return json<LarkAvatarInboxItem[]>(`/api/lark-avatar/inbox?${search}`);
   },
+  cleanupLarkAvatarInbox: (body: { keepLatest?: number } = {}) => json<LarkAvatarCleanupResult>('/api/lark-avatar/inbox/cleanup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   larkAvatarDrafts: (state?: string) => json<LarkAvatarDraft[]>(`/api/lark-avatar/drafts${state ? `?state=${encodeURIComponent(state)}` : ''}`),
   draftLarkAvatarInboxItem: (id: string, regenerate = false) => json<LarkAvatarDraft>(`/api/lark-avatar/inbox/${encodeURIComponent(id)}/draft`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ regenerate }) }),
   createLarkAvatarDraft: (body: { itemId?: string; target?: string; body?: string; threadKey?: string; replyRootId?: string }) => json<LarkAvatarDraft>('/api/lark-avatar/drafts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
@@ -610,6 +1003,34 @@ export const api = {
   sideChatConfig: () => json<SideChatConfigState>('/api/side-chat/config', undefined, true),
   saveSideChatConfig: (body: SideChatConfig) => json<SideChatConfigState>('/api/side-chat/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   resetSideChatConfig: () => json<SideChatConfigState>('/api/side-chat/config', { method: 'DELETE' }),
+  notificationsConfig: () => json<NotificationConfigState>('/api/notifications/config', undefined, true),
+  saveNotificationsConfig: (body: NotificationServerConfig) => json<NotificationConfigState>('/api/notifications/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  testNotificationChannel: (body: { channel: 'lark' | 'webhook' | 'command'; webhookId?: string; draftConfig?: NotificationServerConfig }) => json<NotificationTestResult>('/api/notifications/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  reportNotificationPresence: (body: { clientId: string; focused: boolean; activeSessionId?: string }) => fetch('/api/notifications/presence', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), keepalive: true }).catch(() => undefined),
+  larkBotChats: (appId: string, options?: { all?: boolean; refresh?: boolean; pageToken?: string }) => {
+    const query = new URLSearchParams();
+    if (options?.all) query.set('all', '1');
+    if (options?.refresh) query.set('refresh', '1');
+    if (options?.pageToken) query.set('pageToken', options.pageToken);
+    const qs = query.toString();
+    return json<{ items: LarkBotChatItem[]; hasMore: boolean; pageToken?: string }>(`/api/lark/bots/${encodeURIComponent(appId)}/chats${qs ? `?${qs}` : ''}`);
+  },
+  larkBotChatMessages: (appId: string, chatId: string, options?: { limit?: number; pageToken?: string; ruleId?: string }) => {
+    const query = new URLSearchParams();
+    if (options?.limit) query.set('limit', String(options.limit));
+    if (options?.pageToken) query.set('pageToken', options.pageToken);
+    if (options?.ruleId) query.set('ruleId', options.ruleId);
+    const qs = query.toString();
+    return json<LarkChatMessagesPreviewResponse>(`/api/lark/bots/${encodeURIComponent(appId)}/chats/${encodeURIComponent(chatId)}/messages${qs ? `?${qs}` : ''}`);
+  },
+  larkRegexTriggers: () => json<LarkRegexTriggersResponse>('/api/lark/regex-triggers'),
+  createLarkRegexTrigger: (body: SaveLarkRegexTriggerBody) => json<{ rule: LarkRegexTriggerRule }>('/api/lark/regex-triggers', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  updateLarkRegexTrigger: (id: string, body: SaveLarkRegexTriggerBody) => json<{ rule: LarkRegexTriggerRule }>(`/api/lark/regex-triggers/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  deleteLarkRegexTrigger: (id: string) => json<{ deleted: boolean; id: string }>(`/api/lark/regex-triggers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  previewLarkRegexTrigger: (body: { pattern: string; flags?: string; ignoreBotMessages?: boolean; messages?: Array<{ messageId: string; text: string; senderType?: string }>; botId?: string; chatId?: string; limit?: number }, options?: { signal?: AbortSignal }) =>
+    json<LarkRegexPreviewResponse>('/api/lark/regex-triggers/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), ...(options?.signal ? { signal: options.signal } : {}) }),
+  backfillLarkRegexTrigger: (body: { ruleId?: string; ruleName?: string; botId: string; chatId: string; chatName?: string; pattern: string; flags?: string; replyMode: LarkRegexReplyMode; promptTemplate?: string; ignoreBotMessages?: boolean; force?: boolean; messages: Array<{ messageId: string; text: string; senderId?: string; senderName?: string; senderType?: string; threadId?: string; rootId?: string; parentId?: string; msgType?: string; createTime?: string; createdAt?: string }> }) =>
+    json<LarkRegexBackfillResponse>('/api/lark/regex-triggers/backfill', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   systemCapabilities: () => json<{ platform: string; directoryPicker: boolean; filePicker: boolean; workingDirectory: string; homeDirectory: string }>('/api/system/capabilities'),
   skills: (cwd?: string) => json<SkillReference[]>(`/api/system/skills${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   selectDirectory: () => json<{ path: string }>('/api/system/select-directory', { method: 'POST' }),
@@ -644,5 +1065,41 @@ export const api = {
   },
   /** 图片/SVG/PDF 不走 JSON：直接给 <img>/<iframe> 用的同源 URL（cookie/会话令牌语义与其他接口一致）。 */
   fsReadUrl: (id: string, path: string) => `/api/sessions/${id}/fs/read?path=${encodeURIComponent(path)}`,
-  fsDownloadUrl: (id: string, path: string) => `/api/sessions/${id}/fs/read?path=${encodeURIComponent(path)}&download=1`
+  fsDownloadUrl: (id: string, path: string) => `/api/sessions/${id}/fs/read?path=${encodeURIComponent(path)}&download=1`,
+
+  // ---- 看板（Kanban） ----
+  boards: (includeArchived = false) => json<{ boards: BoardRecord[]; defaultBoardId: string | null }>(`/api/boards${includeArchived ? '?includeArchived=1' : ''}`, undefined, true),
+  board: (boardId = 'default') => json<HydratedBoard>(`/api/boards/${encodeURIComponent(boardId)}`, undefined, true),
+  createBoard: (body: { name: string; description?: string; template?: BoardTemplate; viewMode?: BoardViewMode; density?: BoardDensity; isDefault?: boolean; clientMutationId?: string }) =>
+    json<HydratedBoard>('/api/boards', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  updateBoard: (boardId: string, body: { name?: string; description?: string; viewMode?: BoardViewMode; density?: BoardDensity; isDefault?: boolean; archived?: boolean; clientMutationId?: string }) =>
+    json<{ board: BoardRecord }>(`/api/boards/${encodeURIComponent(boardId)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  useBoard: (boardId: string, clientMutationId?: string) =>
+    json<{ board: BoardRecord }>(`/api/boards/${encodeURIComponent(boardId)}/use`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(clientMutationId ? { clientMutationId } : {}) }),
+  deleteBoard: (boardId: string, archive = false) =>
+    json<{ ok: boolean; archived?: boolean; deleted?: boolean }>(`/api/boards/${encodeURIComponent(boardId)}${archive ? '?archive=1' : ''}`, { method: 'DELETE' }),
+  addBoardColumn: (boardId: string, body: { name: string; color?: BoardColumnColor; wipLimit?: number | null; collapsed?: boolean; rule?: BoardColumnRule | null; onDropAction?: BoardDropAction; beforeColumnId?: string; afterColumnId?: string; clientMutationId?: string }) =>
+    json<{ column: BoardColumnRecord; board: HydratedBoard }>(`/api/boards/${encodeURIComponent(boardId)}/columns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  updateBoardColumn: (colId: string, body: { name?: string; color?: BoardColumnColor; wipLimit?: number | null; collapsed?: boolean; rule?: BoardColumnRule | null; onDropAction?: BoardDropAction; clientMutationId?: string }) =>
+    json<{ column: BoardColumnRecord; board: HydratedBoard }>(`/api/boards/columns/${encodeURIComponent(colId)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  moveBoardColumn: (colId: string, body: { beforeColumnId?: string; afterColumnId?: string; index?: number; clientMutationId?: string }) =>
+    json<{ column: BoardColumnRecord; board: HydratedBoard }>(`/api/boards/columns/${encodeURIComponent(colId)}/move`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  deleteBoardColumn: (colId: string, moveCardsTo?: string) =>
+    json<{ deleted: boolean; board: HydratedBoard }>(`/api/boards/columns/${encodeURIComponent(colId)}${moveCardsTo ? `?moveCardsTo=${encodeURIComponent(moveCardsTo)}` : ''}`, { method: 'DELETE' }),
+  addBoardItem: (boardId: string, body: { columnId: string; entityKind: BoardEntityKind; entityId?: string; title?: string; userNote?: string; kittenNote?: string; tags?: string[]; pinned?: boolean; placement?: 'top' | 'bottom'; beforeItemId?: string; afterItemId?: string; clientMutationId?: string }) =>
+    json<{ item: BoardItemRecord; board: HydratedBoard }>(`/api/boards/${encodeURIComponent(boardId)}/items`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  moveBoardItem: (boardId: string, itemId: string, body: { toColumnId: string; beforeItemId?: string; afterItemId?: string; placement?: 'top' | 'bottom'; applyAction?: boolean; clientMutationId?: string }) =>
+    json<{ item: BoardItemRecord; board: HydratedBoard }>(`/api/boards/${encodeURIComponent(boardId)}/items/${encodeURIComponent(itemId)}/move`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  batchMoveBoardItems: (boardId: string, body: { itemIds: string[]; toColumnId: string; pin?: boolean; applyAction?: boolean; clientMutationId?: string }) =>
+    json<{ moved: BoardItemRecord[]; board: HydratedBoard }>(`/api/boards/${encodeURIComponent(boardId)}/items/batch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  updateBoardItem: (boardId: string, itemId: string, body: { userNote?: string | null; kittenNote?: string | null; pinned?: boolean; tags?: string[]; addTags?: string[]; removeTags?: string[]; manualOverride?: boolean; clientMutationId?: string }) =>
+    json<{ item: BoardItemRecord; board: HydratedBoard }>(`/api/boards/${encodeURIComponent(boardId)}/items/${encodeURIComponent(itemId)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  removeBoardItem: (boardId: string, itemId: string) =>
+    json<{ removed: boolean; board?: HydratedBoard }>(`/api/boards/${encodeURIComponent(boardId)}/items/${encodeURIComponent(itemId)}`, { method: 'DELETE' }),
+  askBoardKitten: (boardId: string, body: { itemIds?: string[]; prompt: string }) =>
+    json<{ ok: boolean; sessionId: string; cardCount: number; message: string }>(`/api/boards/${encodeURIComponent(boardId)}/ask-kitten`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  exportBoard: (boardId: string, includeItems = false) =>
+    json<BoardTemplatePayload>(`/api/boards/${encodeURIComponent(boardId)}/export${includeItems ? '?includeItems=1' : ''}`),
+  importBoard: (body: { template: BoardTemplatePayload; name?: string; isDefault?: boolean }) =>
+    json<HydratedBoard>('/api/boards/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 };

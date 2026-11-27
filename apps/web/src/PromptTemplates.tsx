@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type FormEvent } from 'react';
 import { Bug, Compass, Eye, FileSearch, FlaskConical, Pencil, Plus, Repeat, ScanSearch, SlidersHorizontal, Sparkles, Trash2, Wand2, X } from 'lucide-react';
+import { ExitGate } from './ExitGate';
 import { useModalFocusTrap } from './useModalFocusTrap';
+import { AiFieldHeader, AiTextAssistControl, useAiFlash } from './AiTextAssist';
 import {
   applyPromptTemplate, builtinPromptTemplates, customTemplateFromInput, extractTemplateFields,
   loadCustomTemplates, PROMPT_TEMPLATE_STORAGE_KEY, saveCustomTemplates,
@@ -62,10 +64,12 @@ export function PromptTemplates({ onUse }: { onUse(text: string): void }) {
       })}
       <button type="button" onClick={() => setDialog({ kind: 'edit' })} className="flex min-h-[78px] w-full flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-zinc-300 px-3 py-2.5 text-[12px] text-zinc-500 transition-colors hover:border-zinc-400 hover:bg-zinc-50 hover:text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50"><Plus size={14}/><span>新建模板</span></button>
     </div>
-    {dialog && <TemplateDialog state={dialog} onClose={() => setDialog(undefined)} onApply={text => { setDialog(undefined); onUse(text); }} onSave={template => {
-      persist(custom.some(item => item.id === template.id) ? custom.map(item => item.id === template.id ? template : item) : [...custom, template]);
-      setDialog(undefined);
-    }} onDelete={id => { persist(custom.filter(item => item.id !== id)); setDialog(undefined); }}/>}
+    <ExitGate open={Boolean(dialog)}>
+      {dialog && <TemplateDialog state={dialog} onClose={() => setDialog(undefined)} onApply={text => { setDialog(undefined); onUse(text); }} onSave={template => {
+        persist(custom.some(item => item.id === template.id) ? custom.map(item => item.id === template.id ? template : item) : [...custom, template]);
+        setDialog(undefined);
+      }} onDelete={id => { persist(custom.filter(item => item.id !== id)); setDialog(undefined); }}/>}
+    </ExitGate>
   </section>;
 }
 
@@ -130,7 +134,11 @@ function EditTemplate({ template, onClose, onSave, onDelete }: { template?: Prom
   const [body, setBody] = useState(template?.body ?? '');
   const [error, setError] = useState<string>();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const titleFlash = useAiFlash();
+  const descFlash = useAiFlash();
+  const bodyFlash = useAiFlash();
   const variables = useMemo(() => extractTemplateFields(body).map(field => field.key), [body]);
+  const resetKey = template?.id ?? 'new-template';
   const submit = (event: FormEvent) => {
     event.preventDefault();
     try {
@@ -141,18 +149,97 @@ function EditTemplate({ template, onClose, onSave, onDelete }: { template?: Prom
   };
   return <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
-      <label className="block">
-        <span className="mb-1.5 flex items-center gap-1 text-[12px] font-medium text-zinc-600">模板名称<span className="text-red-500">*</span></span>
-        <input autoFocus value={title} onChange={event => setTitle(event.target.value)} maxLength={40} placeholder="例如：发布前检查" className="ui-field h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-[13px] text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400"/>
-      </label>
-      <label className="block">
-        <span className="mb-1.5 block text-[12px] font-medium text-zinc-600">一句话说明</span>
-        <input value={description} onChange={event => setDescription(event.target.value)} maxLength={120} placeholder="显示在卡片上，可留空" className="ui-field h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-[13px] text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400"/>
-      </label>
-      <label className="block">
-        <span className="mb-1.5 flex items-center gap-1 text-[12px] font-medium text-zinc-600">模板内容<span className="text-red-500">*</span></span>
-        <textarea value={body} onChange={event => setBody(event.target.value)} rows={8} placeholder={'直接写完整提示词。用 {{变量名}} 标记需要每次填写的内容。\n\n例如：请检查 {{项目}} 的发布前状态，并运行 {{验证命令}}。'} className="ui-field w-full resize-y rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-[12px] leading-5 text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400"/>
-      </label>
+      <div className="block">
+        <AiFieldHeader
+          label="模板名称"
+          htmlFor="prompt-template-title"
+          required
+          className="mb-1.5"
+          assist={
+            <AiTextAssistControl
+              mode="title_generate"
+              variant="pill"
+              size="xs"
+              popoverSide="bottom"
+              popoverAlign="end"
+              value={title}
+              onChange={setTitle}
+              onFlash={titleFlash.triggerFlash}
+              resetKey={resetKey}
+              context={() => ({
+                field: '提示词模板名称',
+                purpose: '展示在提示词模板卡片上的简短名称（4–16 字）',
+                maxChars: 18,
+                ...(description.trim() ? { extra: `模板说明：${description.trim()}` } : {}),
+                ...(body.trim() ? { recentMessages: [{ role: '模板正文', text: body.trim().slice(0, 600) }] } : {}),
+                ...(variables.length ? { variables } : {})
+              })}
+              testId="template-title-ai"
+            />
+          }
+        />
+        <input id="prompt-template-title" autoFocus value={title} onChange={event => setTitle(event.target.value)} maxLength={40} placeholder="例如：发布前检查" className={`ui-field h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-[13px] text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 ${titleFlash.flashClass}`}/>
+      </div>
+      <div className="block">
+        <AiFieldHeader
+          label="一句话说明"
+          htmlFor="prompt-template-description"
+          className="mb-1.5"
+          assist={
+            <AiTextAssistControl
+              mode="description_polish"
+              variant="pill"
+              size="xs"
+              popoverSide="bottom"
+              popoverAlign="end"
+              value={description}
+              onChange={setDescription}
+              onFlash={descFlash.triggerFlash}
+              resetKey={resetKey}
+              context={() => ({
+                field: '提示词模板一句话说明',
+                purpose: '展示在首页提示词模板卡片标题下方的简短说明，不超过 48 字',
+                maxChars: 48,
+                ...(title.trim() ? { sessionTitle: title.trim() } : {}),
+                ...(body.trim() ? { recentMessages: [{ role: '模板正文', text: body.trim().slice(0, 600) }] } : {}),
+                ...(variables.length ? { variables } : {})
+              })}
+              testId="template-desc-ai"
+            />
+          }
+        />
+        <input id="prompt-template-description" value={description} onChange={event => setDescription(event.target.value)} maxLength={120} placeholder="显示在卡片上，可留空" className={`ui-field h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-[13px] text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 ${descFlash.flashClass}`}/>
+      </div>
+      <div className="block">
+        <AiFieldHeader
+          label="模板内容"
+          htmlFor="prompt-template-body"
+          required
+          className="mb-1.5"
+          assist={
+            <AiTextAssistControl
+              mode="prompt_write"
+              variant="pill"
+              size="xs"
+              popoverSide="bottom"
+              popoverAlign="end"
+              value={body}
+              onChange={setBody}
+              onFlash={bodyFlash.triggerFlash}
+              resetKey={resetKey}
+              context={() => ({
+                field: '提示词模板内容',
+                purpose: '可复用的 AI Agent 提示词模板；需要用户每次填写的部分请使用 {{变量名}} 占位符',
+                ...(title.trim() ? { sessionTitle: title.trim() } : {}),
+                ...(description.trim() ? { extra: `模板说明：${description.trim()}` } : {}),
+                ...(variables.length ? { variables } : {})
+              })}
+              testId="template-body-ai"
+            />
+          }
+        />
+        <textarea id="prompt-template-body" value={body} onChange={event => setBody(event.target.value)} rows={8} placeholder={'直接写完整提示词。用 {{变量名}} 标记需要每次填写的内容。\n\n例如：请检查 {{项目}} 的发布前状态，并运行 {{验证命令}}。'} className={`ui-field w-full resize-y rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-[12px] leading-5 text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 ${bodyFlash.flashClass}`}/>
+      </div>
       <div className="text-[12px] leading-5 text-zinc-500">
         {variables.length ? <>识别到变量：<span className="font-mono text-zinc-700">{variables.join('、')}</span></> : '没有 {{变量}}，点击卡片会直接填入整段提示词。'}
       </div>

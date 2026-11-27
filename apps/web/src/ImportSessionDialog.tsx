@@ -92,8 +92,8 @@ export function ImportSessionDialog({ agents, onClose, onImported }: { agents: A
   }, [importError]);
   const canImport = Boolean(effectiveSelectedId && picked) && !importSession.isPending;
 
-  return <div className="ui-overlay fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-2 sm:p-4">
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="导入外部会话" className="ui-dialog flex h-[86dvh] w-full max-w-4xl flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)]">
+  return <div className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-0 sm:p-4">
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="导入外部会话" className="ui-dialog flex h-[100dvh] w-full max-w-4xl flex-col overflow-hidden rounded-none border-0 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)] sm:h-[86dvh] sm:rounded-[14px] sm:border sm:border-zinc-200">
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-100 px-4">
         <div className="flex items-center gap-2 text-[16px] font-semibold text-zinc-900"><FolderOpen size={16}/>导入外部会话</div>
         <span className="hidden truncate text-[12px] text-zinc-400 sm:inline">浏览各 Agent 自己记录的会话，选中后导入到 AgentDock</span>
@@ -142,7 +142,7 @@ export function ImportSessionDialog({ agents, onClose, onImported }: { agents: A
             {query.hasNextPage && !keyword && <div className="p-3"><button type="button" disabled={query.isFetchingNextPage} onClick={() => query.fetchNextPage()} className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-zinc-200 text-[12px] text-zinc-600 hover:bg-zinc-50 disabled:opacity-40">{query.isFetchingNextPage ? <Spinner size={12}/> : null}加载更多</button></div>}
           </div>
 
-          <div className="shrink-0 border-t border-zinc-100 px-4 py-2.5">
+          <div className="shrink-0 border-t border-zinc-100 px-3.5 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:px-4">
             <div className="flex flex-col gap-2 text-[12px] text-zinc-400 sm:flex-row sm:items-center sm:gap-3">
               <span className="min-w-0 flex-1 truncate">已列出 {filtered.length} 条{query.hasNextPage ? '（还有更多）' : ''}{picked ? ` · 已选 ${picked.sessionId.slice(0, 8)}` : ''}</span>
               <div className="flex w-full shrink-0 items-center gap-0.5 rounded-lg bg-zinc-100 p-0.5 sm:w-auto">

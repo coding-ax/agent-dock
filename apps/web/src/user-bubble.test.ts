@@ -115,4 +115,50 @@ describe('user bubble sending state', () => {
     expect(opened).toContain('opacity-100');
     expect(opened).toContain('visible body');
   });
+
+  it('renders backticked file paths in user bubbles as wrappable inline code instead of overflowing slash-command chips', () => {
+    const pathPrompt: TimelineEvent = {
+      id: 'u-paths', sequence: 5, type: 'text', timestamp: '2026-01-01T00:00:02.000Z',
+      data: {
+        role: 'user',
+        text: [
+          '产物交付与清理：',
+          '- 工作临时目录放在 `/Users/codeax/workspace/ai-video-studio/work/daily_YYYYMMDD_<slug>/`。',
+          '- 最终成品输出到：',
+          '  - `/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_<slug>.mp4`',
+          '  - `/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_<slug>_hero.jpg`',
+          '  - `/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_<slug>_contact_sheet.jpg`',
+          '  - `/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_<slug>_song.mp3`',
+          '  - `/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_<slug>_README.md`'
+        ].join('\n')
+      }
+    } as TimelineEvent;
+    const html = render(pathPrompt);
+    expect(html).not.toContain('ui-slash-command');
+    expect(html.match(/ui-inline-code/g)).toHaveLength(6);
+    expect(html).toContain('<ul>');
+
+    // 真实开头的 /命令 仍然保留蓝色 chip，同时正文里的反引号路径保持普通行内代码。
+    const cmdPrompt: TimelineEvent = {
+      id: 'u-cmd', sequence: 6, type: 'text', timestamp: '2026-01-01T00:00:03.000Z',
+      data: { role: 'user', text: '/plan 检查 `/Users/codeax/workspace/ai-video-studio/output/daily_YYYYMMDD_<slug>.mp4`' }
+    } as TimelineEvent;
+    const cmdHtml = render(cmdPrompt);
+    expect(cmdHtml.match(/ui-slash-command/g)).toHaveLength(1);
+    expect(cmdHtml).toContain('<code class="ui-slash-command">/plan</code>');
+    expect(cmdHtml.match(/ui-inline-code/g)).toHaveLength(1);
+
+    // CSS 守卫：斜杠命令 chip 与行内代码允许折行、暗色下气泡内行内代码保有背景对比度、列表保留项目符号。
+    const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
+    const slashRule = /\.ui-slash-command\s*\{[^}]*\}/.exec(css)?.[0] ?? '';
+    expect(slashRule).toContain('overflow-wrap: anywhere');
+    expect(slashRule).not.toMatch(/white-space:\s*nowrap/);
+    expect(css).toContain('html[data-theme="dark"] .ui-slash-command');
+    expect(css).toMatch(/\.ui-inline-code\s*\{[^}]*overflow-wrap:\s*anywhere/);
+    expect(css).toContain('html[data-theme="dark"] .ui-user-bubble .ui-inline-code');
+    expect(css).toMatch(/\.ui-user-bubble ul\s*\{[^}]*list-style:\s*disc/);
+    expect(css).toMatch(/\.ui-user-bubble ol\s*\{[^}]*list-style:\s*decimal/);
+    expect(css).toMatch(/\.markdown ul\s*\{[^}]*list-style:\s*disc/);
+    expect(css).toMatch(/\.markdown ol\s*\{[^}]*list-style:\s*decimal/);
+  });
 });

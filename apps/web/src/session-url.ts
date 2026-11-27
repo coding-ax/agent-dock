@@ -29,3 +29,14 @@ export function parseRightParam(search: string, primaryId?: string): ParsedRight
   if (pane && pane !== primaryId) return { kind: 'session', sessionId: pane };
   return undefined;
 }
+
+export function boardUrl(boardId?: string): string {
+  return boardId ? `/boards/${encodeURIComponent(boardId)}` : '/boards';
+}
+
+export function parseBoardRoute(pathname: string): { isBoard: true; boardId?: string } | null {
+  if (pathname === '/boards' || pathname === '/boards/') return { isBoard: true };
+  const match = pathname.match(/^\/boards\/([^/]+)$/);
+  if (match?.[1]) return { isBoard: true, boardId: decodeURIComponent(match[1]) };
+  return null;
+}

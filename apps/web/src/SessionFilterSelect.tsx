@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useEventListener } from 'ahooks';
 import { Bot, Check, ChevronDown, Folder, Laptop, Layers3, ListFilter } from 'lucide-react';
 import type { Agent, LarkBotConfig } from './api';
+import { ExitGate } from './ExitGate';
 import { HoverTooltipText } from './HoverTooltip';
 import { AgentIcon, BotAvatar } from './AgentIcon';
 
@@ -35,7 +36,7 @@ function optionIcon(option: FilterOption, size: number) {
 
 export function SessionFilterSelect({ value, bots, agents, onChange, compact = false }: { value: string; bots: LarkBotConfig[]; agents: Agent[]; onChange(value: string): void; /** 搜索框右侧的图标按钮形态，不再占一整行。 */ compact?: boolean }) {
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<{ top: number; left: number; width: number; maxHeight: number }>();
+  const [position, setPosition] = useState<{ top: number; left: number; width: number; maxHeight: number; flipped: boolean }>();
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const options = optionsFor(bots, agents);
@@ -49,7 +50,7 @@ export function SessionFilterSelect({ value, bots, agents, onChange, compact = f
     const below = window.innerHeight - rect.bottom - 12;
     const above = rect.top - 12;
     const flip = below < 220 && above > below;
-    setPosition({ top: flip ? Math.max(8, rect.top - Math.min(420, above) - 6) : rect.bottom + 6, left, width, maxHeight: Math.min(420, flip ? above : below) });
+    setPosition({ top: flip ? Math.max(8, rect.top - Math.min(420, above) - 6) : rect.bottom + 6, left, width, maxHeight: Math.min(420, flip ? above : below), flipped: flip });
   };
 
   const toggle = () => { if (open) setOpen(false); else { place(); setOpen(true); } };
@@ -69,8 +70,8 @@ export function SessionFilterSelect({ value, bots, agents, onChange, compact = f
   useEventListener('scroll', () => { if (open) place(); }, { target: () => window, capture: true, enable: open });
 
   const triggerClass = compact
-    ? `relative grid h-9 w-9 shrink-0 place-items-center rounded-lg border bg-white transition-colors hover:border-zinc-300 hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${value !== 'all' ? 'border-zinc-300 text-zinc-900' : 'border-zinc-200 text-zinc-500'}`
-    : 'flex min-h-10 w-full items-center gap-2.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50';
+    ? `ui-press relative grid h-9 w-9 shrink-0 place-items-center rounded-lg border bg-white transition-colors hover:border-zinc-300 hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${value !== 'all' ? 'border-zinc-300 text-zinc-900' : 'border-zinc-200 text-zinc-500'}`
+    : 'ui-press flex min-h-10 w-full items-center gap-2.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50';
 
   return <>
     <button ref={trigger} type="button" aria-label="筛选会话来源" aria-haspopup="listbox" aria-expanded={open} title={`来源：${selected.label}`} onClick={toggle} onKeyDown={event => { if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); place(); setOpen(true); } }} className={triggerClass}>
@@ -83,18 +84,25 @@ export function SessionFilterSelect({ value, bots, agents, onChange, compact = f
         : <>
           <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-md bg-zinc-100 text-zinc-600">{optionIcon(selected, 15)}</span>
           <span className="min-w-0 flex-1"><span className="block truncate text-[12px] font-semibold text-zinc-800">{selected.label}</span>{selected.kind === 'bot' ? <span className="flex min-w-0 items-center gap-1 text-[12px] text-zinc-400"><AgentIcon agentId={selected.agentId} agentName={selected.agent} size={12}/><span className="truncate">{selected.agent || '未设置 Agent'} · {selected.model || 'Agent 默认模型'}</span></span> : <span className="block truncate text-[12px] text-zinc-400">{selected.detail}</span>}</span>
-          <ChevronDown size={13} className={`shrink-0 text-zinc-400 transition-transform ${open ? 'rotate-180' : ''}`}/>
+          <ChevronDown size={13} className={`shrink-0 text-zinc-400 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}/>
         </>}
     </button>
-    {open && position && createPortal(<div ref={menu} role="listbox" aria-label="会话来源" className="ui-popover fixed z-50 overflow-y-auto overscroll-contain rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_18px_48px_rgba(24,24,27,.18)]" style={position}>
-      {options.map(option => <button key={option.value} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); trigger.current?.focus(); }} className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors hover:bg-zinc-100 focus-visible:bg-zinc-100 ${option.value === value ? 'bg-zinc-50' : ''}`}>
-        <span className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-md ${option.value === value ? 'ui-selected-tile bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-500'}`}>{optionIcon(option, 15)}</span>
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5"><span className="min-w-0 truncate text-[12px] font-semibold text-zinc-800">{option.label}</span>{option.kind === 'bot' && !option.configured && <span className="shrink-0 text-[12px] text-amber-700">待配置</span>}</span>
-          {option.kind === 'bot' ? <><span className="mt-0.5 flex min-w-0 items-center gap-1 text-[12px] text-zinc-500"><Folder size={10} className="shrink-0"/><HoverTooltipText content={option.workspace || '未设置工作区'} className="min-w-0 truncate">{option.workspace || '未设置工作区'}</HoverTooltipText></span><span className="mt-0.5 flex min-w-0 items-center gap-1 text-[12px] text-zinc-500"><AgentIcon agentId={option.agentId} agentName={option.agent} size={12}/><span className="truncate">{option.agent || '未设置 Agent'} · {option.model || 'Agent 默认模型'}</span></span></> : <span className="mt-0.5 block text-[12px] text-zinc-500">{option.detail}</span>}
-        </span>
-        {option.value === value && <Check size={13} className="mt-1 shrink-0 text-zinc-700"/>}
-      </button>)}
-    </div>, document.body)}
+    {typeof document !== 'undefined' && createPortal(
+      <ExitGate open={open && Boolean(position)} ms={150}>
+        {open && position ? (
+          <div ref={menu} role="listbox" aria-label="会话来源" data-placement={position.flipped ? 'top-start' : 'bottom-start'} className="ui-popover fixed z-50 overflow-y-auto overscroll-contain rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_18px_48px_rgba(24,24,27,.18)]" style={{ top: position.top, left: position.left, width: position.width, maxHeight: position.maxHeight }}>
+            {options.map(option => <button key={option.value} type="button" role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); trigger.current?.focus(); }} className={`ui-press flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none transition-colors hover:bg-zinc-100 focus-visible:bg-zinc-100 ${option.value === value ? 'bg-zinc-50' : ''}`}>
+              <span className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-md ${option.value === value ? 'ui-selected-tile bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-500'}`}>{optionIcon(option, 15)}</span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5"><span className="min-w-0 truncate text-[12px] font-semibold text-zinc-800">{option.label}</span>{option.kind === 'bot' && !option.configured && <span className="shrink-0 text-[12px] text-amber-700">待配置</span>}</span>
+                {option.kind === 'bot' ? <><span className="mt-0.5 flex min-w-0 items-center gap-1 text-[12px] text-zinc-500"><Folder size={10} className="shrink-0"/><HoverTooltipText content={option.workspace || '未设置工作区'} className="min-w-0 truncate">{option.workspace || '未设置工作区'}</HoverTooltipText></span><span className="mt-0.5 flex min-w-0 items-center gap-1 text-[12px] text-zinc-500"><AgentIcon agentId={option.agentId} agentName={option.agent} size={12}/><span className="truncate">{option.agent || '未设置 Agent'} · {option.model || 'Agent 默认模型'}</span></span></> : <span className="mt-0.5 block text-[12px] text-zinc-500">{option.detail}</span>}
+              </span>
+              {option.value === value && <Check size={13} className="mt-1 shrink-0 text-zinc-700"/>}
+            </button>)}
+          </div>
+        ) : null}
+      </ExitGate>,
+      document.body
+    )}
   </>;
 }

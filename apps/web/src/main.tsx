@@ -6,6 +6,7 @@ import { AntdScope } from './AntdScope';
 import { WebAccessDeniedError } from './api';
 import { initPwaInstall, registerPwaServiceWorker } from './pwa-install';
 import './index.css';
+import './motion.css';
 
 initPwaInstall();
 registerPwaServiceWorker();

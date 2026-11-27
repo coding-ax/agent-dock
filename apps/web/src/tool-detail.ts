@@ -60,8 +60,8 @@ function quotedItems(name: string): string[] {
   return [...name.matchAll(/['"`]([^'"`\n]{2,})['"`]/g)].map(match => match[1]!.trim()).filter(Boolean);
 }
 
-const pathKeys = ['path', 'file_path', 'filePath', 'filename', 'file', 'notebook_path'];
-const queryKeys = ['query', 'pattern', 'glob', 'search', 'url', 'q'];
+const pathKeys = ['path', 'Path', 'file_path', 'filePath', 'TargetFile', 'AbsolutePath', 'filename', 'file', 'File', 'notebook_path', 'DirectoryPath', 'directory_path', 'SearchDirectory', 'SearchPath'];
+const queryKeys = ['query', 'Query', 'pattern', 'Pattern', 'glob', 'Glob', 'search', 'url', 'Url', 'URL', 'q'];
 
 function pathItems(data: ToolData, mode: 'read' | 'search' | 'web') {
   const input = recordOf(data.input);
@@ -82,8 +82,8 @@ function patchText(input: unknown): string | undefined {
 
 function oldNewText(input: unknown): { oldText: string; newText: string } | undefined {
   const record = recordOf(input);
-  const oldText = firstString(record, ['old_string', 'oldText', 'old_str', 'before', 'old']);
-  const newText = firstString(record, ['new_string', 'newText', 'new_str', 'after', 'new']);
+  const oldText = firstString(record, ['old_string', 'oldText', 'old_str', 'before', 'old', 'Target', 'TargetContent']);
+  const newText = firstString(record, ['new_string', 'newText', 'new_str', 'after', 'new', 'Replacement', 'ReplacementContent']);
   if (oldText === undefined && newText === undefined) return undefined;
   return { oldText: oldText ?? '', newText: newText ?? '' };
 }
@@ -131,11 +131,13 @@ export function toolDetailView(data: ToolData): ToolDetailView {
   if (kind === 'edit' || patch || oldNew) {
     const path = firstString(input, pathKeys) ?? quotedItems(String(data.name ?? ''))[0];
     const lines = patch ? parsePatch(patch) : oldNew ? lineDiff(oldNew.oldText, oldNew.newText) : [];
-    return { kind: 'diff', ...(path ? { path } : {}), lines, ...(lines.length ? {} : { note: path ? `${path} · 已修改` : '已修改' }) };
+    const verb = presentation.label === '写入文件' ? '已写入' : presentation.label === '删除文件' ? '已删除' : presentation.label === '移动文件' ? '已移动' : '已修改';
+    return { kind: 'diff', ...(path ? { path } : {}), lines, ...(lines.length ? {} : { note: path ? `${path} · ${verb}` : verb }) };
   }
 
-  if (kind === 'read' || kind === 'search' || kind === 'web') {
-    return { kind: 'paths', mode: kind, items: pathItems(data, kind), ...(output ? { output } : {}) };
+  if (kind === 'read' || kind === 'list' || kind === 'search' || kind === 'web') {
+    const mode = kind === 'list' ? 'read' : kind;
+    return { kind: 'paths', mode, items: pathItems(data, mode), ...(output ? { output } : {}) };
   }
 
   return { kind: 'json', ...(data.input !== undefined ? { input: data.input } : {}), ...(data.output !== undefined ? { output: data.output } : {}) };

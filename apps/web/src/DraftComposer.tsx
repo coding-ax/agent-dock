@@ -1,5 +1,5 @@
 import { DockMascot } from './DockMascot';
-import { useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { PawPrint } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Agent, type Session } from './api';
@@ -7,7 +7,27 @@ import { Composer } from './Composer';
 import { PromptTemplates } from './PromptTemplates';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { buildPrompt, getModelReadiness, referenceFromUpload, uploadSessionFile, type ComposerReference } from './composer-utils';
-import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
+import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels, readInitialAgentModels } from './model-cache';
+import {
+  buildWorkspaceOptions,
+  DRAFT_COMPOSER_PREFS_STORAGE_KEY,
+  getPreferredAgentModel,
+  getPreferredAgentReasoningEffort,
+  readDraftComposerPrefs,
+  resolveEffectiveAgentId,
+  resolveEffectiveModel,
+  resolveEffectiveReasoningEffort,
+  resolveEffectiveWorkspace,
+  withConfirmedDraftSubmission,
+  withLastUsedAgent,
+  withLastUsedModel,
+  withLastUsedReasoningEffort,
+  withLastUsedWorkspace,
+  withoutStaleAgentModel,
+  withoutStaleAgentReasoning,
+  writeDraftComposerPrefs,
+  type DraftComposerPrefs
+} from './last-used-prefs';
 import { createClientMessageId } from './client-message-id';
 import { clearSessionDraft, getBrowserDraftStorage, MAX_DRAFT_CHARS, saveSessionDraft } from './session-drafts';
 import { useSessionDraftWriter } from './use-session-draft';
@@ -34,12 +54,38 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   const qc = useQueryClient();
   const [prompt, setPrompt] = useState('');
   const [references, setReferences] = useState<ComposerReference[]>([]);
-  const [agentId, setAgentId] = useState('');
-  const [cwd, setCwd] = useState('');
-  const [model, setModel] = useState('');
-  const [reasoningEffort, setReasoningEffort] = useState('');
+  const [prefs, setPrefs] = useState<DraftComposerPrefs>(() => readDraftComposerPrefs());
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  const updatePrefs = (updater: (current: DraftComposerPrefs) => DraftComposerPrefs) => {
+    const next = updater(prefsRef.current);
+    if (next === prefsRef.current) return;
+    prefsRef.current = next;
+    writeDraftComposerPrefs(next);
+    setPrefs(next);
+  };
+  const [rejectedProbeKeys, setRejectedProbeKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const [modelJustSwitched, setModelJustSwitched] = useState(false);
+  const [reasoningJustSwitched, setReasoningJustSwitched] = useState(false);
+  const modelSavedTimerRef = useRef<number | undefined>(undefined);
+  const reasoningSavedTimerRef = useRef<number | undefined>(undefined);
+  const [systemPrompt, setSystemPrompt] = useState('');
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
+  useEffect(() => () => {
+    window.clearTimeout(modelSavedTimerRef.current);
+    window.clearTimeout(reasoningSavedTimerRef.current);
+  }, []);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && event.key !== DRAFT_COMPOSER_PREFS_STORAGE_KEY) return;
+      const latest = readDraftComposerPrefs();
+      prefsRef.current = latest;
+      setPrefs(latest);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
   const stashed = useRef(new Map<string, File>());
   const objectUrls = useRef(new Set<string>());
   const seq = useRef(0);
@@ -48,44 +94,94 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   const readLiveDraft = () => editorRef?.current?.getValue() ?? promptRef.current;
   const draftWriter = useSessionDraftWriter(companion?.sessionId, prompt, { skipEmptyValue: creating });
 
-  // agents 异步到达：agentId 初值可能为空或已失效，渲染期兜底到最近使用过的 Agent，
-  // 再退到列表第一个。与 App 的 effectiveAgentId 同思路，避免多渲染一帧非法值。
-  const effectiveAgentId = agents.some(agent => agent.id === agentId)
-    ? agentId
-    : sessions.find(session => !session.archivedAt && agents.some(agent => agent.id === session.agentId))?.agentId || agents[0]?.id || '';
-  const selectedAgent = agents.find(agent => agent.id === effectiveAgentId);
+  // agents 异步到达：优先恢复上次选中的可用 Agent，失效时渲染期兜底到最近活跃会话的 Agent，
+  // 再退到可用列表第一个，避免多渲染一帧非法值。
+  const usableAgents = useMemo(() => agents.filter(agent => !agent.disabled), [agents]);
+  const effectiveAgentId = resolveEffectiveAgentId(prefs.agentId, usableAgents, sessions);
+  const selectedAgent = usableAgents.find(agent => agent.id === effectiveAgentId);
   const capabilities = useQuery({ queryKey: ['system-capabilities'], queryFn: api.systemCapabilities });
+  const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects, staleTime: 30_000 });
   const defaultWorkspace = selectedAgent?.cwd || capabilities.data?.workingDirectory;
-  // 工作目录下拉的候选：Agent 默认目录 + 最近用过的会话目录，按使用顺序去重。
-  const workspaceOptions = useMemo(() => {
-    const seen = new Set<string>();
-    const list: string[] = [];
-    for (const path of [defaultWorkspace, ...sessions.map(session => session.cwd)]) {
-      if (!path || seen.has(path)) continue;
-      seen.add(path);
-      list.push(path);
-    }
-    return list.slice(0, 30);
-  }, [defaultWorkspace, sessions]);
+  const effectiveCwd = resolveEffectiveWorkspace(prefs.cwd, projects.data);
+  // 工作目录下拉的候选：当前有效目录 + Agent 默认目录 + 存在的项目目录 + 最近用过的会话目录，按顺序去重。
+  const workspaceOptions = useMemo(() => buildWorkspaceOptions({
+    currentWorkspace: effectiveCwd,
+    defaultWorkspace,
+    projects: projects.data,
+    sessions
+  }), [effectiveCwd, defaultWorkspace, projects.data, sessions]);
 
   const homeDirectory = capabilities.data?.homeDirectory;
+  const preferredModel = getPreferredAgentModel(prefs, effectiveAgentId);
+  const probeKey = effectiveAgentId && preferredModel ? `${effectiveAgentId}\0${preferredModel}` : '';
+  const queryModel = probeKey && rejectedProbeKeys.has(probeKey) ? '' : preferredModel;
 
   const models = useQuery({
-    queryKey: agentModelsQueryKey(effectiveAgentId, model),
-    queryFn: () => loadAgentModels(effectiveAgentId, model || undefined),
+    queryKey: agentModelsQueryKey(effectiveAgentId, queryModel),
+    queryFn: () => loadAgentModels(effectiveAgentId, queryModel || undefined),
     enabled: Boolean(effectiveAgentId),
-    initialData: () => readCachedAgentModels(effectiveAgentId, model || undefined),
+    initialData: () => readInitialAgentModels(effectiveAgentId, queryModel || undefined),
     initialDataUpdatedAt: 0,
-    refetchOnMount: 'always',
+    // 同一 Agent 切换模型时沿用上一份目录避免下拉闪空；切换到不同 Agent 时不跨 Agent 复用，立即可见加载态或新 Agent 本地缓存。
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey?.[1] === effectiveAgentId ? previous : undefined),
+    refetchOnMount: true,
     staleTime: 60_000
   });
-  const skills = useQuery({ queryKey: ['skills', cwd], queryFn: () => api.skills(cwd || undefined), staleTime: 60_000 });
+  const effectiveModel = resolveEffectiveModel(queryModel, models.data, {
+    isPlaceholderData: models.isPlaceholderData
+  });
+  const activeModelForReasoning = effectiveModel || models.data?.defaultModel || '';
+  const preferredReasoningEffort = getPreferredAgentReasoningEffort(prefs, effectiveAgentId, activeModelForReasoning || undefined);
+  const awaitingExactCatalog = Boolean(
+    queryModel
+    && models.dataUpdatedAt === 0
+    && models.isFetching
+    && !readCachedAgentModels(effectiveAgentId, queryModel)
+  );
+  const effectiveReasoningEffort = resolveEffectiveReasoningEffort(preferredReasoningEffort, models.data, {
+    isPlaceholderData: models.isPlaceholderData,
+    awaitingExactCatalog
+  });
+
+  // 服务端模型目录返回后自愈过期偏好：
+  // - 确认已下线的模型从该 Agent 的记忆中清理；
+  // - 若带旧模型探测直接报错或返回空告警目录，则自动不带 model 重试一次，避免卡死。
+  useEffect(() => {
+    if (!effectiveAgentId || !preferredModel || models.isFetching || models.isPlaceholderData) return;
+    if (models.data && models.dataUpdatedAt > 0 && !models.data.warning && models.data.models.length > 0) {
+      if (!models.data.models.some(item => item.id === preferredModel)) {
+        updatePrefs(current => withoutStaleAgentModel(current, effectiveAgentId, preferredModel));
+      }
+      return;
+    }
+    if (probeKey && !rejectedProbeKeys.has(probeKey) && (models.isError || (models.data?.warning && models.data.models.length === 0))) {
+      setRejectedProbeKeys(current => {
+        if (current.has(probeKey)) return current;
+        const next = new Set(current);
+        next.add(probeKey);
+        return next;
+      });
+    }
+  }, [effectiveAgentId, preferredModel, probeKey, rejectedProbeKeys, models.data, models.dataUpdatedAt, models.isError, models.isFetching, models.isPlaceholderData]);
+
+  useEffect(() => {
+    if (!effectiveAgentId || !preferredReasoningEffort || effectiveReasoningEffort || models.isFetching || models.isPlaceholderData || awaitingExactCatalog) return;
+    if (models.data && models.dataUpdatedAt > 0 && !models.data.warning) {
+      updatePrefs(current => withoutStaleAgentReasoning(current, effectiveAgentId, preferredReasoningEffort, activeModelForReasoning || undefined));
+    }
+  }, [effectiveAgentId, preferredReasoningEffort, effectiveReasoningEffort, activeModelForReasoning, awaitingExactCatalog, models.data, models.dataUpdatedAt, models.isFetching, models.isPlaceholderData]);
+
+  const skills = useQuery({ queryKey: ['skills', effectiveCwd], queryFn: () => api.skills(effectiveCwd || undefined), staleTime: 60_000 });
   const refreshModels = useMutation({
-    mutationFn: () => loadAgentModels(effectiveAgentId, model || undefined, true),
-    onSuccess: result => qc.setQueryData(agentModelsQueryKey(effectiveAgentId, model || undefined), result),
+    mutationFn: () => loadAgentModels(effectiveAgentId, queryModel || undefined, true),
+    onSuccess: result => qc.setQueryData(agentModelsQueryKey(effectiveAgentId, queryModel || undefined), result),
     onError: err => setError(err instanceof Error ? err.message : String(err))
   });
-  const pickDirectory = useMutation({ mutationFn: api.selectDirectory, onSuccess: result => setCwd(result.path), onError: err => setError(err instanceof Error ? err.message : String(err)) });
+  const pickDirectory = useMutation({
+    mutationFn: api.selectDirectory,
+    onSuccess: result => updatePrefs(current => withLastUsedWorkspace(current, result.path, effectiveAgentId)),
+    onError: err => setError(err instanceof Error ? err.message : String(err))
+  });
 
   const modelReadiness = getModelReadiness({
     loaded: models.data !== undefined,
@@ -165,15 +261,23 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     const draftPrompt = submittedValue;
     const draftReferences = references;
     const clientMessageId = createClientMessageId();
+    // 提交时同步巩固本次生效的草稿配置，确保即使沿用推断出的 Agent 或刚恢复的配置也被可靠记住。
+    updatePrefs(current => withConfirmedDraftSubmission(current, {
+      agentId: effectiveAgentId,
+      cwd: effectiveCwd,
+      model: effectiveModel,
+      reasoningEffort: effectiveReasoningEffort
+    }));
     setCreating(true);
     void (async () => {
       let session: Session | undefined;
       try {
         session = await api.create({
           agentId: effectiveAgentId,
-          ...(cwd.trim() ? { cwd: cwd.trim() } : {}),
-          ...(model ? { model } : {}),
-          ...(reasoningEffort ? { reasoningEffort } : {})
+          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+          ...(effectiveModel ? { model: effectiveModel } : {}),
+          ...(effectiveReasoningEffort ? { reasoningEffort: effectiveReasoningEffort } : {}),
+          ...(systemPrompt.trim() ? { systemPrompt: systemPrompt.trim() } : {})
         });
         // create 后立刻按真实 sessionId 落草稿：后续上传/发送失败切进会话时还能恢复输入。
         if (draftPrompt) saveSessionDraft(getBrowserDraftStorage(), session.id, draftPrompt);
@@ -201,6 +305,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
           setPrompt('');
         }
         setReferences([]);
+        setSystemPrompt('');
         clearAttachments();
         onCreated(session);
       } catch (err) {
@@ -245,19 +350,25 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
       skills={skills.data ?? []}
       models={models.data?.models ?? []}
       reasoningEfforts={models.data?.reasoningEfforts ?? []}
-      currentModel={model || models.data?.defaultModel}
-      currentReasoningEffort={reasoningEffort || models.data?.defaultReasoningEffort}
+      currentModel={effectiveModel || models.data?.defaultModel}
+      currentReasoningEffort={effectiveReasoningEffort || models.data?.defaultReasoningEffort}
       context={{}}
       advertisedCommands={[]}
       modelReadiness={modelReadiness}
       switchingModel={false}
       switchingReasoningEffort={false}
+      modelJustSwitched={modelJustSwitched}
+      reasoningJustSwitched={reasoningJustSwitched}
       refreshingModels={models.isFetching || refreshModels.isPending}
-      agents={agents}
+      agents={usableAgents}
       currentAgentId={companion?.agentId ?? effectiveAgentId}
-      onAgentChange={id => { setAgentId(id); setModel(''); setReasoningEffort(''); }}
-      workspace={cwd}
-      onWorkspaceChange={setCwd}
+      onAgentChange={id => {
+        updatePrefs(current => withLastUsedAgent(current, id));
+        setModelJustSwitched(false);
+        setReasoningJustSwitched(false);
+      }}
+      workspace={effectiveCwd}
+      onWorkspaceChange={next => updatePrefs(current => withLastUsedWorkspace(current, next, effectiveAgentId))}
       workspaceSuggestion={defaultWorkspace}
       homeDirectory={homeDirectory}
       workspaceOptions={workspaceOptions}
@@ -265,6 +376,14 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
       pickingDirectory={pickDirectory.isPending}
       onPickDirectory={() => pickDirectory.mutate()}
       onAttachFile={attach}
+      {...(!companion ? { systemPrompt, onSystemPromptChange: setSystemPrompt } : {})}
+      aiContext={() => ({
+        field: companion ? `发给主小猫「${companion.name}」的指令` : '新建会话首条消息',
+        ...(selectedAgent?.name ? { agentName: selectedAgent.name } : {}),
+        ...(effectiveCwd || defaultWorkspace ? { cwd: effectiveCwd || defaultWorkspace } : {}),
+        ...(effectiveModel || models.data?.defaultModel ? { model: effectiveModel || models.data?.defaultModel } : {}),
+        ...(systemPrompt.trim() ? { extra: `会话 System Prompt 摘要：${systemPrompt.trim().slice(0, 300)}` } : {})
+      })}
       onChange={setPrompt}
       onReferencesChange={setReferences}
       onModeChange={() => undefined}
@@ -273,8 +392,29 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
       onCancelQueued={() => undefined}
       onSteerQueued={() => undefined}
       onEditQueued={() => undefined}
-      onModelChange={setModel}
-      onReasoningEffortChange={setReasoningEffort}
+      onModelChange={next => {
+        if (effectiveAgentId) {
+          const key = `${effectiveAgentId}\0${next}`;
+          setRejectedProbeKeys(current => {
+            if (!current.has(key)) return current;
+            const copy = new Set(current);
+            copy.delete(key);
+            return copy;
+          });
+          updatePrefs(current => withLastUsedModel(current, effectiveAgentId, next));
+        }
+        setModelJustSwitched(true);
+        window.clearTimeout(modelSavedTimerRef.current);
+        modelSavedTimerRef.current = window.setTimeout(() => setModelJustSwitched(false), 1200);
+      }}
+      onReasoningEffortChange={next => {
+        if (effectiveAgentId) {
+          updatePrefs(current => withLastUsedReasoningEffort(current, effectiveAgentId, next, activeModelForReasoning || undefined));
+        }
+        setReasoningJustSwitched(true);
+        window.clearTimeout(reasoningSavedTimerRef.current);
+        reasoningSavedTimerRef.current = window.setTimeout(() => setReasoningJustSwitched(false), 1200);
+      }}
       onRefreshModels={() => refreshModels.mutate()}
     />
     </div>

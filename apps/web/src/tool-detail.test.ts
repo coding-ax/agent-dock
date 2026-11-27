@@ -68,4 +68,51 @@ describe('toolDetailView', () => {
       { kind: 'context', text: 'd' }
     ]);
   });
+
+  it('Antigravity File 读写与 CommandLine 也能渲染结构化视图', () => {
+    expect(toolDetailView({
+      name: 'File packages/agent-runtime/src/index.ts',
+      input: { Path: '/repo/packages/agent-runtime/src/index.ts', StartLine: 1, EndLine: 20 },
+      output: '1: export {}'
+    })).toEqual({
+      kind: 'paths',
+      mode: 'read',
+      items: ['/repo/packages/agent-runtime/src/index.ts'],
+      output: '1: export {}'
+    });
+
+    expect(toolDetailView({
+      name: 'File apps/web/src/App.tsx',
+      input: { Path: 'apps/web/src/App.tsx', Target: 'a\nold\nc', Replacement: 'a\nnew\nc' }
+    })).toEqual({
+      kind: 'diff',
+      path: 'apps/web/src/App.tsx',
+      lines: [
+        { kind: 'context', text: 'a' },
+        { kind: 'remove', text: 'old' },
+        { kind: 'add', text: 'new' },
+        { kind: 'context', text: 'c' }
+      ]
+    });
+
+    expect(toolDetailView({
+      name: 'File apps/web/src/new.ts',
+      input: { Path: 'apps/web/src/new.ts', Content: 'export const ok = true;' }
+    })).toEqual({
+      kind: 'diff',
+      path: 'apps/web/src/new.ts',
+      lines: [],
+      note: 'apps/web/src/new.ts · 已写入'
+    });
+
+    expect(toolDetailView({
+      name: 'npm view @agent-dock/cli dist-tags.latest',
+      input: { CommandLine: 'npm view @agent-dock/cli dist-tags.latest' },
+      output: '0.4.55'
+    })).toEqual({
+      kind: 'command',
+      command: 'npm view @agent-dock/cli dist-tags.latest',
+      output: '0.4.55'
+    });
+  });
 });

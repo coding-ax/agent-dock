@@ -24,6 +24,8 @@ export interface PwaEnvLike {
   standalone: boolean;
   userAgent: string;
   hasDeferredPrompt: boolean;
+  hasProcessElectron?: boolean;
+  userAgentBrands?: string[];
   installing?: boolean;
   installed?: boolean;
 }
@@ -32,8 +34,31 @@ export function isMobileUserAgent(userAgent: string): boolean {
   return /android|iphone|ipad|ipod|mobile/i.test(userAgent);
 }
 
+/** 识别 Electron / AgentDock 桌面客户端 UA（即使 preload 未注入或 Electron 字样被定制也能兜底拦住）。 */
+export function isElectronUserAgent(userAgent: string): boolean {
+  return /\belectron(?:\/|\b)/i.test(userAgent) || /\bagentdock\//i.test(userAgent);
+}
+
+/**
+ * 综合判断当前是否运行在桌面客户端（Electron）环境：
+ * - preload 桥接对象 `window.agentdockDesktop`（即使 UA 被改写去掉了 Electron 也能可靠识别）；
+ * - UA 包含 `Electron` 或 `AgentDock/`；
+ * - Chromium `navigator.userAgentData.brands` 包含 `Electron`；
+ * - `process.versions.electron` 存在。
+ */
+export function isDesktopClientEnv(
+  env: Pick<PwaEnvLike, 'hasElectronDesktop' | 'userAgent' | 'hasProcessElectron' | 'userAgentBrands'>
+): boolean {
+  if (env.hasElectronDesktop) return true;
+  if (env.hasProcessElectron) return true;
+  if (isElectronUserAgent(env.userAgent)) return true;
+  if (env.userAgentBrands?.some(brand => /\belectron\b/i.test(brand))) return true;
+  return false;
+}
+
 export function getManualInstallHint(userAgent: string): string {
   const ua = userAgent || '';
+  if (isElectronUserAgent(ua)) return '';
   const isEdge = /\bEdg\//i.test(ua);
   const isChrome = /\bChrome\//i.test(ua) && !isEdge;
   const isSafari = /\bSafari\//i.test(ua) && !/\bChrome\//i.test(ua) && !/\bChromium\//i.test(ua);
@@ -45,27 +70,71 @@ export function getManualInstallHint(userAgent: string): string {
 
 export function resolvePwaInstallSnapshot(env: PwaEnvLike): PwaInstallSnapshot {
   const installed = Boolean(env.installed);
-  const visible = !env.hasElectronDesktop && !env.standalone && !installed && !isMobileUserAgent(env.userAgent);
+  const desktopClient = isDesktopClientEnv(env);
+  const visible = !desktopClient && !env.standalone && !installed && !isMobileUserAgent(env.userAgent);
   return {
     visible,
     canPrompt: visible && env.hasDeferredPrompt,
-    installing: Boolean(env.installing),
+    installing: visible && Boolean(env.installing),
     installed,
-    manualHint: getManualInstallHint(env.userAgent)
+    manualHint: desktopClient ? '' : getManualInstallHint(env.userAgent)
   };
+}
+
+type ElectronRuntimeGlobal = {
+  agentdockDesktop?: unknown;
+  process?: { versions?: { electron?: string } };
+};
+
+type NavigatorWithPwaFields = Navigator & {
+  standalone?: boolean;
+  userAgentData?: { brands?: Array<{ brand?: string }> };
+};
+
+function readNavigator(): NavigatorWithPwaFields | undefined {
+  if (typeof window !== 'undefined' && window.navigator) return window.navigator as NavigatorWithPwaFields;
+  if (typeof navigator !== 'undefined') return navigator as NavigatorWithPwaFields;
+  return undefined;
 }
 
 function readStandalone(): boolean {
   if (typeof window === 'undefined') return false;
   const mediaStandalone = typeof window.matchMedia === 'function'
     && (window.matchMedia('(display-mode: standalone)').matches || window.matchMedia('(display-mode: window-controls-overlay)').matches);
-  const navStandalone = Boolean((window.navigator as Navigator & { standalone?: boolean } | undefined)?.standalone);
+  const navStandalone = Boolean(readNavigator()?.standalone);
   return mediaStandalone || navStandalone;
 }
 
-function readElectronDesktop(): boolean {
+function readElectronBridge(): boolean {
   if (typeof window === 'undefined') return false;
-  return Boolean((window as Window & { agentdockDesktop?: unknown }).agentdockDesktop);
+  return Boolean((window as Window & ElectronRuntimeGlobal).agentdockDesktop);
+}
+
+function readProcessElectron(): boolean {
+  const winElectron = typeof window === 'undefined'
+    ? undefined
+    : (window as Window & ElectronRuntimeGlobal).process?.versions?.electron;
+  const globalElectron = (globalThis as ElectronRuntimeGlobal).process?.versions?.electron;
+  return Boolean(winElectron || globalElectron);
+}
+
+function readUserAgent(): string {
+  return readNavigator()?.userAgent ?? '';
+}
+
+function readUserAgentBrands(): string[] {
+  const brands = readNavigator()?.userAgentData?.brands;
+  if (!Array.isArray(brands)) return [];
+  return brands.map(item => item?.brand ?? '').filter(Boolean);
+}
+
+export function isElectronDesktopRuntime(): boolean {
+  return isDesktopClientEnv({
+    hasElectronDesktop: readElectronBridge(),
+    hasProcessElectron: readProcessElectron(),
+    userAgent: readUserAgent(),
+    userAgentBrands: readUserAgentBrands()
+  });
 }
 
 let deferredPrompt: BeforeInstallPromptEvent | null = null;
@@ -77,11 +146,12 @@ let cachedSnapshot: PwaInstallSnapshot | undefined;
 const listeners = new Set<() => void>();
 
 function computeSnapshot(): PwaInstallSnapshot {
-  const userAgent = typeof navigator === 'undefined' ? '' : (navigator.userAgent ?? '');
   return resolvePwaInstallSnapshot({
-    hasElectronDesktop: readElectronDesktop(),
+    hasElectronDesktop: readElectronBridge(),
+    hasProcessElectron: readProcessElectron(),
     standalone: readStandalone(),
-    userAgent,
+    userAgent: readUserAgent(),
+    userAgentBrands: readUserAgentBrands(),
     hasDeferredPrompt: deferredPrompt !== null,
     installing,
     installed
@@ -104,7 +174,7 @@ function notify() {
   for (const listener of listeners) listener();
 }
 
-function getSnapshot(): PwaInstallSnapshot {
+export function getPwaInstallSnapshot(): PwaInstallSnapshot {
   const next = computeSnapshot();
   if (!sameSnapshot(cachedSnapshot, next)) cachedSnapshot = next;
   return cachedSnapshot!;
@@ -115,7 +185,7 @@ const serverSnapshot: PwaInstallSnapshot = {
   canPrompt: false,
   installing: false,
   installed: false,
-  manualHint: getManualInstallHint('')
+  manualHint: ''
 };
 
 export function initPwaInstall(): void {
@@ -123,6 +193,7 @@ export function initPwaInstall(): void {
   initialized = true;
 
   const onBeforeInstallPrompt = (event: Event) => {
+    if (isElectronDesktopRuntime()) return;
     const promptEvent = event as BeforeInstallPromptEvent;
     if (typeof promptEvent.prompt !== 'function') return;
     promptEvent.preventDefault();
@@ -137,22 +208,31 @@ export function initPwaInstall(): void {
     notify();
   };
 
-  const media = typeof window.matchMedia === 'function' ? window.matchMedia('(display-mode: standalone)') : undefined;
+  const standaloneMedia = typeof window.matchMedia === 'function' ? window.matchMedia('(display-mode: standalone)') : undefined;
+  const overlayMedia = typeof window.matchMedia === 'function' ? window.matchMedia('(display-mode: window-controls-overlay)') : undefined;
   const onDisplayModeChange = () => notify();
 
   window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
   window.addEventListener('appinstalled', onAppInstalled);
-  media?.addEventListener?.('change', onDisplayModeChange);
+  standaloneMedia?.addEventListener?.('change', onDisplayModeChange);
+  overlayMedia?.addEventListener?.('change', onDisplayModeChange);
 
   cleanupListeners = () => {
     window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
     window.removeEventListener('appinstalled', onAppInstalled);
-    media?.removeEventListener?.('change', onDisplayModeChange);
+    standaloneMedia?.removeEventListener?.('change', onDisplayModeChange);
+    overlayMedia?.removeEventListener?.('change', onDisplayModeChange);
   };
   notify();
 }
 
 export async function triggerPwaInstall(): Promise<'accepted' | 'dismissed' | 'manual'> {
+  if (isElectronDesktopRuntime()) {
+    deferredPrompt = null;
+    installing = false;
+    notify();
+    return 'dismissed';
+  }
   if (!deferredPrompt) return 'manual';
   const promptEvent = deferredPrompt;
   installing = true;
@@ -174,7 +254,7 @@ export async function triggerPwaInstall(): Promise<'accepted' | 'dismissed' | 'm
 
 export function registerPwaServiceWorker(): void {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return;
-  if (readElectronDesktop()) return;
+  if (isElectronDesktopRuntime()) return;
   if (!('serviceWorker' in navigator)) return;
   const protocol = window.location.protocol;
   const host = window.location.hostname;
@@ -197,7 +277,7 @@ export function usePwaInstall(): PwaInstallSnapshot {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },
-    getSnapshot,
+    getPwaInstallSnapshot,
     () => serverSnapshot
   );
 }

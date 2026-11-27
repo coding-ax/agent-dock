@@ -98,6 +98,48 @@ function remarkFileAutolink() {
   };
 }
 
+const leadingSlashCommandPattern = /^(\s*)(\/[A-Za-z0-9][A-Za-z0-9_:-]*)/;
+
+/**
+ * 轻量 remark 插件：仅把用户消息最开头的单个 `/命令` token（如 `/plan`、`/lark-doc`、`/sc:analyze`）
+ * 标记为命令 chip。跳过用户手写反引号包裹的行内代码、多段绝对路径（如 `/Users/...`）以及正文中间出现的
+ * 任意 `/...` 片段，避免把路径或路由误染成不折行的蓝色命令 chip。
+ */
+function remarkLeadingSlashCommand() {
+  return (tree: any) => {
+    if (!tree || !Array.isArray(tree.children) || tree.children.length === 0) return;
+    const firstBlock = tree.children[0];
+    if (!firstBlock || firstBlock.type !== 'paragraph' || !Array.isArray(firstBlock.children) || firstBlock.children.length === 0) return;
+    const firstChild = firstBlock.children[0];
+    if (!firstChild || firstChild.type !== 'text' || typeof firstChild.value !== 'string') return;
+
+    const match = leadingSlashCommandPattern.exec(firstChild.value);
+    if (!match) return;
+    const [, leadingSpace = '', command = ''] = match;
+    const rest = firstChild.value.slice(match[0].length);
+    // 紧跟在命令后必须是空白，或该文本节点到此结束且后续为空 / 软换行（remarkBreaks 生成的 break）。
+    // 这样 `/Users/codeax/...`（后接 `/`）、`/README.md`（后接 `.`）、`/plan**x**`（后接 strong）都不会误判。
+    if (rest.length > 0) {
+      if (!/^\s/.test(rest)) return;
+    } else if (firstBlock.children.length > 1 && firstBlock.children[1]?.type !== 'break') {
+      return;
+    }
+
+    const replacement: any[] = [];
+    if (leadingSpace) replacement.push({ type: 'text', value: leadingSpace });
+    replacement.push({
+      type: 'inlineCode',
+      value: command,
+      data: { hProperties: { className: ['ui-slash-command'] } }
+    });
+    if (rest) replacement.push({ type: 'text', value: rest });
+    firstBlock.children.splice(0, 1, ...replacement);
+  };
+}
+
+const baseRemarkPlugins = [remarkGfm, remarkBreaks, remarkFileAutolink];
+const userCommandRemarkPlugins = [remarkGfm, remarkBreaks, remarkFileAutolink, remarkLeadingSlashCommand];
+
 /**
  * 提取消息中用 `[label](file:///...png|svg)` 或裸 `file:///...png|svg` 引用的本地图片/SVG，
  * 跳过代码块、行内代码以及已通过 `![](...)` 内联展示过的图片，用于消息下方自动附带紧凑缩略图。
@@ -193,8 +235,8 @@ const CodeBlock = memo(function CodeBlock({ code, className }: { code: string; c
   return <div className="code-renderer group/code my-4 overflow-hidden rounded-[10px] border border-zinc-200 bg-[rgb(var(--code-bg))] [contain:layout_paint]">
     <div className="flex h-8 items-center px-3">
       <span className="font-mono text-[12px] text-zinc-500">{label}</span>
-      <button type="button" onClick={() => void copy()} className="ml-auto flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50" aria-label={copied ? '代码已复制' : '复制代码'}>
-        {copied ? <Check size={12}/> : <Copy size={12}/>}<span>{copied ? '已复制' : '复制'}</span>
+      <button type="button" onClick={() => void copy()} className={`ui-press ml-auto flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] font-medium hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${copied ? 'text-emerald-600' : 'text-zinc-500 hover:text-zinc-900'}`} aria-label={copied ? '代码已复制' : '复制代码'}>
+        {copied ? <Check key="check" size={12} className="ui-icon-pop"/> : <Copy key="copy" size={12}/>}<span>{copied ? '已复制' : '复制'}</span>
       </button>
     </div>
     <Highlight theme={dark ? themes.vsDark : themes.vsLight} code={code} language={language}>
@@ -302,11 +344,12 @@ const markdownComponents: Components = {
   // 跳链默认新开标签页：Agent 输出的链接若在同页打开会直接踢走当前会话时间线，很迷。
   // 统一 target="_blank" + rel，外部站内链接一律新开。
   a({ href, children }) {
-    return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-link underline decoration-[#2563eb]/40 underline-offset-2 hover:decoration-[#2563eb]">{children}</a>;
+    return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">{children}</a>;
   },
   code({ className, children }) {
     if (isBlockCode(className, children)) return <CodeBlock className={className} code={String(children).replace(/\n$/, '')}/>;
-    return <code className="rounded bg-zinc-100 px-[.32rem] py-[.12rem] font-mono text-[.9em] text-zinc-800">{children}</code>;
+    if (className?.split(/\s+/).includes('ui-slash-command')) return <code className="ui-slash-command">{children}</code>;
+    return <code className="ui-inline-code rounded bg-zinc-100 px-[.32rem] py-[.12rem] font-mono text-[.9em] text-zinc-800">{children}</code>;
   },
   pre({ children }) { return <>{children}</>; },
   // 横向滚动放在外层 div 上，不能直接让 table display:block（iOS WebKit 会撑破容器导致整页横滑，见 index.css）。
@@ -314,16 +357,6 @@ const markdownComponents: Components = {
     return <div className="markdown-table-scroll"><table>{children}</table></div>;
   }
   // img 由 MarkdownContent 内部覆盖：它需要 sessionId 才能把本地与 uploads 路径改写成可访问 URL。
-};
-
-const userCommandComponents: Components = {
-  ...markdownComponents,
-  code({ className, children }) {
-    if (isBlockCode(className, children)) return <CodeBlock className={className} code={String(children).replace(/\n$/, '')}/>;
-    // 用户消息开头的 /命令 在 TimelineItems 里被包成行内代码；这里换成彩色命令 chip。
-    if (/^\/[^\s]+$/.test(String(children))) return <code className="ui-slash-command">{children}</code>;
-    return <code className="rounded bg-zinc-100 px-[.32rem] py-[.12rem] font-mono text-[.9em] text-zinc-800">{children}</code>;
-  }
 };
 
 export const MarkdownContent = memo(function MarkdownContent({ children, sessionId, throttleMs, animateUnits = false, highlightSlashCommands = false, showLinkedImageThumbnails = true }: { children: string; sessionId: string | undefined; throttleMs?: number; /** 流式输出时给文字挂词级模糊入场；历史消息保持 false。 */ animateUnits?: boolean; /** 用户消息：把开头的 /命令 渲染成彩色命令 chip。 */ highlightSlashCommands?: boolean; /** 是否在消息下方自动附带图片/SVG 链接的紧凑缩略图。 */ showLinkedImageThumbnails?: boolean }) {
@@ -339,7 +372,7 @@ export const MarkdownContent = memo(function MarkdownContent({ children, session
   );
 
   const components: Components = {
-    ...(highlightSlashCommands ? userCommandComponents : markdownComponents),
+    ...markdownComponents,
     a({ href, children }) {
       const parsed = href ? parseFileLink(href) : undefined;
       if (parsed && sessionId) {
@@ -354,10 +387,10 @@ export const MarkdownContent = memo(function MarkdownContent({ children, session
               endLine: parsed.endLine
             });
           }}
-          className="inline-flex items-center gap-1 rounded px-1 py-0.5 align-baseline font-medium text-link underline decoration-[#2563eb]/40 underline-offset-2 transition-colors hover:bg-blue-50/70 hover:decoration-[#2563eb]"
-        ><FileText size={12} className="shrink-0 opacity-70"/>{children}</button>;
+          className="inline-flex max-w-full items-baseline gap-1 rounded px-1 py-0.5 text-left align-baseline font-medium text-link underline decoration-link/40 underline-offset-2 transition-colors hover:bg-blue-50/70 hover:decoration-link"
+        ><FileText size={12} className="relative top-[1px] shrink-0 opacity-70"/><span className="min-w-0 [overflow-wrap:anywhere]">{children}</span></button>;
       }
-      return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-link underline decoration-[#2563eb]/40 underline-offset-2 hover:decoration-[#2563eb]">{children}</a>;
+      return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">{children}</a>;
     },
     img({ src, alt }) {
       const resolved = resolveImageSrc(src ?? '', sessionId);
@@ -370,7 +403,7 @@ export const MarkdownContent = memo(function MarkdownContent({ children, session
   // remark-breaks：单个换行按用户输入保留（输入框已改成 Enter 换行）。否则多行提示词会被
   // CommonMark 折叠成一整段，长命令 / 路径全挤在一起，既难读也难看。
   return <>
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks, remarkFileAutolink]} rehypePlugins={animateUnits ? [rehypeTextUnits] : []} urlTransform={url => /^file:/i.test(url) ? url : defaultUrlTransform(url)} components={components}>{markdown}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={highlightSlashCommands ? userCommandRemarkPlugins : baseRemarkPlugins} rehypePlugins={animateUnits ? [rehypeTextUnits] : []} urlTransform={url => /^file:/i.test(url) ? url : defaultUrlTransform(url)} components={components}>{markdown}</ReactMarkdown>
     {linkedImages.length > 0 && <LinkedImageThumbnails images={linkedImages} />}
   </>;
 });

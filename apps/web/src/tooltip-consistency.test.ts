@@ -17,11 +17,17 @@ const sourceDir = dirname(fileURLToPath(import.meta.url));
 const files = [
   'ui-controls.tsx',
   'App.tsx',
+  'SidebarPwaInstallButton.tsx',
   'PaneHost.tsx',
   'SessionPane.tsx',
+  'SessionAgentUsagePopover.tsx',
+  'AgentUsagePanel.tsx',
+  'UsageSourceBadge.tsx',
+  'companion/CompanionHeader.tsx',
   'TerminalPanel.tsx',
   'FileExplorerPanel.tsx',
-  'Composer.tsx'
+  'Composer.tsx',
+  'AiTextAssist.tsx'
 ];
 
 const read = (name: string) => readFileSync(join(sourceDir, name), 'utf8');

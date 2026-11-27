@@ -130,10 +130,17 @@ export function SessionContextMenu({ session, agentName, point, origin, anchor, 
     void runCopy(item);
   };
 
+  const flippedUp = position.top < point.y - 10;
+  const flippedLeft = position.left < point.x - 10;
+  const placement = flippedUp
+    ? (flippedLeft ? 'bottom-end' : 'top-start')
+    : (flippedLeft ? 'top-end' : 'bottom-start');
+
   return createPortal(<div
     ref={root}
     role="menu"
     aria-label={`${session.title || session.id} 的会话操作`}
+    data-placement={placement}
     style={{ top: position.top, left: position.left, width: CONTEXT_MENU_WIDTH }}
     onContextMenu={event => event.preventDefault()}
     className="ui-popover fixed z-[70] rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_16px_48px_rgba(24,24,27,.18)]"
@@ -147,7 +154,7 @@ export function SessionContextMenu({ session, agentName, point, origin, anchor, 
         role="menuitem"
         tabIndex={-1}
         onClick={() => choose(entry)}
-        className={`flex h-[32px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors ${entry.danger ? 'text-red-600 hover:bg-red-50' : 'text-zinc-700 hover:bg-zinc-100'}`}
+        className={`ui-press flex h-[32px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors ${entry.danger ? 'text-red-600 hover:bg-red-50' : 'text-zinc-700 hover:bg-zinc-100'}`}
       >
         <Icon size={14} className={`shrink-0 ${entry.danger ? 'text-red-500' : 'text-zinc-500'}`}/>
         <span className="min-w-0 flex-1 truncate">{entry.label}</span>

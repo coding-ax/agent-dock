@@ -28,7 +28,7 @@ export function Disclosure({ open, unmountOnClose = false, children }: { open: b
     }
     setExpanded(false);
     if (!mounted) return;
-    const timer = window.setTimeout(() => setMounted(false), 260);
+    const timer = window.setTimeout(() => setMounted(false), 280);
     return () => window.clearTimeout(timer);
   }, [open, unmountOnClose, mounted]);
 
@@ -42,9 +42,10 @@ export function Disclosure({ open, unmountOnClose = false, children }: { open: b
   return <div
     aria-hidden={!open}
     inert={!open}
+    data-open={shown ? 'true' : 'false'}
     onTransitionEnd={handleTransitionEnd}
-    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(.2,0,0,1)] ${shown ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
+    className={`ui-disclosure grid transition-[grid-template-rows,opacity] duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${shown ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
   >
-    <div className="overflow-hidden">{mounted ? children : null}</div>
+    <div className="min-h-0 overflow-hidden"><div className="ui-disclosure-content">{mounted ? children : null}</div></div>
   </div>;
 }

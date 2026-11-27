@@ -27,7 +27,7 @@ const icon = (kind: PaneTabKind) => kind === 'terminal' ? <TerminalIcon size={14
  */
 export function PaneTypeMenu({ anchor, shortcuts, onPick, onClose }: { anchor?: HTMLElement; shortcuts: Shortcut[]; onPick(kind: PaneTabKind): void; onClose(): void }) {
   const root = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<{ top: number; left: number }>();
+  const [position, setPosition] = useState<{ top: number; left: number; flipped: boolean }>();
   useDismissOnOutsidePointer(root, true, onClose);
 
   // 用 layout effect 而不是普通 effect：先量再画，避免第一帧出现在错误位置后跳一下。
@@ -38,8 +38,9 @@ export function PaneTypeMenu({ anchor, shortcuts, onPick, onClose }: { anchor?: 
       const left = Math.max(GAP, Math.min(rect.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - GAP));
       // 下方放不下就翻到锚点上方——菜单贴着屏幕底边时这是唯一能看全的做法。
       const below = rect.bottom + GAP;
-      const top = below + MENU_HEIGHT + GAP > window.innerHeight ? Math.max(GAP, rect.top - MENU_HEIGHT - GAP) : below;
-      setPosition({ top, left });
+      const flipped = below + MENU_HEIGHT + GAP > window.innerHeight;
+      const top = flipped ? Math.max(GAP, rect.top - MENU_HEIGHT - GAP) : below;
+      setPosition({ top, left, flipped });
     };
     place();
     // 捕获阶段才收得到内层滚动容器的滚动事件。
@@ -48,8 +49,8 @@ export function PaneTypeMenu({ anchor, shortcuts, onPick, onClose }: { anchor?: 
     return () => { window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); };
   }, [anchor]);
 
-  return <div ref={root} role="menu" className="ui-popover fixed z-50 rounded-xl border border-zinc-200 bg-white p-1 shadow-[0_12px_32px_rgba(24,24,27,.12)]" style={{ top: position?.top ?? -9999, left: position?.left ?? -9999, width: MENU_WIDTH }}>
-    {paneTypeOptions(shortcuts).map(option => <button key={option.kind} type="button" role="menuitem" onClick={() => onPick(option.kind)} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-700 transition-colors hover:bg-zinc-100">
+  return <div ref={root} role="menu" data-placement={position?.flipped ? 'bottom-end' : 'top-end'} className="ui-popover fixed z-50 rounded-xl border border-zinc-200 bg-white p-1 shadow-[0_12px_32px_rgba(24,24,27,.12)]" style={{ top: position?.top ?? -9999, left: position?.left ?? -9999, width: MENU_WIDTH }}>
+    {paneTypeOptions(shortcuts).map(option => <button key={option.kind} type="button" role="menuitem" onClick={() => onPick(option.kind)} className="ui-press flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-700 transition-colors hover:bg-zinc-100">
       <span className="text-zinc-500">{icon(option.kind)}</span>
       <span className="min-w-0 flex-1 truncate">{option.label}</span>
       {option.shortcut && <span className="shrink-0 font-mono text-[12px] text-zinc-400">{option.shortcut.label}</span>}

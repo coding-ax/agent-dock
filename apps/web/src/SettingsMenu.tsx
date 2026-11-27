@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useEventListener } from 'ahooks';
 import { useQuery } from '@tanstack/react-query';
-import { AlarmClock, Archive, BarChart3, Bot, FolderOpen, MessagesSquare, MonitorDown, PawPrint, Settings, Settings2, Smartphone } from 'lucide-react';
+import { AlarmClock, Archive, BarChart3, Bell, Bot, FolderOpen, MessagesSquare, MonitorDown, PawPrint, Regex, Settings, Settings2, Smartphone } from 'lucide-react';
 import { api } from './api';
 import { AutostartToggle } from './AutostartToggle';
 import { KeepAwakeToggle } from './KeepAwakeToggle';
@@ -19,7 +19,7 @@ import {
 import { ThemeSegmented } from './ThemeToggle';
 import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
 
-const itemClass = 'flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-100 hover:text-zinc-900';
+const itemClass = 'ui-press flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900';
 
 /**
  * 侧栏底部唯一的入口：把定时任务、归档、导入、Agent / 飞书设置、主题、开机自启、永不休眠、版本都收进一个向上弹出的菜单，
@@ -27,7 +27,7 @@ const itemClass = 'flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 t
  *
  * 弹层只用 hidden 切换、不条件渲染：SelfUpdateNotice 里有「升级中轮询版本号、完成后刷新页面」的状态，卸载就丢了。
  */
-export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onAssistant, onLark, onLarkAvatar, onShare }: {
+export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onAssistant, onNotifications, onLark, onLarkRegexTriggers, onLarkAvatar, onShare }: {
   webDenied: boolean;
   archivedCount: number;
   onUsage(): void;
@@ -37,7 +37,9 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
   onAgentConfig(): void;
   onSideChatConfig(): void;
   onAssistant(): void;
+  onNotifications?(): void;
   onLark(): void;
+  onLarkRegexTriggers?(): void;
   onLarkAvatar(): void;
   onShare(): void;
 }) {
@@ -68,7 +70,7 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
   };
 
   return <div ref={root} className="relative flex min-w-[268px] items-center gap-1 border-t border-zinc-200 p-2">
-    <div role="menu" aria-label="设置" style={{ transformOrigin: 'bottom center' }} aria-hidden={!open} inert={!open} className={`absolute inset-x-2 bottom-full z-30 mb-1 max-h-[75dvh] overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_-12px_36px_rgba(12,13,16,.14)] transition-[opacity,transform,visibility] duration-200 ease-[cubic-bezier(.2,0,0,1)] ${open ? 'visible translate-y-0 opacity-100' : 'invisible translate-y-1.5 opacity-0'}`}>
+    <div role="menu" aria-label="设置" style={{ transformOrigin: 'bottom center' }} aria-hidden={!open} inert={!open} className={`absolute inset-x-2 bottom-full z-30 mb-1 max-h-[75dvh] overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_-12px_36px_rgba(12,13,16,.14)] transition-[opacity,transform,visibility] duration-[180ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'visible translate-y-0 scale-100 opacity-100' : 'invisible translate-y-1.5 scale-[0.97] opacity-0'}`}>
       <button type="button" role="menuitem" onClick={pick(onUsage)} className={itemClass}><BarChart3 size={16}/><span>消耗看板</span></button>
       <button type="button" role="menuitem" onClick={pick(onSchedule)} className={itemClass}><AlarmClock size={16}/><span>定时任务</span></button>
       <button type="button" role="menuitem" onClick={pick(onArchived)} className={itemClass}><Archive size={16}/><span>归档会话</span><span className="ml-auto text-[12px] tabular-nums text-zinc-400">{archivedCount}</span></button>
@@ -77,29 +79,31 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
       <button type="button" role="menuitem" onClick={pick(onAgentConfig)} className={itemClass}><Bot size={16}/><span>Agent 设置</span></button>
       <button type="button" role="menuitem" onClick={pick(onSideChatConfig)} className={itemClass}><MessagesSquare size={16}/><span>侧边对话设置</span></button>
       <button type="button" role="menuitem" onClick={pick(onAssistant)} className={itemClass}><PawPrint size={16}/><span>小猫与督办</span></button>
+      {onNotifications && <button type="button" role="menuitem" onClick={pick(onNotifications)} className={itemClass}><Bell size={16}/><span>通知设置</span></button>}
       <button type="button" role="menuitem" onClick={pick(onLark)} className={itemClass}><Settings2 size={16}/><span>飞书设置</span></button>
+      {onLarkRegexTriggers && <button type="button" role="menuitem" onClick={pick(onLarkRegexTriggers)} className={itemClass}><Regex size={16}/><span>群聊正则唤起</span></button>}
       <button type="button" role="menuitem" onClick={pick(onLarkAvatar)} className={itemClass}><Bot size={16}/><span>AI 飞书替身</span></button>
-      {pwa.visible && <>
+      {!desktopUpdate.api && pwa.visible && <>
         <div className="my-1 border-t border-zinc-200/70"/>
         <button type="button" role="menuitem" disabled={pwa.installing} onClick={() => void handlePwaInstall()} className={`${itemClass} disabled:opacity-60`}>
           {pwa.installing ? <Spinner size={15} label="正在打开安装弹窗" className="text-zinc-500"/> : <MonitorDown size={16}/>}
           <span>{pwa.installing ? '等待确认安装…' : '安装为桌面应用'}</span>
           {pwa.canPrompt && <span className="ml-auto rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-normal text-zinc-500">PWA</span>}
         </button>
-        {showPwaGuide && !pwa.canPrompt && <div className="mx-1.5 mb-1 mt-0.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-[12px] leading-5 text-zinc-600">{pwa.manualHint}</div>}
+        {showPwaGuide && !pwa.canPrompt && Boolean(pwa.manualHint) && <div className="mx-1.5 mb-1 mt-0.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-[12px] leading-5 text-zinc-600">{pwa.manualHint}</div>}
       </>}
       <div className="my-1 border-t border-zinc-200/70"/>
       <div className="px-2.5 py-1"><div className="mb-1.5 text-[12px] text-zinc-500">外观</div><ThemeSegmented/></div>
       <div className="px-2.5 py-1 text-[12px] text-zinc-600"><AutostartToggle enabled={!webDenied}/><KeepAwakeToggle enabled={!webDenied}/></div>
       <div className="mt-1 border-t border-zinc-200/70 px-2.5 pb-1 pt-2 text-[12px] text-zinc-400"><SelfUpdateNotice enabled={!webDenied}/></div>
     </div>
-    <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)} className={`flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium transition-colors duration-150 ${open ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'}`}>
-      <Settings size={16} className={`transition-transform duration-300 ease-[cubic-bezier(.2,0,0,1)] ${open ? 'rotate-90' : ''}`}/><span>设置</span>
+    <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)} className={`ui-press flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium ${open ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'}`}>
+      <Settings size={16} className={`transition-transform duration-300 ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/><span>设置</span>
       {updateBadge === 'updating' && <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[12px] font-normal text-zinc-500"><Spinner size={12} label="正在更新" className="text-zinc-500"/>正在更新…</span>}
       {updateBadge === 'available' && <span className="ml-auto flex shrink-0 items-center gap-1 text-[12px] font-normal text-emerald-600"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500 ui-status-pulse"/>有新版本</span>}
     </button>
     <HoverTooltip content="在手机上打开（扫码）">
-      <button type="button" onClick={() => { setOpen(false); onShare(); }} aria-label="在手机上打开" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-zinc-600 transition-colors duration-150 hover:bg-zinc-100 hover:text-zinc-900"><Smartphone size={16}/></button>
+      <button type="button" onClick={() => { setOpen(false); onShare(); }} aria-label="在手机上打开" className="ui-press grid h-9 w-9 shrink-0 place-items-center rounded-lg text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"><Smartphone size={16}/></button>
     </HoverTooltip>
   </div>;
 }

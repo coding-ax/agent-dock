@@ -14,8 +14,95 @@ import { HoverTooltip } from './HoverTooltip';
  * Radix 会把提示定位到视口原点（实测偏出上千像素）。
  */
 export function IconButton({ label, disabled, active, onClick, children }: { label: string; disabled?: boolean; active?: boolean; onClick(event: MouseEvent<HTMLButtonElement>): void; children: ReactNode }) {
-  const button = <button type="button" aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick} className={`grid h-8 w-8 place-items-center rounded-lg transition-[color,background-color,transform] duration-200 hover:bg-zinc-100 hover:text-zinc-900 active:scale-[.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 disabled:pointer-events-none disabled:opacity-30 ${active ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}>{children}</button>;
+  const button = <button type="button" aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick} className={`ui-press grid h-8 w-8 place-items-center rounded-lg hover:bg-zinc-100 hover:text-zinc-900 active:scale-[.95] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 disabled:pointer-events-none disabled:opacity-30 ${active ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}>{children}</button>;
   return <HoverTooltip content={label}>{button}</HoverTooltip>;
+}
+
+export interface SlidingSegmentedOption<T extends string = string> {
+  value: T;
+  label: ReactNode;
+  disabled?: boolean;
+  ariaLabel?: string;
+  tooltip?: ReactNode;
+}
+
+/**
+ * 统一滑动胶囊分段控件（纯 CSS transform 滑块，零布局重排、60fps）。
+ *
+ * 适用于 2–4 个等宽互斥选项（设置项分段、侧栏「时间/项目」、看板「列视图/矩阵」、
+ * 弹窗标签页等），同时支持 radiogroup 与 tablist 两种无障碍语义角色。
+ */
+export function SlidingSegmented<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+  role = 'radiogroup',
+  size = 'md',
+  className = '',
+  itemClassName = ''
+}: {
+  options: ReadonlyArray<SlidingSegmentedOption<NoInfer<T>>>;
+  value: T;
+  onChange(value: NoInfer<T>): void;
+  ariaLabel?: string;
+  role?: 'radiogroup' | 'tablist';
+  size?: 'xs' | 'sm' | 'md';
+  className?: string;
+  itemClassName?: string;
+}) {
+  const activeIndex = Math.max(0, options.findIndex(option => option.value === value));
+  const count = Math.max(1, options.length);
+  const trackMetrics = size === 'xs'
+    ? 'rounded-lg p-0.5'
+    : size === 'sm'
+      ? 'rounded-xl p-0.5'
+      : 'rounded-xl p-1';
+  const thumbRadius = size === 'xs' ? 'rounded-[6px]' : 'rounded-lg';
+  const thumbInset = size === 'md' ? 4 : 2;
+  const itemHeight = size === 'xs' ? 'h-6 text-[11.5px] px-2' : size === 'sm' ? 'h-7 text-[12px] px-2.5' : 'h-7 text-[12px] px-3';
+
+  return (
+    <div
+      role={role}
+      aria-label={ariaLabel}
+      className={`relative grid items-center bg-zinc-100 ${trackMetrics} ${className}`}
+      style={{ gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }}
+    >
+      <span
+        aria-hidden="true"
+        className={`ui-segmented-thumb pointer-events-none absolute bg-white shadow-[0_1px_2px_rgba(0,0,0,.08),0_1px_3px_rgba(0,0,0,.04)] ring-1 ring-zinc-200/70 ${thumbRadius}`}
+        style={{
+          top: thumbInset,
+          bottom: thumbInset,
+          left: thumbInset,
+          width: `calc((100% - ${thumbInset * 2}px) / ${count})`,
+          transform: `translateX(${activeIndex * 100}%)`
+        }}
+      />
+      {options.map(option => {
+        const active = option.value === value;
+        const button = (
+          <button
+            key={option.value}
+            type="button"
+            role={role === 'tablist' ? 'tab' : 'radio'}
+            aria-checked={role === 'radiogroup' ? active : undefined}
+            aria-selected={role === 'tablist' ? active : undefined}
+            aria-label={option.ariaLabel}
+            disabled={option.disabled}
+            onClick={() => onChange(option.value)}
+            className={`relative z-10 flex items-center justify-center gap-1.5 whitespace-nowrap font-medium transition-colors duration-150 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-40 ${thumbRadius} ${itemHeight} ${active ? 'text-zinc-900' : 'text-zinc-500 hover:text-zinc-800'} ${itemClassName}`}
+          >
+            {option.label}
+          </button>
+        );
+        return option.tooltip
+          ? <HoverTooltip key={option.value} content={option.tooltip}>{button}</HoverTooltip>
+          : button;
+      })}
+    </div>
+  );
 }
 
 /**
@@ -24,13 +111,22 @@ export function IconButton({ label, disabled, active, onClick, children }: { lab
  *
  * 窄屏（<520px）时控件换到说明文字下方并左对齐，避免 160px 的下拉把说明挤成竖条。
  */
-export function SettingRow({ title, description, children, className = '' }: { title: ReactNode; description?: ReactNode; children: ReactNode; className?: string }) {
+export function SettingRow({ title, description, children, className = '', inline = false }: { title: ReactNode; description?: ReactNode; children: ReactNode; className?: string; inline?: boolean }) {
+  if (inline) {
+    return <div className={`flex items-center justify-between gap-4 border-t border-zinc-100 px-4 py-3.5 first:border-t-0 ${className}`}>
+      <div className="min-w-0 flex-1">
+        <div className="text-[14px] text-zinc-900">{title}</div>
+        {description && <div className="mt-0.5 text-[12px] leading-5 text-zinc-500">{description}</div>}
+      </div>
+      <div className="flex shrink-0 items-center justify-end">{children}</div>
+    </div>;
+  }
   return <div className={`flex flex-col gap-2.5 border-t border-zinc-100 px-4 py-3.5 first:border-t-0 min-[520px]:flex-row min-[520px]:items-center min-[520px]:gap-4 ${className}`}>
     <div className="min-w-0 flex-1">
       <div className="text-[14px] text-zinc-900">{title}</div>
       {description && <div className="mt-0.5 text-[12px] leading-5 text-zinc-500">{description}</div>}
     </div>
-    <div className="flex shrink-0 items-center min-[520px]:justify-end">{children}</div>
+    <div className="flex w-full shrink-0 items-center min-[520px]:w-auto min-[520px]:justify-end">{children}</div>
   </div>;
 }
 

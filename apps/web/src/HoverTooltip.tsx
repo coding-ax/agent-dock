@@ -1,5 +1,7 @@
-import type { FocusEvent, ReactNode } from 'react';
+import { createContext, useContext, type FocusEvent, type ReactNode } from 'react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
+
+const HasTooltipProvider = createContext(false);
 
 /**
  * 全局 hover 提示。
@@ -26,7 +28,8 @@ export type TooltipAlign = 'start' | 'center' | 'end';
  * 也不影响 onBlur / onClick 的关闭逻辑。普通图标按钮仍保留键盘聚焦可见的提示。
  */
 export function HoverTooltip({ content, children, side, align, hoverOnly = false }: { content: ReactNode; children: ReactNode; side?: TooltipSide; align?: TooltipAlign; hoverOnly?: boolean }) {
-  if (!content) return <>{children}</>;
+  const hasProvider = useContext(HasTooltipProvider);
+  if (!content || !hasProvider) return <>{children}</>;
   return <TooltipPrimitive.Root>
     <TooltipPrimitive.Trigger asChild {...(hoverOnly ? { onFocus: (event: FocusEvent) => event.preventDefault() } : {})}>{children}</TooltipPrimitive.Trigger>
     <TooltipPrimitive.Portal><Content content={content} side={side} align={align}/></TooltipPrimitive.Portal>
@@ -68,8 +71,10 @@ function Content({ content, side, align }: { content: ReactNode; side?: TooltipS
     align={align}
     sideOffset={8}
     collisionPadding={8}
-    className="ui-tooltip pointer-events-none z-[60] max-h-[46vh] max-w-[460px] overflow-hidden whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-[12px] leading-5 text-zinc-700 shadow-[0_10px_30px_rgba(24,24,27,.14)]"
-  >{content}</TooltipPrimitive.Content>;
+    className="ui-tooltip pointer-events-none z-[60]"
+  >
+    <div className="ui-tooltip-surface max-h-[46vh] max-w-[460px] overflow-hidden whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-[12px] leading-5 text-zinc-700 shadow-[0_10px_30px_rgba(24,24,27,.14)]">{content}</div>
+  </TooltipPrimitive.Content>;
 }
 
 /**
@@ -82,5 +87,5 @@ function Content({ content, side, align }: { content: ReactNode; side?: TooltipS
  * pointer-events-none，本来也不需要移上去交互。
  */
 export function TooltipProvider({ children }: { children: ReactNode }) {
-  return <TooltipPrimitive.Provider delayDuration={120} skipDelayDuration={300} disableHoverableContent>{children}</TooltipPrimitive.Provider>;
+  return <HasTooltipProvider.Provider value={true}><TooltipPrimitive.Provider delayDuration={120} skipDelayDuration={300} disableHoverableContent>{children}</TooltipPrimitive.Provider></HasTooltipProvider.Provider>;
 }

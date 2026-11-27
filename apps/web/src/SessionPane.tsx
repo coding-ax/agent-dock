@@ -1,15 +1,15 @@
 import { ExitGate } from './ExitGate';
-import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Search, Square, Archive, X, RefreshCw, RotateCcw, ScrollText, MoreHorizontal } from 'lucide-react';
+import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Search, StickyNote, Sunset, Archive, X, RefreshCw, RotateCcw, ScrollText, MoreHorizontal } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type Agent, type DockEvent, type Session, type Task } from './api';
+import { api, type Agent, type DockEvent, type LlmAssistContext, type Session, type Task } from './api';
+import { AiTextAssistControl, useAiFlash } from './AiTextAssist';
 import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, EMOJI_TRIGGER_ORIGIN, groupTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, turnTimeBadge, waitingQueuedTasks, type OptimisticMessage } from './timeline';
 import { ActivityPanel, SystemPromptBubble, TimelineItem } from './TimelineItems';
 import { TimelineTurn } from './SendTimeHint';
 import { Composer } from './Composer';
 import type { ComposerEditorHandle } from './ComposerEditor';
-import { AgentIcon } from './AgentIcon';
 import { elapsedText, resolveElapsed } from './elapsed';
 import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, parsePromptToDraft, queuedImageThumbnailUrl, resolveActiveSteeringTaskId, type ComposerReference } from './composer-utils';
 import { computeLiveStreamTps, latestTurnUsageEventTps } from './live-tps';
@@ -17,9 +17,12 @@ import { useTimelineAutoScroll } from './useTimelineAutoScroll';
 import { useHealOnFocus } from './useHealOnFocus';
 import { useBufferedEventStream } from './useBufferedEventStream';
 import { healBoundary, mergeEventBatch, replaceEventTail } from './event-buffer';
-import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
+import { agentModelsQueryKey, loadAgentModels, readInitialAgentModels, writeCachedAgentModels } from './model-cache';
+import { createSessionConfigSwitchLane } from './session-config-switch';
 import { sessionStateLabel, stateLabels, stateTone, busyStates } from './session-states';
 import { ConfirmDialog, IconButton } from './ui-controls';
+import { HoverTooltip, HoverTooltipText } from './HoverTooltip';
+import { SessionAgentUsagePopover } from './SessionAgentUsagePopover';
 import { getActiveAppDialog, openAppDialog } from './dialog-store';
 import { shortcutLabel } from './useShortcuts';
 import { TimelineSearchBar } from './TimelineSearchBar';
@@ -33,9 +36,10 @@ import { useDockStore, type PaneKind } from './store';
 import { createOptimisticMessageId } from './optimistic-message-id';
 import { createClientMessageId } from './client-message-id';
 import { useToast } from './Toast';
-import { CompanionHeader, CompanionHeaderNotes, CompanionWelcome, RetireButton, useMainSessionId } from './companion/CompanionHeader';
+import { CompanionHeader, CompanionWelcome, useMainSessionId } from './companion/CompanionHeader';
 import { useCompanion } from './companion/useCompanion';
 import { useCompanionStore } from './companion/companion-store';
+import { openRetireCeremony, retireEntry } from './companion/lifecycle-model';
 import { sessionPaneTab } from './pane-tab';
 import { DEFAULT_SIDE_CHAT_TRIGGER_PREFIX, matchSideChatTrigger, sideChatBuiltinCommand } from './side-chat-config';
 import { clearSessionDraft, getBrowserDraftStorage, loadSessionDraft, MAX_DRAFT_CHARS, saveSessionDraft } from './session-drafts';
@@ -64,9 +68,16 @@ function PaneToggleButton({ open, onToggle }: { open: boolean; onToggle(): void 
 
 type SessionMenuItem = { id: string; label: string; icon: ReactNode; trailing?: ReactNode; danger?: boolean; disabled?: boolean; onSelect(): void };
 type SessionMenuGroup = { items: SessionMenuItem[] };
+type MenuIndicatorTone = 'alert' | 'warning' | 'active';
 
-/** 会话标题栏的 ⋯ 菜单：分组收纳所有会话级操作，支持上下键、回车、Esc。 */
-function SessionMenu({ groups }: { groups: SessionMenuGroup[] }) {
+const menuIndicatorDotClass: Record<MenuIndicatorTone, string> = {
+  alert: 'bg-red-500',
+  warning: 'bg-amber-500',
+  active: 'bg-emerald-500'
+};
+
+/** 会话标题栏的 ⋯ 菜单：分组收纳所有会话级与主会话辅助操作，支持上下键、回车、Esc 与轻微状态点感知。 */
+function SessionMenu({ groups, indicator, tooltip = '更多操作' }: { groups: SessionMenuGroup[]; indicator?: MenuIndicatorTone; tooltip?: string }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -93,12 +104,17 @@ function SessionMenu({ groups }: { groups: SessionMenuGroup[] }) {
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
   return <div ref={root} className="relative">
-    <button ref={trigger} type="button" aria-haspopup="menu" aria-expanded={open} aria-label="更多操作" onClick={() => setOpen(value => !value)} className={`grid h-8 w-8 place-items-center rounded-lg transition-[color,background-color] duration-150 hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${open ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}><MoreHorizontal size={16}/></button>
-    <ExitGate open={open}>
-      <div ref={menu} role="menu" aria-label="会话操作" className="ui-popover absolute right-0 top-[calc(100%+6px)] z-50 w-60 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_16px_48px_rgba(0,0,0,.16)]">
+    <HoverTooltip content={open ? undefined : tooltip} hoverOnly>
+      <button ref={trigger} type="button" aria-haspopup="menu" aria-expanded={open} aria-label={tooltip} onClick={() => setOpen(value => !value)} className={`ui-press relative grid h-8 w-8 place-items-center rounded-lg hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${open ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}>
+        <MoreHorizontal size={16}/>
+        {indicator && <span aria-hidden="true" data-menu-indicator={indicator} className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full ring-2 ring-canvas ${menuIndicatorDotClass[indicator]}`}/>}
+      </button>
+    </HoverTooltip>
+    <ExitGate open={open} ms={150}>
+      <div ref={menu} role="menu" aria-label="会话操作" data-placement="top-end" className="ui-popover absolute right-0 top-[calc(100%+6px)] z-50 w-60 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_16px_48px_rgba(0,0,0,.16)]">
         {groups.map((group, index) => <div key={index}>
           {index > 0 && <div className="my-1 border-t border-zinc-100"/>}
-          {group.items.map(item => <button key={item.id} type="button" role="menuitem" disabled={item.disabled} onClick={() => { close(); item.onSelect(); }} className={`flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[14px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${item.danger ? 'text-red-600 hover:bg-red-50' : 'text-zinc-700 hover:bg-zinc-100'}`}>
+          {group.items.map(item => <button key={item.id} type="button" role="menuitem" disabled={item.disabled} onClick={() => { close(); item.onSelect(); }} className={`ui-press flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[14px] disabled:cursor-not-allowed disabled:opacity-40 ${item.danger ? 'text-red-600 hover:bg-red-50' : 'text-zinc-700 hover:bg-zinc-100'}`}>
             <span className={`shrink-0 ${item.danger ? 'text-red-500' : 'text-zinc-500'}`}>{item.icon}</span>
             <span className="min-w-0 flex-1 truncate">{item.label}</span>
             {item.trailing}
@@ -107,6 +123,71 @@ function SessionMenu({ groups }: { groups: SessionMenuGroup[] }) {
       </div>
     </ExitGate>
   </div>;
+}
+
+/**
+ * 主会话专属的「更多」菜单桥接：单独订阅 useCompanion，避免便签轮询触发整条时间线重渲染。
+ * 把退休/交接与便签墙辅助入口克制收进 ⋯ 菜单，并通过轻微状态点保持感知。
+ */
+function MainSessionMoreMenu({
+  regularGroups,
+  dangerGroups,
+  baseIndicator,
+  baseTooltip
+}: {
+  regularGroups: SessionMenuGroup[];
+  dangerGroups: SessionMenuGroup[];
+  baseIndicator?: MenuIndicatorTone;
+  baseTooltip?: string;
+}) {
+  const info = useCompanion();
+  const retire = retireEntry({ isMain: true, handoff: info.lifecycle?.handoff });
+  const attention = info.counts.needsUser + info.counts.planned + info.pendingDrafts;
+  const retireLabel = retire.progress
+    ? (info.lifecycle?.handoff?.state === 'proposed' ? '查看交接提议' : '查看交接进度')
+    : '提前退休并交接';
+
+  const mainGroup: SessionMenuGroup = {
+    items: [
+      {
+        id: 'companion-notes',
+        label: '便签墙',
+        icon: <StickyNote size={16}/>,
+        ...(info.counts.open > 0 || info.pendingDrafts > 0
+          ? {
+            trailing: <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-medium tabular-nums ${info.counts.needsUser > 0 ? 'bg-red-100 text-red-700' : 'bg-zinc-100 text-zinc-500'}`}>
+              {info.counts.open + info.pendingDrafts}
+            </span>
+          }
+          : {}),
+        onSelect: () => useCompanionStore.getState().toggleDrawer()
+      },
+      ...(retire.visible ? [{
+        id: 'companion-retire',
+        label: retireLabel,
+        icon: <Sunset size={16}/>,
+        ...(retire.progress ? { trailing: <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500"/> } : {}),
+        onSelect: () => openRetireCeremony(retire, id => useCompanionStore.getState().openCeremony(id))
+      } satisfies SessionMenuItem] : [])
+    ]
+  };
+
+  const indicator: MenuIndicatorTone | undefined = info.counts.needsUser > 0
+    ? 'alert'
+    : (retire.progress || attention > 0)
+      ? 'warning'
+      : baseIndicator;
+
+  const tooltip = info.counts.needsUser > 0
+    ? `更多操作（${info.counts.needsUser} 件便签需要你）`
+    : retire.progress
+      ? `更多操作（${retire.label}）`
+      : attention > 0
+        ? `更多操作（${attention} 项待确认）`
+        : baseTooltip;
+
+  const allGroups = [...regularGroups, mainGroup, ...dangerGroups].filter(group => group.items.length > 0);
+  return <SessionMenu groups={allGroups} indicator={indicator} tooltip={tooltip}/>;
 }
 
 export const SessionPane = memo(function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onTogglePane, onOpenRawLog, btwEnabled = false, btwTriggerPrefix = DEFAULT_SIDE_CHAT_TRIGGER_PREFIX, onSideChat }: {
@@ -188,8 +269,35 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     refetchIntervalInBackground: true
   });
   const systemCapabilities = useQuery({ queryKey: ['system-capabilities'], queryFn: api.systemCapabilities, staleTime: 300_000 });
+  const syncToast = useToast();
+  const syncToastRef = useRef(syncToast);
+  syncToastRef.current = syncToast;
+  // 切换模型与思考深度采用「乐观更新 + 序列号 last-write-wins + 失败回滚 & Toast + 完成微反馈」：
+  // 连续快切时旧请求晚到绝不覆盖新选择，且切换进行中不提前触发未预热的 /models 重查。
+  const [pendingModel, setPendingModel] = useState<string>();
+  const [pendingReasoningEffort, setPendingReasoningEffort] = useState<string>();
+  const [modelJustSwitched, setModelJustSwitched] = useState(false);
+  const [reasoningJustSwitched, setReasoningJustSwitched] = useState(false);
+  const modelSwitchLaneRef = useRef(createSessionConfigSwitchLane());
+  const reasoningSwitchLaneRef = useRef(createSessionConfigSwitchLane());
+  const modelSavedTimerRef = useRef<number | undefined>(undefined);
+  const reasoningSavedTimerRef = useRef<number | undefined>(undefined);
+
   const outputLabel = session.model ?? agent?.name ?? session.agentId ?? 'Agent';
-  const models = useQuery({ queryKey: agentModelsQueryKey(session.agentId, session.model, session.sshHost), queryFn: () => loadAgentModels(session.agentId, session.model, false, session.sshHost), enabled: !session.archivedAt, initialData: () => session.sshHost ? undefined : readCachedAgentModels(session.agentId, session.model), initialDataUpdatedAt: 0, refetchOnMount: 'always', staleTime: 60_000 });
+  // 切换模型请求在途时先稳住目录查询 key，待服务端返回内联 discoveredModels 并写入 fresh 缓存后再切 key，
+  // 避免 PATCH 与未命中的 GET /models 并发撞车触发多余 CLI 探测。
+  const modelsQueryModel = pendingModel !== undefined ? modelSwitchLaneRef.current.rollbackValue : session.model;
+  const models = useQuery({
+    queryKey: agentModelsQueryKey(session.agentId, modelsQueryModel, session.sshHost),
+    queryFn: () => loadAgentModels(session.agentId, modelsQueryModel, false, session.sshHost),
+    enabled: !session.archivedAt,
+    initialData: () => session.sshHost ? undefined : readInitialAgentModels(session.agentId, modelsQueryModel),
+    initialDataUpdatedAt: 0,
+    // 同 Agent 切换模型时沿用上一份目录占位，下拉秒开、不闪回「模型加载中…」，后台 SWR 静默刷新新模型支持的思考深度。
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey?.[1] === session.agentId && previousQuery?.queryKey?.[3] === (session.sshHost ?? 'local') ? previous : undefined),
+    refetchOnMount: true,
+    staleTime: 60_000
+  });
   // Skills are read from the local filesystem; a remote session's cwd is a
   // remote path, so scanning it locally would return another project's skills.
   const skills = useQuery({ queryKey: ['skills', session.cwd], queryFn: () => api.skills(session.cwd), enabled: !session.archivedAt && !session.sshHost, staleTime: 60_000 });
@@ -442,7 +550,14 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 乐观清屏写入的是空串，但请求还没成功，不能据此删掉已落盘的草稿；
   // 成功/失败后 isPending 变化会再触发一次，成功清空、失败把草稿写回去。
   const draftWriter = useSessionDraftWriter(session.id, prompt, { skipEmptyValue: send.isPending, enabled: !session.archivedAt });
-  const cancelQueued = useMutation({ mutationFn: (taskId: string) => api.cancelQueued(session.id, taskId), onSuccess: result => qc.setQueryData<Task[]>(['tasks', session.id], current => current?.map(task => task.id === result.id ? result : task)), onError: error => setActionError(error.message) });
+  const cancelQueued = useMutation({
+    mutationFn: (taskId: string) => api.cancelQueued(session.id, taskId),
+    onSuccess: result => {
+      qc.setQueryData<Task[]>(['tasks', session.id], current => upsertTask(current, result));
+      setOptimisticMessages(current => bindOptimisticTask(current, result));
+    },
+    onError: error => setActionError(error.message)
+  });
   const steerQueued = useMutation({
     mutationFn: (taskId: string) => api.steerQueued(session.id, taskId),
     onMutate: taskId => {
@@ -452,6 +567,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     onSuccess: () => {
       setActionError(undefined);
       void qc.invalidateQueries({ queryKey: ['tasks', session.id] });
+      void qc.invalidateQueries({ queryKey: ['sessions'] });
     },
     onError: error => {
       setHeldSteeringTaskId(undefined);
@@ -479,7 +595,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     mutationFn: (taskId: string) => api.cancelQueued(session.id, taskId),
     onSuccess: result => {
       setActionError(undefined);
-      qc.setQueryData<Task[]>(['tasks', session.id], current => current?.map(task => task.id === result.id ? result : task));
+      qc.setQueryData<Task[]>(['tasks', session.id], current => upsertTask(current, result));
+      setOptimisticMessages(current => bindOptimisticTask(current, result));
       const { text, references } = parsePromptToDraft(result.prompt, advertisedCommands.map(command => command.name));
       const restored = references.map(reference => {
         if (reference.kind !== 'image') return reference;
@@ -508,9 +625,103 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     onError: error => setActionError(error.message)
   });
   const refreshModels = useMutation({ mutationFn: ({ agentId, currentModel }: { agentId: string; currentModel?: string }) => loadAgentModels(agentId, currentModel, true, session.sshHost), onSuccess: (result, variables) => { setActionError(undefined); qc.setQueryData(agentModelsQueryKey(variables.agentId, variables.currentModel, session.sshHost), result); }, onError: error => setActionError(error.message) });
-  const switchModel = useMutation({ mutationFn: (nextModel: string) => api.setSessionModel(session.id, nextModel), onSuccess: result => { setActionError(undefined); qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === result.id ? result : item)); void models.refetch(); }, onError: error => setActionError(error.message) });
-  const switchReasoningEffort = useMutation({ mutationFn: (nextReasoningEffort: string) => api.setSessionReasoningEffort(session.id, nextReasoningEffort), onSuccess: result => { setActionError(undefined); qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === result.id ? result : item)); }, onError: error => setActionError(error.message) });
-  const modelReadiness = getModelReadiness({ loaded: models.data !== undefined, loading: models.data === undefined && (models.isPending || models.isFetching || refreshModels.isPending), switching: switchModel.isPending, failed: models.data === undefined && models.isError });
+
+  useEffect(() => {
+    // 切换会话时重置本会话的切换态与计时器。
+    modelSwitchLaneRef.current.reset();
+    reasoningSwitchLaneRef.current.reset();
+    setPendingModel(undefined);
+    setPendingReasoningEffort(undefined);
+    setModelJustSwitched(false);
+    setReasoningJustSwitched(false);
+    window.clearTimeout(modelSavedTimerRef.current);
+    window.clearTimeout(reasoningSavedTimerRef.current);
+  }, [session.id]);
+
+  useEffect(() => () => {
+    modelSwitchLaneRef.current.reset();
+    reasoningSwitchLaneRef.current.reset();
+    window.clearTimeout(modelSavedTimerRef.current);
+    window.clearTimeout(reasoningSavedTimerRef.current);
+  }, []);
+
+  const handleModelChange = useCallback((nextModel: string) => {
+    void modelSwitchLaneRef.current.submit(nextModel, {
+      currentValue: session.model,
+      request: target => api.setSessionModel(session.id, target),
+      onOptimistic: target => {
+        setActionError(undefined);
+        setModelJustSwitched(false);
+        window.clearTimeout(modelSavedTimerRef.current);
+        setPendingModel(target);
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, model: target } : item));
+      },
+      onSuccess: result => {
+        const { discoveredModels, ...updatedSession } = result;
+        if (discoveredModels) {
+          qc.setQueryData(agentModelsQueryKey(session.agentId, updatedSession.model, session.sshHost), discoveredModels);
+          if (!session.sshHost && !discoveredModels.warning) {
+            writeCachedAgentModels(session.agentId, updatedSession.model, discoveredModels);
+          }
+        }
+        setPendingModel(undefined);
+        const activeReasoning = reasoningSwitchLaneRef.current.pending;
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === updatedSession.id ? {
+          ...updatedSession,
+          ...(activeReasoning !== undefined ? { reasoningEffort: activeReasoning } : {})
+        } : item));
+        setModelJustSwitched(true);
+        modelSavedTimerRef.current = window.setTimeout(() => setModelJustSwitched(false), 1200);
+      },
+      onRollback: (previousValue, message) => {
+        setPendingModel(undefined);
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, model: previousValue } : item));
+        setActionError(message);
+        syncToastRef.current.show(`切换模型失败：${message}`, 'error');
+      }
+    });
+  }, [qc, session.agentId, session.id, session.model, session.sshHost]);
+
+  const handleReasoningEffortChange = useCallback((nextReasoningEffort: string) => {
+    void reasoningSwitchLaneRef.current.submit(nextReasoningEffort, {
+      currentValue: session.reasoningEffort,
+      request: target => api.setSessionReasoningEffort(session.id, target),
+      onOptimistic: target => {
+        setActionError(undefined);
+        setReasoningJustSwitched(false);
+        window.clearTimeout(reasoningSavedTimerRef.current);
+        setPendingReasoningEffort(target);
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, reasoningEffort: target } : item));
+      },
+      onSuccess: result => {
+        const { discoveredModels, ...updatedSession } = result;
+        if (discoveredModels) {
+          qc.setQueryData(agentModelsQueryKey(session.agentId, updatedSession.model, session.sshHost), discoveredModels);
+          if (!session.sshHost && !discoveredModels.warning) {
+            writeCachedAgentModels(session.agentId, updatedSession.model, discoveredModels);
+          }
+        }
+        setPendingReasoningEffort(undefined);
+        const activeModel = modelSwitchLaneRef.current.pending;
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === updatedSession.id ? {
+          ...updatedSession,
+          ...(activeModel !== undefined ? { model: activeModel } : {})
+        } : item));
+        setReasoningJustSwitched(true);
+        reasoningSavedTimerRef.current = window.setTimeout(() => setReasoningJustSwitched(false), 1200);
+      },
+      onRollback: (previousValue, message) => {
+        setPendingReasoningEffort(undefined);
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, reasoningEffort: previousValue } : item));
+        setActionError(message);
+        syncToastRef.current.show(`切换思考深度失败：${message}`, 'error');
+      }
+    });
+  }, [qc, session.agentId, session.id, session.reasoningEffort, session.sshHost]);
+
+  const switchingModel = pendingModel !== undefined;
+  const switchingReasoningEffort = pendingReasoningEffort !== undefined;
+  const modelReadiness = getModelReadiness({ loaded: models.data !== undefined, loading: models.data === undefined && (models.isPending || models.isFetching || refreshModels.isPending), switching: switchingModel, failed: models.data === undefined && models.isError });
 
   useBufferedEventStream({
     sessionId: session.id,
@@ -518,8 +729,9 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     runId: session.runId,
     queryClient: qc,
     onReconnect: () => {
-      // 断线期间漏掉的 task 事件不会补发：重连后立刻重取任务，并把本轮事件自愈一遍。
+      // 断线期间漏掉的 task/status 事件不会补发：重连后立刻重取任务、会话状态并自愈本轮事件。
       void tasks.refetch();
+      void qc.invalidateQueries({ queryKey: ['sessions'] });
       healNextFetch.current = true;
       void events.refetch();
     },
@@ -530,11 +742,12 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       if (event.type === 'status' && Object.hasOwn(stateLabels, event.data.state)) qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? {
         ...item,
         state: event.data.state,
+        error: typeof event.data.error === 'string' ? event.data.error : undefined,
         ...(Object.hasOwn(event.data, 'interruptIntent')
           ? { interruptIntent: typeof event.data.interruptIntent === 'string' ? event.data.interruptIntent : undefined }
           : event.data.state !== 'interrupted' ? { interruptIntent: undefined } : {}),
-        ...(typeof event.data.model === 'string' ? { model: event.data.model } : {}),
-        ...(typeof event.data.reasoningEffort === 'string' ? { reasoningEffort: event.data.reasoningEffort } : {})
+        ...(typeof event.data.model === 'string' && !modelSwitchLaneRef.current.pending ? { model: event.data.model } : {}),
+        ...(typeof event.data.reasoningEffort === 'string' && !reasoningSwitchLaneRef.current.pending ? { reasoningEffort: event.data.reasoningEffort } : {})
       } : item));
       if (event.type === 'task' && event.data.task) {
         const task = event.data.task as Task;
@@ -605,7 +818,6 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
 
   // 导入会话从外部 Agent 同步新轮次：用户在 Codex 等原客户端里续聊后，一键把 AgentDock 还没有的轮次补进来。
   // 其他会话的本地同步由 SSE + 聚焦自愈重拉兼顾，不再放按钮。
-  const syncToast = useToast();
   const externalName = agent?.name ?? session.agentId;
   const syncExternal = useMutation({
     mutationFn: () => api.syncExternal(session.id),
@@ -622,20 +834,67 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
 
   const act = async (action: string) => { try { setActionError(undefined); await api.action(session.id, action); } catch (error) { setActionError(error instanceof Error ? error.message : String(error)); } };
 
-  // ⋯ 菜单：会话 / 协作 / 危险操作三组。原标题栏上的每个按钮都能在这里找到，
-  // 常用入口另外在标题栏常驻，避免 0.1.x 的老用户找不到它们。
-  const menuGroups: SessionMenuGroup[] = [
+  const titleFlash = useAiFlash();
+  const [editingHeaderTitle, setEditingHeaderTitle] = useState(false);
+  const [headerTitleDraft, setHeaderTitleDraft] = useState('');
+  useEffect(() => {
+    setEditingHeaderTitle(false);
+    setHeaderTitleDraft('');
+  }, [session.id]);
+
+  const saveHeaderTitle = useMutation({
+    mutationFn: (title: string | null) => api.setSessionTitle(session.id, title),
+    onSuccess: updated => {
+      qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === updated.id ? updated : item));
+      setEditingHeaderTitle(false);
+    },
+    onError: error => setActionError(error instanceof Error ? error.message : String(error))
+  });
+
+  const commitHeaderTitle = () => {
+    if (saveHeaderTitle.isPending) return;
+    const next = headerTitleDraft.replace(/\s+/g, ' ').trim();
+    if (next === (session.customTitle ?? '')) {
+      setEditingHeaderTitle(false);
+      return;
+    }
+    saveHeaderTitle.mutate(next || null);
+  };
+
+  const buildSessionAiContext = useCallback((): LlmAssistContext => {
+    const textEntries = timeline
+      .filter(item => item.type === 'text' && typeof item.data.text === 'string' && item.data.text.trim())
+      .map(item => ({
+        role: item.data.role === 'user' ? 'user' : 'assistant',
+        text: String(item.data.text).replace(/\s+/g, ' ').trim().slice(0, 320)
+      }));
+    const recentMessages = textEntries.length <= 8
+      ? textEntries
+      : [...textEntries.slice(0, 2), ...textEntries.slice(-6)];
+    return {
+      sessionTitle: sessionLabel(session, agent?.name),
+      agentName: agent?.name ?? session.agentId,
+      cwd: session.cwd,
+      ...(session.model ? { model: session.model } : {}),
+      ...(recentMessages.length ? { recentMessages } : {}),
+      ...(session.systemPrompt?.trim() ? { extra: `会话 System Prompt 摘要：${session.systemPrompt.trim().slice(0, 260)}` } : {})
+    };
+  }, [timeline, session, agent?.name]);
+
+  const buildTitleAiContext = useCallback((): LlmAssistContext => ({
+    ...buildSessionAiContext(),
+    field: '会话标题',
+    purpose: '根据会话消息与工作区提炼一个简短直观的中文会话标题',
+    maxChars: 20
+  }), [buildSessionAiContext]);
+
+  // ⋯ 菜单：统一收纳会话级低频操作（定时任务、系统提示词、飞书托管、同步、归档等），
+  // 顶栏只保留搜索、副屏与「更多」，零重复、高呼吸感。
+  const regularMenuGroups: SessionMenuGroup[] = [
     { items: [
-      {
-        id: 'search-timeline',
-        label: '搜索对话内容',
-        icon: <Search size={16}/>,
-        trailing: <span className="shrink-0 font-mono text-[11px] text-zinc-400">{shortcutLabel('f')}</span>,
-        onSelect: openTimelineSearch
-      } satisfies SessionMenuItem,
       ...(!session.archivedAt ? [{
         id: 'schedules', label: '定时任务', icon: <AlarmClock size={16}/>,
-        ...(activeSchedules ? { trailing: <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[12px] tabular-nums text-zinc-500">{activeSchedules}</span> } : {}),
+        ...(activeSchedules ? { trailing: <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-zinc-500">{activeSchedules}</span> } : {}),
         onSelect: () => openAppDialog('schedule', { sessionId: session.id })
       } satisfies SessionMenuItem] : []),
       ...(session.systemPrompt ? [{ id: 'system-prompt', label: '查看系统提示词', icon: <BookOpen size={16}/>, onSelect: () => openAppDialog('system-prompt', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
@@ -646,61 +905,135 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       ...(!session.archivedAt && !handoverInfo && session.source !== 'lark' ? [{ id: 'handover', label: '托管到飞书机器人', icon: <Bot size={16}/>, onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
       ...(!handoverInfo && larkLink ? [{ id: 'lark-open', label: larkLink.exact ? '在飞书中打开' : '在飞书中打开该话题', icon: <ExternalLink size={16}/>, onSelect: () => window.open(larkLink.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem] : []),
       ...(!session.archivedAt && session.source === 'import' ? [{ id: 'sync', label: syncExternal.isPending ? `正在从 ${externalName} 同步…` : `从 ${externalName} 同步新消息`, icon: <RefreshCw size={16}/>, disabled: syncExternal.isPending || busyStates.has(session.state), onSelect: () => syncExternal.mutate() } satisfies SessionMenuItem] : [])
-    ] },
-    ...(!session.archivedAt ? [{ items: [{
-      id: 'archive',
-      // 主会话在岗时后端会硬拦；这里先把文案改掉，点开给解释和直达交接的入口。
-      label: isMain ? '归档会话（主会话需先交接）' : '归档会话',
-      icon: <Archive size={16}/>, danger: !isMain, disabled: archive.isPending,
-      onSelect: () => { archive.reset(); if (isMain) setMainArchiveBlocked(true); else setArchiveConfirm(true); }
-    } satisfies SessionMenuItem] }] : [])
+    ] }
   ];
+  const dangerMenuGroups: SessionMenuGroup[] = !session.archivedAt ? [{ items: [{
+    id: 'archive',
+    // 主会话在岗时后端会硬拦；这里先把文案改掉，点开给解释和直达交接的入口。
+    label: isMain ? '归档会话（主会话需先交接）' : '归档会话',
+    icon: <Archive size={16}/>, danger: !isMain, disabled: archive.isPending,
+    onSelect: () => { archive.reset(); if (isMain) setMainArchiveBlocked(true); else setArchiveConfirm(true); }
+  } satisfies SessionMenuItem] }] : [];
+  const menuGroups: SessionMenuGroup[] = [...regularMenuGroups, ...dangerMenuGroups];
+  const baseMenuIndicator: MenuIndicatorTone | undefined = handoverInfo ? 'active' : activeSchedules > 0 ? 'active' : undefined;
+  const baseMenuTooltip = handoverInfo
+    ? `更多操作（已托管：${handoverInfo.name}）`
+    : activeSchedules > 0
+      ? `更多操作（${activeSchedules} 个定时任务启用中）`
+      : '更多操作';
+
+  const agentUsageTrigger = (
+    <SessionAgentUsagePopover
+      sessionId={session.id}
+      agentId={session.agentId}
+      agentName={agent?.name}
+      currentModel={session.model ?? models.data?.defaultModel}
+      context={composerContext}
+      sessionUsage={effectiveSessionUsage}
+      liveTps={liveStreamTps}
+    />
+  );
 
   // h-full w-full：本组件既被当作并排的 flex 子项（主区），也被塞进 PaneHost 的
   // absolute inset-0 容器（右栏标签）。后者不是 flex 上下文，只写 flex-1 会撑不满，
   // 表现为右栏内容只占左上角一块。
   return <div ref={paneRootRef} data-session-pane={pane} className={`flex h-full min-w-0 w-full ${secondary ? 'border-l border-zinc-200' : ''}`}>
     <section className="flex min-w-0 flex-1 flex-col">
-      <header className="ui-session-topbar flex shrink-0 items-center gap-1 border-b border-zinc-200 bg-canvas px-3 sm:px-4">
-        <span className="mr-1 md:hidden"><IconButton label="打开会话列表" onClick={onOpenSidebar}><Menu size={16}/></IconButton></span>
-        {isMain ? <CompanionHeader agentId={session.agentId} agentName={agent?.name}/> : <div className="min-w-0 flex-1 overflow-hidden">
-          <div className="truncate text-[14px] font-semibold text-zinc-900">{sessionLabel(session, agent?.name)}</div>
-          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500">
-            <AgentIcon agentId={session.agentId} agentName={agent?.name} size={13}/>
-            <span className="min-w-0 truncate">{agent?.name ?? session.agentId}</span>
-            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>
-            <span className="shrink-0">{sessionStateLabel(session.state, session.interruptIntent)}</span>
-            {headerElapsed && <>
-              <span className="shrink-0 text-zinc-300">·</span>
-              <span className="shrink-0 tabular-nums" title="本轮执行耗时；刷新或重连后按服务端时间重新计算">{headerElapsed}</span>
-            </>}
+      <header className="ui-session-topbar flex shrink-0 items-center gap-1.5 border-b border-zinc-200 bg-canvas px-3 sm:px-4">
+        <span className="mr-0.5 md:hidden"><IconButton label="打开会话列表" onClick={onOpenSidebar}><Menu size={16}/></IconButton></span>
+        {isMain ? <CompanionHeader agentId={session.agentId} agentName={agent?.name} agentSlot={agentUsageTrigger}/> : <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="flex min-w-0 items-center gap-1.5">
+            {editingHeaderTitle ? (
+              <input
+                autoFocus
+                value={headerTitleDraft}
+                maxLength={120}
+                disabled={saveHeaderTitle.isPending}
+                onChange={event => setHeaderTitleDraft(event.target.value)}
+                onBlur={commitHeaderTitle}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') { event.preventDefault(); commitHeaderTitle(); }
+                  else if (event.key === 'Escape') { event.preventDefault(); setEditingHeaderTitle(false); }
+                }}
+                placeholder={sessionLabel(session, agent?.name)}
+                aria-label="编辑会话标题"
+                className={`ui-field h-6 min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 text-[13px] font-semibold text-zinc-900 ${titleFlash.flashClass}`}
+              />
+            ) : (
+              <div
+                onDoubleClick={() => {
+                  setHeaderTitleDraft(session.customTitle ?? '');
+                  setEditingHeaderTitle(true);
+                }}
+                className={`min-w-0 truncate rounded px-0.5 text-[14px] font-semibold leading-tight text-zinc-900 ${titleFlash.flashClass}`}
+              >
+                {sessionLabel(session, agent?.name)}
+              </div>
+            )}
+            <AiTextAssistControl
+              mode="title_generate"
+              interaction="instant"
+              variant="inline"
+              size="xs"
+              compactUndo
+              value={editingHeaderTitle ? headerTitleDraft : (session.customTitle ?? '')}
+              onChange={next => {
+                if (editingHeaderTitle) setHeaderTitleDraft(next);
+              }}
+              manualApply={!editingHeaderTitle}
+              onResult={async result => {
+                const nextTitle = result.text.trim();
+                if (!nextTitle) return;
+                if (editingHeaderTitle) {
+                  setHeaderTitleDraft(nextTitle);
+                  return;
+                }
+                await saveHeaderTitle.mutateAsync(nextTitle);
+              }}
+              onUndo={async previous => {
+                if (editingHeaderTitle) {
+                  setHeaderTitleDraft(previous);
+                  return;
+                }
+                await saveHeaderTitle.mutateAsync(previous.trim() || null);
+              }}
+              context={buildTitleAiContext}
+              resetKey={session.id}
+              onFlash={titleFlash.triggerFlash}
+              disabled={saveHeaderTitle.isPending}
+              ariaLabel="AI 生成会话标题"
+              tooltip="AI 根据会话内容生成标题（生成后可一键撤销）"
+              testId="session-title-ai-assist"
+            />
+            {session.sshHost && <HoverTooltip content={`通过 SSH 在 ${session.sshHost} 上运行`}><span className="shrink-0 rounded border border-sky-200 bg-sky-50 px-1 py-px text-[11px] font-medium leading-4 text-sky-700 max-sm:hidden">SSH · {session.sshHost}</span></HoverTooltip>}
+          </div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] leading-4 text-zinc-500">
+            {agentUsageTrigger}
             <span className="shrink-0 text-zinc-300">·</span>
-            <span title={session.cwd} className="min-w-0 truncate">{workspaceLabel(session.cwd)}</span>
-            {session.sshHost && <span title={`通过 SSH 在 ${session.sshHost} 上运行`} className="shrink-0 rounded border border-sky-200 bg-sky-50 px-1 py-px text-[12px] font-medium leading-4 text-sky-700">SSH · {session.sshHost}</span>}
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'} ${sessionBusy ? 'ui-live-ring' : ''}`}/>
+            <span className="shrink-0">{sessionStateLabel(session.state, session.interruptIntent)}</span>
+            {headerElapsed && <span className="hidden shrink-0 items-center gap-1.5 sm:inline-flex">
+              <span className="text-zinc-300">·</span>
+              <HoverTooltip content="本轮执行耗时；刷新或重连后按服务端时间重新计算"><span className="tabular-nums">{headerElapsed}</span></HoverTooltip>
+            </span>}
+            <span className="hidden min-w-0 items-center gap-1.5 md:inline-flex">
+              <span className="shrink-0 text-zinc-300">·</span>
+              <HoverTooltipText content={session.cwd} className="min-w-0 truncate">{workspaceLabel(session.cwd)}</HoverTooltipText>
+            </span>
           </div>
         </div>}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          {isMain && <RetireButton/>}
-          {isMain && <CompanionHeaderNotes/>}
-          {!session.archivedAt && busyStates.has(session.state) && <button type="button" onClick={() => void act('interrupt')} className="mr-1 flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[12px] font-medium text-white transition-colors hover:bg-zinc-700"><Square size={10} fill="currentColor"/>停止</button>}
-          {/* 手机上这些操作都收进 ⋯ 菜单，给标题和退休入口留出空间。 */}
-          {!session.archivedAt && <span className="max-sm:hidden"><IconButton label={activeSchedules ? `定时任务（${activeSchedules} 个启用中）` : '定时任务'} active={activeSchedules > 0} onClick={() => openAppDialog('schedule', { sessionId: session.id })}><AlarmClock size={15}/></IconButton></span>}
-          {session.systemPrompt && <span className="max-sm:hidden"><IconButton label="查看系统提示词" onClick={() => openAppDialog('system-prompt', { sessionId: session.id })}><BookOpen size={15}/></IconButton></span>}
-          <span className="max-sm:hidden">
-            {handoverInfo
-              ? <IconButton label={`已托管：${handoverInfo.name}（打开托管群）`} onClick={() => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer')}><Bot size={15} className="text-emerald-600"/></IconButton>
-              : !session.archivedAt && session.source !== 'lark' && <IconButton label="托管给飞书机器人" onClick={() => openAppDialog('handover', { sessionId: session.id })}><Bot size={15}/></IconButton>}
-          </span>
-          {!handoverInfo && larkLink && <span className="max-sm:hidden"><IconButton label={larkLink.exact ? '在飞书中打开该会话' : '在飞书中打开该话题（若未定位请在群内查找）'} onClick={() => window.open(larkLink.url, '_blank', 'noopener,noreferrer')}><ExternalLink size={15}/></IconButton></span>}
           <IconButton label={`搜索对话内容（${shortcutLabel('f')}）`} active={searchOpen} onClick={() => { if (searchOpen) closeTimelineSearch(); else openTimelineSearch(); }}><Search size={15}/></IconButton>
           {!secondary && onTogglePane && <PaneToggleButton open={Boolean(paneOpen)} onToggle={onTogglePane}/>}
-          <SessionMenu groups={menuGroups.filter(group => group.items.length)}/>
+          {isMain
+            ? <MainSessionMoreMenu regularGroups={regularMenuGroups} dangerGroups={dangerMenuGroups} baseIndicator={baseMenuIndicator} baseTooltip={baseMenuTooltip}/>
+            : <SessionMenu groups={menuGroups.filter(group => group.items.length)} indicator={baseMenuIndicator} tooltip={baseMenuTooltip}/>}
         </div>
       </header>
       {actionError && <div className="flex items-center border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700"><span className="min-w-0 truncate">{actionError}</span><button className="ml-2 shrink-0" onClick={() => setActionError(undefined)} aria-label="关闭错误提示"><X size={13}/></button></div>}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-      <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
+      <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`ui-view-fade mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
         {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{session.systemPrompt?.trim() && <div data-search-item-key={SYSTEM_PROMPT_SEARCH_KEY} data-search-active={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY ? 'true' : undefined} className={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY ? 'ui-search-active-item' : undefined}><SystemPromptBubble prompt={session.systemPrompt.trim()} forceOpen={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY}/></div>}{timelineTurns.map(turn => {
           const time = turnTimeBadge(turn);
           return <TimelineTurn key={turn.turnId} turnId={turn.turnId} time={time}>
@@ -719,7 +1052,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             })}
           </TimelineTurn>;
         })}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
-        </div></div>{searchOpen && <TimelineSearchBar inputRef={searchInputRef} query={searchQuery} hasQuery={Boolean(normalizeSearchQuery(searchQuery))} activeIndex={clampedSearchIndex} total={searchMatches.length} onQueryChange={next => { setSearchQuery(next); setSearchIndex(0); }} onNext={goToNextMatch} onPrev={goToPrevMatch} onClear={() => { setSearchQuery(''); setSearchIndex(0); }} onClose={closeTimelineSearch}/>}{showScrollToBottom && <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-popover pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_4px_14px_rgba(0,0,0,.12)] transition-colors hover:border-zinc-300 hover:text-zinc-900" aria-label="回到最新消息"><ArrowDown size={15}/></button></div>}<SelectionQuotePopover containerRef={timelineScroll.containerRef} enabled={!session.archivedAt && !mainNeedsRestart} onQuote={handleQuoteReply}/></div>
+        </div></div><ExitGate open={searchOpen} ms={150}><TimelineSearchBar inputRef={searchInputRef} query={searchQuery} hasQuery={Boolean(normalizeSearchQuery(searchQuery))} activeIndex={clampedSearchIndex} total={searchMatches.length} onQueryChange={next => { setSearchQuery(next); setSearchIndex(0); }} onNext={goToNextMatch} onPrev={goToPrevMatch} onClear={() => { setSearchQuery(''); setSearchIndex(0); }} onClose={closeTimelineSearch}/></ExitGate><ExitGate open={showScrollToBottom} ms={150}><div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-fab-in ui-press pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_6px_18px_rgba(0,0,0,.13)] hover:-translate-y-0.5 hover:border-zinc-300 hover:text-zinc-900 active:scale-95" aria-label="回到最新消息"><ArrowDown size={15}/></button></div></ExitGate><SelectionQuotePopover containerRef={timelineScroll.containerRef} enabled={!session.archivedAt && !mainNeedsRestart} onQuote={handleQuoteReply}/></div>
       {!session.archivedAt && prompt.length > MAX_DRAFT_CHARS && <div role="status" className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-center text-[12px] text-amber-700">草稿超过 {MAX_DRAFT_CHARS.toLocaleString()} 字符，超出部分不会保存，刷新后会丢失。</div>}
       {session.archivedAt || mainNeedsRestart
         ? mainNeedsRestart
@@ -730,7 +1063,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             </button>
           </div>
           : <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已归档，仅支持查看。</div>
-        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} quotedText={quotedText} onClearQuote={() => setQuotedText(undefined)} sending={send.isPending} sendingMode={send.isPending ? send.variables?.mode : undefined} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={activeSteeringTaskId} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} context={composerContext} sessionUsage={effectiveSessionUsage} liveTps={liveStreamTps} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchModel.isPending} switchingReasoningEffort={switchReasoningEffort.isPending} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={handleSteerQueued} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={nextModel => switchModel.mutate(nextModel)} onReasoningEffortChange={nextReasoningEffort => switchReasoningEffort.mutate(nextReasoningEffort)} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
+        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} quotedText={quotedText} onClearQuote={() => setQuotedText(undefined)} sending={send.isPending} sendingMode={send.isPending ? send.variables?.mode : undefined} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={activeSteeringTaskId} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchingModel} switchingReasoningEffort={switchingReasoningEffort} pendingModel={pendingModel} pendingReasoningEffort={pendingReasoningEffort} modelJustSwitched={modelJustSwitched} reasoningJustSwitched={reasoningJustSwitched} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} aiContext={buildSessionAiContext} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={handleSteerQueued} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={handleModelChange} onReasoningEffortChange={handleReasoningEffortChange} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>
       </div>
     </section>

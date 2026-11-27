@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readCachedAgentModels, writeCachedAgentModels, reconcileAgentModels } from './model-cache';
+import { readCachedAgentModels, readInitialAgentModels, writeCachedAgentModels, reconcileAgentModels } from './model-cache';
 
 const memoryStorage = () => {
   const values = new Map<string, string>();
@@ -23,6 +23,9 @@ describe('agent model cache', () => {
     writeCachedAgentModels('claude', 'opus', result, storage, 1_000);
     expect(readCachedAgentModels('claude', 'opus', storage, 2_000)).toEqual(result);
     expect(readCachedAgentModels('claude', 'sonnet', storage, 2_000)).toBeUndefined();
+    // 切换未探测过的新模型时，SWR 初始占位回落到同 Agent 基础目录缓存，下拉立即可用不闪空。
+    expect(readInitialAgentModels('claude', 'sonnet', storage, 2_000)).toEqual(result);
+    expect(readCachedAgentModels('claude', undefined, storage, 2_000)).toEqual(result);
   });
 
   it('ignores expired and malformed cache entries', () => {
