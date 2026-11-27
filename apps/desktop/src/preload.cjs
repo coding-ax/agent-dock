@@ -11,7 +11,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 const STATE_CHANNEL = 'agentdock:desktop-update:state';
+const NOTIFY_CLICK_CHANNEL = 'agentdock:desktop-notification:click';
+const NOTIFY_FOCUS_CHANNEL = 'agentdock:desktop-notification:focus';
 const listeners = new Map();
+const notifyClickListeners = new Map();
+const notifyFocusListeners = new Map();
 let nextListenerId = 1;
 
 ipcRenderer.on(STATE_CHANNEL, (_event, state) => {
@@ -20,6 +24,26 @@ ipcRenderer.on(STATE_CHANNEL, (_event, state) => {
       listener(state);
     } catch {
       // A renderer listener must never break the bridge for the others.
+    }
+  }
+});
+
+ipcRenderer.on(NOTIFY_CLICK_CHANNEL, (_event, payload) => {
+  for (const listener of notifyClickListeners.values()) {
+    try {
+      listener(payload);
+    } catch {
+      // Isolate renderer callback failures.
+    }
+  }
+});
+
+ipcRenderer.on(NOTIFY_FOCUS_CHANNEL, (_event, payload) => {
+  for (const listener of notifyFocusListeners.values()) {
+    try {
+      listener(payload);
+    } catch {
+      // Isolate renderer callback failures.
     }
   }
 });
@@ -51,4 +75,27 @@ const projects = {
   pickDirectory: () => ipcRenderer.invoke('agentdock:desktop-projects:pick-directory')
 };
 
-contextBridge.exposeInMainWorld('agentdockDesktop', { update, network, projects });
+const notifications = {
+  getCapabilities: () => ipcRenderer.invoke('agentdock:desktop-notification:capabilities'),
+  isWindowFocused: () => ipcRenderer.invoke('agentdock:desktop-notification:is-focused'),
+  show: payload => ipcRenderer.invoke('agentdock:desktop-notification:show', payload),
+  setBadge: count => ipcRenderer.invoke('agentdock:desktop-notification:set-badge', count),
+  onClick: listener => {
+    const id = nextListenerId++;
+    notifyClickListeners.set(id, listener);
+    return id;
+  },
+  offClick: id => {
+    notifyClickListeners.delete(id);
+  },
+  onFocusChange: listener => {
+    const id = nextListenerId++;
+    notifyFocusListeners.set(id, listener);
+    return id;
+  },
+  offFocusChange: id => {
+    notifyFocusListeners.delete(id);
+  }
+};
+
+contextBridge.exposeInMainWorld('agentdockDesktop', { update, network, projects, notifications });

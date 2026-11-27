@@ -21,3 +21,22 @@ self.addEventListener('fetch', (event) => {
   if (accept.includes('text/event-stream')) return;
   // Pass through directly to network without caching.
 });
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const sessionId = event.notification.data && event.notification.data.sessionId;
+  const targetUrl = sessionId ? `/sessions/${encodeURIComponent(sessionId)}` : '/';
+  event.waitUntil((async () => {
+    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clientList) {
+      if ('focus' in client) {
+        await client.focus();
+        if (sessionId && 'postMessage' in client) {
+          client.postMessage({ type: 'agentdock:notification-click', sessionId });
+        }
+        return;
+      }
+    }
+    if (self.clients.openWindow) await self.clients.openWindow(targetUrl);
+  })());
+});

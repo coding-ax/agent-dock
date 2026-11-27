@@ -15,7 +15,7 @@
  * installers and code-signing hooks in electron-builder with no extra work.
  */
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, screen } = require('electron');
+const { app, BrowserWindow, Menu, Notification, dialog, ipcMain, shell, screen } = require('electron');
 const { spawn, spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -56,7 +56,8 @@ const state = {
   starting: null,
   installingUpdate: false,
   updater: null,
-  recentLog: []
+  recentLog: [],
+  activeNotifications: new Map()
 };
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -295,6 +296,109 @@ function registerProjectIpc() {
     const options = { title: '选择项目文件夹', properties: ['openDirectory', 'createDirectory'] };
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
     return { supported: true, canceled: result.canceled, path: result.filePaths[0] };
+  });
+}
+
+function isMainWindowFocused() {
+  const win = state.window;
+  return Boolean(win && !win.isDestroyed() && win.isVisible() && !win.isMinimized() && win.isFocused());
+}
+
+function focusMainWindow() {
+  const win = state.window;
+  if (!win || win.isDestroyed()) return null;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  return win;
+}
+
+function setDesktopBadgeCount(rawCount) {
+  const count = Number.isFinite(Number(rawCount)) ? Math.max(0, Math.min(99, Math.floor(Number(rawCount)))) : 0;
+  try {
+    if (process.platform === 'darwin') {
+      app.setBadgeCount(count);
+    } else if (process.platform === 'win32' && state.window && !state.window.isDestroyed()) {
+      if (count === 0) state.window.flashFrame(false);
+    }
+  } catch { /* non-fatal */ }
+  return count;
+}
+
+function broadcastWindowFocus(focused) {
+  const win = state.window;
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.webContents.send('agentdock:desktop-notification:focus', { focused: Boolean(focused) });
+  } catch { /* window closed between check and send */ }
+}
+
+function registerNotificationIpc() {
+  ipcMain.handle('agentdock:desktop-notification:capabilities', () => ({
+    supported: typeof Notification?.isSupported === 'function' ? Notification.isSupported() : false,
+    platform: process.platform,
+    appId: APP_ID
+  }));
+
+  ipcMain.handle('agentdock:desktop-notification:is-focused', () => isMainWindowFocused());
+
+  ipcMain.handle('agentdock:desktop-notification:set-badge', (_event, count) => ({
+    count: setDesktopBadgeCount(count)
+  }));
+
+  ipcMain.handle('agentdock:desktop-notification:show', (_event, payload = {}) => {
+    const supported = typeof Notification?.isSupported === 'function' ? Notification.isSupported() : false;
+    if (!supported) return { shown: false, reason: '系统不支持原生通知' };
+    const id = typeof payload.id === 'string' && payload.id.trim() ? payload.id.trim() : crypto.randomUUID();
+    const sessionId = typeof payload.sessionId === 'string' && payload.sessionId.trim() ? payload.sessionId.trim() : undefined;
+    const title = typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : APP_NAME;
+    const body = typeof payload.body === 'string' ? payload.body.trim() : '';
+    const urgency = payload.urgency === 'critical' || payload.urgency === 'low' ? payload.urgency : 'normal';
+    const silent = payload.silent === true;
+    const bounce = payload.bounce !== false;
+    const iconPath = path.join(__dirname, '..', 'build', 'icon.png');
+    try {
+      const notification = new Notification({
+        title,
+        body,
+        silent,
+        ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
+        ...(process.platform === 'linux' ? { urgency } : {})
+      });
+      // 保留引用直到关闭或点击，避免 V8 提前 GC 导致点击回调失效。
+      state.activeNotifications.set(id, notification);
+      const cleanup = () => state.activeNotifications.delete(id);
+      notification.once('close', cleanup);
+      notification.once('failed', cleanup);
+      notification.once('click', () => {
+        cleanup();
+        const win = focusMainWindow();
+        if (win && sessionId) {
+          try {
+            win.webContents.send('agentdock:desktop-notification:click', { id, sessionId });
+          } catch { /* ignore */ }
+        }
+      });
+      notification.show();
+
+      if (!isMainWindowFocused()) {
+        if (bounce) {
+          try {
+            if (process.platform === 'darwin') {
+              app.dock?.bounce(urgency === 'critical' ? 'critical' : 'informational');
+            } else if (process.platform === 'win32' && state.window && !state.window.isDestroyed()) {
+              state.window.flashFrame(true);
+            }
+          } catch { /* non-fatal */ }
+        }
+        if (typeof payload.badgeCount === 'number') {
+          setDesktopBadgeCount(payload.badgeCount);
+        }
+      }
+      return { shown: true, id };
+    } catch (error) {
+      return { shown: false, reason: error instanceof Error ? error.message : String(error) };
+    }
   });
 }
 
@@ -630,6 +734,16 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     broadcastUpdateState(state.updater?.snapshot() ?? unsupportedUpdateState());
   });
+  win.on('focus', () => {
+    setDesktopBadgeCount(0);
+    if (process.platform === 'win32' && !win.isDestroyed()) {
+      try { win.flashFrame(false); } catch { /* ignore */ }
+    }
+    broadcastWindowFocus(true);
+  });
+  win.on('blur', () => broadcastWindowFocus(false));
+  win.on('minimize', () => broadcastWindowFocus(false));
+  win.on('hide', () => broadcastWindowFocus(false));
   win.on('close', () => saveBounds(win));
   win.on('closed', () => { if (state.window === win) state.window = null; });
 
@@ -747,6 +861,7 @@ async function boot() {
   registerUpdateIpc();
   registerNetworkIpc();
   registerProjectIpc();
+  registerNotificationIpc();
   setUpdater();
   const win = createWindow();
   try {
