@@ -169,4 +169,16 @@ describe('core motion primitives rendering', () => {
     expect(chipShimmer).not.toContain('box-shadow');
     expect(motionCss).toMatch(/\.ui-chip-loading::after\s*\{\s*display:\s*none;/);
   });
+
+  it('keeps Kitten calm while typing (no per-keystroke input wiggle or sprite shake)', () => {
+    const kittenTsx = read('./companion/Kitten.tsx');
+    const companionCss = read('./companion/companion.css');
+
+    // 打字时只允许 focusin/focusout 的平稳低头（ui-cat-typing），绝不可监听 input 每键反复抖动整只小猫。
+    expect(kittenTsx).not.toContain("addEventListener('input'");
+    expect(kittenTsx).not.toContain('ui-cat-ear-wiggle');
+    expect(companionCss).not.toContain('ui-cat-ear-wiggle');
+    expect(kittenTsx).toContain('ui-cat-typing');
+    expect(companionCss).toContain('.ui-cat-typing .ui-cat-sprite');
+  });
 });

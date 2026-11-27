@@ -14,10 +14,9 @@ import {
   Trash2
 } from 'lucide-react';
 import type { Agent, BoardDensity, HydratedBoardColumn, HydratedBoardItem } from '../api';
-import { ExitGate } from '../ExitGate';
 import { HoverTooltip } from '../HoverTooltip';
-import { useDismissOnOutsidePointer } from '../useDismissOnOutsidePointer';
 import { SortableBoardCard, type BoardCardActionHandlers } from './BoardCard';
+import { BoardPopoverMenu } from './BoardPopoverMenu';
 import { COLUMN_COLOR_STYLES, describeColumnRule } from './board-utils';
 
 export interface BoardColumnProps {
@@ -58,7 +57,6 @@ export const BoardColumn = memo(function BoardColumn({
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarOver, setSidebarOver] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  useDismissOnOutsidePointer(menuRef, menuOpen, () => setMenuOpen(false));
 
   const {
     attributes,
@@ -163,7 +161,7 @@ export const BoardColumn = memo(function BoardColumn({
       } ${isColumnDragging ? 'opacity-45' : ''}`}
     >
       {/* 列头 */}
-      <header className="flex shrink-0 items-center gap-1 px-2.5 pb-2 pt-2.5">
+      <header className="relative z-10 flex shrink-0 items-center gap-1 px-2.5 pb-2 pt-2.5">
         {!mobileFullWidth && (
           <button
             type="button"
@@ -229,58 +227,66 @@ export const BoardColumn = memo(function BoardColumn({
         )}
 
         <div ref={menuRef} className="relative shrink-0">
-          <HoverTooltip content="列设置">
+          <HoverTooltip content={menuOpen ? undefined : '列设置'} hoverOnly>
             <button
               type="button"
               aria-label={`列 ${column.name} 设置`}
+              aria-haspopup="menu"
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen(open => !open)}
-              className="ui-press grid h-6 w-6 place-items-center rounded-lg text-zinc-400 transition-colors hover:bg-white hover:text-zinc-900"
+              className={`ui-press grid h-6 w-6 place-items-center rounded-lg transition-colors ${
+                menuOpen ? 'bg-white text-zinc-900' : 'text-zinc-400 hover:bg-white hover:text-zinc-900'
+              }`}
             >
               <MoreHorizontal size={14}/>
             </button>
           </HoverTooltip>
-          <ExitGate open={menuOpen} ms={150}>
-            {menuOpen && (
-              <div data-placement="top-end" className="ui-popover absolute right-0 top-7 z-40 w-44 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_14px_34px_rgba(24,24,27,.16)]">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onEditColumn(column);
-                  }}
-                  className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
-                >
-                  <Pencil size={13} className="text-zinc-400"/>
-                  编辑名称 / 规则
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onAddCard(column);
-                  }}
-                  className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
-                >
-                  <Plus size={13} className="text-zinc-400"/>
-                  添加会话 / 卡片
-                </button>
-                <div className="my-1 border-t border-zinc-100"/>
-                <button
-                  type="button"
-                  disabled={allColumns.length <= 1}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onDeleteColumn(column);
-                  }}
-                  className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-red-600 hover:bg-red-50 disabled:opacity-40"
-                >
-                  <Trash2 size={13}/>
-                  删除此列
-                </button>
-              </div>
-            )}
-          </ExitGate>
+          <BoardPopoverMenu
+            open={menuOpen}
+            anchorRef={menuRef}
+            width={176}
+            ariaLabel={`列 ${column.name} 设置`}
+            onClose={() => setMenuOpen(false)}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                onEditColumn(column);
+              }}
+              className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
+            >
+              <Pencil size={13} className="text-zinc-400"/>
+              编辑名称 / 规则
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                onAddCard(column);
+              }}
+              className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
+            >
+              <Plus size={13} className="text-zinc-400"/>
+              添加会话 / 卡片
+            </button>
+            <div className="my-1 border-t border-zinc-100"/>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={allColumns.length <= 1}
+              onClick={() => {
+                setMenuOpen(false);
+                onDeleteColumn(column);
+              }}
+              className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-red-600 hover:bg-red-50 disabled:opacity-40"
+            >
+              <Trash2 size={13}/>
+              删除此列
+            </button>
+          </BoardPopoverMenu>
         </div>
       </header>
 

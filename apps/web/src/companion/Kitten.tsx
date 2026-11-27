@@ -20,7 +20,7 @@ import './lifecycle.css';
  * - mood → 立绘：idle 待命、curious 歪头、thinking 托腮思考、busy 敲电脑、delegating 派便签、
  *   reviewing 放大镜验收、waiting/alert 招手等你拍板、happy 眯眼笑、celebrating 举爪庆祝、
  *   error 排查小紧张、sad 耷拉耳朵、tidying 整理记忆、night 深夜月光陪伴、sleepy 趴着睡；
- * - track：整只猫轻轻朝光标方向倾斜；typingAware：输入框聚焦时低头、按键时轻轻抖一下；
+ * - track：整只猫轻轻朝光标方向倾斜；typingAware：输入框聚焦时安静低头倾听并暂停鼠标跟随，打字过程沉稳不抖动；
  * - celebrateKey 变化：原地蹦一下、换成闪亮立绘并冒爱心；点它：抖一下、偶尔冒一颗心；
  * - 呼吸与状态切换：所有循环动画只动 transform / opacity，prefers-reduced-motion 下回退静态 PNG 并停住动效；
  * - 资源降级兜底：任意状态立绘加载失败时静默回退到 cat-idle.png，不出现破图。
@@ -66,15 +66,20 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
   const [sparkling, setSparkling] = useState(false);
   const [fallbackFor, setFallbackFor] = useState<string | null>(null);
   const toggles = useRef({ twitch: false, hop: false });
+  const twitchClearTimer = useRef<number | undefined>(undefined);
 
   const twitch = () => {
     const el = root.current;
     if (!el) return;
-    el.classList.remove('ui-cat-ear-wiggle-a', 'ui-cat-ear-wiggle-b');
     toggles.current.twitch = !toggles.current.twitch;
     el.classList.toggle('ui-cat-twitching-a', toggles.current.twitch);
     el.classList.toggle('ui-cat-twitching-b', !toggles.current.twitch);
+    window.clearTimeout(twitchClearTimer.current);
+    twitchClearTimer.current = window.setTimeout(() => {
+      root.current?.classList.remove('ui-cat-twitching-a', 'ui-cat-twitching-b');
+    }, 340);
   };
+  useEffect(() => () => window.clearTimeout(twitchClearTimer.current), []);
   const hop = () => {
     const el = root.current;
     if (!el || prefersReducedMotion()) return;
@@ -105,7 +110,6 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
     let frame = 0;
     let resetTimer = 0;
     let typing = false;
-    let wiggle = false;
 
     const setLook = (x: number, y: number) => {
       cancelAnimationFrame(frame);
@@ -139,21 +143,14 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
       el.classList.remove('ui-cat-typing');
       clearLook();
     };
-    const onInput = (event: Event) => {
-      if (!isEditable(event.target)) return;
-      el.classList.remove('ui-cat-twitching-a', 'ui-cat-twitching-b');
-      wiggle = !wiggle;
-      el.classList.toggle('ui-cat-ear-wiggle-a', wiggle);
-      el.classList.toggle('ui-cat-ear-wiggle-b', !wiggle);
-    };
     if (track) {
       window.addEventListener('pointermove', onMove, { passive: true });
       document.documentElement.addEventListener('pointerleave', clearLook);
     }
     if (typingAware) {
+      // 输入框聚焦时小猫安静低头倾听并暂停鼠标跟随；不再随每次按键反复触发抖动动画。
       document.addEventListener('focusin', onFocusIn);
       document.addEventListener('focusout', onFocusOut);
-      document.addEventListener('input', onInput);
       // 挂载时输入框可能已经聚焦（首页自动聚焦）。
       if (isEditable(document.activeElement)) { typing = true; el.classList.add('ui-cat-typing'); }
     }
@@ -164,7 +161,6 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
       document.documentElement.removeEventListener('pointerleave', clearLook);
       document.removeEventListener('focusin', onFocusIn);
       document.removeEventListener('focusout', onFocusOut);
-      document.removeEventListener('input', onInput);
     };
   }, [track, typingAware]);
 

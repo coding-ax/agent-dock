@@ -16,9 +16,8 @@ import {
 } from 'lucide-react';
 import type { Agent, BoardDensity, HydratedBoardColumn, HydratedBoardItem } from '../api';
 import { AgentIcon } from '../AgentIcon';
-import { ExitGate } from '../ExitGate';
 import { HoverTooltip } from '../HoverTooltip';
-import { useDismissOnOutsidePointer } from '../useDismissOnOutsidePointer';
+import { BoardPopoverMenu } from './BoardPopoverMenu';
 import {
   COLUMN_COLOR_STYLES,
   VISUAL_STATE_META,
@@ -66,7 +65,6 @@ export const BoardCardSurface = memo(function BoardCardSurface({
 }: BoardCardSurfaceProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  useDismissOnOutsidePointer(menuRef, menuOpen, () => setMenuOpen(false));
 
   const stateMeta = VISUAL_STATE_META[item.live.visualState] ?? VISUAL_STATE_META.idle;
   const compact = density === 'compact';
@@ -227,7 +225,11 @@ export const BoardCardSurface = memo(function BoardCardSurface({
 
           {!isOverlay && handlers && (
             <div
-              className="flex shrink-0 items-center gap-0.5 opacity-100 transition-opacity md:opacity-0 md:group-hover/card:opacity-100 md:group-focus-within/card:opacity-100"
+              className={`flex shrink-0 items-center gap-0.5 transition-opacity ${
+                menuOpen
+                  ? 'opacity-100'
+                  : 'opacity-100 md:opacity-0 md:group-hover/card:opacity-100 md:group-focus-within/card:opacity-100'
+              }`}
               onPointerDown={e => e.stopPropagation()}
               onClick={e => e.stopPropagation()}
             >
@@ -262,73 +264,81 @@ export const BoardCardSurface = memo(function BoardCardSurface({
                 </button>
               </HoverTooltip>
               <div ref={menuRef} className="relative">
-                <HoverTooltip content="移动与更多操作">
+                <HoverTooltip content={menuOpen ? undefined : '移动与更多操作'} hoverOnly>
                   <button
                     type="button"
                     aria-label="移动与更多操作"
+                    aria-haspopup="menu"
                     aria-expanded={menuOpen}
                     onClick={() => setMenuOpen(open => !open)}
-                    className="ui-press grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+                    className={`ui-press grid h-6 w-6 place-items-center rounded-md transition-colors ${
+                      menuOpen ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900'
+                    }`}
                   >
                     <MoreHorizontal size={13}/>
                   </button>
                 </HoverTooltip>
-                <ExitGate open={menuOpen} ms={150}>
-                  {menuOpen && (
-                    <div data-placement="top-end" className="ui-popover absolute right-0 top-7 z-40 w-48 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_14px_34px_rgba(24,24,27,.16)]">
-                      <div className="px-2 py-1 text-[11px] font-medium text-zinc-400">移动到列</div>
-                      <div className="max-h-40 overflow-y-auto">
-                        {columns.map(col => {
-                          const isCurrent = col.id === item.columnId;
-                          const style = COLUMN_COLOR_STYLES[col.color] ?? COLUMN_COLOR_STYLES.zinc;
-                          return (
-                            <button
-                              key={col.id}
-                              type="button"
-                              disabled={isCurrent}
-                              onClick={() => {
-                                setMenuOpen(false);
-                                handlers.onMoveToColumn(item, col.id);
-                              }}
-                              className="ui-press flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-zinc-700 hover:bg-zinc-100 disabled:opacity-45"
-                            >
-                              <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot}`}/>
-                              <span className="min-w-0 flex-1 truncate">{col.name}</span>
-                              {isCurrent && <ArrowRightLeft size={11} className="text-zinc-400"/>}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <div className="my-1 border-t border-zinc-100"/>
-                      {item.manualOverride && !item.virtual && handlers.onResetOverride && (
+                <BoardPopoverMenu
+                  open={menuOpen}
+                  anchorRef={menuRef}
+                  width={192}
+                  ariaLabel="移动与更多操作"
+                  onClose={() => setMenuOpen(false)}
+                >
+                  <div className="px-2 py-1 text-[11px] font-medium text-zinc-400">移动到列</div>
+                  <div className="max-h-40 overflow-y-auto">
+                    {columns.map(col => {
+                      const isCurrent = col.id === item.columnId;
+                      const style = COLUMN_COLOR_STYLES[col.color] ?? COLUMN_COLOR_STYLES.zinc;
+                      return (
                         <button
+                          key={col.id}
                           type="button"
+                          role="menuitem"
+                          disabled={isCurrent}
                           onClick={() => {
                             setMenuOpen(false);
-                            handlers.onResetOverride?.(item);
+                            handlers.onMoveToColumn(item, col.id);
                           }}
-                          className="ui-press flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-zinc-700 hover:bg-zinc-100"
+                          className="ui-press flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-zinc-700 hover:bg-zinc-100 disabled:opacity-45"
                         >
-                          <RotateCcw size={12} className="text-zinc-400"/>
-                          <span>恢复规则自动归位</span>
+                          <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot}`}/>
+                          <span className="min-w-0 flex-1 truncate">{col.name}</span>
+                          {isCurrent && <ArrowRightLeft size={11} className="text-zinc-400"/>}
                         </button>
-                      )}
-                      {!item.virtual && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMenuOpen(false);
-                            handlers.onRemove(item);
-                          }}
-                          className="ui-press flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-red-600 hover:bg-red-50"
-                        >
-                          <Trash2 size={12}/>
-                          <span>从看板移出</span>
-                        </button>
-                      )}
-                    </div>
+                      );
+                    })}
+                  </div>
+                  <div className="my-1 border-t border-zinc-100"/>
+                  {item.manualOverride && !item.virtual && handlers.onResetOverride && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        handlers.onResetOverride?.(item);
+                      }}
+                      className="ui-press flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-zinc-700 hover:bg-zinc-100"
+                    >
+                      <RotateCcw size={12} className="text-zinc-400"/>
+                      <span>恢复规则自动归位</span>
+                    </button>
                   )}
-                </ExitGate>
+                  {!item.virtual && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        handlers.onRemove(item);
+                      }}
+                      className="ui-press flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-red-600 hover:bg-red-50"
+                    >
+                      <Trash2 size={12}/>
+                      <span>从看板移出</span>
+                    </button>
+                  )}
+                </BoardPopoverMenu>
               </div>
             </div>
           )}

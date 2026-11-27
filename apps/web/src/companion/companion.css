@@ -62,8 +62,6 @@ html[data-theme="dark"] .ui-cat-blush { fill: rgb(244 114 182 / .3); }
 @keyframes ui-cat-twitch-r { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(10deg); } 65% { transform: rotate(-5deg); } }
 @keyframes ui-cat-twitch-l-alt { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(-10deg); } 65% { transform: rotate(5deg); } }
 @keyframes ui-cat-twitch-r-alt { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(10deg); } 65% { transform: rotate(-5deg); } }
-@keyframes ui-cat-ear-wiggle { 0%, 100% { transform: rotate(0); } 40% { transform: rotate(-4deg); } }
-@keyframes ui-cat-ear-wiggle-alt { 0%, 100% { transform: rotate(0); } 40% { transform: rotate(-4deg); } }
 /* ---------- 像素立绘 ---------- */
 .ui-cat-sprite-box { position: relative; display: block; width: 100%; height: 100%; transform-origin: 50% 100%; }
 .ui-cat-sprite { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: 50% 100%; pointer-events: none; user-select: none;
@@ -71,8 +69,8 @@ html[data-theme="dark"] .ui-cat-blush { fill: rgb(244 114 182 / .3); }
 .ui-cat-typing .ui-cat-sprite { transform: translateY(3%) rotate(0deg); }
 .ui-kitten-face .ui-cat-sprite-box { overflow: hidden; border-radius: 28%; }
 .ui-kitten-face .ui-cat-sprite { inset: auto; left: -2%; top: -2%; width: 124%; height: 124%; object-position: 50% 0; }
-.ui-cat-twitching-a .ui-cat-sprite-box, .ui-cat-ear-wiggle-a .ui-cat-sprite-box { animation: ui-cat-wiggle .3s ease-in-out; }
-.ui-cat-twitching-b .ui-cat-sprite-box, .ui-cat-ear-wiggle-b .ui-cat-sprite-box { animation: ui-cat-wiggle-alt .3s ease-in-out; }
+.ui-cat-twitching-a .ui-cat-sprite-box { animation: ui-cat-wiggle .3s ease-in-out; }
+.ui-cat-twitching-b .ui-cat-sprite-box { animation: ui-cat-wiggle-alt .3s ease-in-out; }
 @keyframes ui-cat-wiggle { 0%, 100% { rotate: 0deg; } 30% { rotate: -3deg; } 65% { rotate: 2deg; } }
 @keyframes ui-cat-wiggle-alt { 0%, 100% { rotate: 0deg; } 30% { rotate: -3deg; } 65% { rotate: 2deg; } }
 @keyframes ui-cat-sprite-in {
@@ -82,7 +80,7 @@ html[data-theme="dark"] .ui-cat-blush { fill: rgb(244 114 182 / .3); }
 }
 @media (prefers-reduced-motion: no-preference) {
   .ui-cat-sprite-swap { animation: ui-cat-sprite-in var(--dur-spring, 320ms) var(--ease-out-expo, var(--ease-out-quint)); }
-  .ui-kitten:not(.ui-kitten-face):not([class*="ui-cat-twitching-"]):not([class*="ui-cat-ear-wiggle-"]) .ui-cat-sprite-box { animation: ui-cat-breathe var(--cat-breath-duration, 3.8s) ease-in-out infinite; }
+  .ui-kitten:not(.ui-kitten-face):not([class*="ui-cat-twitching-"]) .ui-cat-sprite-box { animation: ui-cat-breathe var(--cat-breath-duration, 3.8s) ease-in-out infinite; }
   .ui-kitten[data-mood="thinking"] .ui-cat-sprite-box { --cat-breath-duration: 3.4s; }
   .ui-kitten[data-mood="busy"] .ui-cat-sprite-box { --cat-breath-duration: 2.6s; }
   .ui-kitten[data-mood="delegating"] .ui-cat-sprite-box { --cat-breath-duration: 2.4s; }
@@ -126,10 +124,6 @@ html[data-theme="dark"] .ui-cat-blush { fill: rgb(244 114 182 / .3); }
 
 @media (prefers-reduced-motion: no-preference) {
   .ui-cat-tail { animation: ui-cat-tail 3s ease-in-out infinite; }
-  .ui-cat-ear-wiggle-a .ui-cat-ear-l { animation: ui-cat-ear-wiggle .16s ease-out; }
-  .ui-cat-ear-wiggle-a .ui-cat-ear-r { animation: ui-cat-ear-wiggle .16s ease-out reverse; }
-  .ui-cat-ear-wiggle-b .ui-cat-ear-l { animation: ui-cat-ear-wiggle-alt .16s ease-out; }
-  .ui-cat-ear-wiggle-b .ui-cat-ear-r { animation: ui-cat-ear-wiggle-alt .16s ease-out reverse; }
   .ui-kitten .ui-cat-body-group { animation: ui-cat-breathe 3.8s ease-in-out infinite; }
   .ui-kitten[data-mood="sleepy"] .ui-cat-body-group { animation-duration: 5.2s; }
   .ui-kitten[data-mood="busy"] .ui-cat-tail { animation-duration: 1.3s; }

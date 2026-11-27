@@ -66,12 +66,12 @@ import { ExitGate } from '../ExitGate';
 import { SessionPane } from '../SessionPane';
 import { useCompanion } from '../companion/useCompanion';
 import { prefersReducedMotion, springEasing } from '../companion/effects';
-import { useDismissOnOutsidePointer } from '../useDismissOnOutsidePointer';
 import { useToast } from '../Toast';
 import { BoardCardSurface, SortableBoardCard, type BoardCardActionHandlers } from './BoardCard';
 import { BoardColumn } from './BoardColumn';
 import { BoardDetailDrawer } from './BoardDetailDrawer';
 import { AddCardModal, ColumnEditorModal, CreateBoardModal, type ColumnEditorPayload, type CreateBoardPayload } from './BoardModals';
+import { BoardPopoverMenu } from './BoardPopoverMenu';
 import { KITTEN_DOCK_DROPPABLE_ID, KittenBoardDock } from './KittenBoardDock';
 import { nextClientMutationId, useBoardStore } from './board-store';
 import {
@@ -186,7 +186,6 @@ export function BoardWorkspace({
 
   const boardMenuRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  useDismissOnOutsidePointer(boardMenuRef, boardMenuOpen, () => setBoardMenuOpen(false));
 
   // 1. 拉取全部看板列表
   const boardsQuery = useQuery({
@@ -651,7 +650,7 @@ export function BoardWorkspace({
     <div className="ui-board-canvas relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
       {/* ---------- 看板顶栏：快速看板记忆切换 + 视图/密度/筛选 + 新建 ---------- */}
       <header
-        className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-200 bg-white/95 px-3 py-2 backdrop-blur-sm md:px-4"
+        className="relative z-30 flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-200 bg-white/95 px-3 py-2 backdrop-blur-sm md:px-4"
         style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top))' }}
       >
         {/* 移动端打开侧栏按钮 */}
@@ -792,20 +791,40 @@ export function BoardWorkspace({
 
           {/* 当前看板更多设置菜单 */}
           <div ref={boardMenuRef} className="relative">
-            <HoverTooltip content="当前看板操作">
+            <HoverTooltip content={boardMenuOpen ? undefined : '当前看板操作'} hoverOnly>
               <button
                 type="button"
+                data-testid="board-more-menu-trigger"
                 aria-label="当前看板操作"
+                aria-haspopup="menu"
                 aria-expanded={boardMenuOpen}
-                onClick={() => setBoardMenuOpen(o => !o)}
-                className="ui-press grid h-8 w-8 place-items-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
+                onClick={() => setBoardMenuOpen(o => {
+                  const next = !o;
+                  if (!next) setRenamingBoard(false);
+                  return next;
+                })}
+                className={`ui-press grid h-8 w-8 place-items-center rounded-xl border transition-colors ${
+                  boardMenuOpen
+                    ? 'border-zinc-300 bg-zinc-100 text-zinc-900'
+                    : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+                }`}
               >
                 <MoreHorizontal size={15}/>
               </button>
             </HoverTooltip>
-            <ExitGate open={boardMenuOpen && Boolean(activeBoard)} ms={150}>
-              {boardMenuOpen && activeBoard && (
-                <div data-placement="top-end" className="ui-popover absolute right-0 top-9 z-40 w-52 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_16px_38px_rgba(24,24,27,.16)]">
+            <BoardPopoverMenu
+              open={boardMenuOpen && Boolean(activeBoard)}
+              anchorRef={boardMenuRef}
+              width={208}
+              ariaLabel="当前看板操作"
+              testId="board-more-menu"
+              onClose={() => {
+                setBoardMenuOpen(false);
+                setRenamingBoard(false);
+              }}
+            >
+              {activeBoard && (
+                <>
                   {renamingBoard ? (
                     <div className="flex items-center gap-1 p-1">
                       <input
@@ -830,6 +849,7 @@ export function BoardWorkspace({
                   ) : (
                     <button
                       type="button"
+                      role="menuitem"
                       onClick={() => { setRenameDraft(activeBoard.name); setRenamingBoard(true); }}
                       className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
                     >
@@ -839,6 +859,7 @@ export function BoardWorkspace({
                   {!activeBoard.isDefault && (
                     <button
                       type="button"
+                      role="menuitem"
                       onClick={() => { setBoardMenuOpen(false); switchBoardMutation.mutate(activeBoard.id); }}
                       className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
                     >
@@ -848,6 +869,7 @@ export function BoardWorkspace({
                   )}
                   <button
                     type="button"
+                    role="menuitem"
                     onClick={() => void handleExportTemplate()}
                     className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
                   >
@@ -857,6 +879,7 @@ export function BoardWorkspace({
                   <div className="my-1 border-t border-zinc-100"/>
                   <button
                     type="button"
+                    role="menuitem"
                     disabled={boardList.length <= 1 || deleteBoardMutation.isPending}
                     onClick={() => deleteBoardMutation.mutate(activeBoard.id)}
                     className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-red-600 hover:bg-red-50 disabled:opacity-40"
@@ -864,9 +887,9 @@ export function BoardWorkspace({
                     <Trash2 size={13}/>
                     删除此看板
                   </button>
-                </div>
+                </>
               )}
-            </ExitGate>
+            </BoardPopoverMenu>
           </div>
         </div>
       </header>
