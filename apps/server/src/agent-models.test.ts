@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createAcpRuntime, createAgentRegistry, createRuntimeStore, type AcpRuntime } from 'acpx/runtime';
-import { agentModelsCacheKey, agentModelProbeWarning, AgentModelProbeTimeoutError, discoverAgentModels, modelsFromAcpStatus, probeModelsThroughAcpRuntime } from './agent-models.js';
+import { agentModelsCacheKey, agentModelProbeWarning, AgentModelProbeTimeoutError, discoverAgentModels, modelsFromAcpStatus, modelsFromConfigOptions, probeModelsThroughAcpRuntime, seedAgentModelsCache } from './agent-models.js';
 
 const probeInput = { sessionKey: 'probe', agent: 'codex', mode: 'oneshot' as const };
 const handle = { sessionKey: 'probe', backend: 'acpx', runtimeSessionName: 'probe', acpxRecordId: 'probe-record' };
@@ -199,5 +199,72 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     expect(result.models).toContainEqual({ id: 'proxy-model-1', name: 'proxy-model-1' });
     expect(result.models).toContainEqual({ id: 'proxy-model-2', name: 'proxy-model-2' });
     expect(result.models.length).toBe(3);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+it('seeds server model discovery cache directly from active ACP configOptions without spawning a probe', async () => {
+  const agent = {
+    id: 'claude-seed-test',
+    name: 'Claude Seed',
+    command: '/nonexistent-binary-must-not-spawn',
+    args: [],
+    protocol: 'acp' as const,
+    cwd: '/tmp/seed-cache-test',
+    extraModels: ['custom/proxy-model'],
+    env: {},
+    permissionMode: 'deny-all' as const,
+    timeout: 10,
+    capabilities: { pause: false, resume: true },
+    builtin: false
+  };
+  const configOptions = [
+    { id: 'model', category: 'model', currentValue: 'claude-opus', options: [{ value: 'claude-sonnet', name: 'Sonnet 4.5' }, { value: 'claude-opus', name: 'Opus 4.5' }] },
+    { id: 'reasoning_effort', category: 'thought_level', currentValue: 'high', options: [{ value: 'low', name: '低' }, { value: 'high', name: '高' }] }
+  ];
+
+  const parsed = modelsFromConfigOptions(configOptions, agent.extraModels);
+  expect(parsed).toMatchObject({
+    defaultModel: 'claude-opus',
+    defaultReasoningEffort: 'high',
+    source: 'acp',
+    models: [
+      { id: 'claude-sonnet', name: 'Sonnet 4.5' },
+      { id: 'claude-opus', name: 'Opus 4.5' },
+      { id: 'custom/proxy-model', name: 'custom/proxy-model' }
+    ],
+    reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }]
+  });
+
+  const seeded = seedAgentModelsCache(agent, 'claude-opus', configOptions);
+  expect(seeded).toEqual(parsed);
+  // 命中服务端已预热缓存，不会启动 nonexistent CLI 探测。
+  expect(await discoverAgentModels(agent, 'claude-opus')).toEqual(parsed);
+});
+
+it('deduplicates concurrent discoverAgentModels probes with single-flight sharing', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'agentdock-single-flight-'));
+  const fixture = join(cwd, 'agent.mjs');
+  const spawnLog = join(cwd, 'spawns.log');
+  await writeFile(fixture, `import readline from 'node:readline';
+import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(spawnLog)}, '1\\n');
+const configOptions = [{ id: 'model', category: 'model', type: 'select', name: 'Model', currentValue: 'sf-model', options: [{ name: 'SF Model', value: 'sf-model' }] }];
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const { id, method, params } = JSON.parse(line);
+  if (method === 'initialize') return setTimeout(() => send({ jsonrpc: '2.0', id, result: { protocolVersion: params.protocolVersion, agentCapabilities: {}, authMethods: [] } }), 120);
+  if (method === 'session/new') return send({ jsonrpc: '2.0', id, result: { sessionId: 'probe', configOptions } });
+  if (method === 'session/set_config_option') return send({ jsonrpc: '2.0', id, result: { configOptions } });
+});`);
+  const agent = { id: 'sf-agent', name: 'SF Agent', command: process.execPath, args: [fixture], protocol: 'acp' as const, cwd, env: {}, permissionMode: 'deny-all' as const, timeout: 10, capabilities: { pause: false, resume: true }, builtin: false };
+  try {
+    const [first, second] = await Promise.all([
+      discoverAgentModels(agent),
+      discoverAgentModels(agent)
+    ]);
+    expect(first).toEqual(second);
+    expect(first.models).toEqual([{ id: 'sf-model', name: 'SF Model' }]);
+    const spawns = (await readFile(spawnLog, 'utf8')).trim().split('\n').filter(Boolean);
+    expect(spawns).toHaveLength(1);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });

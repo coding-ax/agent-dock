@@ -10,7 +10,21 @@ import { packagedNativeFallback } from './native-compat.js';
 import { startLocalServer } from './service.js';
 import { runLarkSend, runLarkUpdate } from './lark/cli.js';
 import { runLarkMessageListen, runLarkMessageRead, runLarkMessageSend } from './lark/message-cli.js';
-import { runLarkAvatarDiagnostics, runLarkAvatarReaction, runLarkAvatarReactionRoute, runLarkAvatarSend } from './lark-avatar/cli.js';
+import {
+  runLarkAvatarChats, runLarkAvatarConfigSet, runLarkAvatarConfigShow, runLarkAvatarDiagnostics,
+  runLarkAvatarDraftCreate, runLarkAvatarDraftDiscard, runLarkAvatarDraftList, runLarkAvatarDraftSend,
+  runLarkAvatarDraftUpdate, runLarkAvatarInboxCleanup, runLarkAvatarInboxList, runLarkAvatarListen,
+  runLarkAvatarPoll, runLarkAvatarReaction, runLarkAvatarReactionRoute, runLarkAvatarSend, runLarkAvatarStatus
+} from './lark-avatar/cli.js';
+import {
+  runBoardAskKitten, runBoardCardAdd, runBoardCardList, runBoardCardMove, runBoardCardRemove, runBoardCardUpdate,
+  runBoardColumnAdd, runBoardColumnDelete, runBoardColumnList, runBoardColumnMove, runBoardColumnUpdate,
+  runBoardCreate, runBoardDelete, runBoardExport, runBoardImport, runBoardList, runBoardShow, runBoardUpdate, runBoardUse
+} from './boards/cli.js';
+import {
+  runNotifyChannelCommandSet, runNotifyChannelLarkSet, runNotifyConfigSet, runNotifyStatus,
+  runNotifyTest, runNotifyWebhookAdd, runNotifyWebhookList, runNotifyWebhookRemove, runNotifyWebhookUpdate
+} from './notifications/cli.js';
 import { acpxPassThroughArgs, runAcpx } from './acpx.js';
 import { AgentGroupToolCliError, runGroupBots, runGroupMembers, runGroupMessage, runGroupMessages, runGroupPeers, runGroupReplyMode, runGroupSelf, runGroupSend, runGroupWait } from './lark/agent-tools-cli.js';
 import { agentDockGroupToolsCommand } from './lark/agent-tools.js';
@@ -26,7 +40,7 @@ import { devDown, devEnv, devRun, devUp } from './dev-sandbox.js';
 import { runPasswordClear, runPasswordSet, runPasswordStatus } from './password-cli.js';
 import { webPasswordEnabled } from './web-password.js';
 import { runScheduleAdd, runScheduleList, runSchedulePause, runScheduleRemove, runScheduleResume, runScheduleRun, runScheduleShow, runScheduleUpdate } from './schedule-cli.js';
-import { runUsageBreakdown, runUsageSession, runUsageSummary } from './usage-cli.js';
+import { runUsageBreakdown, runUsageQuota, runUsageSession, runUsageSummary } from './usage-cli.js';
 import {
   runDraftCreate, runDraftDiscard, runDraftList, runDraftSend, runMainClear, runMainGet, runMainRestore, runMainSet,
   runNotify, runTaskCancel, runTaskList, runTaskPlan,
@@ -177,6 +191,19 @@ async function main() {
     larkAvatarDiagnostics: async options => { process.stdout.write(await runLarkAvatarDiagnostics(options)); },
     larkAvatarReaction: async options => { process.stdout.write(await runLarkAvatarReaction(options)); },
     larkAvatarReactionRoute: async options => { process.stdout.write(await runLarkAvatarReactionRoute(options)); },
+    larkAvatarStatus: async options => { process.stdout.write(await runLarkAvatarStatus(options)); },
+    larkAvatarConfigShow: async options => { process.stdout.write(await runLarkAvatarConfigShow(options)); },
+    larkAvatarConfigSet: async options => { process.stdout.write(await runLarkAvatarConfigSet(options)); },
+    larkAvatarListen: async (enabled, options) => { process.stdout.write(await runLarkAvatarListen(enabled, options)); },
+    larkAvatarChats: async options => { process.stdout.write(await runLarkAvatarChats(options)); },
+    larkAvatarPoll: async options => { process.stdout.write(await runLarkAvatarPoll(options)); },
+    larkAvatarInboxList: async options => { process.stdout.write(await runLarkAvatarInboxList(options)); },
+    larkAvatarInboxCleanup: async options => { process.stdout.write(await runLarkAvatarInboxCleanup(options)); },
+    larkAvatarDraftList: async options => { process.stdout.write(await runLarkAvatarDraftList(options)); },
+    larkAvatarDraftCreate: async options => { process.stdout.write(await runLarkAvatarDraftCreate(options)); },
+    larkAvatarDraftUpdate: async (id, options) => { process.stdout.write(await runLarkAvatarDraftUpdate(id, options)); },
+    larkAvatarDraftSend: async (id, options) => { process.stdout.write(await runLarkAvatarDraftSend(id, options)); },
+    larkAvatarDraftDiscard: async (id, options) => { process.stdout.write(await runLarkAvatarDraftDiscard(id, options)); },
     groupSelf: async () => { output(await runGroupSelf()); },
     groupPeers: async () => { output(await runGroupPeers()); },
     groupMembers: async () => { output(await runGroupMembers()); },
@@ -242,6 +269,15 @@ async function main() {
     watchRun: async (id, options) => { process.stdout.write(await runWatchControl(id, 'run', options)); },
     watchRemove: async (id, options) => { process.stdout.write(await runWatchRemove(id, options)); },
     notify: async (text, options) => { process.stdout.write(await runNotify(text, options)); },
+    notifyStatus: async options => { process.stdout.write(await runNotifyStatus(options)); },
+    notifyConfigSet: async options => { process.stdout.write(await runNotifyConfigSet(options)); },
+    notifyChannelLarkSet: async options => { process.stdout.write(await runNotifyChannelLarkSet(options)); },
+    notifyWebhookList: async options => { process.stdout.write(await runNotifyWebhookList(options)); },
+    notifyWebhookAdd: async options => { process.stdout.write(await runNotifyWebhookAdd(options)); },
+    notifyWebhookUpdate: async (id, options) => { process.stdout.write(await runNotifyWebhookUpdate(id, options)); },
+    notifyWebhookRemove: async (id, options) => { process.stdout.write(await runNotifyWebhookRemove(id, options)); },
+    notifyChannelCommandSet: async options => { process.stdout.write(await runNotifyChannelCommandSet(options)); },
+    notifyTest: async (channel, options) => { process.stdout.write(await runNotifyTest(channel, options)); },
     mainGet: async options => { process.stdout.write(await runMainGet(options)); },
     mainSet: async (sessionId, options) => { process.stdout.write(await runMainSet(sessionId, options)); },
     mainClear: async options => { process.stdout.write(await runMainClear(options)); },
@@ -263,7 +299,27 @@ async function main() {
     draftDiscard: async (id, options) => { process.stdout.write(await runDraftDiscard(id, options)); },
     usageSummary: async options => { process.stdout.write(await runUsageSummary(options)); },
     usageBreakdown: async options => { process.stdout.write(await runUsageBreakdown(options)); },
-    usageSession: async (sessionId, options) => { process.stdout.write(await runUsageSession(sessionId, options)); }
+    usageSession: async (sessionId, options) => { process.stdout.write(await runUsageSession(sessionId, options)); },
+    usageQuota: async (agent, options) => { process.stdout.write(await runUsageQuota(agent, options)); },
+    boardList: async options => { process.stdout.write(await runBoardList(options)); },
+    boardCreate: async (name, options) => { process.stdout.write(await runBoardCreate(name, options)); },
+    boardShow: async (boardId, options) => { process.stdout.write(await runBoardShow(boardId, options)); },
+    boardUpdate: async (boardId, options) => { process.stdout.write(await runBoardUpdate(boardId, options)); },
+    boardUse: async (boardId, options) => { process.stdout.write(await runBoardUse(boardId, options)); },
+    boardDelete: async (boardId, options) => { process.stdout.write(await runBoardDelete(boardId, options)); },
+    boardExport: async (boardId, options) => { process.stdout.write(await runBoardExport(boardId, options)); },
+    boardImport: async (file, options) => { process.stdout.write(await runBoardImport(file, options)); },
+    boardAskKitten: async (boardId, options) => { process.stdout.write(await runBoardAskKitten(boardId, options)); },
+    boardColumnList: async (boardId, options) => { process.stdout.write(await runBoardColumnList(boardId, options)); },
+    boardColumnAdd: async (boardId, options) => { process.stdout.write(await runBoardColumnAdd(boardId, options)); },
+    boardColumnUpdate: async (colId, options) => { process.stdout.write(await runBoardColumnUpdate(colId, options)); },
+    boardColumnMove: async (colId, options) => { process.stdout.write(await runBoardColumnMove(colId, options)); },
+    boardColumnDelete: async (colId, options) => { process.stdout.write(await runBoardColumnDelete(colId, options)); },
+    boardCardList: async (boardId, options) => { process.stdout.write(await runBoardCardList(boardId, options)); },
+    boardCardAdd: async (boardId, options) => { process.stdout.write(await runBoardCardAdd(boardId, options)); },
+    boardCardMove: async (cardIds, options) => { process.stdout.write(await runBoardCardMove(cardIds, options)); },
+    boardCardUpdate: async (cardId, options) => { process.stdout.write(await runBoardCardUpdate(cardId, options)); },
+    boardCardRemove: async (cardIds, options) => { process.stdout.write(await runBoardCardRemove(cardIds, options)); }
   });
   await program.parseAsync();
 }

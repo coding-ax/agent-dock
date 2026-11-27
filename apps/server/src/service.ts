@@ -1,4 +1,5 @@
 import { AutostartService } from './daemon/autostart.js';
+import { acquireDatabaseServerLock } from './daemon/db-lock.js';
 import { KeepAwakeService } from './daemon/keep-awake.js';
 import { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { loadConfig, type AppConfig } from '@agent-dock/agent-dock-config';
@@ -13,6 +14,8 @@ import { readLarkConfigs } from './lark/config.js';
 import { createLarkCardService } from './lark/service.js';
 import { LlmEndpointService } from './llm/service.js';
 import { SideChatConfigService } from './side-chat-config.js';
+import { NotificationService } from './notifications/service.js';
+import { BoardService } from './boards/service.js';
 import { LarkAvatarService } from './lark-avatar/service.js';
 import { buildInitialSystemPrompt } from './initial-system-prompt.js';
 import { ScheduleService } from './schedules/service.js';
@@ -44,13 +47,17 @@ function localApiBaseUrl(config: Pick<AppConfig, 'host' | 'port'>) {
 
 export async function startLocalServer(options: StartLocalServerOptions = {}): Promise<LocalServer> {
   const config = loadConfig(options.env ?? process.env);
-  const repos = createRepositories(config.databaseUrl);
+  const env = options.env ?? process.env;
+  // 先独占数据库服务锁，再打开库与运行 runtime.initialize()：杜绝重复起服在 listen 失败前破坏在线会话。
+  const dbLock = acquireDatabaseServerLock(config.databaseUrl, { home: env.HOME });
+  let repos: ReturnType<typeof createRepositories>;
+  try { repos = createRepositories(config.databaseUrl); }
+  catch (error) { dbLock.release(); throw error; }
   let groupToolsSigningSecret: string;
   try { groupToolsSigningSecret = await loadOrCreateGroupToolsSigningSecret(repos.config); }
-  catch (error) { repos.close(); throw error; }
+  catch (error) { repos.close(); dbLock.release(); throw error; }
   const capabilities = new LarkAgentToolCapabilityRegistry(repos.sessions, localApiBaseUrl(config), groupToolsSigningSecret);
   capabilities.useHandoverLookup(createHandoverLookup(repos.config, repos.channelMappings));
-  const env = options.env ?? process.env;
   const agentTools = new LarkAgentToolsService(capabilities, repos.config, { env, groupToolsCommand: options.groupToolsCommand });
   let assistant: AssistantService | undefined;
   const runtime = new AgentDockRuntime(repos, {
@@ -67,6 +74,8 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
   });
   let app: Awaited<ReturnType<typeof buildApp>> | undefined;
   let schedules: ScheduleService | undefined;
+  let notifications: NotificationService | undefined;
+  let boards: BoardService | undefined;
   let larkAvatar: LarkAvatarService | undefined;
   let keepAwake: KeepAwakeService | undefined;
   let closed = false;
@@ -90,13 +99,30 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     schedules = new ScheduleService(repos.schedules, repos.sessions, runtime, {
       resolveMainSessionId: () => assistant?.mainSessionId
     });
+    const legacyLarkNotify = createLarkNotifier(repos, env);
+    notifications = new NotificationService({
+      runtime,
+      repos,
+      env,
+      cwd: config.defaultCwd,
+      isAssistantSubtask: sessionId => assistant?.isTaskSession(sessionId) ?? false
+    });
     // 主会话/事项/watch/督办。旧 sources-router 从 M0 起不再构造，代码留到 M2 删除。
     assistant = new AssistantService({
       databaseUrl: config.databaseUrl,
       runtime,
       repos,
       log: { info: () => undefined, warn: message => console.warn(String(message)) },
-      notify: createLarkNotifier(repos, env),
+      notify: async input => {
+        if (!notifications) return legacyLarkNotify(input);
+        const state = await notifications.getPublicState();
+        const dispatched = await notifications.emitManualNotify(input);
+        if (!state.config.lark.enabled) {
+          const legacySent = await legacyLarkNotify(input).catch(() => false);
+          return dispatched || legacySent;
+        }
+        return dispatched;
+      },
       // larkAvatar 在下面才构造；回调在真正发草稿时才解析到实例。
       sendLarkReply: input => {
         if (!larkAvatar) throw new Error('飞书替身尚未初始化');
@@ -104,9 +130,17 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       },
       onMainSessionHandoff: async fromSessionId => {
         await schedules?.migrateSessionAppendSchedulesToMain(fromSessionId);
+      },
+      boardSnapshot: () => boards ? boards.snapshotForMainSession() : Promise.resolve(''),
+      onTaskMutated: task => {
+        boards?.hub.broadcast({
+          event: 'task.updated',
+          data: { taskId: task.id, sessionId: task.sessionId, state: task.state, timestamp: task.updatedAt }
+        });
       }
     });
     await assistant.initialize();
+    boards = new BoardService({ repos, runtime, assistant });
     let openChatService: ReturnType<typeof createLarkCardService> | undefined;
     const openChatLookup = async (openChatId: string) => {
       try {
@@ -144,15 +178,19 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     // 分享链接接口始终挂载：访问防护关闭时 build() 会返回可操作的 409，
     // 界面据此提示用户开启局域网访问，而不是显示一个 404「接口不存在」。
     const shareLinks = new ShareLinkService({ host: config.host, port: config.port, secret: webAuth.secret ?? '', config: repos.config, env });
-    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
+    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, notifications, boards, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
     await app.listen(listenOptions(config));
     // 听到端口后再开始扫描：启动失败时不会先投递出去一半。
+    notifications.start();
+    boards.start();
     schedules.start();
     assistant?.start();
     larkAvatar.start();
   } catch (error) {
     keepAwake?.close();
+    boards?.close();
     const results = await Promise.allSettled([
+      notifications?.close() ?? Promise.resolve(),
       schedules?.stop() ?? Promise.resolve(),
       app?.close() ?? Promise.resolve(),
       assistant?.close() ?? Promise.resolve(),
@@ -161,6 +199,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     ]);
     capabilities.close();
     repos.close();
+    dbLock.release();
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason);
     throw new AggregateError([error, ...failures], 'AgentDock 启动失败');
   }
@@ -173,12 +212,15 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       closed = true;
       // 先停调度（等当前一轮扫完），再关 runtime：避免关到一半时还在往里投递。
       keepAwake?.close();
+      boards?.close();
+      await notifications?.close();
       await larkAvatar?.close();
       await schedules?.stop();
       await assistant?.close();
       const results = await Promise.allSettled([app?.close() ?? Promise.resolve(), runtime.shutdown()]);
       capabilities.close();
       repos.close();
+      dbLock.release();
       const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason);
       if (errors.length) throw new AggregateError(errors, 'AgentDock did not shut down cleanly');
     }

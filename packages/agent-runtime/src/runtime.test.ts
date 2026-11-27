@@ -10,7 +10,7 @@ function harness(options: { onSend?: (emit: (event: any) => void) => void; exitO
   const repos = createRepositories(':memory:'); let emit!: (event: any) => void; let exit!: (code: number | null) => void; const configuredAgents: AgentConfig[] = [];
   const driver: AgentDriver = { start: vi.fn(async () => {}), send: vi.fn(async () => { options.onSend?.(emit); if (options.exitOnSend) exit(options.exitOnSend); }), interrupt: vi.fn(async () => {}), resume: vi.fn(async () => {}), stop: vi.fn(async () => {}), setModel: vi.fn(async () => {}), setReasoningEffort: vi.fn(async () => {}), setPermissionMode: vi.fn() };
   const runtime = new AgentDockRuntime(repos, { probe: () => ({ protocol: 'acp', available: true, pause: false, resume: true }), driverFactory: (configuredAgent, _p, onEvent, onExit) => { configuredAgents.push(configuredAgent); emit = onEvent; exit = onExit; return driver; }, driverIdleTimeoutMs: options.driverIdleTimeoutMs, streamCoalesce: options.streamCoalesce, sessionEnvironment: options.sessionEnvironment, createSystemPrompt: options.createSystemPrompt, sessionPrompt: options.sessionPrompt });
-  return { repos, runtime, driver, configuredAgents, emit: (event: any) => emit(event) };
+  return { repos, runtime, driver, configuredAgents, emit: (event: any) => emit(event), exit: (code: number | null) => exit(code) };
 }
 
 function deferred() {
@@ -1118,5 +1118,382 @@ describe('会话名的三级回退', () => {
     await expect(h.runtime.setSessionTitle(session.id, 'a'.repeat(SESSION_TITLE_MAX_CHARS + 1))).rejects.toMatchObject({ code: 'INVALID_SESSION_TITLE' });
     await expect(h.runtime.setSessionTitle('ses_missing', 'x')).rejects.toMatchObject({ code: 'SESSION_NOT_FOUND' });
     h.repos.close();
+  });
+
+  it('onTurnEvent 发出 completed / waiting_approval / reconnect 失败 status 与 turn 事件', async () => {
+    const turnEvents: Array<{ kind: string; sessionId: string; summary?: string; error?: string; durationMs?: number }> = [];
+    const statuses: Array<{ sessionId: string; state: string; error?: string }> = [];
+    let startCalls = 0;
+    const repos = createRepositories(':memory:');
+    let emitRef: ((e: NormalizedDriverEvent) => void) | undefined;
+    const driver: AgentDriver = {
+      start: vi.fn(async () => {
+        startCalls += 1;
+        if (startCalls === 2) throw new Error('driver offline');
+      }),
+      send: vi.fn(async () => {
+        emitRef?.({ type: 'permission_request', data: { id: 'p1', title: '确认运行命令', status: 'pending' } });
+        emitRef?.({ type: 'text', data: { text: '已经处理完成' } });
+      }),
+      interrupt: vi.fn(async () => {}),
+      resume: vi.fn(async () => {}),
+      stop: vi.fn(async () => {})
+    };
+    const runtime = new AgentDockRuntime(repos, {
+      probe: () => ({ protocol: 'acp', available: true, pause: false, resume: true }),
+      driverFactory: (_a, _p, onEvent) => { emitRef = onEvent; return driver; },
+      driverIdleTimeoutMs: 10
+    });
+    runtime.onTurnEvent(event => turnEvents.push(event));
+    runtime.onStatus(event => statuses.push(event));
+    await runtime.initialize([agent]);
+    const session = await runtime.start({ agentId: 'mock' });
+    await runtime.send(session.id, '帮我跑一下');
+
+    expect(turnEvents.some(e => e.kind === 'waiting_approval' && e.summary === '确认运行命令')).toBe(true);
+    expect(turnEvents.some(e => e.kind === 'completed' && e.summary === '已经处理完成' && typeof e.durationMs === 'number')).toBe(true);
+
+    // 驱逐空闲驱动后模拟重连失败：应同时发 status(带 error) 与 failed turn 事件
+    await runtime.cleanupIdleDrivers(Date.now() + 100);
+    await expect(runtime.send(session.id, '重连会失败')).rejects.toThrow('driver offline');
+    expect(statuses.some(s => s.sessionId === session.id && s.error?.includes('driver offline'))).toBe(true);
+    expect(turnEvents.some(e => e.kind === 'failed' && e.error?.includes('driver offline'))).toBe(true);
+
+    await runtime.shutdown();
+    repos.close();
+  });
+
+  it('recovers stale thinking/running_tool state without a running task on initialize and drains queued tasks', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'recovered answer' } }) });
+    const t0 = '2026-11-26T17:30:00.000Z';
+    const t1 = '2026-11-26T17:35:00.000Z';
+    await h.repos.sessions.save({
+      id: 'ses_stale_thinking', agentId: 'mock', state: 'thinking', cwd: '/tmp',
+      permissionMode: 'full-trust', protocol: 'acp', runId: 'run_old',
+      error: 'AgentDock 守护进程重启，正在进行的任务已中断', interruptIntent: 'daemon_restart',
+      createdAt: t0, updatedAt: t1
+    });
+    await h.repos.tasks.save({ id: 'task_done', sessionId: 'ses_stale_thinking', prompt: 'earlier', status: 'interrupted', createdAt: t0, updatedAt: t0 });
+    await h.repos.tasks.save({ id: 'task_queued', sessionId: 'ses_stale_thinking', prompt: 'queued-after-restart', status: 'queued', createdAt: t1, updatedAt: t1 });
+
+    await h.runtime.initialize([agent]);
+    await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('queued-after-restart'));
+    await vi.waitFor(async () => expect((await h.runtime.getTasks('ses_stale_thinking')).find(t => t.id === 'task_queued')?.status).toBe('completed'));
+    const updated = await h.runtime.getSession('ses_stale_thinking');
+    expect(updated?.state).toBe('completed');
+    // 正常完成后旧的 error 与 interruptIntent 必须从 DB 清空，不再永久残留。
+    expect(updated?.error ?? null).toBeNull();
+    expect(updated?.interruptIntent ?? null).toBeNull();
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('marks dangling queued tasks on stopped/failed sessions as failed during initialize', async () => {
+    const h = harness();
+    const ts = new Date().toISOString();
+    await h.repos.sessions.save({ id: 'ses_stopped_q', agentId: 'mock', state: 'stopped', cwd: '/tmp', permissionMode: 'full-trust', protocol: 'acp', runId: 'run_s', createdAt: ts, updatedAt: ts });
+    await h.repos.tasks.save({ id: 'task_q_dead', sessionId: 'ses_stopped_q', prompt: 'never runs', status: 'queued', createdAt: ts, updatedAt: ts });
+    await h.runtime.initialize([agent]);
+    expect((await h.runtime.getTasks('ses_stopped_q'))[0]?.status).toBe('failed');
+    expect(h.runtime.hasQueuedTasks('ses_stopped_q')).toBe(false);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('self-heals external event sequence gaps without failing dispatch or stranding queued tasks', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'ok' } }) });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+    await h.runtime.send(session.id, 'first');
+
+    // 模拟外部进程往同一会话写入了 3 条事件，导致 runtime 内存里的 sequence 缓存落后。
+    const currentMax = await h.repos.events.maxSequence(session.id);
+    for (let offset = 1; offset <= 3; offset++) {
+      await h.repos.events.append({
+        id: `evt_ext_${offset}`, sessionId: session.id, sequence: currentMax + offset,
+        type: 'status', timestamp: new Date().toISOString(), data: { state: 'interrupted', interruptIntent: 'daemon_restart' }
+      });
+    }
+
+    const queued = await h.runtime.dispatch(session.id, 'after-sequence-gap', 'queue');
+    await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('after-sequence-gap'));
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === queued.id)?.status).toBe('completed'));
+    expect(await h.repos.events.maxSequence(session.id)).toBeGreaterThan(currentMax + 3);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('releases activeTurns lock and keeps draining queue when runTask fails before driver.send', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'second ok' } }) });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+    // 模拟 applyRiskPolicy（位于 activeTurns.add 之后、driver.send 之前）抛错。
+    const badPolicy = { enabled: true } as any;
+    const origSave = h.repos.events.append;
+    let failOnce = true;
+    h.repos.events.append = async event => {
+      if (failOnce && event.type === 'text' && (event.data as any)?.role === 'user') {
+        failOnce = false;
+        throw new Error('transient disk error');
+      }
+      return origSave(event);
+    };
+
+    const first = await h.runtime.dispatch(session.id, 'first-fails-anchor', 'queue', 'first-fails-anchor', badPolicy);
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === first.id)?.status).toBe('failed'));
+
+    // activeTurns 必须已释放，后续入队消息不能被永远卡在队列里。
+    const second = await h.runtime.dispatch(session.id, 'second-must-run', 'queue');
+    await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('second-must-run'));
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === second.id)?.status).toBe('completed'));
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('still drains steered task and clears hardInterrupts even when driver.stop rejects', async () => {
+    const gate = deferred();
+    const h = harness();
+    h.driver.send = vi.fn(async prompt => {
+      if (prompt === 'first') await gate.promise;
+      h.emit({ type: 'text', data: { text: `done:${prompt}` } });
+    });
+    h.driver.stop = vi.fn(async () => {
+      gate.resolve();
+      throw new Error('ACP session not found');
+    });
+    const statuses: Array<{ state: string; interruptIntent?: string; queued?: boolean }> = [];
+    h.runtime.onStatus(event => statuses.push(event));
+
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+    await h.runtime.dispatch(session.id, 'first');
+    await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('first'));
+    const second = await h.runtime.dispatch(session.id, 'steered-second');
+
+    await expect(h.runtime.steerQueued(session.id, second.id)).resolves.toMatchObject({ id: second.id });
+    await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('steered-second'));
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === second.id)?.status).toBe('completed'));
+    // Steer 打断旧轮次时，onStatus 必须携带 queued: true，供督办器区分 Steer 与真正的用户停止。
+    expect(statuses.some(s => s.state === 'interrupted' && s.queued === true)).toBe(true);
+
+    // 确认 hardInterrupts 没有泄漏：后续再排新消息仍能正常排空。
+    const third = await h.runtime.dispatch(session.id, 'third-after-steer');
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === third.id)?.status).toBe('completed'));
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('does not wipe newly queued tasks when cleanupIdleDrivers runs concurrently with dispatch', async () => {
+    const stopGate = deferred();
+    let driverIdx = 0;
+    const oldStop = vi.fn(async () => { await stopGate.promise; });
+    const newSend = vi.fn(async () => {});
+    const repos = createRepositories(':memory:');
+    let emitFn: ((e: NormalizedDriverEvent) => void) | undefined;
+    const runtime = new AgentDockRuntime(repos, {
+      probe: () => ({ protocol: 'acp', available: true, pause: false, resume: true }),
+      driverFactory: (_a, _p, onEvent) => {
+        emitFn = onEvent;
+        driverIdx += 1;
+        return driverIdx === 1
+          ? { start: vi.fn(async () => {}), send: vi.fn(async () => {}), interrupt: vi.fn(async () => {}), resume: vi.fn(async () => {}), stop: oldStop }
+          : { start: vi.fn(async () => {}), send: vi.fn(async () => { emitFn?.({ type: 'text', data: { text: 'fresh answer' } }); await newSend(); }), interrupt: vi.fn(async () => {}), resume: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+      },
+      driverIdleTimeoutMs: 10
+    });
+    await runtime.initialize([agent]);
+    const session = await runtime.start({ agentId: 'mock' });
+
+    const cleanup = runtime.cleanupIdleDrivers(Date.now() + 100);
+    await vi.waitFor(() => expect(oldStop).toHaveBeenCalledOnce());
+
+    // 在旧驱动 stop() 异步阻塞期间到达的新消息，必须走新驱动跑完，绝不能被 cleanup 的 finally 清空队列。
+    const queued = await runtime.dispatch(session.id, 'arrived-during-cleanup');
+    stopGate.resolve();
+    await cleanup;
+
+    await vi.waitFor(async () => expect((await runtime.getTasks(session.id)).find(t => t.id === queued.id)?.status).toBe('completed'));
+    expect(newSend).toHaveBeenCalledOnce();
+    await runtime.shutdown(); repos.close();
+  });
+
+  it('transitions out of thinking and drains next queued task when driver.send throws after cancelled stopReason', async () => {
+    const firstGate = deferred();
+    const h = harness();
+    h.driver.send = vi.fn(async prompt => {
+      if (prompt === 'cancel-throw') {
+        await firstGate.promise;
+        h.emit({ type: 'completed', data: { stopReason: 'cancelled' } });
+        throw new Error('turn cancelled by agent');
+      }
+      h.emit({ type: 'text', data: { text: 'next ok' } });
+    });
+
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+    const first = await h.runtime.dispatch(session.id, 'cancel-throw');
+    await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('cancel-throw'));
+    const second = await h.runtime.dispatch(session.id, 'after-cancel-throw');
+    firstGate.resolve();
+
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === first.id)?.status).toBe('interrupted'));
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === second.id)?.status).toBe('completed'));
+    expect((await h.runtime.getSession(session.id))?.state).toBe('completed');
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('recovers a disconnected session stuck in stale thinking state on interrupt()', async () => {
+    const h = harness();
+    const ts = new Date().toISOString();
+    await h.repos.sessions.save({ id: 'ses_stale_busy', agentId: 'mock', state: 'thinking', cwd: '/tmp', permissionMode: 'full-trust', protocol: 'acp', runId: 'run_1', createdAt: ts, updatedAt: ts });
+    await h.runtime.interrupt('ses_stale_busy');
+    expect(await h.runtime.getSession('ses_stale_busy')).toMatchObject({ state: 'interrupted', interruptIntent: 'user' });
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('re-schedules queue drain when a new task arrives right as drainQueue finishes (no lost wakeup)', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'ok' } }) });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+
+    // 连续 8 次在上一轮刚好落完 completed 的同一事件循环波次里入队，覆盖 queueRuns.finally 边界窗口。
+    const ids: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const task = await h.runtime.dispatch(session.id, `burst-${i}`, 'queue');
+      ids.push(task.id);
+      if (i % 2 === 1) {
+        await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === task.id)?.status).toBe('completed'));
+      }
+    }
+    await vi.waitFor(async () => {
+      const tasks = await h.runtime.getTasks(session.id);
+      expect(ids.every(id => tasks.find(t => t.id === id)?.status === 'completed')).toBe(true);
+    });
+    expect(h.runtime.hasQueuedTasks(session.id)).toBe(false);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('fails remaining queued tasks and evicts dead driver when process exits abnormally mid-queue', async () => {
+    const gate = deferred();
+    const h = harness();
+    h.driver.send = vi.fn(async prompt => {
+      if (prompt === 'crash-turn') {
+        await gate.promise;
+        h.exit(17);
+        throw new Error('process exited');
+      }
+      h.emit({ type: 'text', data: { text: 'ok' } });
+    });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+    const first = await h.runtime.dispatch(session.id, 'crash-turn');
+    await vi.waitFor(() => expect(h.driver.send).toHaveBeenCalledWith('crash-turn'));
+    const second = await h.runtime.dispatch(session.id, 'queued-behind-crash');
+    gate.resolve();
+
+    await vi.waitFor(async () => expect((await h.runtime.getSession(session.id))?.state).toBe('failed'));
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === first.id)?.status).toBe('failed'));
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === second.id)?.status).toBe('failed'));
+    expect(h.runtime.hasQueuedTasks(session.id)).toBe(false);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('persists model and reasoningEffort on a dormant session without cold-starting the CLI driver, and applies them on next wake', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'woken' } }) });
+    await h.runtime.initialize([agent]);
+    const ts = new Date().toISOString();
+    await h.repos.sessions.save({
+      id: 'ses_dormant_cfg',
+      agentId: 'mock',
+      state: 'completed',
+      cwd: '/tmp',
+      model: 'model-old',
+      reasoningEffort: 'low',
+      permissionMode: 'ask',
+      protocol: 'acp',
+      runId: 'run_old',
+      createdAt: ts,
+      updatedAt: ts
+    });
+
+    const events: any[] = [];
+    const unsubscribe = h.runtime.subscribe('ses_dormant_cfg', event => events.push(event));
+    const afterModel = await h.runtime.setModel('ses_dormant_cfg', 'model-new');
+    const afterEffort = await h.runtime.setReasoningEffort('ses_dormant_cfg', 'high');
+    unsubscribe();
+
+    expect(afterModel).toMatchObject({ model: 'model-new', state: 'completed' });
+    expect(afterEffort).toMatchObject({ model: 'model-new', reasoningEffort: 'high', state: 'completed' });
+    // 休眠会话绝不因切换配置冷启动 CLI/ACP 进程。
+    expect(h.configuredAgents).toHaveLength(0);
+    expect(h.driver.start).not.toHaveBeenCalled();
+    expect(h.driver.setModel).not.toHaveBeenCalled();
+    expect(h.driver.setReasoningEffort).not.toHaveBeenCalled();
+    expect(events.some(event => event.type === 'status' && event.data?.model === 'model-new')).toBe(true);
+    expect(events.some(event => event.type === 'status' && event.data?.reasoningEffort === 'high')).toBe(true);
+
+    // 下次真正发消息唤醒 driver 时自动携带最新持久化配置。
+    await h.runtime.send('ses_dormant_cfg', 'hello after switch');
+    expect(h.configuredAgents).toHaveLength(1);
+    expect(h.configuredAgents[0]).toMatchObject({ model: 'model-new', reasoningEffort: 'high' });
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('short-circuits no-op model and reasoningEffort updates on an active driver', async () => {
+    const h = harness();
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock', model: 'model-a', reasoningEffort: 'medium' });
+
+    await expect(h.runtime.setModel(session.id, 'model-a')).resolves.toMatchObject({ model: 'model-a' });
+    await expect(h.runtime.setReasoningEffort(session.id, 'medium')).resolves.toMatchObject({ reasoningEffort: 'medium' });
+    expect(h.driver.setModel).not.toHaveBeenCalled();
+    expect(h.driver.setReasoningEffort).not.toHaveBeenCalled();
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('applies last-write-wins for rapid concurrent setModel switches without stale overwrites', async () => {
+    const firstGate = deferred();
+    const calls: string[] = [];
+    const h = harness();
+    h.driver.setModel = vi.fn(async (nextModel: string) => {
+      calls.push(nextModel);
+      if (nextModel === 'model-1') await firstGate.promise;
+    });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock', model: 'model-0' });
+
+    const p1 = h.runtime.setModel(session.id, 'model-1');
+    await vi.waitFor(() => expect(calls).toEqual(['model-1']));
+    const p2 = h.runtime.setModel(session.id, 'model-2');
+    const p3 = h.runtime.setModel(session.id, 'model-3');
+    firstGate.resolve();
+
+    const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+    // 排队中被覆盖的 model-2 直接跳过，不浪费 ACP 往返；最终落库必为 model-3。
+    expect(calls).toEqual(['model-1', 'model-3']);
+    expect(r3.model).toBe('model-3');
+    expect(r1.model).not.toBe('model-1');
+    expect(r2.model).not.toBe('model-2');
+    expect((await h.runtime.getSession(session.id))?.model).toBe('model-3');
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('applies last-write-wins for rapid concurrent setReasoningEffort switches without stale overwrites', async () => {
+    const firstGate = deferred();
+    const calls: string[] = [];
+    const h = harness();
+    h.driver.setReasoningEffort = vi.fn(async (nextEffort: string) => {
+      calls.push(nextEffort);
+      if (nextEffort === 'low') await firstGate.promise;
+    });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock', reasoningEffort: 'medium' });
+
+    const p1 = h.runtime.setReasoningEffort(session.id, 'low');
+    await vi.waitFor(() => expect(calls).toEqual(['low']));
+    const p2 = h.runtime.setReasoningEffort(session.id, 'high');
+    const p3 = h.runtime.setReasoningEffort(session.id, 'xhigh');
+    firstGate.resolve();
+
+    const [, , r3] = await Promise.all([p1, p2, p3]);
+    expect(calls).toEqual(['low', 'xhigh']);
+    expect(r3.reasoningEffort).toBe('xhigh');
+    expect((await h.runtime.getSession(session.id))?.reasoningEffort).toBe('xhigh');
+    await h.runtime.shutdown(); h.repos.close();
   });
 });

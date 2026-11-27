@@ -61,6 +61,57 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     } finally { await adapter.stop({ discardSession: true }); }
   });
 
+  it('reuses cached configOptions during live switches and syncs dormant model/reasoningEffort changes on wake', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'agentdock-dormant-sync-')); dirs.push(cwd);
+    const fixture = join(cwd, 'agent.mjs');
+    const logFile = join(cwd, 'ops.jsonl');
+    await writeFile(fixture, `import readline from 'node:readline';
+import { appendFileSync } from 'node:fs';
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+let currentModel = 'model-a';
+let currentEffort = 'medium';
+const options = () => [
+  { id: 'model', category: 'model', type: 'select', currentValue: currentModel, options: ['model-a', 'model-b'].map(value => ({ value, name: value })) },
+  { id: 'effort', category: 'thought_level', type: 'select', currentValue: currentEffort, options: ['low', 'medium', 'high'].map(value => ({ value, name: value })) }
+];
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const { id, method, params = {} } = JSON.parse(line);
+  appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ method, params }) + '\\n');
+  if (method === 'initialize') return send({ jsonrpc: '2.0', id, result: { protocolVersion: params.protocolVersion, agentCapabilities: { loadSession: true }, authMethods: [] } });
+  if (method === 'session/new' || method === 'session/load') return send({ jsonrpc: '2.0', id, result: { sessionId: params.sessionId || 'dormant-sync', configOptions: options() } });
+  if (method === 'session/set_config_option') {
+    if (params.configId === 'model') currentModel = params.value;
+    if (params.configId === 'effort') currentEffort = params.value;
+    return send({ jsonrpc: '2.0', id, result: { configOptions: options() } });
+  }
+  if (method === 'session/prompt') {
+    send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: currentModel + ':' + currentEffort } } } });
+    return send({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+  }
+});`);
+    const baseAgent = { id: 'mock', name: 'Mock', command: process.execPath, args: [fixture], protocol: 'acp' as const, cwd, env: {}, permissionMode: 'deny-all' as const, timeout: 10, capabilities: { pause: false, resume: true }, builtin: false };
+    const first = new AcpxAdapter({ ...baseAgent, model: 'model-a', reasoningEffort: 'low' }, { sessionKey: 'dormant-sync', onEvent() {} });
+    try {
+      await first.start();
+      expect(first.getConfigOptions()?.find(o => o.id === 'model')?.currentValue).toBe('model-a');
+      await first.setReasoningEffort('high');
+      expect(first.getConfigOptions()?.find(o => o.id === 'effort')?.currentValue).toBe('high');
+      await first.stop();
+    } catch (error) {
+      await first.stop({ discardSession: true });
+      throw error;
+    }
+
+    // 模拟休眠期间仅改 SQLite（模型 model-a -> model-b，思考深度 high -> low），下次唤醒时一次到位同步到持久记录。
+    const texts: string[] = [];
+    const woken = new AcpxAdapter({ ...baseAgent, model: 'model-b', reasoningEffort: 'low' }, { sessionKey: 'dormant-sync', onEvent: e => { if (e.type === 'text') texts.push(e.data.text); } });
+    try {
+      await woken.start();
+      await woken.send('check');
+      expect(texts.join('')).toBe('model-b:low');
+    } finally { await woken.stop({ discardSession: true }); }
+  });
+
   it('applies Codex full access before prompts and restores or revokes it across persistent sessions', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'agentdock-codex-mode-')); dirs.push(cwd);
     const log = join(cwd, 'requests.jsonl');
@@ -307,6 +358,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   it('normalizes raw ACP session/update envelopes', () => {
     expect(normalizeAcpxEvent({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Trae says hi' } } } })).toMatchObject({ type: 'text', data: { text: 'Trae says hi' } });
     expect(normalizeAcpxEvent({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', title: 'pwd' } } })).toMatchObject({ type: 'tool_call', data: { id: 'tool-1', status: 'running' } });
+    expect(normalizeAcpxEvent({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'tool_call', toolCallId: 'tool-read', title: 'File packages/agent-runtime/src/index.ts', kind: 'read', rawInput: { Path: 'packages/agent-runtime/src/index.ts' } } } })).toMatchObject({ type: 'tool_call', data: { id: 'tool-read', name: 'File packages/agent-runtime/src/index.ts', kind: 'read', status: 'running' } });
+    expect(normalizeAcpxEvent({ type: 'tool_call', tag: 'tool_call', toolCallId: 'tool-edit', title: 'Edit app.ts', kind: 'edit', status: 'in_progress' })).toMatchObject({ type: 'tool_call', data: { id: 'tool-edit', name: 'Edit app.ts', kind: 'edit', status: 'running' } });
     expect(normalizeAcpxEvent({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'completed' } } })).toMatchObject({ type: 'tool_result', data: { id: 'tool-1', status: 'completed' } });
     expect(normalizeAcpxEvent({ type: 'status', tag: 'usage_update', used: 1200, size: 200000, breakdown: { totalTokens: 1300 } })).toEqual({ type: 'status', data: { state: 'usage', used: 1200, size: 200000, breakdown: { totalTokens: 1300 }, cost: undefined } });
     expect(normalizeAcpxEvent({ type: 'status', tag: 'available_commands_update', availableCommands: [{ name: 'compact' }] })).toEqual({ type: 'status', data: { state: 'commands', availableCommands: [{ name: 'compact' }] } });

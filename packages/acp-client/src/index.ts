@@ -119,7 +119,24 @@ export function normalizeAcpxEvent(input: unknown): NormalizedDriverEvent | unde
   }
   if (kind === 'text') return { type: 'text', data: { text: update.content?.text ?? event.text ?? event.message ?? '' } };
   if (kind === 'agent_thought_chunk' || kind === 'thinking') return { type: 'thinking', data: { text: update.content?.text ?? event.text ?? '' } };
-  if (kind === 'tool_call' || kind === 'tool_call_update' || kind === 'tool_result') { const complete = statusMap[update.status] ?? (kind === 'tool_result' ? 'completed' : 'running'); return { type: complete === 'completed' || complete === 'failed' ? 'tool_result' : 'tool_call', data: { id: update.toolCallId ?? event.toolCallId ?? event.id, name: update.title ?? event.title ?? event.name ?? 'tool', input: update.rawInput ?? event.rawInput ?? event.input, output: update.rawOutput ?? event.rawOutput ?? event.output, status: complete } }; }
+  if (kind === 'tool_call' || kind === 'tool_call_update' || kind === 'tool_result') {
+    const complete = statusMap[update.status] ?? (kind === 'tool_result' ? 'completed' : 'running');
+    const rawToolKind = update.kind ?? event.kind;
+    const toolKind = typeof rawToolKind === 'string' && rawToolKind.trim() && !['tool_call', 'tool_call_update', 'tool_result'].includes(rawToolKind.trim())
+      ? rawToolKind.trim()
+      : undefined;
+    return {
+      type: complete === 'completed' || complete === 'failed' ? 'tool_result' : 'tool_call',
+      data: {
+        id: update.toolCallId ?? event.toolCallId ?? event.id,
+        name: update.title ?? event.title ?? event.name ?? 'tool',
+        ...(toolKind ? { kind: toolKind } : {}),
+        input: update.rawInput ?? event.rawInput ?? event.input,
+        output: update.rawOutput ?? event.rawOutput ?? event.output,
+        status: complete
+      }
+    };
+  }
   if (kind === 'permission_request' || kind === 'permission_escalation') return { type: 'permission_request', data: { id: event.requestId ?? event.id ?? update.toolCallId, toolCallId: update.toolCallId, title: update.title ?? event.toolTitle ?? 'Permission required', options: update.options ?? [], status: 'pending' } };
   if (kind === 'usage_update') return { type: 'status', data: { state: 'usage', used: event.used, size: event.size, breakdown: event.breakdown, cost: event.cost } };
   // codex-acp 用结构化的 compaction_update 报告压缩；status 可能是 in_progress/completed/failed/cancelled。
@@ -312,6 +329,7 @@ export class AcpxAdapter {
   private reportedTitle?: string;
   private riskPolicy?: ToolRiskPolicy;
   private permissionMode: PermissionMode;
+  private cachedConfigOptions?: Array<Record<string, any>>;
 
   constructor(readonly agent: SessionAgentConfig, private readonly options: AcpxAdapterOptions) {
     const cwd = agent.cwd ?? process.cwd(); this.sessionKey = options.sessionKey ?? `agentdock-${agent.id}`;
@@ -373,17 +391,64 @@ export class AcpxAdapter {
     record.acpx = { ...record.acpx, reset_on_next_ensure: true };
     await this.sessionStore.save(record);
   }
+  private async syncDesiredOptionsBeforeEnsure(): Promise<boolean> {
+    const record = await this.sessionStore.load(this.sessionKey);
+    if (!record) return false;
+    const acpxState: Record<string, any> = { ...(record.acpx ?? {}) };
+    let changed = false;
+
+    if (this.agent.model && acpxState.session_options?.model !== this.agent.model) {
+      const nextSessionOptions: Record<string, any> = { ...(acpxState.session_options ?? {}), model: this.agent.model };
+      if (isCodexAgent(this.agent)) {
+        nextSessionOptions.env = { ...(nextSessionOptions.env ?? {}), agentdock_codex_model: this.agent.model };
+      }
+      acpxState.session_options = nextSessionOptions;
+      changed = true;
+    }
+
+    const storedOptions = Array.isArray(acpxState.config_options) ? acpxState.config_options as Array<Record<string, any>> : [];
+    if (storedOptions.length) this.cachedConfigOptions = storedOptions;
+
+    let syncedReasoning = false;
+    if (this.agent.reasoningEffort && storedOptions.length) {
+      const reasoning = storedOptions.find(option => option.category === 'thought_level' || option.id === 'reasoning_effort' || option.id === 'effort');
+      if (reasoning && typeof reasoning.id === 'string') {
+        const currentDesired = acpxState.desired_config_options?.[reasoning.id];
+        if (currentDesired !== this.agent.reasoningEffort) {
+          acpxState.desired_config_options = { ...(acpxState.desired_config_options ?? {}), [reasoning.id]: this.agent.reasoningEffort };
+          changed = true;
+        }
+        syncedReasoning = true;
+      }
+    }
+
+    if (changed) {
+      record.acpx = acpxState as typeof record.acpx;
+      await this.sessionStore.save(record);
+    }
+    return syncedReasoning;
+  }
+  private async loadConfigOptions(force = false): Promise<Array<Record<string, any>>> {
+    if (!force && this.cachedConfigOptions?.length) return this.cachedConfigOptions;
+    if (!this.handle) return [];
+    const status = await this.runtime.getStatus?.({ handle: this.handle });
+    const options = Array.isArray(status?.details?.configOptions) ? status.details.configOptions as Array<Record<string, any>> : [];
+    if (options.length) this.cachedConfigOptions = options;
+    return options;
+  }
+  getConfigOptions(): Array<Record<string, any>> | undefined {
+    return this.cachedConfigOptions;
+  }
   /**
    * 启动阶段应用配置里的思考深度。与模型同理：一个过期/不被当前模型支持的
    * reasoningEffort 不应让整个 Session 起不来（用户会被锁死在改不了配置的状态），
    * 因此这里降级为提示并继续，用 Agent 默认深度。
    * 注意：运行时通过 setReasoningEffort 显式切换仍会抛错——那是用户的即时操作，需要明确反馈。
    */
-  private async applyReasoningEffort() {
+  private async applyReasoningEffort(skipWhenSyncedOnDormantRecord = false) {
     if (!this.handle || !this.agent.reasoningEffort) return;
     const requested = this.agent.reasoningEffort;
-    const status = await this.runtime.getStatus?.({ handle: this.handle });
-    const options = Array.isArray(status?.details?.configOptions) ? status.details.configOptions as Array<Record<string, any>> : [];
+    const options = await this.loadConfigOptions(true);
     const reasoning = options.find(option => option.category === 'thought_level' || option.id === 'reasoning_effort' || option.id === 'effort');
     const unsupported = !reasoning || typeof reasoning.id !== 'string'
       ? `Agent ${this.agent.id} 不支持配置思考深度`
@@ -398,7 +463,13 @@ export class AcpxAdapter {
       });
       return;
     }
-    await this.runtime.setConfigOption?.({ handle: this.handle, key: reasoning!.id, value: requested });
+    // 休眠会话重新唤醒且已把 desired_config_options 同步进持久化记录，或者当前值已一致时，
+    // 避免在 start() 阶段额外拉起一次 control CLI，由随后同轮连接一并重放。
+    if (reasoning!.currentValue === requested || skipWhenSyncedOnDormantRecord) return;
+    const response = await this.runtime.setConfigOption?.({ handle: this.handle, key: reasoning!.id, value: requested });
+    if (response && Array.isArray((response as { configOptions?: unknown }).configOptions)) {
+      this.cachedConfigOptions = (response as { configOptions: Array<Record<string, any>> }).configOptions;
+    }
   }
   private isUnadvertisedModelError(error: unknown): boolean {
     for (let current: unknown = error, depth = 0; current && depth < 5; depth++) {
@@ -421,6 +492,7 @@ export class AcpxAdapter {
   }
   async start() {
     await this.resetWhenScopedEnvironmentChanged();
+    const syncedDormantReasoning = await this.syncDesiredOptionsBeforeEnsure();
     try { this.handle = await this.runtime.ensureSession(this.sessionInput()); }
     catch (error) {
       // 配置里存了一个该 Agent 并不支持的模型时，acpx 会直接拒绝建会话，整个 Session
@@ -441,10 +513,14 @@ export class AcpxAdapter {
     }
     try {
       await this.applyCodexPermissionMode();
-      await this.applyReasoningEffort();
+      await this.applyReasoningEffort(syncedDormantReasoning);
     } catch (error) {
       await this.stop().catch(() => undefined);
       throw error;
+    }
+    // 预热 configOptions 内存缓存，后续切模型/思考深度免一次 getStatus 往返。
+    if (!this.cachedConfigOptions?.length) {
+      await this.loadConfigOptions(true).catch(() => undefined);
     }
     // 老会话的标题回填：新建的会话这里记录里还是 null，读了等于没读；
     // 之前跑过、Agent 推过标题的会话，这一次打开就能把名字补上。
@@ -620,31 +696,49 @@ export class AcpxAdapter {
     // 若把 handle 留在原地，下一次 stop 会再抛一次同样的错。
     const handle = this.handle;
     this.handle = undefined;
+    this.cachedConfigOptions = undefined;
     if (handle) await this.runtime.close({ handle, reason: 'AgentDock stop' });
     if (options.discardSession) await this.resetPersistentState();
   }
   async resolvePermission(id: string, approved: boolean) { const resolve = this.pendingPermissions.get(id); if (!resolve) return false; this.pendingPermissions.delete(id); this.activeTiming?.onPermissionResolved(id, Date.now()); resolve({ outcome: approved ? 'allow_once' : 'reject_once' }); return true; }
   async setModel(model: string) {
     if (!this.handle) await this.start();
-    const status = await this.runtime.getStatus?.({ handle: this.handle! });
-    const options = Array.isArray(status?.details?.configOptions) ? status.details.configOptions as Array<Record<string, any>> : [];
-    const modelOption = options.find(option => option.id === 'model' || option.category === 'model');
+    let options = await this.loadConfigOptions(false);
+    let modelOption = options.find(option => option.id === 'model' || option.category === 'model');
+    if (!modelOption || typeof modelOption.id !== 'string') {
+      options = await this.loadConfigOptions(true);
+      modelOption = options.find(option => option.id === 'model' || option.category === 'model');
+    }
     if (!modelOption || typeof modelOption.id !== 'string') throw new Error(`Agent ${this.agent.id} does not support runtime model switching`);
     // getStatus reads the persisted option snapshot. A long-lived session can
     // have an older model catalog than the fresh ACP connection used by
     // setConfigOption; let the agent validate the requested value there.
-    await this.runtime.setConfigOption?.({ handle: this.handle!, key: modelOption.id, value: model });
+    const response = await this.runtime.setConfigOption?.({ handle: this.handle!, key: modelOption.id, value: model });
+    if (response && Array.isArray((response as { configOptions?: unknown }).configOptions)) {
+      this.cachedConfigOptions = (response as { configOptions: Array<Record<string, any>> }).configOptions;
+    } else {
+      // 换模型可能改变该模型支持的思考深度集合，没有随响应回传时主动失效缓存。
+      this.cachedConfigOptions = undefined;
+    }
     this.agent.model = model;
   }
   async setReasoningEffort(reasoningEffort: string) {
     if (!this.handle) await this.start();
-    const status = await this.runtime.getStatus?.({ handle: this.handle! });
-    const options = Array.isArray(status?.details?.configOptions) ? status.details.configOptions as Array<Record<string, any>> : [];
-    const reasoning = options.find(option => option.category === 'thought_level' || option.id === 'reasoning_effort' || option.id === 'effort');
+    let options = await this.loadConfigOptions(false);
+    let reasoning = options.find(option => option.category === 'thought_level' || option.id === 'reasoning_effort' || option.id === 'effort');
+    let allowed = reasoning && Array.isArray(reasoning.options) ? reasoning.options.some((option: any) => option?.value === reasoningEffort) : true;
+    if (!reasoning || typeof reasoning.id !== 'string' || !allowed) {
+      // 缓存可能来自切换前的模型，强刷一次确认真实支持的思考深度。
+      options = await this.loadConfigOptions(true);
+      reasoning = options.find(option => option.category === 'thought_level' || option.id === 'reasoning_effort' || option.id === 'effort');
+      allowed = reasoning && Array.isArray(reasoning.options) ? reasoning.options.some((option: any) => option?.value === reasoningEffort) : true;
+    }
     if (!reasoning || typeof reasoning.id !== 'string') throw new Error(`Agent ${this.agent.id} does not support runtime reasoning effort switching`);
-    const allowed = Array.isArray(reasoning.options) ? reasoning.options.some((option: any) => option?.value === reasoningEffort) : true;
     if (!allowed) throw new Error(`Reasoning effort ${reasoningEffort} is not supported by model ${this.agent.model ?? '(default)'}`);
-    await this.runtime.setConfigOption?.({ handle: this.handle!, key: reasoning.id, value: reasoningEffort });
+    const response = await this.runtime.setConfigOption?.({ handle: this.handle!, key: reasoning.id, value: reasoningEffort });
+    if (response && Array.isArray((response as { configOptions?: unknown }).configOptions)) {
+      this.cachedConfigOptions = (response as { configOptions: Array<Record<string, any>> }).configOptions;
+    }
     this.agent.reasoningEffort = reasoningEffort;
   }
   setRiskPolicy(policy?: ToolRiskPolicy) { this.riskPolicy = policy; }

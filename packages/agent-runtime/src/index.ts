@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, Session, SessionInterruptIntent, SessionUsageDetail, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy, TurnUsageRecord, UsageBreakdown, UsageBreakdownGroup, UsageQueryFilter, UsageSummary } from '@agent-dock/agent-dock-shared';
+import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, RuntimeActivityEvent, RuntimeTurnEvent, Session, SessionInterruptIntent, SessionUsageDetail, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy, TurnEventKind, TurnUsageRecord, UsageBreakdown, UsageBreakdownGroup, UsageQueryFilter, UsageSummary } from '@agent-dock/agent-dock-shared';
 import { basename } from 'node:path';
 import { resolveProjectPath } from './project-path.js';
 import { ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, agentConfigSchema, isAgentAuthErrorText, isDeferredAsyncWaitText, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
@@ -78,6 +78,7 @@ export interface AgentDriver {
   resolvePermission?(id: string, approved: boolean): Promise<boolean>;
   setModel?(model: string): Promise<void>;
   setReasoningEffort?(reasoningEffort: string): Promise<void>;
+  getConfigOptions?(): Array<Record<string, any>> | undefined;
   setRiskPolicy?(policy?: ToolRiskPolicy): void;
   setPermissionMode?(mode: PermissionMode): void;
 }
@@ -176,6 +177,7 @@ export class AgentDockRuntime {
   private readonly drivers = new Map<string, AgentDriver>();
   private readonly activeTurns = new Set<string>();
   private readonly activeTasks = new Map<string, TaskRecord>();
+  private readonly turnStartedAt = new Map<string, number>();
   private readonly interruptedTurns = new Set<string>();
   private readonly hardInterrupts = new Set<string>();
   private readonly turnWaiters = new Map<string, Set<() => void>>();
@@ -198,6 +200,11 @@ export class AgentDockRuntime {
   private readonly factory: DriverFactory;
   private readonly streamCoalescer: StreamEventCoalescer;
   private readonly persistChains = new Map<string, Promise<void>>();
+  // 按会话串行化模型 / 思考深度配置变更，并配合单调版本号实现 last-write-wins，
+  // 防止用户连续快切时慢请求后到把新值覆盖回旧值。
+  private readonly configLocks = new Map<string, Promise<unknown>>();
+  private readonly modelVersions = new Map<string, number>();
+  private readonly reasoningVersions = new Map<string, number>();
   private readonly lastActivity = new Map<string, number>();
   private readonly cleanupTimer?: NodeJS.Timeout;
   private cleanupRun?: Promise<void>;
@@ -376,11 +383,31 @@ export class AgentDockRuntime {
           await this.emit(session.id, 'error', { message });
         }
         await this.saveState(session, 'interrupted', message, 'daemon_restart');
+      } else if (['starting', 'thinking', 'running_tool', 'waiting_for_permission', 'interrupting'].includes(session.state)) {
+        // 即使 tasks 表里没有 running 任务（例如崩溃发生在落任务终态与落会话态之间，或重连/打断途中退出），
+        // 残留的忙碌状态也不能带进新进程；否则前端与调度会误判会话仍在运行。
+        const latestSettled = [...persistedTasks]
+          .filter(task => task.status !== 'queued' && task.status !== 'cancelled')
+          .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+          .at(-1);
+        if (latestSettled?.status === 'completed') {
+          await this.saveState(session, 'completed');
+        } else if (session.state === 'starting') {
+          await this.saveState(session, 'idle');
+        } else {
+          const message = 'AgentDock 守护进程重启，残留的运行状态已恢复';
+          await this.saveState(session, 'interrupted', message, 'daemon_restart');
+        }
       }
       const queued = persistedTasks.filter(task => task.status === 'queued').sort((left, right) => left.createdAt.localeCompare(right.createdAt));
       if (queued.length) {
-        this.queues.set(session.id, queued);
-        if (!['stopped', 'failed'].includes(session.state)) this.scheduleQueue(session.id);
+        if (['stopped', 'failed'].includes(session.state)) {
+          // 终态会话不会再排空队列：启动恢复时将残留 queued 标为 failed，避免任务永久挂在队列里。
+          for (const task of queued) await this.saveTask(task, 'failed');
+        } else {
+          this.queues.set(session.id, queued);
+          this.scheduleQueue(session.id);
+        }
       }
     }
   }
@@ -595,6 +622,10 @@ export class AgentDockRuntime {
     return { text, ...(message ? { error: message } : {}) };
   }
 
+  hasQueuedTasks(sessionId: string): boolean {
+    return (this.queues.get(sessionId)?.length ?? 0) > 0;
+  }
+
   private async saveState(session: Session, state: Session['state'], error?: string, interruptIntent?: SessionInterruptIntent) {
     this.touch(session.id);
     session.state = state; session.updatedAt = now(); session.error = error;
@@ -602,7 +633,7 @@ export class AgentDockRuntime {
     await this.repos.sessions.save(session);
     const status = { state, ...(error ? { error } : {}), ...(state === 'interrupted' && interruptIntent ? { interruptIntent } : {}) };
     await this.emit(session.id, 'status', status);
-    this.emitter.emit('status', { sessionId: session.id, ...status });
+    this.emitter.emit('status', { sessionId: session.id, ...status, queued: this.hasQueuedTasks(session.id) });
   }
 
   // A task-level failure (e.g. no final output, a capped turn, or a transient
@@ -612,13 +643,17 @@ export class AgentDockRuntime {
   // `failed` terminal state. When a task fails we return the session to a
   // reusable `idle` state while surfacing the last task error for the UI.
   private async recoverSessionAfterTask(session: Session, error: string) {
-    if (session.archivedAt || ['stopped', 'failed'].includes(session.state)) return;
-    this.touch(session.id);
-    session.state = 'idle'; session.updatedAt = now(); session.error = error;
-    session.interruptIntent = undefined;
-    await this.repos.sessions.save(session);
-    await this.emit(session.id, 'status', { state: 'idle', error });
-    this.emitter.emit('status', { sessionId: session.id, state: 'idle', error });
+    // 从库里重读最新会话态：onExit 等并发路径可能已经把会话标成 failed/stopped，
+    // 不能拿 runTask 开头读出来的旧快照把硬终态覆盖回 idle。
+    const latest = (await this.repos.sessions.get(session.id)) ?? session;
+    if (latest.archivedAt || ['stopped', 'failed'].includes(latest.state)) return;
+    this.touch(latest.id);
+    latest.state = 'idle'; latest.updatedAt = now(); latest.error = error;
+    latest.interruptIntent = undefined;
+    session.state = 'idle'; session.updatedAt = latest.updatedAt; session.error = error; session.interruptIntent = undefined;
+    await this.repos.sessions.save(latest);
+    await this.emit(latest.id, 'status', { state: 'idle', error });
+    this.emitter.emit('status', { sessionId: latest.id, state: 'idle', error, queued: this.hasQueuedTasks(latest.id) });
   }
 
   /** 导入会话的 resume 参数：只有 source='import' 的会话才需要（重）恢复外部 ACP 会话。 */
@@ -694,13 +729,33 @@ export class AgentDockRuntime {
     return next;
   }
 
+  private static isSequenceConflict(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /UNIQUE constraint failed:\s*events\.session_id,\s*events\.sequence/i.test(message);
+  }
+
+  private async currentMaxSequence(sessionId: string): Promise<number> {
+    if (typeof this.repos.events.maxSequence === 'function') return this.repos.events.maxSequence(sessionId);
+    return (await this.repos.events.listRecent(sessionId, 1)).at(-1)?.sequence ?? 0;
+  }
+
   private async appendEvent(sessionId: string, type: EventType, data: any, raw?: string) {
-    const sequence = (this.sequences.get(sessionId) ?? (await this.repos.events.listRecent(sessionId, 1)).at(-1)?.sequence ?? 0) + 1;
-    this.sequences.set(sessionId, sequence);
-    const event: AgentEvent = { id: makeId('evt'), sessionId, sequence, type, timestamp: now(), data, ...(raw ? { raw } : {}) };
-    await this.repos.events.append(event);
-    this.emitter.emit(`session:${sessionId}`, event);
-    return event;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const base = attempt === 0
+        ? (this.sequences.get(sessionId) ?? await this.currentMaxSequence(sessionId))
+        : await this.currentMaxSequence(sessionId);
+      const sequence = base + 1;
+      const event: AgentEvent = { id: makeId('evt'), sessionId, sequence, type, timestamp: now(), data, ...(raw ? { raw } : {}) };
+      try {
+        await this.repos.events.append(event);
+        this.sequences.set(sessionId, sequence);
+        this.emitter.emit(`session:${sessionId}`, event);
+        return event;
+      } catch (error) {
+        if (!AgentDockRuntime.isSequenceConflict(error) || attempt === 3) throw error;
+      }
+    }
+    throw new RuntimeError('EVENT_NOT_PERSISTED', '事件写入序号冲突重试耗尽', 500);
   }
 
   /**
@@ -739,10 +794,72 @@ export class AgentDockRuntime {
    * 订阅所有会话的状态变化。督办器靠它即时发现「等权限 / 轮次结束 / 失败」，
    * 不必轮询整个会话列表；30 秒扫描只做补漏和时间条件。
    */
-  onStatus(listener: (event: { sessionId: string; state: Session['state']; error?: string; interruptIntent?: SessionInterruptIntent }) => void) {
+  onStatus(listener: (event: { sessionId: string; state: Session['state']; error?: string; interruptIntent?: SessionInterruptIntent; queued?: boolean }) => void) {
     const name = 'status';
     this.emitter.on(name, listener);
     return () => this.emitter.off(name, listener);
+  }
+
+  /**
+   * 订阅所有会话的高层轮次事件（完成 / 失败 / 等待审批 / 打断）。
+   * 相比底层 status 事件，直接携带 taskId / taskOrigin / durationMs / summary / interruptIntent，
+   * 避免通知系统从状态机反向猜测。
+   */
+  onTurnEvent(listener: (event: RuntimeTurnEvent) => void) {
+    const name = 'turn';
+    this.emitter.on(name, listener);
+    return () => this.emitter.off(name, listener);
+  }
+
+  /**
+   * 订阅所有会话的轻量实时活动摘要（工具步 / 权限请求 / 思考 / 文本片段），
+   * 供 BoardLiveHub 节流投影至全局单连接看板 SSE，避免为每张卡片各自建立会话流。
+   */
+  onActivity(listener: (event: RuntimeActivityEvent) => void) {
+    const name = 'activity';
+    this.emitter.on(name, listener);
+    return () => this.emitter.off(name, listener);
+  }
+
+  private emitActivity(event: RuntimeActivityEvent) {
+    if (this.emitter.listenerCount('activity') > 0) {
+      this.emitter.emit('activity', event);
+    }
+  }
+
+  private async emitTurnEvent(
+    session: Session,
+    input: {
+      kind: TurnEventKind;
+      taskId?: string;
+      taskOrigin?: string;
+      interruptIntent?: SessionInterruptIntent;
+      durationMs?: number;
+      summary?: string;
+      error?: string;
+    }
+  ) {
+    let titled: Session = session;
+    try {
+      titled = await this.titledSession(session);
+    } catch { /* 读取首条 prompt 失败时不阻断通知分发 */ }
+    const event: RuntimeTurnEvent = {
+      id: makeId('tevt'),
+      kind: input.kind,
+      sessionId: session.id,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      agentId: session.agentId,
+      ...(titled.title ? { sessionTitle: titled.title } : {}),
+      ...(session.source ? { sessionSource: session.source } : {}),
+      ...(session.sourceId ? { sessionSourceId: session.sourceId } : {}),
+      ...(input.taskOrigin ? { taskOrigin: input.taskOrigin } : {}),
+      ...(input.interruptIntent ? { interruptIntent: input.interruptIntent } : {}),
+      ...(input.durationMs !== undefined ? { durationMs: Math.max(0, Math.round(input.durationMs)) } : {}),
+      ...(input.summary ? { summary: input.summary } : {}),
+      ...(input.error ? { error: input.error } : {}),
+      timestamp: now()
+    };
+    this.emitter.emit('turn', event);
   }
 
   private async consume(session: Session, event: NormalizedDriverEvent) {
@@ -821,19 +938,74 @@ export class AgentDockRuntime {
       await this.repos.artifacts.saveToolCall(session.id, data);
       // 更早轮次的后台进程推进度，不代表这一轮在跑工具：不拨会话状态，免得每条进度都切一次 running_tool。
       if (!carriedOver) await this.saveState(session, completed ? 'thinking' : 'running_tool');
-    } else if (event.type === 'thinking' && session.state !== 'thinking') await this.saveState(session, 'thinking');
-    else if (event.type === 'permission_request') {
+      this.emitActivity({
+        sessionId: session.id,
+        kind: event.type,
+        state: session.state,
+        toolName: typeof data.name === 'string' ? data.name : undefined,
+        toolInput: data.input,
+        toolStatus: data.status,
+        timestamp: now()
+      });
+    } else if (event.type === 'thinking') {
+      if (session.state !== 'thinking') await this.saveState(session, 'thinking');
+      this.emitActivity({ sessionId: session.id, kind: 'thinking', state: session.state, timestamp: now() });
+    } else if (event.type === 'text' && data?.role !== 'user' && typeof data?.text === 'string' && data.text.trim()) {
+      this.emitActivity({
+        sessionId: session.id,
+        kind: 'text',
+        state: session.state,
+        textPreview: data.text.trim().slice(0, 140),
+        timestamp: now()
+      });
+    } else if (event.type === 'permission_request') {
       data = { ...data, status: data.status ?? 'pending' };
-      if (data.status === 'pending') { this.permissions.set(this.permissionKey(session.id, data.id), data); await this.saveState(session, 'waiting_for_permission'); }
+      if (data.status === 'pending') {
+        this.permissions.set(this.permissionKey(session.id, data.id), data);
+        await this.saveState(session, 'waiting_for_permission');
+        const activeTask = this.activeTasks.get(session.id);
+        const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim() : '等待权限确认';
+        this.emitActivity({
+          sessionId: session.id,
+          kind: 'permission_request',
+          state: 'waiting_for_permission',
+          permissionTitle: title,
+          timestamp: now()
+        });
+        await this.emitTurnEvent(session, {
+          kind: 'waiting_approval',
+          taskId: activeTask?.id,
+          taskOrigin: activeTask?.origin ?? undefined,
+          summary: title
+        });
+      }
       await this.repos.artifacts.savePermission(session.id, data);
     } else if (event.type === 'error') {
       await this.repos.artifacts.saveError(session.id, data.message, data.detail);
       // Error events emitted during a turn describe that task. runTask owns the
       // terminal task outcome and returns a reusable shared Session to idle.
       // Outside an active turn the same event is a driver-level hard failure.
-      if (!this.activeTurns.has(session.id)) await this.saveState(session, 'failed', data.message);
+      if (!this.activeTurns.has(session.id)) {
+        await this.saveState(session, 'failed', data.message);
+        await this.emitTurnEvent(session, { kind: 'failed', error: typeof data.message === 'string' ? data.message : 'Agent 运行异常' });
+      }
     }
     await this.emit(session.id, event.type, data, event.raw);
+  }
+
+  private createExitHandler(session: Session, getDriver: () => AgentDriver | undefined) {
+    return (code: number | null) => {
+      const driver = getDriver();
+      if (code && driver && this.drivers.get(session.id) === driver) this.drivers.delete(session.id);
+      if (code && session.state !== 'stopped' && !this.interruptedTurns.has(session.id) && !this.hardInterrupts.has(session.id)) {
+        const exitMessage = `Agent exited with code ${code}`;
+        void this.saveState(session, 'failed', exitMessage)
+          .then(() => this.emit(session.id, 'error', { message: exitMessage }))
+          .then(() => this.emitTurnEvent(session, { kind: 'failed', error: exitMessage }))
+          .then(() => { if (!this.activeTurns.has(session.id)) return this.failRemainingQueue(session.id); })
+          .catch(() => undefined);
+      }
+    };
   }
 
   async start(input: StartSessionInput): Promise<Session> {
@@ -858,7 +1030,8 @@ export class AgentDockRuntime {
     // 出现在「正在启动」之前。这里不 emit status，交给下面正常的启动流程。
     if (input.importTurns?.length) await this.seedImportedTurns(session, input.importTurns);
     await this.saveState(session, 'starting');
-    const driver = this.factory(this.configureAgentForSession(configured, session), capability.protocol, this.onDriverEvent(session), code => { if (code && session.state !== 'stopped' && !this.interruptedTurns.has(session.id) && !this.hardInterrupts.has(session.id)) void this.saveState(session, 'failed', `Agent exited with code ${code}`).then(() => this.emit(session.id, 'error', { message: `Agent exited with code ${code}` })); }, session.id, input.resumeSessionId ? { resumeSessionId: input.resumeSessionId } : undefined);
+    let driver: AgentDriver | undefined;
+    driver = this.factory(this.configureAgentForSession(configured, session), capability.protocol, this.onDriverEvent(session), this.createExitHandler(session, () => driver), session.id, input.resumeSessionId ? { resumeSessionId: input.resumeSessionId } : undefined);
     this.drivers.set(session.id, driver);
     try { await driver.start(); this.touch(session.id); await this.saveState(session, 'idle'); return session; }
     catch (error) {
@@ -907,12 +1080,11 @@ export class AgentDockRuntime {
     const agent = await this.repos.agents.get(session.agentId);
     if (!agent) throw new RuntimeError('AGENT_NOT_FOUND', `Unknown agent: ${session.agentId}`, 404);
     const configured = this.configureAgentForSession(agent, session);
-    const driver = this.factory(configured, session.protocol!, this.onDriverEvent(session), code => {
-      if (code && session.state !== 'stopped' && !this.interruptedTurns.has(session.id) && !this.hardInterrupts.has(session.id)) void this.saveState(session, 'failed', `Agent exited with code ${code}`).then(() => this.emit(session.id, 'error', { message: `Agent exited with code ${code}` }));
-    }, session.id, this.resumeOptions(session));
+    let driver: AgentDriver | undefined;
+    driver = this.factory(configured, session.protocol!, this.onDriverEvent(session), this.createExitHandler(session, () => driver), session.id, this.resumeOptions(session));
     this.drivers.set(session.id, driver);
     try { await this.startDriver(session, driver); this.touch(session.id); return driver; }
-    catch (error) { this.drivers.delete(session.id); throw error; }
+    catch (error) { if (this.drivers.get(session.id) === driver) this.drivers.delete(session.id); throw error; }
   }
 
   private async applyRiskPolicy(session: Session, driver: AgentDriver | undefined, policy?: ToolRiskPolicy) {
@@ -942,72 +1114,112 @@ export class AgentDockRuntime {
     if (this.activeTurns.has(id)) throw new RuntimeError('TURN_IN_PROGRESS', 'Wait for the current response to finish', 409);
     this.activeTurns.add(id);
     this.activeTasks.set(id, task);
+    const startedAt = Date.now();
+    this.turnStartedAt.set(id, startedAt);
     this.touch(id);
-    let driver: AgentDriver;
-    try { driver = await this.reconnect(session); }
-    catch (error) {
-      this.activeTurns.delete(id); this.activeTasks.delete(id);
-      await this.saveTask(task, 'failed');
-      // 队列里的任务走 drainQueue，异常会被吞掉；不记一条 error，用户只能看到一个没有原因的失败。
-      const message = `连接 Agent 失败：${describeAcpError(error)}`;
-      await this.repos.artifacts.saveError(id, message).catch(() => undefined);
-      await this.emit(id, 'error', { message, taskId: task.id });
-      throw error;
-    }
-    if (riskPolicy) await this.applyRiskPolicy(session, driver, riskPolicy);
-    await this.saveTask(task, 'running');
-    // 这一条就是轮次锚点：它是本会话唯一可靠的「这一轮从哪开始」的标记，
-    // 判终态、面板切轮、按轮取事件全靠它，所以序号要留一份在手上。
-    const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' || task.origin === 'maintenance' || task.origin === 'handoff' ? { detail: agentPrompt } : {}) });
-    if (!anchor) throw new RuntimeError('EVENT_NOT_PERSISTED', '轮次锚点未能落库', 500);
-    this.turnAnchors.set(task.id, anchor.sequence);
-    // 用户这一轮提问就是一次对话事件，蹭下面的 saveState 一起落盘，不额外多写一次库。
-    session.lastMessageAt = now();
-    await this.saveState(session, 'thinking');
     try {
-      const resolvedAgentPrompt = await this.options.sessionPrompt?.(session, agentPrompt, task.origin ?? undefined) ?? agentPrompt;
-      task.sentPrompt = resolvedAgentPrompt;
-      await this.repos.tasks.save(task);
-      let outcome = await this.executeTurnAndResolve(id, session, task, driver, resolvedAgentPrompt);
-      // antigravity 长驻 agy acp 子进程偶尔在 OAuth token 过期后不自刷新而吐 401；
-      // 仅对 antigravity 尝试驱逐旧驱动并重连重试一次，仍失败则判 failed 交给用户处理。
-      if (outcome.status === 'failed' && outcome.authError) {
-        const retryAfterSequence = this.sequences.get(id);
-        await this.evictDriver(id, driver);
-        driver = await this.reconnect(session);
+      let driver: AgentDriver;
+      try { driver = await this.reconnect(session); }
+      catch (error) {
+        const durationMs = Date.now() - startedAt;
+        await this.saveTask(task, 'failed').catch(() => undefined);
+        // 队列里的任务走 drainQueue，异常会被吞掉；不记一条 error，用户只能看到一个没有原因的失败。
+        const message = `连接 Agent 失败：${describeAcpError(error)}`;
+        await this.repos.artifacts.saveError(id, message).catch(() => undefined);
+        await this.emit(id, 'error', { message, taskId: task.id }).catch(() => undefined);
+        // 同步广播带 error 的 status（不强改 session.state，以免干扰 drainQueue 的 failRemainingQueue 行为），
+        // 并发出失败轮次事件，避免督办器与通知系统漏掉重连失败。
+        session.error = message;
+        session.updatedAt = now();
+        await this.repos.sessions.save(session).catch(() => undefined);
+        await this.emit(id, 'status', { state: session.state, error: message }).catch(() => undefined);
+        this.emitter.emit('status', { sessionId: id, state: session.state, error: message, queued: this.hasQueuedTasks(id) });
+        await this.emitTurnEvent(session, { kind: 'failed', taskId: task.id, taskOrigin: task.origin ?? undefined, durationMs, error: message }).catch(() => undefined);
+        throw error;
+      }
+      try {
         if (riskPolicy) await this.applyRiskPolicy(session, driver, riskPolicy);
-        outcome = await this.executeTurnAndResolve(id, session, task, driver, resolvedAgentPrompt, retryAfterSequence);
+        await this.saveTask(task, 'running');
+        // 这一条就是轮次锚点：它是本会话唯一可靠的「这一轮从哪开始」的标记，
+        // 判终态、面板切轮、按轮取事件全靠它，所以序号要留一份在手上。
+        const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' || task.origin === 'maintenance' || task.origin === 'handoff' ? { detail: agentPrompt } : {}) });
+        if (!anchor) throw new RuntimeError('EVENT_NOT_PERSISTED', '轮次锚点未能落库', 500);
+        this.turnAnchors.set(task.id, anchor.sequence);
+        // 用户这一轮提问就是一次对话事件，蹭下面的 saveState 一起落盘，不额外多写一次库。
+        session.lastMessageAt = now();
+        await this.saveState(session, 'thinking');
+        const resolvedAgentPrompt = await this.options.sessionPrompt?.(session, agentPrompt, task.origin ?? undefined) ?? agentPrompt;
+        task.sentPrompt = resolvedAgentPrompt;
+        await this.repos.tasks.save(task);
+        let outcome = await this.executeTurnAndResolve(id, session, task, driver, resolvedAgentPrompt);
+        // antigravity 长驻 agy acp 子进程偶尔在 OAuth token 过期后不自刷新而吐 401；
+        // 仅对 antigravity 尝试驱逐旧驱动并重连重试一次，仍失败则判 failed 交给用户处理。
+        if (outcome.status === 'failed' && outcome.authError) {
+          const retryAfterSequence = this.sequences.get(id);
+          await this.evictDriver(id, driver);
+          driver = await this.reconnect(session);
+          if (riskPolicy) await this.applyRiskPolicy(session, driver, riskPolicy);
+          outcome = await this.executeTurnAndResolve(id, session, task, driver, resolvedAgentPrompt, retryAfterSequence);
+        }
+        // ACPX 按轮次收口，end_turn 后不会把内置后台任务/subAgent/定时器的完成事件异步推回唤醒会话。
+        // 若非主会话给出了「后台在跑、等完成后再汇报」的挂起回复，自动注入一次纠偏续跑（每轮最多 1 次）。
+        if (
+          outcome.status === 'completed'
+          && session.source !== 'assistant-main'
+          && !this.interruptedTurns.has(id)
+          && isDeferredAsyncWaitText(outcome.finalText)
+        ) {
+          const retryAfterSequence = this.sequences.get(id);
+          await this.emit(id, 'status', { state: 'acpx_sync_guard', reason: 'deferred_async_wait' });
+          outcome = await this.executeTurnAndResolve(id, session, task, driver, ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, retryAfterSequence);
+        }
+        task.finalText = outcome.finalText;
+        // 收尾也算一次对话事件（长轮次结束时该浮上来），同样蹭终端态的 saveState 落盘。
+        session.lastMessageAt = now();
+        const durationMs = Date.now() - startedAt;
+        if (outcome.status === 'interrupted') {
+          const intent: SessionInterruptIntent = this.interruptedTurns.has(id) ? 'user' : 'agent_cancelled';
+          await this.saveTask(task, 'interrupted');
+          await this.saveState(session, 'interrupted', undefined, intent);
+          await this.emitTurnEvent(session, { kind: 'interrupted', taskId: task.id, taskOrigin: task.origin ?? undefined, interruptIntent: intent, durationMs });
+        }
+        else if (outcome.status === 'failed') {
+          const failureMessage = outcome.message ?? 'Agent 未正常完成本轮任务';
+          await this.saveTask(task, 'failed');
+          await this.repos.artifacts.saveError(id, failureMessage);
+          await this.emit(id, 'error', { message: failureMessage });
+          await this.recoverSessionAfterTask(session, failureMessage);
+          await this.emitTurnEvent(session, { kind: 'failed', taskId: task.id, taskOrigin: task.origin ?? undefined, durationMs, error: failureMessage, summary: outcome.finalText });
+        } else {
+          await this.saveTask(task, 'completed');
+          await this.saveState(session, 'completed');
+          await this.emit(id, 'completed', { stopReason: outcome.stopReason ?? 'end_turn' });
+          await this.emitTurnEvent(session, { kind: 'completed', taskId: task.id, taskOrigin: task.origin ?? undefined, durationMs, summary: outcome.finalText });
+        }
+      } catch (error) {
+        const durationMs = Date.now() - startedAt;
+        try { await this.flushDriverEvents(id); }
+        catch { /* Preserve the driver error while ensuring preceding events finish first. */ }
+        if (this.interruptedTurns.has(id) || this.driverStopReasons.get(id) === 'cancelled') {
+          const intent: SessionInterruptIntent = this.interruptedTurns.has(id) ? 'user' : 'agent_cancelled';
+          await this.saveTask(task, 'interrupted').catch(() => undefined);
+          if (!this.hardInterrupts.has(id) && session.state !== 'stopped') {
+            await this.saveState(session, 'interrupted', undefined, intent).catch(() => undefined);
+          }
+          await this.emitTurnEvent(session, { kind: 'interrupted', taskId: task.id, taskOrigin: task.origin ?? undefined, interruptIntent: intent, durationMs }).catch(() => undefined);
+        } else {
+          const message = error instanceof Error ? error.message : String(error);
+          await this.saveTask(task, 'failed').catch(() => undefined);
+          await this.repos.artifacts.saveError(id, message).catch(() => undefined);
+          await this.emit(id, 'error', { message }).catch(() => undefined);
+          await this.recoverSessionAfterTask(session, message).catch(() => undefined);
+          await this.emitTurnEvent(session, { kind: 'failed', taskId: task.id, taskOrigin: task.origin ?? undefined, durationMs, error: message }).catch(() => undefined);
+          throw error;
+        }
       }
-      // ACPX 按轮次收口，end_turn 后不会把内置后台任务/subAgent/定时器的完成事件异步推回唤醒会话。
-      // 若非主会话给出了「后台在跑、等完成后再汇报」的挂起回复，自动注入一次纠偏续跑（每轮最多 1 次）。
-      if (
-        outcome.status === 'completed'
-        && session.source !== 'assistant-main'
-        && !this.interruptedTurns.has(id)
-        && isDeferredAsyncWaitText(outcome.finalText)
-      ) {
-        const retryAfterSequence = this.sequences.get(id);
-        await this.emit(id, 'status', { state: 'acpx_sync_guard', reason: 'deferred_async_wait' });
-        outcome = await this.executeTurnAndResolve(id, session, task, driver, ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, retryAfterSequence);
-      }
-      task.finalText = outcome.finalText;
-      // 收尾也算一次对话事件（长轮次结束时该浮上来），同样蹭终端态的 saveState 落盘。
-      session.lastMessageAt = now();
-      if (outcome.status === 'interrupted') {
-        await this.saveTask(task, 'interrupted');
-        await this.saveState(session, 'interrupted', undefined, this.interruptedTurns.has(id) ? 'user' : 'agent_cancelled');
-      }
-      else if (outcome.status === 'failed') {
-        await this.saveTask(task, 'failed');
-        if (outcome.message) { await this.repos.artifacts.saveError(id, outcome.message); await this.emit(id, 'error', { message: outcome.message }); await this.recoverSessionAfterTask(session, outcome.message); }
-      } else { await this.saveTask(task, 'completed'); await this.saveState(session, 'completed'); await this.emit(id, 'completed', { stopReason: outcome.stopReason ?? 'end_turn' }); }
-    } catch (error) {
-      try { await this.flushDriverEvents(id); }
-      catch { /* Preserve the driver error while ensuring preceding events finish first. */ }
-      if (this.interruptedTurns.has(id) || this.driverStopReasons.get(id) === 'cancelled') await this.saveTask(task, 'interrupted');
-      else { const message = error instanceof Error ? error.message : String(error); await this.saveTask(task, 'failed'); await this.repos.artifacts.saveError(id, message); await this.emit(id, 'error', { message }); await this.recoverSessionAfterTask(session, message); throw error; }
     } finally {
-      // 兜底：异常退出时也不能把最后半段思考/正文留在内存里。
+      // 兜底：无论在重连、发前准备（风控策略/锚点落库）还是正文执行阶段抛出异常，
+      // 都必须释放 activeTurns 锁并唤醒等待者，绝不能把会话永久锁死在队列外。
       await this.flushStream(id).catch(() => undefined);
       const hardInterrupted = this.hardInterrupts.has(id);
       // 锚点只在本轮存续期间有效：`anchor` 那条捷径的上界是「会话当前最大序号 +1」，
@@ -1015,7 +1227,8 @@ export class AgentDockRuntime {
       // （getTurnText 会被飞书对账之类的晚到调用重新用到）就会把后面几轮的文本算成本轮的。
       // 删掉只是让晚到的调用退回按锚点精确查边界——多一次扫描，但答案不会错。
       this.turnAnchors.delete(task.id);
-      this.interruptedTurns.delete(id); this.activeTurns.delete(id); this.activeTasks.delete(id); this.touch(id);
+      this.driverStopReasons.delete(id);
+      this.interruptedTurns.delete(id); this.activeTurns.delete(id); this.activeTasks.delete(id); this.turnStartedAt.delete(id); this.touch(id);
       for (const resolve of this.turnWaiters.get(id) ?? []) resolve();
       this.turnWaiters.delete(id);
       if (!hardInterrupted) this.scheduleQueue(id);
@@ -1098,7 +1311,10 @@ export class AgentDockRuntime {
     if (seen) {
       // 并发重放时两个请求都在等同一轮入队结果，不能各建一个 task。
       if (seen.pending) return seen.pending;
-      if (seen.task && !RETRIED_SEND_STATUSES.has(seen.task.status)) return { ...seen.task, queuedAhead: seen.queuedAhead ?? 0 };
+      if (seen.task && !RETRIED_SEND_STATUSES.has(seen.task.status)) {
+        if (seen.task.status === 'queued') this.scheduleQueue(id);
+        return { ...seen.task, queuedAhead: seen.queuedAhead ?? 0 };
+      }
       // 上一轮已被取消/失败/中断：这次是用户主动重发，要真的再跑一遍。
     }
     const pending = this.enqueueTask(id, prompt, mode, agentPrompt, riskPolicy, origin).then(result => {
@@ -1123,26 +1339,42 @@ export class AgentDockRuntime {
 
   private async enqueueTask(id: string, prompt: string, mode: 'queue' | 'interrupt', agentPrompt: string, riskPolicy: ToolRiskPolicy | undefined, origin: string | undefined) {
     const task: TaskRecord = { id: makeId('task'), sessionId: id, prompt, status: 'queued', ...(origin ? { origin } : {}), createdAt: now(), updatedAt: now() };
+    // 先落库并写 task 事件（同一会话的 emit 已串行化，保持到达顺序），再入内存队列：
+    // 1) 若落库/发事件失败，不会在内存队列留下幽灵任务；
+    // 2) drainQueue 不会在 queued 事件尚未写完前抢跑并被反写回 queued。
+    await this.saveTask(task, 'queued');
     const queue = this.queues.get(id) ?? [];
-    const queuedAhead = queue.length + (this.activeTurns.has(id) ? 1 : 0);
+    const busy = this.activeTurns.has(id) || this.queueRuns.has(id);
+    const queuedAhead = queue.length + (busy ? 1 : 0);
     if (mode === 'interrupt') queue.unshift(task); else queue.push(task);
     this.queues.set(id, queue);
     if (agentPrompt !== prompt) this.queuedAgentPrompts.set(task.id, agentPrompt);
     if (riskPolicy) this.queuedRiskPolicies.set(task.id, riskPolicy);
-    await this.saveTask(task, 'queued');
-    if (mode === 'interrupt' && this.activeTurns.has(id)) await this.terminateCurrentTurn(id);
-    this.scheduleQueue(id);
+    try {
+      if (mode === 'interrupt' && this.activeTurns.has(id)) await this.terminateCurrentTurn(id);
+    } finally {
+      this.scheduleQueue(id);
+    }
     return { task, queuedAhead };
   }
 
   private scheduleQueue(id: string) {
-    if (this.queueRuns.has(id) || this.activeTurns.has(id)) return;
-    const run = this.drainQueue(id); this.queueRuns.set(id, run);
-    void run.finally(() => { if (this.queueRuns.get(id) === run) this.queueRuns.delete(id); });
+    if (this.queueRuns.has(id) || this.activeTurns.has(id) || this.hardInterrupts.has(id)) return;
+    if (!this.hasQueuedTasks(id)) return;
+    const run = this.drainQueue(id);
+    this.queueRuns.set(id, run);
+    void run.finally(() => {
+      if (this.queueRuns.get(id) === run) this.queueRuns.delete(id);
+      // 消除 lost-wakeup 竞态：drainQueue 退出循环后、finally 删 queueRuns 之前若有新任务入队，
+      // 那个时刻的 scheduleQueue 会被 queueRuns.has 挡住；这里删完立即补查一次。
+      if (!this.activeTurns.has(id) && !this.hardInterrupts.has(id) && this.hasQueuedTasks(id)) {
+        this.scheduleQueue(id);
+      }
+    });
   }
 
   private async drainQueue(id: string) {
-    while (!this.activeTurns.has(id)) {
+    while (!this.activeTurns.has(id) && !this.hardInterrupts.has(id)) {
       const queue = this.queues.get(id);
       const task = queue?.shift();
       if (!task) { this.queues.delete(id); return; }
@@ -1152,7 +1384,17 @@ export class AgentDockRuntime {
       this.queuedAgentPrompts.delete(task.id);
       this.queuedRiskPolicies.delete(task.id);
       try { await this.runTask(id, task, agentPrompt, riskPolicy); }
-      catch {
+      catch (error) {
+        // 若另一条路径（如直接 send）在 active(id) 间隙抢先拿到了 activeTurns，
+        // 把本条任务放回队首等待前一条结束再派发，而不是把整个队列判失败。
+        if (error instanceof RuntimeError && error.code === 'TURN_IN_PROGRESS') {
+          const currentQueue = this.queues.get(id) ?? [];
+          currentQueue.unshift(task);
+          this.queues.set(id, currentQueue);
+          if (agentPrompt !== task.prompt) this.queuedAgentPrompts.set(task.id, agentPrompt);
+          if (riskPolicy) this.queuedRiskPolicies.set(task.id, riskPolicy);
+          return;
+        }
         // A prompt/SDK failure only fails the current task. recoverSessionAfterTask
         // restores a reusable shared session to idle, so later queued work must
         // still get its own attempt instead of being failed without execution.
@@ -1191,15 +1433,19 @@ export class AgentDockRuntime {
   }
 
   async steerQueued(id: string, taskId: string) {
-    await this.active(id);
+    const { session } = await this.active(id);
+    if (['stopped', 'failed'].includes(session.state)) throw new RuntimeError('INVALID_STATE', `Cannot steer while session is ${session.state}`, 409);
     const queue = this.queues.get(id) ?? [];
     const index = queue.findIndex(task => task.id === taskId);
     if (index < 0) throw new RuntimeError('QUEUED_TASK_NOT_FOUND', `Unknown queued task: ${taskId}`, 404);
     const [task] = queue.splice(index, 1);
     queue.unshift(task!);
     this.queues.set(id, queue);
-    if (this.activeTurns.has(id)) await this.terminateCurrentTurn(id);
-    this.scheduleQueue(id);
+    try {
+      if (this.activeTurns.has(id)) await this.terminateCurrentTurn(id);
+    } finally {
+      this.scheduleQueue(id);
+    }
     return task!;
   }
 
@@ -1228,24 +1474,81 @@ export class AgentDockRuntime {
     await Promise.all(queue.map(task => { this.queuedAgentPrompts.delete(task.id); this.queuedRiskPolicies.delete(task.id); return this.saveTask(task, 'cancelled'); }));
   }
 
-  async interrupt(id: string) { const { session, driver } = await this.active(id); if (!driver) throw new RuntimeError('SESSION_DISCONNECTED', 'Session is disconnected', 409); if (this.activeTurns.has(id)) this.interruptedTurns.add(id); await this.saveState(session, 'interrupting'); await driver.interrupt(); await this.saveState(session, 'interrupted', undefined, 'user'); }
+  async interrupt(id: string) {
+    const { session, driver } = await this.active(id);
+    if (!driver) {
+      // 若会话无活跃驱动和轮次、却因异常/外部写入残留了忙碌状态，允许用户点停止将其归位并继续排空队列。
+      if (!this.activeTurns.has(id) && ['starting', 'thinking', 'running_tool', 'waiting_for_permission', 'interrupting'].includes(session.state)) {
+        await this.saveState(session, 'interrupted', undefined, 'user');
+        this.scheduleQueue(id);
+        return;
+      }
+      throw new RuntimeError('SESSION_DISCONNECTED', 'Session is disconnected', 409);
+    }
+    const hadActiveTurn = this.activeTurns.has(id);
+    if (hadActiveTurn) this.interruptedTurns.add(id);
+    await this.saveState(session, 'interrupting');
+    try {
+      await driver.interrupt();
+    } catch (error) {
+      if (hadActiveTurn && !this.activeTurns.has(id)) this.interruptedTurns.delete(id);
+      if (!this.activeTurns.has(id)) {
+        await this.saveState(session, 'interrupted', undefined, 'user').catch(() => undefined);
+        this.scheduleQueue(id);
+      }
+      throw error;
+    }
+    const latest = (await this.repos.sessions.get(id)) ?? session;
+    if (latest.state !== 'interrupted' && latest.state !== 'stopped') {
+      await this.saveState(latest, 'interrupted', undefined, 'user');
+    }
+  }
   async setRiskPolicy(id: string, policy?: ToolRiskPolicy) {
     const { session, driver } = await this.active(id);
     await this.applyRiskPolicy(session, driver, policy);
   }
+  private async withConfigLock<T>(id: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.configLocks.get(id) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(task);
+    const tail = next.then(() => undefined, () => undefined);
+    this.configLocks.set(id, tail);
+    try { return await next; }
+    finally { if (this.configLocks.get(id) === tail) this.configLocks.delete(id); }
+  }
+  getSessionConfigOptions(id: string): Array<Record<string, any>> | undefined {
+    return this.drivers.get(id)?.getConfigOptions?.();
+  }
   async setModel(id: string, model: string) {
     const normalized = model.trim();
     if (!normalized) throw new RuntimeError('INVALID_MODEL', 'Model must not be empty', 400);
-    const { session } = await this.active(id);
-    const driver = await this.reconnect(session);
-    if (!driver.setModel) throw new RuntimeError('MODEL_SWITCH_UNSUPPORTED', `Agent ${session.agentId} does not support runtime model switching`, 422);
-    try { await driver.setModel(normalized); }
-    catch (error) { throw new RuntimeError('MODEL_SWITCH_FAILED', error instanceof Error ? error.message : String(error), 422); }
-    session.model = normalized;
-    session.updatedAt = now();
-    await this.repos.sessions.save(session);
-    await this.emit(id, 'status', { state: session.state, model: normalized });
-    return session;
+    const version = (this.modelVersions.get(id) ?? 0) + 1;
+    this.modelVersions.set(id, version);
+    return this.withConfigLock(id, async () => {
+      const { session, driver } = await this.active(id);
+      // 排队期间已有更新的模型选择入队：跳过过时的慢速 ACP 切换，直接返回最新快照。
+      if (this.modelVersions.get(id) !== version) return session;
+      if (session.model === normalized) return session;
+      // 休眠会话（无活跃 ACP runtime）：禁止为一次下拉点击冷启动 CLI 进程；
+      // 极速落库 SQLite 并通知前端，下次真正发消息唤醒 runtime 时会自动携带新模型。
+      if (!driver) {
+        const agent = await this.repos.agents.get(session.agentId);
+        if (!agent) throw new RuntimeError('AGENT_NOT_FOUND', `Unknown agent: ${session.agentId}`, 404);
+      } else {
+        if (!driver.setModel) throw new RuntimeError('MODEL_SWITCH_UNSUPPORTED', `Agent ${session.agentId} does not support runtime model switching`, 422);
+        try { await driver.setModel(normalized); }
+        catch (error) {
+          if (this.modelVersions.get(id) !== version) return (await this.repos.sessions.get(id)) ?? session;
+          throw new RuntimeError('MODEL_SWITCH_FAILED', error instanceof Error ? error.message : String(error), 422);
+        }
+        if (this.modelVersions.get(id) !== version) return (await this.repos.sessions.get(id)) ?? session;
+      }
+      const latest = (await this.repos.sessions.get(id)) ?? session;
+      latest.model = normalized;
+      latest.updatedAt = now();
+      await this.repos.sessions.save(latest);
+      await this.emit(id, 'status', { state: latest.state, model: normalized });
+      return latest;
+    });
   }
   /**
    * Agent 推来的会话名。**不覆盖用户手改的名字**：`customTitle` 一旦存在就锁定，
@@ -1283,16 +1586,32 @@ export class AgentDockRuntime {
   async setReasoningEffort(id: string, reasoningEffort: string) {
     const normalized = reasoningEffort.trim();
     if (!normalized) throw new RuntimeError('INVALID_REASONING_EFFORT', 'Reasoning effort must not be empty', 400);
-    const { session } = await this.active(id);
-    const driver = await this.reconnect(session);
-    if (!driver.setReasoningEffort) throw new RuntimeError('REASONING_SWITCH_UNSUPPORTED', `Agent ${session.agentId} does not support runtime reasoning effort switching`, 422);
-    try { await driver.setReasoningEffort(normalized); }
-    catch (error) { throw new RuntimeError('REASONING_SWITCH_FAILED', error instanceof Error ? error.message : String(error), 422); }
-    session.reasoningEffort = normalized;
-    session.updatedAt = now();
-    await this.repos.sessions.save(session);
-    await this.emit(id, 'status', { state: session.state, reasoningEffort: normalized });
-    return session;
+    const version = (this.reasoningVersions.get(id) ?? 0) + 1;
+    this.reasoningVersions.set(id, version);
+    return this.withConfigLock(id, async () => {
+      const { session, driver } = await this.active(id);
+      if (this.reasoningVersions.get(id) !== version) return session;
+      if (session.reasoningEffort === normalized) return session;
+      // 休眠会话（无活跃 ACP runtime）：直接持久化并立即返回，不为切思考深度冷启 CLI。
+      if (!driver) {
+        const agent = await this.repos.agents.get(session.agentId);
+        if (!agent) throw new RuntimeError('AGENT_NOT_FOUND', `Unknown agent: ${session.agentId}`, 404);
+      } else {
+        if (!driver.setReasoningEffort) throw new RuntimeError('REASONING_SWITCH_UNSUPPORTED', `Agent ${session.agentId} does not support runtime reasoning effort switching`, 422);
+        try { await driver.setReasoningEffort(normalized); }
+        catch (error) {
+          if (this.reasoningVersions.get(id) !== version) return (await this.repos.sessions.get(id)) ?? session;
+          throw new RuntimeError('REASONING_SWITCH_FAILED', error instanceof Error ? error.message : String(error), 422);
+        }
+        if (this.reasoningVersions.get(id) !== version) return (await this.repos.sessions.get(id)) ?? session;
+      }
+      const latest = (await this.repos.sessions.get(id)) ?? session;
+      latest.reasoningEffort = normalized;
+      latest.updatedAt = now();
+      await this.repos.sessions.save(latest);
+      await this.emit(id, 'status', { state: latest.state, reasoningEffort: normalized });
+      return latest;
+    });
   }
   private waitForTurn(id: string) {
     if (!this.activeTurns.has(id)) return Promise.resolve();
@@ -1300,27 +1619,59 @@ export class AgentDockRuntime {
   }
   private async terminateCurrentTurn(id: string) {
     const { session, driver } = await this.active(id);
-    if (!driver) return;
-    this.interruptedTurns.add(id); this.hardInterrupts.add(id);
-    await this.saveState(session, 'interrupting');
-    await driver.stop({ discardSession: true });
-    await this.waitForTurn(id);
-    if (this.drivers.get(id) === driver) this.drivers.delete(id);
-    // 换 driver 之后，旧进程起的后台调用不会再推进度；留着只会让新进程的同名 id 被认成跨轮调用。
-    this.openToolCalls.delete(id);
-    await this.saveState(session, 'interrupted', undefined, 'user');
-    this.hardInterrupts.delete(id);
+    if (!driver) {
+      await this.waitForTurn(id);
+      return;
+    }
+    this.interruptedTurns.add(id);
+    this.hardInterrupts.add(id);
+    try {
+      await this.saveState(session, 'interrupting');
+      try {
+        await driver.stop({ discardSession: true });
+      } catch {
+        // 旧驱动可能已退出或会话文件已回收；仍需等当前轮次退出并清掉 hardInterrupts，
+        // 否则后续队列会被永久锁死。
+      }
+      await this.waitForTurn(id);
+      if (this.drivers.get(id) === driver) this.drivers.delete(id);
+      // 换 driver 之后，旧进程起的后台调用不会再推进度；留着只会让新进程的同名 id 被认成跨轮调用。
+      this.openToolCalls.delete(id);
+      const latest = (await this.repos.sessions.get(id)) ?? session;
+      if (latest.state !== 'interrupted' && latest.state !== 'stopped') {
+        await this.saveState(latest, 'interrupted', undefined, 'user');
+      }
+    } finally {
+      this.hardInterrupts.delete(id);
+      this.interruptedTurns.delete(id);
+    }
   }
   async pause(id: string) { const { session } = await this.active(id); const agent = await this.repos.agents.get(session.agentId); if (!agent?.capabilities.pause) throw new RuntimeError('UNSUPPORTED_CAPABILITY', `Agent ${agent?.name ?? session.agentId} does not support pause/resume`, 422); await this.interrupt(id); }
-  async resume(id: string) { const { session } = await this.active(id); const agent = await this.repos.agents.get(session.agentId); if (!agent?.capabilities.resume) throw new RuntimeError('UNSUPPORTED_CAPABILITY', `Agent ${agent?.name ?? session.agentId} does not support resume`, 422); let driver = this.drivers.get(id); if (!driver) { const configured = this.configureAgentForSession(agent, session); driver = this.factory(configured, session.protocol!, this.onDriverEvent(session), code => { if (code) void this.saveState(session, 'failed', `Agent exited with code ${code}`); }, session.id, this.resumeOptions(session)); this.drivers.set(id, driver); } await driver.resume(); await this.saveState(session, 'idle'); }
+  async resume(id: string) {
+    const { session } = await this.active(id);
+    const agent = await this.repos.agents.get(session.agentId);
+    if (!agent?.capabilities.resume) throw new RuntimeError('UNSUPPORTED_CAPABILITY', `Agent ${agent?.name ?? session.agentId} does not support resume`, 422);
+    let driver = this.drivers.get(id);
+    if (!driver) {
+      const configured = this.configureAgentForSession(agent, session);
+      driver = this.factory(configured, session.protocol!, this.onDriverEvent(session), this.createExitHandler(session, () => driver), session.id, this.resumeOptions(session));
+      this.drivers.set(id, driver);
+    }
+    await driver.resume();
+    await this.saveState(session, 'idle');
+  }
   async stop(id: string) {
     const { session, driver } = await this.active(id);
     this.hardInterrupts.add(id);
     if (this.activeTurns.has(id)) this.interruptedTurns.add(id);
-    await driver?.stop();
-    await this.waitForTurn(id);
-    await this.cancelSessionQueue(id);
-    this.releaseSessionMemory(id);
+    try {
+      try { await driver?.stop(); }
+      catch { /* 驱动可能已退出或记录已被回收，继续收尾队列与状态。 */ }
+      await this.waitForTurn(id);
+      await this.cancelSessionQueue(id);
+    } finally {
+      this.releaseSessionMemory(id);
+    }
     await this.saveState(session, 'stopped');
   }
   async archive(id: string) {
@@ -1337,26 +1688,54 @@ export class AgentDockRuntime {
     stopped.pinnedAt = null;
     return stopped;
   }
-  async restart(id: string) { const { session } = await this.active(id); await this.stop(id); const agent = await this.repos.agents.get(session.agentId); if (!agent) throw new RuntimeError('AGENT_NOT_FOUND', 'Agent config was removed', 404); session.runId = makeId('run'); session.error = undefined; const configured = this.configureAgentForSession(agent, session); const driver = this.factory(configured, session.protocol!, this.onDriverEvent(session), code => { if (code) void this.saveState(session, 'failed', `Agent exited with code ${code}`); }, session.id, this.resumeOptions(session)); this.drivers.set(id, driver); await this.saveState(session, 'starting'); await driver.start(); await this.saveState(session, 'idle'); return session; }
+  async restart(id: string) {
+    const { session } = await this.active(id);
+    await this.stop(id);
+    const agent = await this.repos.agents.get(session.agentId);
+    if (!agent) throw new RuntimeError('AGENT_NOT_FOUND', 'Agent config was removed', 404);
+    session.runId = makeId('run');
+    session.error = undefined;
+    const configured = this.configureAgentForSession(agent, session);
+    let driver: AgentDriver | undefined;
+    driver = this.factory(configured, session.protocol!, this.onDriverEvent(session), this.createExitHandler(session, () => driver), session.id, this.resumeOptions(session));
+    this.drivers.set(id, driver);
+    await this.saveState(session, 'starting');
+    try {
+      await driver.start();
+    } catch (error) {
+      if (this.drivers.get(id) === driver) this.drivers.delete(id);
+      const message = error instanceof Error ? error.message : String(error);
+      await this.saveState(session, 'failed', message).catch(() => undefined);
+      throw error;
+    }
+    await this.saveState(session, 'idle');
+    return session;
+  }
   async setPermissionMode(id: string, mode: PermissionMode) { const { session, driver } = await this.active(id); session.permissionMode = mode; session.updatedAt = now(); driver?.setPermissionMode?.(mode); await this.repos.sessions.save(session); return session; }
   async resolvePermission(sessionId: string, permissionId: string, approved: boolean) { const { session, driver } = await this.active(sessionId); const key = this.permissionKey(sessionId, permissionId); const request = this.permissions.get(key); if (!request) throw new RuntimeError('PERMISSION_NOT_FOUND', `Unknown permission request: ${permissionId}`, 404); const resolved = await driver?.resolvePermission?.(permissionId, approved); if (driver?.resolvePermission && !resolved) throw new RuntimeError('PERMISSION_EXPIRED', `Permission request is no longer active: ${permissionId}`, 409); request.status = approved ? 'approved' : 'rejected'; this.permissions.delete(key); this.touch(sessionId); await this.repos.artifacts.savePermission(sessionId, request); await this.emit(sessionId, 'permission_request', request); await this.saveState(session, 'thinking'); return request; }
 
   private releaseSessionMemory(sessionId: string) {
     this.streamCoalescer.discard(sessionId);
     this.persistChains.delete(sessionId);
+    this.configLocks.delete(sessionId);
+    this.modelVersions.delete(sessionId);
+    this.reasoningVersions.delete(sessionId);
     this.drivers.delete(sessionId);
     this.sequences.delete(sessionId);
     this.lastActivity.delete(sessionId);
     this.activeTasks.delete(sessionId);
+    this.turnStartedAt.delete(sessionId);
     this.interruptedTurns.delete(sessionId);
     this.hardInterrupts.delete(sessionId);
     this.driverStopReasons.delete(sessionId);
     this.driverEventChains.delete(sessionId);
     this.driverEventErrors.delete(sessionId);
     this.openToolCalls.delete(sessionId);
+    for (const queued of this.queues.get(sessionId) ?? []) {
+      this.queuedAgentPrompts.delete(queued.id);
+      this.queuedRiskPolicies.delete(queued.id);
+    }
     this.queues.delete(sessionId);
-    this.queuedAgentPrompts.delete(sessionId);
-    this.queuedRiskPolicies.delete(sessionId);
     this.queueRuns.delete(sessionId);
     for (const resolve of this.turnWaiters.get(sessionId) ?? []) resolve();
     this.turnWaiters.delete(sessionId);
@@ -1367,19 +1746,26 @@ export class AgentDockRuntime {
     if (!this.drivers.size) return;
     const defaultTimeout = this.options.driverIdleTimeoutMs ?? 6 * 60 * 60_000;
     const agentsById = new Map((await this.repos.agents.list()).map(agent => [agent.id, agent]));
-    for (const [sessionId, driver] of this.drivers) {
-      if (this.activeTurns.has(sessionId)) continue;
+    for (const [sessionId, driver] of [...this.drivers.entries()]) {
+      if (this.activeTurns.has(sessionId) || this.hasQueuedTasks(sessionId) || this.queueRuns.has(sessionId)) continue;
       const session = await this.repos.sessions.get(sessionId);
       if (!session || !['idle', 'completed', 'interrupted'].includes(session.state)) continue;
       const timeout = agentsById.get(session.agentId)?.idleTimeoutMs ?? defaultTimeout;
       if (timeout <= 0 || at - (this.lastActivity.get(sessionId) ?? at) < timeout) continue;
+      // 先摘除旧驱动再 stop，防止 stop 异步期间新到达的消息复用到正在关闭的驱动。
+      if (this.drivers.get(sessionId) === driver) this.drivers.delete(sessionId);
       // driver.stop() 可能因为 ACP session 记录文件已被 acpx 的 prune 回收而抛
       // "ACP session not found"：会话早已 close，记录文件被删，但 driver 仍留在内存 map 里。
       // 这属于「已经停了」，不是故障；旧代码用 try/finally 不吞异常，它会冒泡到
       // setInterval 回调的 void promise，变成 unhandledRejection 直接打挂整个进程。
       try { await driver.stop(); }
       catch { /* 记录文件已被回收即视为已停止，继续释放内存。 */ }
-      finally { this.releaseSessionMemory(sessionId); }
+      finally {
+        // stop 期间若已有新任务入队或启动了新驱动，绝不能清空队列与运行态内存。
+        if (!this.activeTurns.has(sessionId) && !this.hasQueuedTasks(sessionId) && !this.queueRuns.has(sessionId) && !this.drivers.has(sessionId)) {
+          this.releaseSessionMemory(sessionId);
+        }
+      }
     }
   }
 
@@ -1399,7 +1785,7 @@ export class AgentDockRuntime {
     await Promise.allSettled(this.driverEventChains.values());
     await this.streamCoalescer.flushAll();
     await Promise.allSettled(this.persistChains.values());
-    this.sequences.clear(); this.permissions.clear(); this.lastActivity.clear(); this.activeTurns.clear(); this.activeTasks.clear(); this.interruptedTurns.clear(); this.hardInterrupts.clear(); this.driverEventChains.clear(); this.driverEventErrors.clear(); this.openToolCalls.clear();
+    this.sequences.clear(); this.permissions.clear(); this.lastActivity.clear(); this.activeTurns.clear(); this.activeTasks.clear(); this.turnStartedAt.clear(); this.interruptedTurns.clear(); this.hardInterrupts.clear(); this.driverEventChains.clear(); this.driverEventErrors.clear(); this.openToolCalls.clear();
     for (const waiters of this.turnWaiters.values()) for (const resolve of waiters) resolve();
     this.turnWaiters.clear(); this.queues.clear(); this.queuedAgentPrompts.clear(); this.queuedRiskPolicies.clear(); this.queueRuns.clear(); this.emitter.removeAllListeners();
   }

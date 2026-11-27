@@ -141,36 +141,93 @@ export function agentModelsCacheKey(agent: AgentConfig, model?: string): string 
   })).digest('hex');
 }
 
+export function modelsFromConfigOptions(configOptions: Array<Record<string, any>>, extraModels?: string[]): AgentModelsResult | undefined {
+  const modelOption = configOptions.find(option => option.id === 'model' || option.category === 'model');
+  const reasoningOption = configOptions.find(option => option.category === 'thought_level' || option.id === 'reasoning_effort' || option.id === 'effort');
+  const names = new Map<string, string>();
+  for (const option of Array.isArray(modelOption?.options) ? modelOption.options : []) {
+    if (typeof option?.value === 'string' && !names.has(option.value)) {
+      names.set(option.value, typeof option.name === 'string' ? option.name : option.value);
+    }
+  }
+  const reasoningEfforts = (Array.isArray(reasoningOption?.options) ? reasoningOption.options : []).flatMap((option: any) => typeof option?.value === 'string' ? [{ id: option.value, name: typeof option.name === 'string' ? option.name : option.value }] : []);
+  const currentModelId = typeof modelOption?.currentValue === 'string' ? modelOption.currentValue : undefined;
+  const ids = [...names.keys()];
+  if (!ids.length && !currentModelId && !reasoningEfforts.length) return undefined;
+  const models = ids.map(id => ({ id, name: names.get(id) ?? id }));
+  if (extraModels?.length) {
+    const seen = new Set(models.map(item => item.id));
+    for (const id of extraModels) {
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        models.push({ id, name: id });
+      }
+    }
+  }
+  return {
+    models,
+    ...(currentModelId ? { defaultModel: currentModelId } : {}),
+    reasoningEfforts,
+    ...(typeof reasoningOption?.currentValue === 'string' ? { defaultReasoningEffort: reasoningOption.currentValue } : {}),
+    source: 'acp'
+  };
+}
+
+export function seedAgentModelsCache(agent: AgentConfig, model: string | undefined, configOptions: Array<Record<string, any>> | undefined): AgentModelsResult | undefined {
+  if (!Array.isArray(configOptions) || !configOptions.length) return undefined;
+  const parsed = modelsFromConfigOptions(configOptions, agent.extraModels);
+  if (!parsed) return undefined;
+  const expiresAt = Date.now() + 5 * 60_000;
+  cache.set(agentModelsCacheKey(agent, model), { expiresAt, value: parsed });
+  if (model) {
+    const baseKey = agentModelsCacheKey(agent, undefined);
+    if (!cache.has(baseKey)) cache.set(baseKey, { expiresAt, value: parsed });
+  }
+  return parsed;
+}
+
 const cache = new Map<string, { expiresAt: number; value: AgentModelsResult }>();
+// 同一个 (agent, model) 的并发探测合流（single-flight），避免连切模型或并发打开页面时
+// 同时拉起多个重复的 oneshot CLI 子进程抢 CPU。
+const inFlight = new Map<string, Promise<AgentModelsResult>>();
 export async function discoverAgentModels(agent: AgentConfig, model?: string, forceRefresh = false): Promise<AgentModelsResult> {
   const cacheKey = agentModelsCacheKey(agent, model);
   const cached = cache.get(cacheKey);
   if (!forceRefresh && cached && cached.expiresAt > Date.now()) return cached.value;
 
-  let value: AgentModelsResult | undefined;
-  let warning: string | undefined;
-  try { value = await discoverThroughAcp(agent, model); }
-  catch (error) {
-    warning = agentModelProbeWarning(error);
-  }
-  if (!value?.models.length) {
-    try {
-      const models = await discoverThroughCli(agent.id);
-      if (models.length) value = { models, ...(agent.model ? { defaultModel: agent.model } : {}), reasoningEfforts: value?.reasoningEfforts ?? [], ...(value?.defaultReasoningEffort ? { defaultReasoningEffort: value.defaultReasoningEffort } : {}), source: 'cli' };
-    } catch { /* Fall through to the Agent's configured default. */ }
-  }
-  value ??= { models: [], ...(agent.model ? { defaultModel: agent.model } : {}), reasoningEfforts: [], source: 'agent' };
-  // Merge user-supplied extra models (e.g. reverse-proxied models not advertised
-  // by the provider's /models endpoint). Existing IDs take precedence to keep
-  // their display names; extra models fall back to using the ID as the name.
-  if (agent.extraModels?.length) {
-    const seen = new Set(value.models.map(m => m.id));
-    const extras = agent.extraModels
-      .filter(id => id && !seen.has(id))
-      .map(id => ({ id, name: id }));
-    if (extras.length) value = { ...value, models: [...value.models, ...extras] };
-  }
-  if (warning) value = { ...value, warning };
-  cache.set(cacheKey, { expiresAt: Date.now() + (value.source === 'acp' && !warning ? 5 * 60_000 : 15_000), value });
-  return value;
+  const flightKey = forceRefresh ? `${cacheKey}:refresh` : cacheKey;
+  const existing = inFlight.get(flightKey);
+  if (existing) return existing;
+
+  const pending = (async (): Promise<AgentModelsResult> => {
+    let value: AgentModelsResult | undefined;
+    let warning: string | undefined;
+    try { value = await discoverThroughAcp(agent, model); }
+    catch (error) {
+      warning = agentModelProbeWarning(error);
+    }
+    if (!value?.models.length) {
+      try {
+        const models = await discoverThroughCli(agent.id);
+        if (models.length) value = { models, ...(agent.model ? { defaultModel: agent.model } : {}), reasoningEfforts: value?.reasoningEfforts ?? [], ...(value?.defaultReasoningEffort ? { defaultReasoningEffort: value.defaultReasoningEffort } : {}), source: 'cli' };
+      } catch { /* Fall through to the Agent's configured default. */ }
+    }
+    value ??= { models: [], ...(agent.model ? { defaultModel: agent.model } : {}), reasoningEfforts: [], source: 'agent' };
+    // Merge user-supplied extra models (e.g. reverse-proxied models not advertised
+    // by the provider's /models endpoint). Existing IDs take precedence to keep
+    // their display names; extra models fall back to using the ID as the name.
+    if (agent.extraModels?.length) {
+      const seen = new Set(value.models.map(m => m.id));
+      const extras = agent.extraModels
+        .filter(id => id && !seen.has(id))
+        .map(id => ({ id, name: id }));
+      if (extras.length) value = { ...value, models: [...value.models, ...extras] };
+    }
+    if (warning) value = { ...value, warning };
+    cache.set(cacheKey, { expiresAt: Date.now() + (value.source === 'acp' && !warning ? 5 * 60_000 : 15_000), value });
+    return value;
+  })();
+  inFlight.set(flightKey, pending);
+  try { return await pending; }
+  finally { if (inFlight.get(flightKey) === pending) inFlight.delete(flightKey); }
 }
