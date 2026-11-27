@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useEventListener } from 'ahooks';
 import { useQuery } from '@tanstack/react-query';
-import { AlarmClock, Archive, BarChart3, Bell, Bot, FolderOpen, MessagesSquare, MonitorDown, Palette, PawPrint, Regex, Settings, Settings2, Smartphone } from 'lucide-react';
+import { AlarmClock, Archive, BarChart3, Bell, Bot, FolderOpen, MessagesSquare, MonitorDown, Palette, PawPrint, Puzzle, Regex, Settings, Settings2, Smartphone } from 'lucide-react';
 import { api } from './api';
 import { AutostartToggle } from './AutostartToggle';
 import { KeepAwakeToggle } from './KeepAwakeToggle';
@@ -28,15 +28,18 @@ const itemClass = 'ui-press flex h-[34px] w-full items-center gap-2.5 rounded-lg
  *
  * 弹层只用 hidden 切换、不条件渲染：SelfUpdateNotice 里有「升级中轮询版本号、完成后刷新页面」的状态，卸载就丢了。
  */
-export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onAssistant, onNotifications, onLark, onLarkRegexTriggers, onLarkAvatar, onThemeStudio, onShare }: {
+export function SettingsMenu({ webDenied, archivedCount, outputPluginsEnabledCount, outputPluginsTotalCount, onUsage, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onOutputPlugins, onAssistant, onNotifications, onLark, onLarkRegexTriggers, onLarkAvatar, onThemeStudio, onShare }: {
   webDenied: boolean;
   archivedCount: number;
+  outputPluginsEnabledCount?: number;
+  outputPluginsTotalCount?: number;
   onUsage(): void;
   onSchedule(): void;
   onArchived(): void;
   onImport(): void;
   onAgentConfig(): void;
   onSideChatConfig(): void;
+  onOutputPlugins?(): void;
   onAssistant(): void;
   onNotifications?(): void;
   onLark(): void;
@@ -81,6 +84,17 @@ export function SettingsMenu({ webDenied, archivedCount, onUsage, onSchedule, on
       <div className="my-1 border-t border-zinc-200/70"/>
       <button type="button" role="menuitem" onClick={pick(onAgentConfig)} className={itemClass}><Bot size={16}/><span>Agent 设置</span></button>
       <button type="button" role="menuitem" onClick={pick(onSideChatConfig)} className={itemClass}><MessagesSquare size={16}/><span>侧边对话设置</span></button>
+      {onOutputPlugins && (
+        <button type="button" role="menuitem" data-testid="settings-output-plugins-item" onClick={pick(onOutputPlugins)} className={itemClass}>
+          <Puzzle size={16}/>
+          <span>交互插件中心</span>
+          {outputPluginsTotalCount !== undefined && outputPluginsTotalCount > 0 && (
+            <span className="ml-auto shrink-0 rounded-full border border-zinc-200 bg-zinc-50 px-1.5 py-px text-[11px] font-normal tabular-nums text-zinc-500">
+              {outputPluginsEnabledCount ?? 0}/{outputPluginsTotalCount}
+            </span>
+          )}
+        </button>
+      )}
       <button type="button" role="menuitem" onClick={pick(onAssistant)} className={itemClass}><PawPrint size={16}/><span>小猫与督办</span></button>
       {onNotifications && <button type="button" role="menuitem" onClick={pick(onNotifications)} className={itemClass}><Bell size={16}/><span>通知设置</span></button>}
       <button type="button" role="menuitem" onClick={pick(onLark)} className={itemClass}><Settings2 size={16}/><span>飞书设置</span></button>

@@ -1,4 +1,16 @@
 import type {
+  AskUserQuestionAnswerItem,
+  AskUserQuestionAnswerPayload,
+  AskUserQuestionConfig,
+  ConfirmActionDecision,
+  ConfirmActionInteractionPayload,
+  ConfirmActionRisk,
+  ConfirmActionSpec,
+  DeclarativeInteractionField,
+  DeclarativeOutputPluginInteractionPayload,
+  OutputPluginCatalogItem,
+  OutputPluginsCatalogSnapshot,
+  OutputPluginsGlobalConfig,
   BoardActor,
   BoardColumnColor,
   BoardColumnRecord,
@@ -32,6 +44,18 @@ import type {
 export type BoardVisualState = BoardItemLiveDigest['visualState'];
 
 export type {
+  AskUserQuestionAnswerItem,
+  AskUserQuestionAnswerPayload,
+  AskUserQuestionConfig,
+  ConfirmActionDecision,
+  ConfirmActionInteractionPayload,
+  ConfirmActionRisk,
+  ConfirmActionSpec,
+  DeclarativeInteractionField,
+  DeclarativeOutputPluginInteractionPayload,
+  OutputPluginCatalogItem,
+  OutputPluginsCatalogSnapshot,
+  OutputPluginsGlobalConfig,
   BoardActor,
   BoardColumnColor,
   BoardColumnRecord,
@@ -355,7 +379,7 @@ export type LarkAvatarLoginState = 'idle' | 'starting' | 'waiting' | 'scanned' |
 export type LarkAvatarLoginSnapshot = { state: LarkAvatarLoginState; message: string; region: LarkAvatarRegion; qrContent?: string; attempt: number; expiresAt?: string };
 export type LarkAvatarInboxItem = { id: string; threadKey: string; chatId: string; chatType: string; chatName?: string; chatAvatarUrl?: string; senderId?: string; senderName?: string; senderAvatarUrl?: string; title: string; summary?: string; tier: 'action' | 'fyi' | 'noise'; state: 'new' | 'handled'; occurredAt: string; receivedAt: string };
 export type LarkAvatarDraft = { id: string; itemId?: string; threadKey?: string; target: string; replyRootId?: string; replyQuote?: boolean; replyThreadChat?: boolean; body: string; state: 'pending' | 'sent' | 'failed' | 'discarded'; sentMessageId?: string; attempts: number; lastError?: string; createdAt: string; updatedAt: string; sentAt?: string };
-export type Session = { id: string; agentId: string; state: string; interruptIntent?: 'user' | 'agent_cancelled' | 'daemon_restart'; error?: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null; /** 非空即置顶；只影响「时间」视图。 */ pinnedAt?: string | null };
+export type Session = { id: string; agentId: string; state: string; interruptIntent?: 'user' | 'agent_cancelled' | 'daemon_restart'; error?: string; cwd: string; model?: string; reasoningEffort?: string; permissionMode?: 'full-trust'; source?: string; sourceId?: string; sshHost?: string; archivedAt?: string; runId: string; createdAt: string; updatedAt: string; /** 最后一次对话时间；旧数据为空，排序需回退 updatedAt。 */ lastMessageAt?: string | null; systemPrompt?: string; title?: string; titleSource?: 'user' | 'agent' | 'prompt'; customTitle?: string | null; agentTitle?: string | null; /** 非空即置顶；只影响「时间」视图。 */ pinnedAt?: string | null; /** 会话级 XML 询问卡片覆写：null/undefined = 跟随全局默认（向后兼容）。 */ askUserQuestionEnabled?: boolean | null; /** 会话级纯 XML 交互插件覆写映射：缺失或 null = 跟随全局默认。 */ outputPlugins?: Record<string, boolean | null> };
 export type Project = { id: string; machineId?: string | null; name: string; cwd: string; pinnedAt?: string | null; exists: boolean; createdAt: string; updatedAt: string };
 export type RegisterProjectResult = { project: Project; created: boolean };
 export type AutostartStatus = { supported: boolean; enabled: boolean; reason?: string; plistPath?: string; entrypoint?: string };
@@ -968,6 +992,9 @@ export const api = {
   send: (id: string, prompt: string, mode: 'queue' | 'interrupt' = 'queue', origin?: string, clientMessageId?: string) => json<{ accepted: true; task: Task }>(`/api/sessions/${id}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, mode, ...(origin ? { origin } : {}), ...(clientMessageId ? { clientMessageId } : {}) }) }),
   setSessionModel: (id: string, model: string) => json<Session & { discoveredModels?: AgentModelsResult }>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model }) }),
   setSessionReasoningEffort: (id: string, reasoningEffort: string) => json<Session & { discoveredModels?: AgentModelsResult }>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reasoningEffort }) }),
+  // 传 null 表示恢复跟随全局默认；纯元数据极速切换，不触发 CLI 冷启动。
+  setSessionAskUserQuestionEnabled: (id: string, askUserQuestionEnabled: boolean | null) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ askUserQuestionEnabled }) }),
+  setSessionOutputPlugins: (id: string, outputPlugins: Record<string, boolean | null>) => json<Session>(`/api/sessions/${id}/config`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ outputPlugins }) }),
   // 传 null / 空串表示「恢复自动命名」，由服务端回落到 Agent 名或首条 prompt 摘要。
   setSessionTitle: (id: string, title: string | null) => json<Session>(`/api/sessions/${id}/title`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title }) }),
   cancelQueued: (id: string, taskId: string) => json<Task>(`/api/sessions/${id}/queue/${taskId}`, { method: 'DELETE' }),
@@ -1057,6 +1084,74 @@ export const api = {
   sideChatConfig: () => json<SideChatConfigState>('/api/side-chat/config', undefined, true),
   saveSideChatConfig: (body: SideChatConfig) => json<SideChatConfigState>('/api/side-chat/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   resetSideChatConfig: () => json<SideChatConfigState>('/api/side-chat/config', { method: 'DELETE' }),
+  outputPlugins: () => json<OutputPluginsCatalogSnapshot>('/api/output-plugins', undefined, true),
+  saveOutputPluginsConfig: (plugins: Record<string, boolean>) => json<OutputPluginsCatalogSnapshot>('/api/output-plugins/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ plugins }) }),
+  reloadOutputPlugins: () => json<OutputPluginsCatalogSnapshot>('/api/output-plugins/reload', { method: 'POST' }),
+  interactOutputPlugin: async (
+    sessionId: string,
+    pluginId: string,
+    body: {
+      instanceId: string;
+      title?: string;
+      answers?: AskUserQuestionAnswerItem[];
+      decision?: ConfirmActionDecision;
+      decisionLabel?: string;
+      risk?: ConfirmActionRisk;
+      comment?: string;
+      actionValue?: string;
+      actionLabel?: string;
+      fields?: DeclarativeInteractionField[];
+      note?: string;
+      mode?: 'queue' | 'interrupt';
+      clientMessageId?: string;
+    }
+  ): Promise<
+    | { accepted: true; pluginId: string; instanceId: string; payload: unknown; task: Task & { queuedAhead?: number } }
+    | { alreadySubmitted: true; existing: unknown }
+  > => {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/output-plugins/${encodeURIComponent(pluginId)}/interact`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 409 && (data?.alreadySubmitted || data?.alreadyAnswered) && data?.existing) {
+      return { alreadySubmitted: true, existing: data.existing };
+    }
+    if (!response.ok) {
+      throw new Error(data?.error?.message ?? `交互提交失败（HTTP ${response.status}）`);
+    }
+    return data as { accepted: true; pluginId: string; instanceId: string; payload: unknown; task: Task & { queuedAhead?: number } };
+  },
+  askUserQuestionConfig: () => json<{ configured: boolean; config: AskUserQuestionConfig }>('/api/ask-user-question/config', undefined, true),
+  saveAskUserQuestionConfig: (body: AskUserQuestionConfig) => json<{ configured: boolean; config: AskUserQuestionConfig }>('/api/ask-user-question/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  answerAskUserQuestion: async (
+    sessionId: string,
+    body: {
+      questionId: string;
+      title?: string;
+      answers: AskUserQuestionAnswerItem[];
+      mode?: 'queue' | 'interrupt';
+      clientMessageId?: string;
+    }
+  ): Promise<
+    | { accepted: true; payload: AskUserQuestionAnswerPayload; task: Task & { queuedAhead?: number } }
+    | { alreadyAnswered: true; existing: AskUserQuestionAnswerPayload }
+  > => {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/ask-user-question/answer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 409 && data?.alreadyAnswered && data?.existing) {
+      return { alreadyAnswered: true, existing: data.existing as AskUserQuestionAnswerPayload };
+    }
+    if (!response.ok) {
+      throw new Error(data?.error?.message ?? `提交回答失败（HTTP ${response.status}）`);
+    }
+    return data as { accepted: true; payload: AskUserQuestionAnswerPayload; task: Task & { queuedAhead?: number } };
+  },
   notificationsConfig: () => json<NotificationConfigState>('/api/notifications/config', undefined, true),
   saveNotificationsConfig: (body: NotificationServerConfig) => json<NotificationConfigState>('/api/notifications/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   testNotificationChannel: (body: { channel: 'lark' | 'webhook' | 'command'; webhookId?: string; draftConfig?: NotificationServerConfig }) => json<NotificationTestResult>('/api/notifications/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),

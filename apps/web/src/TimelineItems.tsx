@@ -1,10 +1,21 @@
 import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Clock, Compass, Database, FilePenLine, FlaskConical, FolderOpen, GitBranch, Globe2, Image, ListTodo, MessageCircleQuestion, MessageSquare, Plug, Search, Sparkles, Square, StickyNote, Terminal, Users, Workflow, Wrench, Zap } from 'lucide-react';
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+  defaultOutputPluginRegistry,
+  outputPluginInstanceKey,
+  type AskUserQuestionAnswerItem,
+  type AskUserQuestionAnswerPayload,
+  type AskUserQuestionSpec,
+  type OutputPluginMetadata,
+  type OutputPluginRegistry
+} from '@agent-dock/agent-dock-shared';
 import { Spinner } from './Loaders';
 import { buildActivitySteps, thinkingTitle, EMOJI_TRIGGER_ORIGIN, eventRenderSignature, groupRenderSignature, type ActivityStep, type TimelineActivityGroup, type TimelineEvent } from './timeline';
 import { extractBubbleInjection, type BubbleInjection } from './bubble-injection';
 import { MarkdownContent } from './MarkdownContent';
 import { AssistantMarkdown, ThinkingMarkdown } from './TypewriterText';
+import { defaultWebOutputPluginRendererRegistry } from './output-plugins/registry';
 import { elapsedMilliseconds, formatElapsed, summarizeTools, toolActionLabel, toolPresentation, type ToolKind } from './tool-presentation';
 import { toolDetailView, type ToolDetailView } from './tool-detail';
 import { SupervisionNotice } from './companion/SupervisionNotice';
@@ -202,9 +213,27 @@ const ThinkingStep = memo(function ThinkingStep({ event, live, replay, sessionId
   && prev.forceOpen === next.forceOpen && prev.stepId === next.stepId
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event));
 
-function ActivitySteps({ steps, ongoing, replay, sessionId, activeStepId, reservePending = false, pending = false, pendingLabel }: { steps: ActivityStep[]; ongoing: boolean; replay: boolean; sessionId: string | undefined; activeStepId?: string; /** 留出「处理中」这一行的位置，即便此刻不显示。 */ reservePending?: boolean; pending?: boolean; pendingLabel?: string }) {
+function resolveEffectivePluginIds(
+  enabledOutputPluginIds: ReadonlySet<string> | undefined,
+  askUserQuestionXmlEnabled: boolean
+): ReadonlySet<string> {
+  if (enabledOutputPluginIds !== undefined) return enabledOutputPluginIds;
+  return askUserQuestionXmlEnabled
+    ? new Set([BUILTIN_ASK_USER_QUESTION_PLUGIN_ID])
+    : new Set<string>();
+}
+
+function sameStringSet(a?: ReadonlySet<string>, b?: ReadonlySet<string>): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.size !== b.size) return false;
+  for (const item of a) if (!b.has(item)) return false;
+  return true;
+}
+
+function ActivitySteps({ steps, ongoing, replay, sessionId, activeStepId, askUserQuestionXmlEnabled = true, outputPluginRegistry = defaultOutputPluginRegistry, enabledOutputPluginIds, reservePending = false, pending = false, pendingLabel }: { steps: ActivityStep[]; ongoing: boolean; replay: boolean; sessionId: string | undefined; activeStepId?: string; askUserQuestionXmlEnabled?: boolean; outputPluginRegistry?: OutputPluginRegistry; enabledOutputPluginIds?: ReadonlySet<string>; /** 留出「处理中」这一行的位置，即便此刻不显示。 */ reservePending?: boolean; pending?: boolean; pendingLabel?: string }) {
   const last = steps.at(-1);
   const slot = reservePending || pending;
+  const effectiveEnabledIds = resolveEffectivePluginIds(enabledOutputPluginIds, askUserQuestionXmlEnabled);
   return <div className="relative">
     {/* 留空的「处理中」行不画竖线，竖线照旧止于最后一步。 */}
     <span aria-hidden="true" className={`absolute left-2 top-2 w-px bg-zinc-200 ${slot && !pending ? 'bottom-11' : 'bottom-3'}`}/>
@@ -213,7 +242,19 @@ function ActivitySteps({ steps, ongoing, replay, sessionId, activeStepId, reserv
       if (step.kind === 'thinking') return <ThinkingStep key={step.id} stepId={step.id} forceOpen={activeStepId === step.id} event={step.event} live={ongoing && isLast} replay={replay} sessionId={sessionId}/>;
       if (step.kind === 'tools') return <ToolsStep key={step.id} stepId={step.id} forceOpen={activeStepId === step.id} events={step.events}/>;
       const streaming = ongoing && isLast;
-      return <div key={step.id} data-search-step-id={step.id} className="relative pl-6"><AssistantMarkdown text={step.event.data.text ?? ''} active={streaming} replay={replay || !streaming} sessionId={sessionId}/></div>;
+      const rawText = step.event.data.text ?? '';
+      if (effectiveEnabledIds.size > 0 && streaming) {
+        const split = outputPluginRegistry.splitStreamingOutput(rawText, true, effectiveEnabledIds);
+        if (split.kind === 'pending' || split.kind === 'complete') {
+          const plugin = outputPluginRegistry.get(split.pluginId);
+          const placeholderTitle = split.kind === 'pending' ? split.partialTitle : plugin?.getTitle?.(split.spec);
+          return <div key={step.id} data-search-step-id={step.id} className="relative pl-6">
+            {split.proseText && <AssistantMarkdown text={split.proseText} active={false} replay={replay} sessionId={sessionId}/>}
+            {plugin && defaultWebOutputPluginRendererRegistry.renderStreamingPlaceholder(plugin, placeholderTitle)}
+          </div>;
+        }
+      }
+      return <div key={step.id} data-search-step-id={step.id} className="relative pl-6"><AssistantMarkdown text={rawText} active={streaming} replay={replay || !streaming} sessionId={sessionId}/></div>;
     })}
     {slot && <div aria-hidden={pending ? undefined : true} className="relative min-h-8 py-1 text-[13px] text-zinc-400">
       {pending && <div className="ui-timeline-item flex min-h-6 items-center pl-6">
@@ -224,7 +265,7 @@ function ActivitySteps({ steps, ongoing, replay, sessionId, activeStepId, reserv
   </div>;
 }
 
-export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, replay = false, sessionId, hasAnswer = false, taskStatus = 'running', modelLabel, startedAt, completedAt, forceOpen = false, activeStepId }: { groups: TimelineActivityGroup[]; ongoing: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; sessionId: string | undefined; hasAnswer?: boolean; taskStatus?: string; modelLabel: string; startedAt?: string; completedAt?: string; forceOpen?: boolean; activeStepId?: string }) {
+export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, replay = false, sessionId, hasAnswer = false, taskStatus = 'running', modelLabel, startedAt, completedAt, forceOpen = false, activeStepId, askUserQuestionXmlEnabled = true, outputPluginRegistry = defaultOutputPluginRegistry, enabledOutputPluginIds }: { groups: TimelineActivityGroup[]; ongoing: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; sessionId: string | undefined; hasAnswer?: boolean; taskStatus?: string; modelLabel: string; startedAt?: string; completedAt?: string; forceOpen?: boolean; activeStepId?: string; askUserQuestionXmlEnabled?: boolean; outputPluginRegistry?: OutputPluginRegistry; enabledOutputPluginIds?: ReadonlySet<string> }) {
   const steps = useMemo(() => buildActivitySteps(groups), [groups]);
   const [open, setOpen] = useState(forceOpen);
   useEffect(() => {
@@ -249,7 +290,7 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
   if (ongoing) return <section aria-live="polite" aria-label={`${modelLabel} 执行过程`} className="my-3">
     {/* 当前有思考/工具/正文在跑时，「处理中」占位行不显示；耗时挪到过程区右上角，仍然每秒刷新。 */}
     {!idle && elapsed && <div className="mb-1 flex justify-end pr-1 text-[11px] tabular-nums text-zinc-400">已用时 {elapsed}</div>}
-    <ActivitySteps steps={steps} ongoing replay={replay} sessionId={sessionId} activeStepId={activeStepId} reservePending={reservePending} pending={idle} pendingLabel={`处理中${elapsed ? ` · ${elapsed}` : ''}`}/>
+    <ActivitySteps steps={steps} ongoing replay={replay} sessionId={sessionId} activeStepId={activeStepId} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginRegistry={outputPluginRegistry} enabledOutputPluginIds={enabledOutputPluginIds} reservePending={reservePending} pending={idle} pendingLabel={`处理中${elapsed ? ` · ${elapsed}` : ''}`}/>
   </section>;
 
   // 结束后：中间过程全部收进一行「已处理 xx」，只留最终输出；点开才看完整过程。
@@ -266,7 +307,7 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
         {statusText && <span className={`text-[12px] ${statusTone}`}>{statusText}</span>}
         <ChevronRight size={13} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>
       </button>
-      <Disclosure open={open}><div className="pb-1 pt-1"><ActivitySteps steps={steps} ongoing={false} replay sessionId={sessionId} activeStepId={activeStepId}/></div></Disclosure>
+      <Disclosure open={open}><div className="pb-1 pt-1"><ActivitySteps steps={steps} ongoing={false} replay sessionId={sessionId} activeStepId={activeStepId} outputPluginRegistry={outputPluginRegistry} enabledOutputPluginIds={enabledOutputPluginIds}/></div></Disclosure>
     </div>}
     {steps.length === 0 && elapsed && <div className="ui-timeline-item my-3 flex min-h-8 items-center gap-2 text-[13px] text-zinc-500">
       <StatusIcon size={14} className={`shrink-0 ${statusTone}`}/>
@@ -279,6 +320,9 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
   && prev.taskStatus === next.taskStatus && prev.modelLabel === next.modelLabel
   && prev.startedAt === next.startedAt && prev.completedAt === next.completedAt
   && prev.forceOpen === next.forceOpen && prev.activeStepId === next.activeStepId
+  && prev.askUserQuestionXmlEnabled === next.askUserQuestionXmlEnabled
+  && prev.outputPluginRegistry === next.outputPluginRegistry
+  && sameStringSet(prev.enabledOutputPluginIds, next.enabledOutputPluginIds)
   && prev.groups.length === next.groups.length
   && prev.groups.every((group, index) => group.id === next.groups[index]!.id && groupRenderSignature(group) === groupRenderSignature(next.groups[index]!)));
 
@@ -331,7 +375,51 @@ export const SystemPromptBubble = memo(function SystemPromptBubble({ prompt, for
   </div>;
 });
 
-export const TimelineItem = memo(function TimelineItem({ event, final = false, streaming = false, replay = false, assistantLabel = 'Agent', sessionId, sentPrompt }: { event: TimelineEvent; final?: boolean; streaming?: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; assistantLabel?: string; sessionId?: string; /** 该轮实际提交给 Agent 的完整文本，用于拆出隐式注入前缀并展示在气泡内。 */ sentPrompt?: string | null }) {
+export const TimelineItem = memo(function TimelineItem({
+  event,
+  final = false,
+  streaming = false,
+  replay = false,
+  assistantLabel = 'Agent',
+  sessionId,
+  sentPrompt,
+  askUserQuestionXmlEnabled = true,
+  outputPluginRegistry = defaultOutputPluginRegistry,
+  enabledOutputPluginIds,
+  askAnswersByQuestionId,
+  pluginInteractionsByKey,
+  submittingAskId,
+  submittingPluginKey,
+  askSubmitErrors,
+  pluginSubmitErrors,
+  askDisabled = false,
+  askDisabledReason,
+  onSubmitAskAnswer,
+  onInteractOutputPlugin
+}: {
+  event: TimelineEvent;
+  final?: boolean;
+  streaming?: boolean;
+  /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */
+  replay?: boolean;
+  assistantLabel?: string;
+  sessionId?: string;
+  /** 该轮实际提交给 Agent 的完整文本，用于拆出隐式注入前缀并展示在气泡内。 */
+  sentPrompt?: string | null;
+  askUserQuestionXmlEnabled?: boolean;
+  outputPluginRegistry?: OutputPluginRegistry;
+  enabledOutputPluginIds?: ReadonlySet<string>;
+  askAnswersByQuestionId?: ReadonlyMap<string, AskUserQuestionAnswerPayload>;
+  pluginInteractionsByKey?: ReadonlyMap<string, unknown>;
+  submittingAskId?: string;
+  submittingPluginKey?: string;
+  askSubmitErrors?: Readonly<Record<string, string>>;
+  pluginSubmitErrors?: Readonly<Record<string, string>>;
+  askDisabled?: boolean;
+  askDisabledReason?: string;
+  onSubmitAskAnswer?(spec: AskUserQuestionSpec, answers: AskUserQuestionAnswerItem[]): void | Promise<void>;
+  onInteractOutputPlugin?(plugin: OutputPluginMetadata, spec: unknown, input: unknown): void | Promise<void>;
+}) {
   if (event.type === 'tool_call' || event.type === 'tool_result') return <ToolCard event={event}/>;
   if (event.type === 'permission_request') return <PermissionCard event={event}/>;
   if (event.type === 'warning') return <aside role="status" className="ui-timeline-item my-4 overflow-hidden rounded-xl border border-amber-200 bg-amber-50/60">
@@ -341,6 +429,16 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
     <div className="flex items-start gap-2.5 px-4 py-3"><CircleX size={15} className="mt-0.5 shrink-0 text-red-600"/><div className="min-w-0 flex-1 [overflow-wrap:anywhere]"><div className="text-[13px] font-semibold text-red-950">Agent 错误</div><div className="mt-1 text-[13px] leading-5 text-red-800"><MarkdownContent sessionId={sessionId}>{event.data.message ?? 'Agent 运行失败'}</MarkdownContent></div></div></div>
   </aside>;
   if (event.type === 'thinking') return null;
+  // 纯 XML 交互插件回传轮次（含 AskUserQuestion 及全部声明式交互插件）：统一按 origin 路由到专属回显卡片。
+  const pluginInteraction = outputPluginRegistry.parseInteractionEvent(event.data.origin, event.data.text);
+  if (pluginInteraction) {
+    const renderedTurn = defaultWebOutputPluginRendererRegistry.renderInteractionTurn(
+      pluginInteraction.plugin,
+      pluginInteraction.payload,
+      event.timestamp
+    );
+    if (renderedTurn) return renderedTurn;
+  }
   // 表情触发轮次：展示成带折叠注入块的特殊气泡，方便直观看到触发来源与完整注入正文。
   if (event.data.origin === EMOJI_TRIGGER_ORIGIN) {
     const injection = extractBubbleInjection(event.data.text ?? '', sentPrompt);
@@ -389,14 +487,77 @@ export const TimelineItem = memo(function TimelineItem({ event, final = false, s
   // 挂载时已不在流式输出的正文直接给全文。轮次结束时最终回答会从执行面板搬成独立的 final 行（重新挂载），
   // tasks 刷新的空档也可能让它短暂搬回去再搬出来；否则这些早就返回过的内容会从 0 重新打一遍。
   const settled = replay || !streaming;
+  const rawAssistantText = event.data.text ?? '';
+  const effectiveEnabledIds = resolveEffectivePluginIds(enabledOutputPluginIds, askUserQuestionXmlEnabled);
+  if (effectiveEnabledIds.size > 0 && (final || streaming)) {
+    const split = outputPluginRegistry.splitStreamingOutput(rawAssistantText, streaming, effectiveEnabledIds);
+    if (split.kind === 'pending') {
+      const plugin = outputPluginRegistry.get(split.pluginId);
+      if (plugin) {
+        return <>
+          {split.proseText && <AssistantMarkdown text={split.proseText} active={false} replay={settled} final={final} animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>}
+          {defaultWebOutputPluginRendererRegistry.renderStreamingPlaceholder(plugin, split.partialTitle)}
+        </>;
+      }
+    }
+    if (split.kind === 'complete') {
+      const plugin = outputPluginRegistry.get(split.pluginId);
+      if (plugin) {
+        const instanceId = plugin.getInstanceId(split.spec);
+        const instanceKey = outputPluginInstanceKey(plugin.id, instanceId);
+        const answered = pluginInteractionsByKey?.get(instanceKey)
+          ?? (plugin.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID ? askAnswersByQuestionId?.get(instanceId) : undefined);
+        const isSubmitting = submittingPluginKey === instanceKey
+          || (plugin.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID && submittingAskId === instanceId);
+        const submitError = pluginSubmitErrors?.[instanceKey]
+          ?? (plugin.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID ? askSubmitErrors?.[instanceId] : undefined);
+        const onInteract = onInteractOutputPlugin
+          ? (input: unknown) => onInteractOutputPlugin(plugin, split.spec, input)
+          : (plugin.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID && onSubmitAskAnswer)
+            ? (input: unknown) => {
+                const answers = (input as { answers?: AskUserQuestionAnswerItem[] })?.answers;
+                if (answers) return onSubmitAskAnswer(split.spec as AskUserQuestionSpec, answers);
+              }
+            : undefined;
+        return <>
+          {split.proseText && <AssistantMarkdown text={split.proseText} active={false} replay={settled} final={final} animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>}
+          {streaming && !final
+            ? defaultWebOutputPluginRendererRegistry.renderStreamingPlaceholder(plugin, plugin.getTitle?.(split.spec))
+            : defaultWebOutputPluginRendererRegistry.renderCard({
+                plugin,
+                spec: split.spec,
+                answered,
+                disabled: askDisabled,
+                disabledReason: askDisabledReason,
+                submitting: isSubmitting,
+                error: submitError,
+                onInteract
+              })}
+        </>;
+      }
+    }
+  }
   // 轮次结束时搬出来的 final 行，内容刚才已经在执行面板里显示过：不重播入场动画，否则回答会先消失再淡入。
   // 首屏历史（replay）照常和其它行一起淡入。
   const assistant = final
-    ? <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} final animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>
-    : <AssistantMarkdown text={event.data.text ?? ''} active={streaming} replay={settled} assistantLabel={assistantLabel} sessionId={sessionId}/>;
+    ? <AssistantMarkdown text={rawAssistantText} active={streaming} replay={settled} final animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>
+    : <AssistantMarkdown text={rawAssistantText} active={streaming} replay={settled} assistantLabel={assistantLabel} sessionId={sessionId}/>;
   return assistant;
 }, (prev, next) => prev.final === next.final && prev.streaming === next.streaming && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId
   && prev.sentPrompt === next.sentPrompt
+  && prev.askUserQuestionXmlEnabled === next.askUserQuestionXmlEnabled
+  && prev.outputPluginRegistry === next.outputPluginRegistry
+  && sameStringSet(prev.enabledOutputPluginIds, next.enabledOutputPluginIds)
+  && prev.askAnswersByQuestionId === next.askAnswersByQuestionId
+  && prev.pluginInteractionsByKey === next.pluginInteractionsByKey
+  && prev.submittingAskId === next.submittingAskId
+  && prev.submittingPluginKey === next.submittingPluginKey
+  && prev.askSubmitErrors === next.askSubmitErrors
+  && prev.pluginSubmitErrors === next.pluginSubmitErrors
+  && prev.askDisabled === next.askDisabled
+  && prev.askDisabledReason === next.askDisabledReason
+  && prev.onSubmitAskAnswer === next.onSubmitAskAnswer
+  && prev.onInteractOutputPlugin === next.onInteractOutputPlugin
   && prev.event.timestamp === next.event.timestamp
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event)
   // error/warning/permission 卡片的 payload 变化也要刷新；text 长度已在签名内。

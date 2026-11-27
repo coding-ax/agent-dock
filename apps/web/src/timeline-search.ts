@@ -1,3 +1,7 @@
+import {
+  defaultOutputPluginRegistry,
+  type OutputPluginRegistry
+} from '@agent-dock/agent-dock-shared';
 import { buildActivitySteps, thinkingTitle, timelineRowKey, type TimelineEvent, type TimelineTurn } from './timeline';
 import { summarizeTools, toolPresentation } from './tool-presentation';
 import { toolDetailView } from './tool-detail';
@@ -79,9 +83,29 @@ function extractToolSearchText(event: TimelineEvent): string {
   return parts.join('\n');
 }
 
-function extractEventSearchText(event: TimelineEvent): string {
+function extractEventSearchText(
+  event: TimelineEvent,
+  pluginRegistry: OutputPluginRegistry = defaultOutputPluginRegistry
+): string {
   if (event.type === 'thinking') return '';
-  if (event.type === 'text') return stripMarkdownForSearch(event.data.text ?? '');
+  if (event.type === 'text') {
+    const interaction = pluginRegistry.parseInteractionEvent(event.data.origin, event.data.text);
+    if (interaction?.plugin.extractInteractionSearchText) {
+      return interaction.plugin.extractInteractionSearchText(interaction.payload);
+    }
+    if (event.data.role !== 'user') {
+      const extracted = pluginRegistry.parseTrailingOutput(event.data.text ?? '');
+      if (extracted) {
+        const plugin = pluginRegistry.get(extracted.pluginId);
+        const widgetText = plugin?.extractSearchText ? plugin.extractSearchText(extracted.spec) : '';
+        return [
+          stripMarkdownForSearch(extracted.proseText),
+          widgetText
+        ].filter(Boolean).join('\n');
+      }
+    }
+    return stripMarkdownForSearch(event.data.text ?? '');
+  }
   if (event.type === 'warning') return stripMarkdownForSearch(event.data.text ?? '');
   if (event.type === 'error') return stripMarkdownForSearch(event.data.message ?? 'Agent 运行失败');
   if (event.type === 'permission_request') return event.data.title ?? '';
@@ -93,12 +117,14 @@ export function searchTimeline({
   turns,
   rowKeys,
   systemPrompt,
-  query
+  query,
+  outputPluginRegistry = defaultOutputPluginRegistry
 }: {
   turns: TimelineTurn[];
   rowKeys?: ReadonlyMap<string, string>;
   systemPrompt?: string;
   query: string;
+  outputPluginRegistry?: OutputPluginRegistry;
 }): TimelineSearchMatch[] {
   const normalized = normalizeSearchQuery(query);
   if (!normalized) return [];
@@ -122,7 +148,7 @@ export function searchTimeline({
   for (const turn of turns) {
     for (const section of turn.sections) {
       if (section.kind === 'event') {
-        const text = extractEventSearchText(section.event);
+        const text = extractEventSearchText(section.event, outputPluginRegistry);
         const count = countTextOccurrences(text, needleLower);
         if (!count) continue;
         const itemKey = timelineRowKey(section.event, emptyRowKeys);

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, RuntimeActivityEvent, RuntimeTurnEvent, Session, SessionInterruptIntent, SessionUsageDetail, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy, TurnEventKind, TurnUsageRecord, UsageBreakdown, UsageBreakdownGroup, UsageQueryFilter, UsageSummary } from '@agent-dock/agent-dock-shared';
 import { basename } from 'node:path';
 import { resolveProjectPath } from './project-path.js';
-import { ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, agentConfigSchema, isAgentAuthErrorText, isDeferredAsyncWaitText, makeId, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
+import { ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, agentConfigSchema, BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, isAgentAuthErrorText, isDeferredAsyncWaitText, makeId, mergeSessionOutputPluginsPatch, normalizeSessionOutputPlugins, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 export type { AgentConfig };
 import { AcpxAdapter, describeAcpError, wrapAgentForSsh, type NormalizedDriverEvent } from '@agent-dock/agent-dock-acp-client';
 import { JsonlTransport, PipeTransport, probeAgent, PtyTransport, type ProbeMatrix } from '@agent-dock/agent-dock-transports';
@@ -1021,7 +1021,29 @@ export class AgentDockRuntime {
       ? { protocol: 'acp' as const, available: true, pause: false, resume: true }
       : (this.options.probe ?? probeAgent)(configured, this.options.acpxCommand);
     if (!capability.available) throw new RuntimeError('AGENT_UNAVAILABLE', capability.detail ?? 'Agent unavailable', 503);
-    const session: Session = { id: makeId('ses'), agentId: agent.id, state: 'created', cwd: configured.cwd!, model: configured.model, reasoningEffort: configured.reasoningEffort, permissionMode: configured.permissionMode, source: input.source, sourceId: input.sourceId, ...(input.sshHost ? { sshHost: input.sshHost } : {}), protocol: capability.protocol, runId: makeId('run'), createdAt: now(), updatedAt: now(), systemPrompt: configured.systemPrompt };
+    const initialOutputPlugins = normalizeSessionOutputPlugins(input.outputPlugins, input.askUserQuestionEnabled);
+    const initialAskEnabled = typeof initialOutputPlugins[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] === 'boolean'
+      ? initialOutputPlugins[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]
+      : null;
+    const session: Session = {
+      id: makeId('ses'),
+      agentId: agent.id,
+      state: 'created',
+      cwd: configured.cwd!,
+      model: configured.model,
+      reasoningEffort: configured.reasoningEffort,
+      permissionMode: configured.permissionMode,
+      source: input.source,
+      sourceId: input.sourceId,
+      ...(input.sshHost ? { sshHost: input.sshHost } : {}),
+      askUserQuestionEnabled: initialAskEnabled,
+      ...(Object.keys(initialOutputPlugins).length ? { outputPlugins: initialOutputPlugins } : {}),
+      protocol: capability.protocol,
+      runId: makeId('run'),
+      createdAt: now(),
+      updatedAt: now(),
+      systemPrompt: configured.systemPrompt
+    };
     // 显式传入的 systemPrompt 优先：主会话/侧边会话要写自己的提示词，不能被默认种子覆盖。
     if (!input.systemPrompt && this.options.createSystemPrompt) session.systemPrompt = this.options.createSystemPrompt(session);
     await this.repos.projects.ensure(session.cwd);
@@ -1148,6 +1170,12 @@ export class AgentDockRuntime {
         // 用户这一轮提问就是一次对话事件，蹭下面的 saveState 一起落盘，不额外多写一次库。
         session.lastMessageAt = now();
         await this.saveState(session, 'thinking');
+        // 若用户在重连期间刚刚切换过会话级交互插件开关，取库内最新覆写值后再决定是否注入 XML 规范。
+        const latestSession = await this.repos.sessions.get(id);
+        if (latestSession) {
+          session.askUserQuestionEnabled = latestSession.askUserQuestionEnabled ?? null;
+          session.outputPlugins = latestSession.outputPlugins;
+        }
         const resolvedAgentPrompt = await this.options.sessionPrompt?.(session, agentPrompt, task.origin ?? undefined) ?? agentPrompt;
         task.sentPrompt = resolvedAgentPrompt;
         await this.repos.tasks.save(task);
@@ -1612,6 +1640,69 @@ export class AgentDockRuntime {
       await this.emit(id, 'status', { state: latest.state, reasoningEffort: normalized });
       return latest;
     });
+  }
+  /**
+   * 极速更新会话级纯 XML 交互插件开关映射（每个插件支持 `true` / `false` / `null`=跟随全局）。
+   * 纯本地元数据更新：绝不为切换插件冷启动或触碰 CLI/ACP 驱动进程，落库后立即通过 SSE 广播。
+   */
+  async setOutputPlugins(id: string, patch: Record<string, boolean | null>): Promise<Session> {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      throw new RuntimeError('INVALID_OUTPUT_PLUGINS', 'outputPlugins must be an object mapping pluginId to boolean or null', 400);
+    }
+    const entries = Object.entries(patch);
+    if (!entries.length) {
+      throw new RuntimeError('INVALID_OUTPUT_PLUGINS', 'outputPlugins patch must not be empty', 400);
+    }
+    for (const [key, value] of entries) {
+      if (!key.trim() || (value !== null && typeof value !== 'boolean')) {
+        throw new RuntimeError('INVALID_OUTPUT_PLUGINS', `outputPlugins["${key}"] must be boolean or null`, 400);
+      }
+    }
+    const session = await this.repos.sessions.get(id);
+    if (!session) throw new RuntimeError('SESSION_NOT_FOUND', `Unknown session: ${id}`, 404);
+    if (session.archivedAt) throw new RuntimeError('SESSION_ARCHIVED', 'Archived sessions are read-only', 409);
+
+    const currentNormalized = normalizeSessionOutputPlugins(session.outputPlugins, session.askUserQuestionEnabled);
+    const merged = mergeSessionOutputPluginsPatch(currentNormalized, patch);
+    const nextAskEnabled = typeof merged[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] === 'boolean'
+      ? merged[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]
+      : null;
+
+    const currentKeys = Object.keys(currentNormalized).sort();
+    const nextKeys = Object.keys(merged).sort();
+    const unchanged = currentKeys.length === nextKeys.length
+      && currentKeys.every((key, idx) => key === nextKeys[idx] && currentNormalized[key] === merged[key]);
+    if (unchanged) {
+      return this.titledSession({
+        ...session,
+        askUserQuestionEnabled: nextAskEnabled,
+        ...(nextKeys.length ? { outputPlugins: merged } : { outputPlugins: undefined })
+      });
+    }
+
+    const updatedAt = now();
+    await this.repos.sessions.saveOutputPlugins(id, merged, updatedAt);
+    const updated: Session = {
+      ...session,
+      askUserQuestionEnabled: nextAskEnabled,
+      ...(nextKeys.length ? { outputPlugins: merged } : { outputPlugins: undefined }),
+      updatedAt
+    };
+    await this.emit(id, 'status', {
+      state: updated.state,
+      askUserQuestionEnabled: nextAskEnabled,
+      outputPlugins: merged
+    });
+    return this.titledSession(updated);
+  }
+  /**
+   * 极速更新会话级 XML 询问卡片开关（向后兼容入口，自动同步到 `outputPlugins['builtin:ask-user-question']`）。
+   */
+  async setAskUserQuestionEnabled(id: string, enabled: boolean | null): Promise<Session> {
+    if (enabled !== null && typeof enabled !== 'boolean') {
+      throw new RuntimeError('INVALID_ASK_USER_QUESTION_ENABLED', 'askUserQuestionEnabled must be boolean or null', 400);
+    }
+    return this.setOutputPlugins(id, { [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: enabled });
   }
   private waitForTurn(id: string) {
     if (!this.activeTurns.has(id)) return Promise.resolve();

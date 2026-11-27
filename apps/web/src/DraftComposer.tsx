@@ -2,8 +2,19 @@ import { DockMascot } from './DockMascot';
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { PawPrint } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+  DEFAULT_ASK_USER_QUESTION_CONFIG,
+  getSessionOutputPluginOverride,
+  mergeSessionOutputPluginsPatch,
+  resolveOutputPluginEnabled,
+  type OutputPluginCatalogItem,
+  type OutputPluginsGlobalConfig
+} from '@agent-dock/agent-dock-shared';
 import { api, type Agent, type Session } from './api';
-import { Composer } from './Composer';
+import { Composer, type ComposerOutputPluginItem } from './Composer';
+import { openAppDialog } from './dialog-store';
+import { buildFallbackOutputPluginCatalogItems } from './output-plugins/useOutputPlugins';
 import { PromptTemplates } from './PromptTemplates';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { buildPrompt, getModelReadiness, referenceFromUpload, uploadSessionFile, type ComposerReference } from './composer-utils';
@@ -19,10 +30,12 @@ import {
   resolveEffectiveReasoningEffort,
   resolveEffectiveWorkspace,
   withConfirmedDraftSubmission,
+  withDraftOutputPluginOverride,
   withLastUsedAgent,
   withLastUsedModel,
   withLastUsedReasoningEffort,
   withLastUsedWorkspace,
+  withoutDraftOutputPluginOverrides,
   withoutStaleAgentModel,
   withoutStaleAgentReasoning,
   writeDraftComposerPrefs,
@@ -39,7 +52,7 @@ import { useSessionDraftWriter } from './use-session-draft';
  * 附件为什么不能当场传：/api/sessions/:id/uploads 需要 sessionId。草稿态先建一枚本地引用
  * chip 占位（图片用 objectURL 预览），create 成功后再逐件上传、换成真实路径再拼 prompt。
  */
-export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, collapsed = false, companion }: {
+export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, collapsed = false, companion, askUserQuestionXmlEnabled = DEFAULT_ASK_USER_QUESTION_CONFIG.askUserQuestionXmlEnabled, outputPluginItems, outputPluginsGlobalConfig }: {
   agents: Agent[];
   editorRef?: RefObject<ComposerEditorHandle | null>;
   sessions: Session[];
@@ -50,6 +63,12 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   collapsed?: boolean;
   /** 交给小猫：消息直接发进主会话，不新建会话；Agent / 目录 / 模型选择换成一枚锁定的小猫标签。 */
   companion?: { sessionId: string; agentId: string; name: string; onSent(): void };
+  /** 全局默认 XML 询问卡片开关；未传时按默认开启处理（向后兼容）。 */
+  askUserQuestionXmlEnabled?: boolean;
+  /** 服务端下发的全部可用纯 XML 交互插件列表。 */
+  outputPluginItems?: OutputPluginCatalogItem[];
+  /** 全局默认插件开关配置。 */
+  outputPluginsGlobalConfig?: OutputPluginsGlobalConfig;
 }) {
   const qc = useQueryClient();
   const [prompt, setPrompt] = useState('');
@@ -67,14 +86,18 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   const [rejectedProbeKeys, setRejectedProbeKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [modelJustSwitched, setModelJustSwitched] = useState(false);
   const [reasoningJustSwitched, setReasoningJustSwitched] = useState(false);
+  const [askJustSwitched, setAskJustSwitched] = useState(false);
+  const [switchingCompanionAsk, setSwitchingCompanionAsk] = useState(false);
   const modelSavedTimerRef = useRef<number | undefined>(undefined);
   const reasoningSavedTimerRef = useRef<number | undefined>(undefined);
+  const askSavedTimerRef = useRef<number | undefined>(undefined);
   const [systemPrompt, setSystemPrompt] = useState('');
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
   useEffect(() => () => {
     window.clearTimeout(modelSavedTimerRef.current);
     window.clearTimeout(reasoningSavedTimerRef.current);
+    window.clearTimeout(askSavedTimerRef.current);
   }, []);
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
@@ -253,6 +276,149 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     })();
   };
 
+  const companionSession = companion ? sessions.find(item => item.id === companion.sessionId) : undefined;
+  const effectivePluginCatalog = useMemo<OutputPluginCatalogItem[]>(
+    () => (outputPluginItems?.length ? outputPluginItems : buildFallbackOutputPluginCatalogItems()),
+    [outputPluginItems]
+  );
+  const effectiveGlobalPluginsConfig = useMemo<OutputPluginsGlobalConfig>(() => {
+    const base: Record<string, boolean> = {};
+    for (const item of effectivePluginCatalog) {
+      base[item.id] = item.globalEnabled;
+    }
+    if (outputPluginsGlobalConfig?.plugins) {
+      Object.assign(base, outputPluginsGlobalConfig.plugins);
+    } else {
+      base[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] = askUserQuestionXmlEnabled;
+    }
+    return { plugins: base };
+  }, [effectivePluginCatalog, outputPluginsGlobalConfig, askUserQuestionXmlEnabled]);
+
+  const draftOutputPluginOverrides: Record<string, boolean | null> = useMemo(() => {
+    if (companion) {
+      return companionSession?.outputPlugins ?? (
+        typeof companionSession?.askUserQuestionEnabled === 'boolean'
+          ? { [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: companionSession.askUserQuestionEnabled }
+          : {}
+      );
+    }
+    return prefs.outputPlugins ?? (
+      typeof prefs.askUserQuestionEnabled === 'boolean'
+        ? { [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: prefs.askUserQuestionEnabled }
+        : {}
+    );
+  }, [companion, companionSession?.outputPlugins, companionSession?.askUserQuestionEnabled, prefs.outputPlugins, prefs.askUserQuestionEnabled]);
+
+  const composerOutputPlugins = useMemo<ComposerOutputPluginItem[]>(
+    () => effectivePluginCatalog.map(plugin => {
+      const globalEnabled = resolveOutputPluginEnabled(plugin.id, {
+        defaultEnabled: plugin.globalEnabled,
+        globalConfig: effectiveGlobalPluginsConfig
+      });
+      const override = getSessionOutputPluginOverride(
+        plugin.id,
+        draftOutputPluginOverrides,
+        companion ? companionSession?.askUserQuestionEnabled : prefs.askUserQuestionEnabled
+      );
+      const enabled = resolveOutputPluginEnabled(plugin.id, {
+        defaultEnabled: globalEnabled,
+        globalConfig: effectiveGlobalPluginsConfig,
+        sessionOverrides: draftOutputPluginOverrides,
+        legacySessionAskEnabled: companion ? companionSession?.askUserQuestionEnabled : prefs.askUserQuestionEnabled
+      });
+      return {
+        id: plugin.id,
+        name: plugin.name,
+        description: plugin.description,
+        icon: plugin.icon,
+        tagName: plugin.tagName,
+        builtin: plugin.builtin,
+        enabled,
+        globalEnabled,
+        override
+      };
+    }),
+    [effectivePluginCatalog, effectiveGlobalPluginsConfig, draftOutputPluginOverrides, companion, companionSession?.askUserQuestionEnabled, prefs.askUserQuestionEnabled]
+  );
+
+  const [switchingCompanionPluginId, setSwitchingCompanionPluginId] = useState<string>();
+
+  const handleSetDraftOutputPlugin = (pluginId: string, next: boolean | null) => {
+    setAskJustSwitched(true);
+    window.clearTimeout(askSavedTimerRef.current);
+    askSavedTimerRef.current = window.setTimeout(() => setAskJustSwitched(false), 900);
+    if (companion) {
+      const previousSession = companionSession;
+      const merged = mergeSessionOutputPluginsPatch(
+        previousSession?.outputPlugins,
+        { [pluginId]: next },
+        previousSession?.askUserQuestionEnabled
+      );
+      const nextAsk = typeof merged[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] === 'boolean'
+        ? merged[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]
+        : null;
+      setSwitchingCompanionPluginId(pluginId);
+      setSwitchingCompanionAsk(true);
+      qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => (
+        item.id === companion.sessionId
+          ? { ...item, outputPlugins: Object.keys(merged).length ? merged : undefined, askUserQuestionEnabled: nextAsk }
+          : item
+      )));
+      void api.setSessionOutputPlugins(companion.sessionId, { [pluginId]: next }).then(updated => {
+        setSwitchingCompanionPluginId(undefined);
+        setSwitchingCompanionAsk(false);
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => (
+          item.id === updated.id ? updated : item
+        )));
+      }).catch(err => {
+        setSwitchingCompanionPluginId(undefined);
+        setSwitchingCompanionAsk(false);
+        setAskJustSwitched(false);
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => (
+          item.id === companion.sessionId && previousSession ? previousSession : item
+        )));
+        setError(err instanceof Error ? err.message : String(err));
+      });
+      return;
+    }
+    const targetPlugin = composerOutputPlugins.find(item => item.id === pluginId);
+    // 切回与全局默认一致或显式 null 时移除覆写，自动恢复跟随全局默认。
+    const effectiveOverride = next === null || (targetPlugin && next === targetPlugin.globalEnabled) ? undefined : next;
+    updatePrefs(current => withDraftOutputPluginOverride(current, pluginId, effectiveOverride));
+  };
+
+  const handleResetAllDraftOutputPlugins = () => {
+    setAskJustSwitched(true);
+    window.clearTimeout(askSavedTimerRef.current);
+    askSavedTimerRef.current = window.setTimeout(() => setAskJustSwitched(false), 900);
+    if (companion) {
+      const resetPatch: Record<string, null> = {};
+      for (const item of composerOutputPlugins) {
+        if (item.override !== null) resetPatch[item.id] = null;
+      }
+      if (!Object.keys(resetPatch).length) return;
+      const previousSession = companionSession;
+      setSwitchingCompanionAsk(true);
+      qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => (
+        item.id === companion.sessionId ? { ...item, outputPlugins: undefined, askUserQuestionEnabled: null } : item
+      )));
+      void api.setSessionOutputPlugins(companion.sessionId, resetPatch).then(updated => {
+        setSwitchingCompanionAsk(false);
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => (
+          item.id === updated.id ? updated : item
+        )));
+      }).catch(err => {
+        setSwitchingCompanionAsk(false);
+        qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => (
+          item.id === companion.sessionId && previousSession ? previousSession : item
+        )));
+        setError(err instanceof Error ? err.message : String(err));
+      });
+      return;
+    }
+    updatePrefs(current => withoutDraftOutputPluginOverrides(current));
+  };
+
   const submit = (submittedValue: string) => {
     if (creating) return;
     setError(undefined);
@@ -272,12 +438,19 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     void (async () => {
       let session: Session | undefined;
       try {
+        const cleanDraftOverrides: Record<string, boolean> = {};
+        for (const [k, v] of Object.entries(draftOutputPluginOverrides)) {
+          if (typeof v === 'boolean') cleanDraftOverrides[k] = v;
+        }
+        const askExplicit = cleanDraftOverrides[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID];
         session = await api.create({
           agentId: effectiveAgentId,
           ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
           ...(effectiveModel ? { model: effectiveModel } : {}),
           ...(effectiveReasoningEffort ? { reasoningEffort: effectiveReasoningEffort } : {}),
-          ...(systemPrompt.trim() ? { systemPrompt: systemPrompt.trim() } : {})
+          ...(systemPrompt.trim() ? { systemPrompt: systemPrompt.trim() } : {}),
+          ...(Object.keys(cleanDraftOverrides).length ? { outputPlugins: cleanDraftOverrides } : {}),
+          ...(typeof askExplicit === 'boolean' ? { askUserQuestionEnabled: askExplicit } : {})
         });
         // create 后立刻按真实 sessionId 落草稿：后续上传/发送失败切进会话时还能恢复输入。
         if (draftPrompt) saveSessionDraft(getBrowserDraftStorage(), session.id, draftPrompt);
@@ -330,7 +503,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
       <DockMascot size={88}/>
       <h1 className="ui-empty-state ui-hero-title mt-4 text-[22px] font-semibold tracking-[-.02em]">有什么要做的？</h1>
     </div>}
-    <div className="ui-collapse" data-collapsed={collapsed || undefined} aria-hidden={collapsed || undefined} inert={collapsed}><div>
+    <div className="ui-collapse" data-collapsed={collapsed || undefined} aria-hidden={collapsed || undefined} inert={collapsed}><div className="min-w-0">
     <div className="mt-6">
     <Composer
       draft
@@ -377,6 +550,13 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
       onPickDirectory={() => pickDirectory.mutate()}
       onAttachFile={attach}
       {...(!companion ? { systemPrompt, onSystemPromptChange: setSystemPrompt } : {})}
+      outputPlugins={composerOutputPlugins}
+      switchingOutputPluginId={switchingCompanionPluginId}
+      switchingAskUserQuestion={switchingCompanionAsk}
+      outputPluginsJustSwitched={askJustSwitched}
+      onSetOutputPlugin={handleSetDraftOutputPlugin}
+      onResetAllOutputPlugins={handleResetAllDraftOutputPlugins}
+      onOpenOutputPluginsCenter={() => openAppDialog('output-plugins')}
       aiContext={() => ({
         field: companion ? `发给主小猫「${companion.name}」的指令` : '新建会话首条消息',
         ...(selectedAgent?.name ? { agentName: selectedAgent.name } : {}),

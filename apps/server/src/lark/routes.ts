@@ -1,12 +1,34 @@
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { registerApp as larkRegisterApp } from './sdk.js';
-import { cleanChatName, validateHighRiskPattern, type AgentRepository, type ChannelMappingRepository, type ConfigRepository } from '@agent-dock/agent-dock-shared';
+import {
+  BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+  cleanChatName,
+  defaultOutputPluginRegistry,
+  normalizeOutputPluginId,
+  now,
+  resolveOutputPluginEnabled,
+  validateHighRiskPattern,
+  type AgentRepository,
+  type ChannelMappingRepository,
+  type ConfigRepository
+} from '@agent-dock/agent-dock-shared';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { createLarkCardService, LarkServiceError, larkConfigurationStatus, type LarkBotConfigInput, type LarkCardService, type LarkSendInput, type LarkUpdateInput } from './service.js';
 import { parseLarkMessageContent } from './message-content.js';
 import { isLarkOperatorAllowed, type OperatorAccessInput } from './access-config.js';
 import { defaultHighRiskPattern, deleteLarkConfig, publicLarkConfigs, readLarkConfig, readLarkConfigs, saveLarkConfig, type SaveLarkConfigInput } from './config.js';
 import { LarkLongConnectionListenerPool, LarkMessageCoordinator, larkHandoverChannel, type LarkListenerPool, type LarkMessageEvent } from './listener.js';
+import { createHandoverLookup } from './handover-binding.js';
+import { LARK_ASK_CARD_CHANNEL } from './ask-user-question-card.js';
+import {
+  defaultLarkOutputPluginAdapterRegistry,
+  LARK_OUTPUT_PLUGIN_CARD_CHANNEL,
+  type LarkOutputPluginAdapterRegistry,
+  type PersistedLarkOutputPluginCard
+} from './output-plugins/index.js';
+import { readAskUserQuestionConfig, type AskUserQuestionService } from '../ask-user-question.js';
+import { readOutputPluginsGlobalConfig, type OutputPluginService } from '../output-plugins/service.js';
 import { LarkBotChatCache, registerLarkRegexTriggerRoutes } from './regex-triggers.js';
 import type { LarkAvatarService, LarkReactionPort, LarkReactionSourceStatus } from '../lark-avatar/service.js';
 import type { LarkChatMessage } from './service.js';
@@ -107,6 +129,12 @@ export interface LarkRoutesOptions {
   registrationTimeoutMs?: number;
   /** AI 飞书替身：接收 reaction 事件、处理询问卡片上的路由选择。 */
   larkAvatar?: LarkAvatarService;
+  /** 纯 XML 协议版 AskUserQuestion 兼容服务：双向同步飞书卡片与网页端作答状态。 */
+  askUserQuestion?: AskUserQuestionService;
+  /** 统一纯 XML 交互插件服务：支持全部内置及本地声明式插件的飞书双向卡片同步。 */
+  outputPlugins?: OutputPluginService;
+  /** 飞书插件卡片适配器注册表（默认包含 builtin:ask-user-question 及全部声明式插件适配器）。 */
+  larkPluginAdapters?: LarkOutputPluginAdapterRegistry;
 }
 
 type ReactionChatInfo = { webChatId?: string; name?: string; type?: 'p2p' | 'group' | 'topic' | 'unknown' };
@@ -228,10 +256,16 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
   const lineage = () => options.assistant?.lifecycle.lineage() ?? [];
   const kittenFor = (sessionId: string) => handoverKittenProfile(lineage(), sessionId);
   const listeningDisabled = options.listeningDisabled === true;
+  const resolvedOutputPlugins = options.outputPlugins ?? options.askUserQuestion?.outputPlugins;
+  const resolvedPluginRegistry = resolvedOutputPlugins?.registry ?? defaultOutputPluginRegistry;
+  const resolvedPluginAdapters = options.larkPluginAdapters ?? defaultLarkOutputPluginAdapterRegistry;
   const listener = options.listener ?? new LarkLongConnectionListenerPool(app.log, {
     runtime: options.runtime,
     cardMappings: options.cardMappings,
     configRepository: options.config,
+    askUserQuestion: options.askUserQuestion,
+    outputPlugins: resolvedOutputPlugins,
+    larkPluginAdapters: resolvedPluginAdapters,
     env,
     fetcher,
     peerBotAuthorized: (appId, chatId, senderOpenId) => options.agentTools?.isConfiguredPeer(appId, chatId, senderOpenId) ?? Promise.resolve(false),
@@ -335,7 +369,164 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
       fallbackCoordinators.delete(appId);
     }
   };
+  // Web 端提交任意交互插件响应后，同步把该会话对应的未锁定飞书插件卡片更新为「✅ 已响应（网页端）」。
+  const unsubscribePluginInteraction = resolvedOutputPlugins?.onInteraction(async event => {
+    if (event.source !== 'web' || !options.cardMappings) return;
+    const plugin = resolvedPluginRegistry.get(event.pluginId);
+    if (!plugin) return;
+    const adapter = resolvedPluginAdapters.resolve(plugin);
+    if (!adapter?.buildAnsweredCard) return;
+    const channel = event.pluginId === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID
+      ? LARK_ASK_CARD_CHANNEL
+      : LARK_OUTPUT_PLUGIN_CARD_CHANNEL;
+    const mappings = await options.cardMappings.list(channel).catch(() => []);
+    for (const mapping of mappings) {
+      if (mapping.sessionId !== event.sessionId || !mapping.extra) continue;
+      let record: PersistedLarkOutputPluginCard | undefined;
+      try { record = JSON.parse(mapping.extra) as PersistedLarkOutputPluginCard; } catch { continue; }
+      const recordPluginId = record?.pluginId ? normalizeOutputPluginId(record.pluginId) : BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
+      const recordInstanceId = record?.instanceId || record?.questionId;
+      if (!record || recordPluginId !== event.pluginId || recordInstanceId !== event.instanceId || !record.messageId) continue;
+      try {
+        const botService = await resolveService(undefined, record.appId);
+        await botService.updateInteractiveCard({
+          messageId: record.messageId,
+          card: adapter.buildAnsweredCard({
+            plugin,
+            payload: event.payload,
+            sessionId: event.sessionId,
+            webBaseUrl: record.webBaseUrl
+          })
+        });
+      } catch (error) {
+        app.log.warn({ error, sessionId: event.sessionId, pluginId: event.pluginId, instanceId: event.instanceId, messageId: record.messageId }, '网页端响应后同步更新飞书交互插件卡片失败');
+      }
+    }
+  });
+
+  // 兜底桥接：若飞书绑定/托管会话由网页端触发一轮对话且以任一已启用插件的 XML 结尾，同样自动推送飞书 Schema 2.0 卡片。
+  const handoverLookup = options.config && options.cardMappings
+    ? createHandoverLookup(options.config, options.cardMappings)
+    : undefined;
+  const bridgeTimers = new Set<ReturnType<typeof setTimeout>>();
+  const unsubscribeTurnBridge = !listeningDisabled && options.cardMappings && options.config && typeof options.runtime?.onTurnEvent === 'function'
+    ? options.runtime.onTurnEvent(event => {
+        if (event.kind !== 'completed' || !event.summary) return;
+        const extracted = resolvedPluginRegistry.parseTrailingOutput(event.summary);
+        if (!extracted) return;
+        // 延迟 450ms 等待飞书侧 LarkMessageCoordinator.finalizeCard 先完成推卡与落库，避免重复发送。
+        const timer = setTimeout(() => {
+          bridgeTimers.delete(timer);
+          void (async () => {
+            const plugin = resolvedPluginRegistry.get(extracted.pluginId);
+            if (!plugin) return;
+            const adapter = resolvedPluginAdapters.resolve(plugin);
+            if (!adapter) return;
+            const session = typeof options.runtime?.getSession === 'function'
+              ? await options.runtime.getSession(event.sessionId).catch(() => undefined)
+              : undefined;
+            const pluginEnabled = resolvedOutputPlugins
+              ? await resolvedOutputPlugins.isPluginEnabledForSession(plugin.id, session)
+              : resolveOutputPluginEnabled(plugin.id, {
+                  defaultEnabled: plugin.defaultEnabled,
+                  globalConfig: {
+                    plugins: {
+                      [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: (await readAskUserQuestionConfig(options.config)).askUserQuestionXmlEnabled,
+                      ...(await readOutputPluginsGlobalConfig(options.config)).config.plugins
+                    }
+                  },
+                  sessionOverrides: session?.outputPlugins,
+                  legacySessionAskEnabled: session?.askUserQuestionEnabled
+                });
+            if (!pluginEnabled) return;
+
+            const instanceId = plugin.getInstanceId(extracted.spec);
+            const isAsk = plugin.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
+            const channel = isAsk ? LARK_ASK_CARD_CHANNEL : LARK_OUTPUT_PLUGIN_CARD_CHANNEL;
+            const existing = await options.cardMappings!.list(channel).catch(() => []);
+            const alreadySent = existing.some(mapping => {
+              if (mapping.sessionId !== event.sessionId || !mapping.extra) return false;
+              try {
+                const rec = JSON.parse(mapping.extra) as Partial<PersistedLarkOutputPluginCard>;
+                const recPluginId = rec.pluginId ? normalizeOutputPluginId(rec.pluginId) : BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
+                const recInstanceId = rec.instanceId || rec.questionId;
+                return recPluginId === plugin.id && recInstanceId === instanceId;
+              } catch { return false; }
+            });
+            if (alreadySent) return;
+
+            let target: { appId: string; chatId: string; receiveIdType: 'chat_id' | 'open_id'; chatType: 'group' | 'p2p' } | undefined;
+            const source = event.sessionSource ?? session?.source;
+            const sourceId = event.sessionSourceId ?? session?.sourceId;
+            if (source === 'lark' && sourceId) {
+              const parts = sourceId.split(':');
+              const appId = parts[0]?.trim();
+              const chatId = parts[1]?.trim();
+              const chatType = parts[2]?.trim() === 'group' ? 'group' : 'p2p';
+              if (appId && chatId && (chatId.startsWith('oc_') || chatId.startsWith('ou_'))) {
+                target = { appId, chatId, receiveIdType: chatId.startsWith('ou_') ? 'open_id' : 'chat_id', chatType };
+              }
+            }
+            if (!target && handoverLookup) {
+              const handover = await handoverLookup(event.sessionId).catch(() => undefined);
+              if (handover) target = { appId: handover.appId, chatId: handover.chatId, receiveIdType: 'chat_id', chatType: 'group' };
+            }
+            if (!target) return;
+
+            const stored = await readLarkConfig(options.config, target.appId);
+            if (!stored) return;
+            const botService = await resolveService(undefined, target.appId);
+            const cardId = `${isAsk ? 'askc' : 'outpc'}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+            const sent = await botService.sendInteractiveCard({
+              ...(target.receiveIdType === 'open_id'
+                ? { receiveId: target.chatId, receiveIdType: 'open_id' as const }
+                : { chatId: target.chatId }),
+              card: adapter.buildCard({
+                cardId,
+                plugin,
+                spec: extracted.spec,
+                sessionId: event.sessionId,
+                webBaseUrl: stored.webBaseUrl
+              }),
+              idempotencyKey: `${isAsk ? 'askq' : 'outp'}-${cardId}`
+            });
+            const record: PersistedLarkOutputPluginCard = {
+              cardId,
+              pluginId: plugin.id,
+              appId: target.appId,
+              chatId: sent.chatId ?? target.chatId,
+              chatType: target.chatType,
+              messageId: sent.messageId,
+              sessionId: event.sessionId,
+              ...(event.taskId ? { taskId: event.taskId } : {}),
+              instanceId,
+              ...(isAsk ? { questionId: instanceId } : {}),
+              spec: extracted.spec,
+              ...(stored.webBaseUrl ? { webBaseUrl: stored.webBaseUrl } : {}),
+              createdAt: now()
+            };
+            await options.cardMappings!.save({
+              id: `${channel}:${cardId}`,
+              channel,
+              externalId: cardId,
+              sessionId: event.sessionId,
+              extra: JSON.stringify(record),
+              createdAt: record.createdAt
+            });
+          })().catch(error => {
+            app.log.warn({ error, sessionId: event.sessionId, pluginId: extracted.pluginId }, '网页轮次结束桥接发送飞书交互插件卡片失败');
+          });
+        }, 450);
+        timer.unref();
+        bridgeTimers.add(timer);
+      })
+    : undefined;
+
   app.addHook('onClose', async () => {
+    unsubscribePluginInteraction?.();
+    unsubscribeTurnBridge?.();
+    for (const timer of bridgeTimers) clearTimeout(timer);
+    bridgeTimers.clear();
     clearFallbackCoordinator();
     listener.stop();
   });
@@ -642,7 +833,10 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
             undefined,
             (chatId, senderOpenId) => options.agentTools?.isConfiguredPeer(botConfig.appId, chatId, senderOpenId) ?? Promise.resolve(false),
             options.cardMappings,
-            options.config
+            options.config,
+            options.askUserQuestion,
+            resolvedOutputPlugins,
+            resolvedPluginAdapters
           );
           fallbackCoordinators.set(botConfig.appId, coordinator);
         }

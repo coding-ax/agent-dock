@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Dices, FolderOpen, LoaderCircle, MessageSquarePlus, PawPrint, RefreshCw } from 'lucide-react';
+import type { OutputPluginCatalogItem, OutputPluginsGlobalConfig } from '@agent-dock/agent-dock-shared';
 import { api, type Agent, type AssistantState, type Session } from '../api';
 import { AgentIcon } from '../AgentIcon';
 import { CompactSelect } from '../CompactSelect';
@@ -67,11 +68,14 @@ function TargetToggle({ value, name, onChange }: { value: HomeTarget; name: stri
  * 小猫蹦一下、冒爱心、项圈一笔画上、名牌荡出来，然后形变进主会话的头像位。
  * 认领后：首页的大猫戴着项圈打招呼，点它进主会话；输入框可以直接「交给它」。
  */
-export function HomeStage({ agents, sessions, editorRef, onCreated }: {
+export function HomeStage({ agents, sessions, editorRef, onCreated, askUserQuestionXmlEnabled, outputPluginItems, outputPluginsGlobalConfig }: {
   agents: Agent[];
   sessions: Session[];
   editorRef?: RefObject<ComposerEditorHandle | null>;
   onCreated(session: Session): void;
+  askUserQuestionXmlEnabled?: boolean;
+  outputPluginItems?: OutputPluginCatalogItem[];
+  outputPluginsGlobalConfig?: OutputPluginsGlobalConfig;
 }) {
   const qc = useQueryClient();
   const info = useCompanion();
@@ -301,7 +305,7 @@ export function HomeStage({ agents, sessions, editorRef, onCreated }: {
     </div>;
   }
 
-  return <DraftComposer editorRef={editorRef} agents={agents} sessions={sessions} onCreated={onCreated} hero={hero} collapsed={adopting && !adopted}
+  return <DraftComposer editorRef={editorRef} agents={agents} sessions={sessions} onCreated={onCreated} hero={hero} collapsed={adopting && !adopted} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginItems={outputPluginItems} outputPluginsGlobalConfig={outputPluginsGlobalConfig}
     companion={companionMode && info.mainSession ? {
       sessionId: info.mainSession.id,
       agentId: info.mainSession.agentId,

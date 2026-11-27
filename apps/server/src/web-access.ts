@@ -176,6 +176,8 @@ export function sessionTokenAllows(method: string, pathname: string, sessionId: 
     || pathname === '/api/lark/config' || pathname === '/api/system/capabilities'
     || pathname === '/api/system/skills' || pathname === '/api/system/update'
     || pathname === '/api/llm' || pathname === '/api/side-chat/config'
+    || pathname === '/api/ask-user-question/config'
+    || pathname === '/api/output-plugins'
     || pathname === '/api/themes'
     || pathname === '/api/themes/stream'
     || pathname === '/api/notifications/stream';

@@ -28,6 +28,11 @@ const files = [
   'FileExplorerPanel.tsx',
   'Composer.tsx',
   'AiTextAssist.tsx',
+  'AskUserQuestionCard.tsx',
+  'AskUserQuestionSettingsPanel.tsx',
+  'output-plugins/OutputPluginsCenterPanel.tsx',
+  'output-plugins/ConfirmActionCard.tsx',
+  'output-plugins/DeclarativeOutputPluginCard.tsx',
   'ThemeStudioDialog.tsx',
   'ThemeToggle.tsx'
 ];

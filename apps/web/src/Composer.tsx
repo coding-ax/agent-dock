@@ -1,6 +1,8 @@
 import { type Dispatch, type ReactNode, type RefObject, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useEventListener } from 'ahooks';
-import { AlertCircle, ArrowUp, BookOpen, Bot, BrainCircuit, Check, ChevronDown, CornerDownLeft, CornerDownRight, File, FilePenLine, Folder, FolderOpen, Gauge, ImageIcon, ListEnd, Paperclip, RefreshCw, Search, Sparkles, Square, Undo2, X, Zap } from 'lucide-react';
+import { AlertCircle, ArrowUp, BookOpen, Bot, BrainCircuit, Check, ChevronDown, CornerDownLeft, CornerDownRight, File, FilePenLine, Folder, FolderOpen, Gauge, ImageIcon, ListEnd, Paperclip, Puzzle, RefreshCw, RotateCcw, Search, Settings2, Sparkles, Square, Undo2, X, Zap } from 'lucide-react';
+import { Switch } from 'antd';
+import { ASK_USER_QUESTION_XML_TAG, BUILTIN_ASK_USER_QUESTION_PLUGIN_ID } from '@agent-dock/agent-dock-shared';
 import type { Agent, AgentModel, LlmAssistContext, SessionUsageDetail, SkillReference, Task } from './api';
 import type { QueuedTask } from './timeline';
 import { AgentIcon } from './AgentIcon';
@@ -9,13 +11,29 @@ import { ComposerEditor, type ComposerEditorHandle } from './ComposerEditor';
 import { ExitGate } from './ExitGate';
 import { HoverTooltip } from './HoverTooltip';
 import { Spinner } from './Loaders';
+import { PluginIcon } from './output-plugins/PluginIcon';
 import { composerKeyAction, createCompositionGuard } from './composer-keyboard';
 import { composerSubmitValue, filterAgentModels, referenceFromUpload, replaceSlashQuery, shouldDismissComposerPanel, slashQuery, uploadSessionFile, workspaceLabel as displayWorkspaceLabel, type ComposerReference, type ContextStats, type ModelReadiness } from './composer-utils';
 import type { LiveStreamTpsResult } from './live-tps';
 
+export interface ComposerOutputPluginItem {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  tagName: string;
+  builtin: boolean;
+  /** 本会话或草稿当前生效状态。 */
+  enabled: boolean;
+  /** 全局默认状态。 */
+  globalEnabled: boolean;
+  /** 本会话或草稿显式覆写（boolean = 覆写，null = 跟随全局默认）。 */
+  override: boolean | null;
+}
+
 type SendMode = 'queue' | 'interrupt';
 type ComposerCommand = { name: string; description: string };
-type ComposerPanel = 'commands' | 'models' | 'reasoning' | 'agent' | 'workspace' | 'systemPrompt' | undefined;
+type ComposerPanel = 'commands' | 'models' | 'reasoning' | 'agent' | 'workspace' | 'systemPrompt' | 'plugins' | undefined;
 
 const supportedCommands = new Set(['goal', 'plan', 'fast']);
 
@@ -91,7 +109,7 @@ export function QueuedTasks({ tasks, cancellingTaskId, steeringTaskId, editingTa
   </div>;
 }
 
-export function Composer({ sessionId, state, value, references, quotedText, onClearQuote, sending, sendingMode, mode, queuedTasks, cancellingTaskId, steeringTaskId, editingTaskId, skills, models, reasoningEfforts, currentModel, currentReasoningEffort, advertisedCommands, builtinCommands = [], modelReadiness, switchingModel, switchingReasoningEffort, pendingModel, pendingReasoningEffort, modelJustSwitched = false, reasoningJustSwitched = false, refreshingModels, editorRef: externalEditorRef, draft, placeholder, sendLabel: sendLabelOverride, lockedTarget, agents, currentAgentId, onAgentChange, workspace, onWorkspaceChange, workspaceSuggestion, workspaceOptions, homeDirectory, directoryPickerAvailable, pickingDirectory, onPickDirectory, onAttachFile, aiContext, systemPrompt, onSystemPromptChange, onChange, onReferencesChange, onModeChange, onSubmit, onInterrupt, onCancelQueued, onSteerQueued, onEditQueued, onModelChange, onReasoningEffortChange, onRefreshModels }: {
+export function Composer({ sessionId, state, value, references, quotedText, onClearQuote, sending, sendingMode, mode, queuedTasks, cancellingTaskId, steeringTaskId, editingTaskId, skills, models, reasoningEfforts, currentModel, currentReasoningEffort, advertisedCommands, builtinCommands = [], modelReadiness, switchingModel, switchingReasoningEffort, pendingModel, pendingReasoningEffort, modelJustSwitched = false, reasoningJustSwitched = false, refreshingModels, editorRef: externalEditorRef, draft, placeholder, sendLabel: sendLabelOverride, lockedTarget, agents, currentAgentId, onAgentChange, workspace, onWorkspaceChange, workspaceSuggestion, workspaceOptions, homeDirectory, directoryPickerAvailable, pickingDirectory, onPickDirectory, onAttachFile, aiContext, systemPrompt, onSystemPromptChange, outputPlugins, switchingOutputPluginId, outputPluginsJustSwitched = false, onSetOutputPlugin, onResetAllOutputPlugins, onOpenOutputPluginsCenter, askUserQuestionEnabled, askUserQuestionOverride, switchingAskUserQuestion = false, askUserQuestionJustSwitched = false, onToggleAskUserQuestion, onChange, onReferencesChange, onModeChange, onSubmit, onInterrupt, onCancelQueued, onSteerQueued, onEditQueued, onModelChange, onReasoningEffortChange, onRefreshModels }: {
   sessionId: string; state: string; value: string; references: ComposerReference[]; quotedText?: string; onClearQuote?(): void; sending: boolean; sendingMode?: SendMode; mode: SendMode; queuedTasks: QueuedTask[]; cancellingTaskId?: string; steeringTaskId?: string; editingTaskId?: string;
   // 输入框由 CodeMirror 承载（Markdown 实时编辑）；光标位置由编辑器回报，用于 / 命令查询。
   skills: SkillReference[]; models: AgentModel[]; reasoningEfforts: AgentModel[]; currentModel?: string; currentReasoningEffort?: string; context?: ContextStats; sessionUsage?: SessionUsageDetail; liveTps?: LiveStreamTpsResult; advertisedCommands: Array<{ name: string; description: string }>; builtinCommands?: Array<{ name: string; description: string }>; modelReadiness: ModelReadiness; switchingModel: boolean; switchingReasoningEffort: boolean; pendingModel?: string; pendingReasoningEffort?: string; modelJustSwitched?: boolean; reasoningJustSwitched?: boolean; refreshingModels: boolean;
@@ -125,6 +143,22 @@ export function Composer({ sessionId, state, value, references, quotedText, onCl
   /** 草稿态可选的系统提示词，创建会话时一并传入。 */
   systemPrompt?: string;
   onSystemPromptChange?(value: string): void;
+  /** 当前会话（或新建草稿）可用的全部纯 XML 交互插件列表及其状态。 */
+  outputPlugins?: ComposerOutputPluginItem[];
+  switchingOutputPluginId?: string;
+  outputPluginsJustSwitched?: boolean;
+  /** 为单个插件设置本会话覆写（boolean = 显式覆写，null = 恢复跟随全局默认）。 */
+  onSetOutputPlugin?(pluginId: string, enabled: boolean | null): void;
+  /** 将本会话/草稿全部插件覆写清空，统一恢复跟随全局默认。 */
+  onResetAllOutputPlugins?(): void;
+  /** 从插件快捷面板直达设置页「交互插件中心」。 */
+  onOpenOutputPluginsCenter?(): void;
+  /** 向后兼容旧单插件 props（未传 `outputPlugins` 时自动合成为单个插件项）。 */
+  askUserQuestionEnabled?: boolean;
+  askUserQuestionOverride?: boolean | null;
+  switchingAskUserQuestion?: boolean;
+  askUserQuestionJustSwitched?: boolean;
+  onToggleAskUserQuestion?(): void;
   onChange(value: string): void; onReferencesChange(value: ComposerReference[] | ((current: ComposerReference[]) => ComposerReference[])): void; onModeChange(mode: SendMode): void; onSubmit(value: string): void; onInterrupt(): void; onCancelQueued(taskId: string): void; onSteerQueued(taskId: string): void; onEditQueued(task: Task): void; onModelChange(model: string): void; onReasoningEffortChange(reasoningEffort: string): void; onRefreshModels(): void;
 }) {
   const [panel, setPanel] = useState<ComposerPanel>();
@@ -217,6 +251,43 @@ export function Composer({ sessionId, state, value, references, quotedText, onCl
       : `思考深度：${reasoningDisplay}`;
   const modelChipState = switchingModel ? 'switching' : modelCatalogLoading ? 'loading' : modelJustSwitched ? 'saved' : 'idle';
   const reasoningChipState = switchingReasoningEffort ? 'switching' : reasoningCatalogLoading ? 'loading' : reasoningJustSwitched ? 'saved' : 'idle';
+  const effectiveOutputPlugins = useMemo<ComposerOutputPluginItem[]>(() => {
+    if (outputPlugins && outputPlugins.length > 0) return outputPlugins;
+    if (onToggleAskUserQuestion) {
+      const enabled = Boolean(askUserQuestionEnabled);
+      const override = typeof askUserQuestionOverride === 'boolean' ? askUserQuestionOverride : null;
+      return [{
+        id: BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+        name: '询问卡片（AskUserQuestion）',
+        description: '需要确认或决策时在回答末尾呈现交互选项卡片',
+        icon: 'message-circle-question',
+        tagName: ASK_USER_QUESTION_XML_TAG,
+        builtin: true,
+        enabled,
+        globalEnabled: override === null ? enabled : !override,
+        override
+      }];
+    }
+    return [];
+  }, [outputPlugins, onToggleAskUserQuestion, askUserQuestionEnabled, askUserQuestionOverride]);
+  const enabledPluginCount = effectiveOutputPlugins.filter(item => item.enabled).length;
+  const overriddenPluginCount = effectiveOutputPlugins.filter(item => item.override !== null).length;
+  const pluginsJustSwitched = outputPluginsJustSwitched || askUserQuestionJustSwitched;
+  const pluginsBusy = Boolean(switchingOutputPluginId) || switchingAskUserQuestion;
+  const pluginsTriggerTooltip = effectiveOutputPlugins.length === 0
+    ? '交互插件'
+    : draft
+      ? `交互插件：新会话已启用 ${enabledPluginCount} / ${effectiveOutputPlugins.length}${overriddenPluginCount ? `（含 ${overriddenPluginCount} 项自定义）` : ''}`
+      : `交互插件：本会话已启用 ${enabledPluginCount} / ${effectiveOutputPlugins.length}${overriddenPluginCount ? `（含 ${overriddenPluginCount} 项独立覆写）` : ' · 跟随全局'}`;
+  const handlePluginToggle = (plugin: ComposerOutputPluginItem, nextEnabled: boolean) => {
+    if (onSetOutputPlugin) {
+      onSetOutputPlugin(plugin.id, nextEnabled);
+      return;
+    }
+    if (plugin.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID && onToggleAskUserQuestion) {
+      onToggleAskUserQuestion();
+    }
+  };
   const sendLabel = modelReadiness.kind === 'blocked' && !lockedTarget ? modelReadiness.reason : sendLabelOverride ?? (draft ? '创建会话并发送' : '发送消息');
   const query = slashQuery(beforeCaret, beforeCaret.length);
   const commands = useMemo(() => {
@@ -381,8 +452,8 @@ export function Composer({ sessionId, state, value, references, quotedText, onCl
 
   return <div className={draft ? 'w-full' : 'bg-gradient-to-t from-canvas via-canvas to-transparent px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-8 sm:pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:pt-7'}><div className="mx-auto w-full max-w-[760px]">
     {!draft && <QueuedTasks tasks={queuedTasks} cancellingTaskId={cancellingTaskId} steeringTaskId={steeringTaskId} editingTaskId={editingTaskId} onCancel={onCancelQueued} onSteer={onSteerQueued} onEdit={onEditQueued}/>}
-    <div onDrop={onDrop} onDragOver={onDragOver} data-interrupting-send={interruptingSend ? '' : undefined} className={`relative rounded-[20px] border bg-white p-2 shadow-[0_1px_2px_rgba(0,0,0,.04)] transition-[border-color,box-shadow,background-color] duration-150 ease-out ${interruptingSend ? 'border-orange-200 ring-1 ring-orange-200/70' : 'border-zinc-200 hover:border-zinc-300 focus-within:border-zinc-400'} ${queuedTasks.length ? 'rounded-t-[10px]' : ''} ${composerFlash.flashClass}`}>
-      <ExitGate open={Boolean(commandPanel || panel === 'models' || panel === 'reasoning' || panel === 'agent' || panel === 'workspace' || panel === 'systemPrompt')} ms={150}><div ref={popover} data-placement="top" className="ui-popover absolute bottom-[calc(100%+8px)] left-0 z-20 w-full overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-[0_18px_55px_rgba(24,24,27,.16)] sm:left-2 sm:w-[460px]">
+    <div onDrop={onDrop} onDragOver={onDragOver} data-interrupting-send={interruptingSend ? '' : undefined} className={`relative rounded-[20px] border bg-white p-1.5 shadow-[0_1px_2px_rgba(0,0,0,.04)] transition-[border-color,box-shadow,background-color] duration-150 ease-out sm:p-2 ${interruptingSend ? 'border-orange-200 ring-1 ring-orange-200/70' : 'border-zinc-200 hover:border-zinc-300 focus-within:border-zinc-400'} ${queuedTasks.length ? 'rounded-t-[10px]' : ''} ${composerFlash.flashClass}`}>
+      <ExitGate open={Boolean(commandPanel || panel === 'models' || panel === 'reasoning' || panel === 'agent' || panel === 'workspace' || panel === 'systemPrompt' || panel === 'plugins')} ms={150}><div ref={popover} data-placement="top" className="ui-popover absolute bottom-[calc(100%+8px)] left-0 z-20 w-full overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-[0_18px_55px_rgba(24,24,27,.16)] sm:left-2 sm:w-[460px]">
         {commandPanel && <div className="max-h-80 overflow-y-auto p-1.5">{visibleCommands.length > 0 && <div className="px-2.5 pb-1.5 pt-1 text-[12px] font-semibold text-zinc-400">命令</div>}{visibleCommands.map(command => <button key={command.name} type="button" onMouseDown={event => event.preventDefault()} onClick={() => chooseCommand(command)} className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-zinc-100"><span className="grid h-7 w-7 place-items-center rounded-lg bg-zinc-100 font-mono text-[13px] text-zinc-700">/</span><span className="min-w-0"><span className="block text-[12px] font-medium text-zinc-800">/{command.name}</span><span className="block truncate text-[12px] text-zinc-500">{command.description || 'Agent 提供的命令'}</span></span></button>)}{visibleSkills.length > 0 && <div className="mx-2 mt-1 border-t border-zinc-100 px-0.5 pb-1 pt-2 text-[12px] font-semibold text-zinc-400">Skills</div>}{visibleSkills.map(skill => <button key={skill.path} type="button" onMouseDown={event => event.preventDefault()} onClick={() => chooseSkill(skill.name)} className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-zinc-100"><span className="grid h-7 w-7 place-items-center rounded-lg bg-amber-50 text-amber-700"><Sparkles size={13}/></span><span className="min-w-0"><span className="block text-[12px] font-medium text-zinc-800">{skill.name}</span><span className="block truncate text-[12px] text-zinc-500">{skill.description || skill.path}</span></span></button>)}{!visibleCommands.length && !visibleSkills.length && <div className="px-3 py-5 text-center text-xs text-zinc-500">没有匹配项</div>}</div>}
         {panel === 'models' && <div><div className="flex items-center border-b border-zinc-100 px-3 py-2.5"><Gauge size={13} className="mr-2 text-zinc-500"/><span className="text-xs font-semibold">切换模型</span>{refreshingModels && <span className="ml-auto text-[12px] text-zinc-400">正在刷新…</span>}<button type="button" disabled={refreshingModels} onClick={onRefreshModels} className={`${refreshingModels ? 'ml-1' : 'ml-auto'} grid h-7 w-7 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-100 disabled:cursor-wait disabled:text-zinc-400`} aria-label={refreshingModels ? '正在刷新模型列表' : '刷新模型列表'} title={refreshingModels ? '正在刷新模型列表' : '刷新模型列表'}><RefreshCw size={12} className={refreshingModels ? 'animate-spin' : ''}/></button></div>
           <div className="flex items-center gap-1.5 border-b border-zinc-100 px-2.5 py-2"><Search size={13} className="shrink-0 text-zinc-400"/><input autoFocus value={modelQuery} onChange={event => setModelQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (modelQuery) setModelQuery(''); else setPanel(undefined); } else if (event.key === 'Enter') { event.preventDefault(); if (visibleModels[0]) { onModelChange(visibleModels[0].id); setPanel(undefined); } } }} placeholder="搜索名称或模型 ID" aria-label="搜索模型" spellCheck={false} className="h-8 min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 text-[12px] text-zinc-700 outline-none placeholder:text-zinc-400 focus:border-zinc-400"/>{modelQuery && <button type="button" onClick={() => setModelQuery('')} aria-label="清空模型搜索" className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"><X size={12}/></button>}</div>
@@ -460,6 +531,108 @@ export function Composer({ sessionId, state, value, references, quotedText, onCl
             </div>
           </div>
         </div>}
+        {panel === 'plugins' && effectiveOutputPlugins.length > 0 && <div data-testid="composer-output-plugins-popover">
+          <div className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-2.5">
+            <Puzzle size={13} className="shrink-0 text-sky-600 dark:text-sky-400"/>
+            <span className="text-xs font-semibold text-zinc-900">交互插件</span>
+            <span className="rounded-full border border-zinc-200 bg-zinc-50 px-1.5 py-px text-[10.5px] font-medium tabular-nums text-zinc-500">
+              {enabledPluginCount} / {effectiveOutputPlugins.length} 已启用
+            </span>
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              {overriddenPluginCount > 0 && onResetAllOutputPlugins && (
+                <button
+                  type="button"
+                  data-testid="composer-plugins-reset-all"
+                  onClick={() => onResetAllOutputPlugins()}
+                  className="ui-press inline-flex h-6 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+                >
+                  <RotateCcw size={11}/>
+                  <span>恢复默认</span>
+                </button>
+              )}
+              {onOpenOutputPluginsCenter && (
+                <button
+                  type="button"
+                  data-testid="composer-plugins-open-center"
+                  onClick={() => { setPanel(undefined); onOpenOutputPluginsCenter(); }}
+                  className="ui-press inline-flex h-6 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+                >
+                  <Settings2 size={11}/>
+                  <span>管理全部</span>
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="border-b border-zinc-100 bg-zinc-50/60 px-3 py-1.5 text-[11px] text-zinc-500">
+            {draft ? '新建会话生效；关闭的插件不注入 XML 协议，零 Token 消耗' : '仅本会话生效；关闭的插件不注入 XML 协议，零 Token 消耗'}
+          </div>
+          <div className="max-h-72 divide-y divide-zinc-100 overflow-y-auto p-1.5">
+            {effectiveOutputPlugins.map(plugin => {
+              const rowPending = switchingOutputPluginId === plugin.id
+                || (plugin.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID && switchingAskUserQuestion);
+              const isOverridden = plugin.override !== null;
+              return (
+                <div
+                  key={plugin.id}
+                  data-testid={`composer-plugin-row-${plugin.id}`}
+                  data-plugin-id={plugin.id}
+                  data-state={plugin.enabled ? 'on' : 'off'}
+                  data-override={isOverridden ? 'explicit' : 'inherit'}
+                  className="flex items-start gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-zinc-50"
+                >
+                  <span className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg border ${
+                    plugin.enabled
+                      ? 'border-sky-200/90 bg-sky-50 text-sky-700 dark:text-sky-300'
+                      : 'border-zinc-200 bg-zinc-50 text-zinc-400'
+                  }`}>
+                    <PluginIcon name={plugin.icon} size={13}/>
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="truncate text-[12.5px] font-medium text-zinc-900">{plugin.name}</span>
+                      {!plugin.builtin && (
+                        <span className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                          扩展
+                        </span>
+                      )}
+                      {isOverridden ? (
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[10px] font-medium text-sky-700 dark:text-sky-300">
+                          <span>已覆写</span>
+                          {onSetOutputPlugin && (
+                            <button
+                              type="button"
+                              aria-label={`恢复「${plugin.name}」跟随全局默认`}
+                              onClick={() => onSetOutputPlugin(plugin.id, null)}
+                              className="ml-0.5 underline decoration-sky-400/70 hover:text-sky-900 dark:hover:text-sky-100"
+                            >
+                              重置
+                            </button>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[10.5px] text-zinc-400">
+                          跟随全局
+                        </span>
+                      )}
+                    </div>
+                    <p className="mb-0 mt-0.5 line-clamp-1 text-[11px] leading-4 text-zinc-500">
+                      {plugin.description}
+                    </p>
+                  </div>
+                  <Switch
+                    size="small"
+                    className="mt-1 shrink-0"
+                    aria-label={`切换插件：${plugin.name}`}
+                    checked={plugin.enabled}
+                    loading={rowPending}
+                    disabled={sending}
+                    onChange={checked => handlePluginToggle(plugin, checked)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>}
       </div></ExitGate>
       {uploadError && <div className="ui-status-banner-in mx-2.5 mb-1 flex items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 py-1.5 text-[12px] text-red-700"><AlertCircle size={12} className="shrink-0"/><span className="min-w-0 flex-1 truncate" title={uploadError}>{uploadError}</span><button type="button" onClick={() => setUploadError(undefined)} aria-label="关闭上传错误提示" className="shrink-0 text-red-400 hover:text-red-700"><X size={11}/></button></div>}
       {quotedText && <div data-testid="composer-quote-bar" className="ui-status-banner-in mx-1.5 mb-1 mt-0.5 flex items-start gap-2 rounded-xl border border-zinc-200/80 bg-zinc-50/90 px-2.5 py-2 text-[12px] leading-[1.45] text-zinc-600">
@@ -472,11 +645,12 @@ export function Composer({ sessionId, state, value, references, quotedText, onCl
       </div>}
       {references.length > 0 && <div className="flex flex-wrap gap-1.5 px-2.5 pb-1.5 pt-1">{references.map(reference => <span key={reference.id} className="flex max-w-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1 text-[12px] text-zinc-600">{reference.kind === 'image' ? (reference.url ? <img src={reference.url} alt={reference.label} className="h-5 w-5 rounded object-cover" /> : <ImageIcon size={11}/>) : reference.kind === 'file' ? <File size={11}/> : <Sparkles size={11}/>}<span className="truncate font-mono">{reference.label}</span><button type="button" onClick={() => onReferencesChange(current => current.filter(item => item.id !== reference.id))} aria-label={`移除引用 ${reference.label}`} className="text-zinc-400 hover:text-zinc-800"><X size={10}/></button></span>)}</div>}
       {uploading.length > 0 && <div className="flex items-center gap-1.5 px-2.5 pb-1 text-[12px] text-zinc-500"><RefreshCw size={11} className="shrink-0 animate-spin text-zinc-400"/><span className="truncate">正在上传 {uploading.length > 1 ? `${uploading.length} 个文件` : uploading[0]}…</span></div>}
-      <ComposerEditor ref={node => { editor.current = node; if (externalEditorRef) externalEditorRef.current = node; }} value={value} ariaLabel="消息" placeholder={placeholder ?? <><span className="hidden sm:inline">输入消息，Enter 发送，Shift+Enter 换行；/ 选择 Skill 或命令，可粘贴/拖入文件</span><span className="sm:hidden">输入消息，/ 选择命令</span></>} onChange={next => { onChange(next); if (panel !== 'models' && panel !== 'reasoning' && panel !== 'systemPrompt') setPanel(undefined); }} onCaretChange={setBeforeCaret} onContentChange={setEditorHasContent} onKeydown={keyboard} compositionGuard={compositionGuard} onFiles={files => { for (const file of files) void uploadFile(file); }}/>
+      <ComposerEditor ref={node => { editor.current = node; if (externalEditorRef) externalEditorRef.current = node; }} value={value} ariaLabel="消息" placeholder={placeholder ?? <><span className="hidden sm:inline">输入消息，Enter 发送，Shift+Enter 换行；/ 选择 Skill 或命令，可粘贴/拖入文件</span><span className="sm:hidden">输入消息，/ 选择命令</span></>} onChange={next => { onChange(next); if (panel !== 'models' && panel !== 'reasoning' && panel !== 'systemPrompt' && panel !== 'plugins') setPanel(undefined); }} onCaretChange={setBeforeCaret} onContentChange={setEditorHasContent} onKeydown={keyboard} compositionGuard={compositionGuard} onFiles={files => { for (const file of files) void uploadFile(file); }}/>
       {aiUndo?.canUndo && <div className="mx-1.5 mb-1 flex items-center justify-end">
         <AiUndoCapsule undoDepth={aiUndo.undoDepth} lastLabel={aiUndo.lastLabel} undoing={aiUndo.undoing} onUndo={aiUndo.undo} onDismiss={aiUndo.clearUndo}/>
       </div>}
-      <div className="flex min-w-0 items-center gap-0.5 px-1 pb-1 sm:gap-1"><button type="button" data-composer-panel-trigger onClick={() => setPanel(panel === 'commands' ? undefined : 'commands')} className="ui-press grid h-8 w-7 shrink-0 place-items-center rounded-lg font-mono text-[16px] text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:w-8" aria-label="打开命令与 Skill 菜单" title="命令与 Skill（/）">/</button><button type="button" onClick={() => imageInput.current?.click()} className="ui-press grid h-8 w-7 shrink-0 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:w-8" aria-label="上传文件" title={uploading.length ? '文件上传中…' : '上传文件'}>{uploading.length > 0 ? <RefreshCw size={14} className="animate-spin"/> : <Paperclip size={14}/>}</button><input ref={imageInput} type="file" multiple className="hidden" onChange={event => { const files = event.target.files; if (files) { for (const file of files) void uploadFile(file); } event.target.value = ''; }}/><div className="composer-toolbar-scroll no-scrollbar flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto sm:gap-1">{lockedTarget}{!lockedTarget && <>{draft && <button type="button" data-composer-panel-trigger onClick={() => setPanel(panel === 'agent' ? undefined : 'agent')} title={currentAgent?.name ?? '选择 Agent'} className={`ui-press flex h-8 min-w-0 max-w-[104px] shrink-0 items-center gap-1 rounded-lg px-1.5 text-[12px] hover:bg-zinc-100 hover:text-zinc-800 sm:max-w-40 sm:gap-1.5 sm:px-2 ${panel === 'agent' ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}><AgentIcon agentId={currentAgentId} agentName={currentAgent?.name} size={12}/><span className="truncate">{currentAgent?.name ?? '选择 Agent'}</span><ChevronDown size={10} className={`shrink-0 transition-transform duration-150 ${panel === 'agent' ? 'rotate-180' : ''}`}/></button>}{draft && <button type="button" data-composer-panel-trigger onClick={() => { setWsDraft(workspacePath); setPanel(panel === 'workspace' ? undefined : 'workspace'); }} title={workspacePath || '工作目录'} className={`ui-press flex h-8 min-w-0 max-w-[104px] shrink-0 items-center gap-1 rounded-lg px-1.5 text-[12px] hover:bg-zinc-100 hover:text-zinc-800 sm:max-w-40 sm:gap-1.5 sm:px-2 ${panel === 'workspace' ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}><Folder size={12} className="shrink-0"/><span className="truncate">{workspaceLabel}</span><ChevronDown size={10} className={`shrink-0 transition-transform duration-150 ${panel === 'workspace' ? 'rotate-180' : ''}`}/></button>}<button type="button" data-composer-panel-trigger data-testid="composer-model-trigger" data-state={modelChipState} aria-busy={switchingModel || modelCatalogLoading || undefined} onClick={() => { setModelQuery(''); setPanel(current => current === 'models' ? undefined : 'models'); }} title={modelTitle} className={`ui-press flex h-8 min-w-0 shrink-0 items-center gap-1 rounded-lg border px-1.5 text-[12px] transition-colors sm:gap-1.5 sm:px-2 ${switchingModel ? 'ui-chip-loading max-w-[120px] sm:max-w-[16rem]' : modelJustSwitched ? 'ui-chip-saved max-w-[104px] sm:max-w-[16rem]' : modelCatalogLoading ? 'max-w-[112px] border-zinc-200/80 bg-zinc-50 text-zinc-500 sm:max-w-[16rem]' : panel === 'models' ? 'max-w-[104px] border-transparent bg-zinc-100 text-zinc-900 sm:max-w-[16rem]' : 'max-w-[104px] border-transparent text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:max-w-[16rem]'}`}>{switchingModel ? <Spinner size={12} label="正在切换模型" className="shrink-0 text-sky-600"/> : modelCatalogLoading ? <Spinner size={12} label="正在读取模型列表" className="shrink-0 text-zinc-400"/> : modelJustSwitched ? <Check key="model-saved" size={12} className="ui-icon-pop shrink-0 text-emerald-600"/> : <Gauge size={12} className="shrink-0"/>}<span className="truncate sm:hidden">{modelCompactDisplay}</span><span className="hidden max-w-[220px] truncate sm:inline">{modelDisplay}</span><ChevronDown size={10} className={`shrink-0 transition-transform duration-150 ${panel === 'models' ? 'rotate-180' : ''}`}/></button><button type="button" data-composer-panel-trigger data-testid="composer-reasoning-trigger" data-state={reasoningChipState} aria-busy={switchingReasoningEffort || reasoningCatalogLoading || undefined} onClick={() => setPanel(panel === 'reasoning' ? undefined : 'reasoning')} title={reasoningTitle} className={`ui-press flex h-8 min-w-0 shrink-0 items-center gap-1 rounded-lg border px-1.5 text-[12px] transition-colors sm:gap-1.5 sm:px-2 ${switchingReasoningEffort ? 'ui-chip-loading max-w-[96px] sm:max-w-[11rem]' : reasoningJustSwitched ? 'ui-chip-saved max-w-[96px] sm:max-w-[10rem]' : reasoningCatalogLoading ? 'max-w-[96px] border-zinc-200/80 bg-zinc-50 text-zinc-500 sm:max-w-[10rem]' : panel === 'reasoning' ? 'max-w-[96px] border-transparent bg-zinc-100 text-zinc-900 sm:max-w-[10rem]' : 'max-w-[96px] border-transparent text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:max-w-[10rem]'}`}>{switchingReasoningEffort ? <Spinner size={12} label="正在切换思考深度" className="shrink-0 text-sky-600"/> : reasoningCatalogLoading ? <Spinner size={12} label="正在读取思考深度" className="shrink-0 text-zinc-400"/> : reasoningJustSwitched ? <Check key="reasoning-saved" size={12} className="ui-icon-pop shrink-0 text-emerald-600"/> : <BrainCircuit size={12} className="shrink-0"/>}<span className="truncate">{reasoningTriggerDisplay}</span><ChevronDown size={10} className={`shrink-0 transition-transform duration-150 ${panel === 'reasoning' ? 'rotate-180' : ''}`}/></button>{draft && onSystemPromptChange && <HoverTooltip content="会话 System Prompt" side="top"><button type="button" data-composer-panel-trigger data-testid="draft-system-prompt-trigger" onClick={() => setPanel(panel === 'systemPrompt' ? undefined : 'systemPrompt')} className={`ui-press flex h-8 min-w-0 shrink-0 items-center gap-1 rounded-lg px-1.5 text-[12px] sm:gap-1.5 sm:px-2 ${panel === 'systemPrompt' || systemPrompt?.trim() ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800'}`}><BookOpen size={12} className="shrink-0"/><span className="whitespace-nowrap">提示词</span>{Boolean(systemPrompt?.trim()) && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"/>}</button></HoverTooltip>}</>}</div><div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
+      <div className="flex min-w-0 items-center gap-0.5 px-0.5 pb-1 sm:gap-1 sm:px-1"><button type="button" data-composer-panel-trigger onClick={() => setPanel(panel === 'commands' ? undefined : 'commands')} className="ui-press grid h-8 w-6 shrink-0 place-items-center rounded-lg font-mono text-[16px] text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:w-8" aria-label="打开命令与 Skill 菜单" title="命令与 Skill（/）">/</button><button type="button" onClick={() => imageInput.current?.click()} className="ui-press grid h-8 w-6 shrink-0 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:w-8" aria-label="上传文件" title={uploading.length ? '文件上传中…' : '上传文件'}>{uploading.length > 0 ? <RefreshCw size={14} className="animate-spin"/> : <Paperclip size={14}/>}</button><input ref={imageInput} type="file" multiple className="hidden" onChange={event => { const files = event.target.files; if (files) { for (const file of files) void uploadFile(file); } event.target.value = ''; }}/><div className="composer-toolbar-scroll no-scrollbar flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto sm:gap-1">{lockedTarget}{!lockedTarget && <>{draft && <button type="button" data-composer-panel-trigger onClick={() => setPanel(panel === 'agent' ? undefined : 'agent')} title={currentAgent?.name ?? '选择 Agent'} className={`ui-press flex h-8 min-w-0 max-w-[100px] shrink-0 items-center gap-1 rounded-lg px-1.5 text-[12px] hover:bg-zinc-100 hover:text-zinc-800 sm:max-w-40 sm:gap-1.5 sm:px-2 ${panel === 'agent' ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}><AgentIcon agentId={currentAgentId} agentName={currentAgent?.name} size={12}/><span className="truncate">{currentAgent?.name ?? '选择 Agent'}</span><ChevronDown size={10} className={`shrink-0 transition-transform duration-150 ${panel === 'agent' ? 'rotate-180' : ''}`}/></button>}{draft && <button type="button" data-composer-panel-trigger onClick={() => { setWsDraft(workspacePath); setPanel(panel === 'workspace' ? undefined : 'workspace'); }} title={workspacePath || '工作目录'} className={`ui-press flex h-8 min-w-0 max-w-[100px] shrink-0 items-center gap-1 rounded-lg px-1.5 text-[12px] hover:bg-zinc-100 hover:text-zinc-800 sm:max-w-40 sm:gap-1.5 sm:px-2 ${panel === 'workspace' ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}><Folder size={12} className="shrink-0"/><span className="truncate">{workspaceLabel}</span><ChevronDown size={10} className={`shrink-0 transition-transform duration-150 ${panel === 'workspace' ? 'rotate-180' : ''}`}/></button>}<button type="button" data-composer-panel-trigger data-testid="composer-model-trigger" data-state={modelChipState} aria-busy={switchingModel || modelCatalogLoading || undefined} onClick={() => { setModelQuery(''); setPanel(current => current === 'models' ? undefined : 'models'); }} title={modelTitle} className={`ui-press flex h-8 min-w-0 shrink-0 items-center gap-0.5 rounded-lg border px-1 text-[12px] transition-colors sm:gap-1.5 sm:px-2 ${switchingModel ? 'ui-chip-loading max-w-[120px] sm:max-w-[16rem]' : modelJustSwitched ? 'ui-chip-saved max-w-[104px] sm:max-w-[16rem]' : modelCatalogLoading ? 'max-w-[112px] border-zinc-200/80 bg-zinc-50 text-zinc-500 sm:max-w-[16rem]' : panel === 'models' ? 'max-w-[104px] border-transparent bg-zinc-100 text-zinc-900 sm:max-w-[16rem]' : 'max-w-[104px] border-transparent text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:max-w-[16rem]'}`}>{switchingModel ? <Spinner size={12} label="正在切换模型" className="shrink-0 text-sky-600"/> : modelCatalogLoading ? <Spinner size={12} label="正在读取模型列表" className="shrink-0 text-zinc-400"/> : modelJustSwitched ? <Check key="model-saved" size={12} className="ui-icon-pop shrink-0 text-emerald-600"/> : <Gauge size={12} className="shrink-0"/>}<span className="truncate sm:hidden">{modelCompactDisplay}</span><span className="hidden max-w-[220px] truncate sm:inline">{modelDisplay}</span><ChevronDown size={10} className={`shrink-0 transition-transform duration-150 ${panel === 'models' ? 'rotate-180' : ''}`}/></button><button type="button" data-composer-panel-trigger data-testid="composer-reasoning-trigger" data-state={reasoningChipState} aria-busy={switchingReasoningEffort || reasoningCatalogLoading || undefined} onClick={() => setPanel(panel === 'reasoning' ? undefined : 'reasoning')} title={reasoningTitle} className={`ui-press flex h-8 min-w-0 shrink-0 items-center gap-0.5 rounded-lg border px-1 text-[12px] transition-colors sm:gap-1.5 sm:px-2 ${switchingReasoningEffort ? 'ui-chip-loading max-w-[96px] sm:max-w-[11rem]' : reasoningJustSwitched ? 'ui-chip-saved max-w-[96px] sm:max-w-[10rem]' : reasoningCatalogLoading ? 'max-w-[96px] border-zinc-200/80 bg-zinc-50 text-zinc-500 sm:max-w-[10rem]' : panel === 'reasoning' ? 'max-w-[96px] border-transparent bg-zinc-100 text-zinc-900 sm:max-w-[10rem]' : 'max-w-[96px] border-transparent text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 sm:max-w-[10rem]'}`}>{switchingReasoningEffort ? <Spinner size={12} label="正在切换思考深度" className="shrink-0 text-sky-600"/> : reasoningCatalogLoading ? <Spinner size={12} label="正在读取思考深度" className="shrink-0 text-zinc-400"/> : reasoningJustSwitched ? <Check key="reasoning-saved" size={12} className="ui-icon-pop shrink-0 text-emerald-600"/> : <BrainCircuit size={12} className="shrink-0"/>}<span className="truncate">{reasoningTriggerDisplay}</span><ChevronDown size={10} className={`shrink-0 transition-transform duration-150 ${panel === 'reasoning' ? 'rotate-180' : ''}`}/></button>{draft && onSystemPromptChange && <HoverTooltip content="会话 System Prompt" side="top"><button type="button" data-composer-panel-trigger data-testid="draft-system-prompt-trigger" onClick={() => setPanel(panel === 'systemPrompt' ? undefined : 'systemPrompt')} className={`ui-press flex h-8 min-w-0 shrink-0 items-center gap-1 rounded-lg px-1.5 text-[12px] sm:gap-1.5 sm:px-2 ${panel === 'systemPrompt' || systemPrompt?.trim() ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800'}`}><BookOpen size={12} className="shrink-0"/><span className="whitespace-nowrap">提示词</span>{Boolean(systemPrompt?.trim()) && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"/>}</button></HoverTooltip>}</>}</div><div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1.5">
+        {effectiveOutputPlugins.length > 0 && <HoverTooltip content={pluginsTriggerTooltip} side="top"><button type="button" data-composer-panel-trigger data-testid="composer-output-plugins-trigger" data-state={enabledPluginCount > 0 ? 'on' : 'off'} data-enabled-count={enabledPluginCount} data-override-count={overriddenPluginCount} aria-haspopup="dialog" aria-expanded={panel === 'plugins'} aria-busy={pluginsBusy || undefined} aria-label={pluginsTriggerTooltip} disabled={sending} onClick={() => setPanel(current => current === 'plugins' ? undefined : 'plugins')} className={`ui-press relative inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-lg border px-1.5 text-[11.5px] font-medium transition-[background-color,border-color,color,box-shadow] duration-150 sm:h-8 sm:px-2 disabled:opacity-45 ${panel === 'plugins' ? 'border-sky-300 bg-sky-100/80 text-sky-800 dark:text-sky-200' : enabledPluginCount > 0 ? 'border-sky-200/90 bg-sky-50/85 text-sky-700 shadow-[0_0_0_1px_rgba(14,165,233,0.08)] hover:border-sky-300 hover:bg-sky-100/80 hover:text-sky-800 dark:text-sky-300' : 'border-transparent text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700'}`}><Puzzle key={pluginsJustSwitched ? `plugins-${enabledPluginCount}` : 'plugins-idle'} size={14} className={`shrink-0 ${pluginsJustSwitched ? 'ui-icon-pop' : ''}`}/>{enabledPluginCount > 0 && <span className="tabular-nums text-[11px] font-semibold leading-none">{enabledPluginCount}</span>}{overriddenPluginCount > 0 && <span aria-hidden="true" className="pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-sky-500"/>}</button></HoverTooltip>}
         <AiTextAssistControl
           mode="message_polish"
           variant="icon"
@@ -501,7 +675,7 @@ export function Composer({ sessionId, state, value, references, quotedText, onCl
           ? <button type="button" disabled aria-busy="true" aria-label="正在打断并发送" className="inline-flex h-8 shrink-0 cursor-wait items-center gap-1.5 whitespace-nowrap rounded-full bg-orange-100 px-3 text-[12px] font-medium text-orange-700"><Spinner size={12} label="正在打断"/><span>正在打断…</span></button>
           : !draft && busy && !value.trim() && !references.length
             ? <button type="button" onClick={onInterrupt} aria-label="中断当前任务" className="ui-press grid h-8 w-8 place-items-center rounded-full bg-zinc-900 text-white hover:bg-zinc-700 active:scale-95"><Square size={12} fill="currentColor"/></button>
-            : <span className="shrink-0" title={modelReadiness.kind === 'blocked' ? modelReadiness.reason : undefined}><button type="button" disabled={!canSend} onClick={() => { setSubmitEpoch(epoch => epoch + 1); onSubmit(composerSubmitValue(editor.current?.getValue(), value)); }} aria-label={sendLabel} aria-keyshortcuts="Enter" title={`${sendLabel}（Enter 发送，Shift+Enter 换行）`} className="ui-press grid h-8 w-8 place-items-center rounded-full bg-zinc-900 text-white shadow-[0_1px_2px_rgba(0,0,0,.16)] hover:bg-zinc-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none"><ArrowUp size={15} strokeWidth={2.2}/></button></span>}
+            : <span className="shrink-0" title={modelReadiness.kind === 'blocked' ? modelReadiness.reason : undefined}><button type="button" disabled={!canSend} onClick={() => { setSubmitEpoch(epoch => epoch + 1); onSubmit(composerSubmitValue(editor.current?.getValue(), value)); }} aria-label={sendLabel} aria-keyshortcuts="Enter" title={`${sendLabel}（Enter 发送，Shift+Enter 换行）`} className="ui-press grid h-8 w-8 place-items-center rounded-full bg-accent text-accent-fg shadow-[0_1px_2px_rgba(0,0,0,.16)] hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400 disabled:opacity-100 disabled:shadow-none"><ArrowUp size={15} strokeWidth={2.2}/></button></span>}
       </div></div>
     </div></div></div>;
 }

@@ -1,3 +1,4 @@
+import { BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, normalizeOutputPluginId } from '@agent-dock/agent-dock-shared';
 import type { Agent, AgentModelsResult, Project, Session } from './api';
 import { readInitialAgentModels } from './model-cache';
 
@@ -25,6 +26,10 @@ export type DraftComposerPrefs = {
   agentId?: string;
   /** 上次显式选择的工作目录（空/未设置表示跟随 Agent 默认目录）。 */
   cwd?: string;
+  /** 新建会话的 XML 询问卡片覆写偏好（历史兼容字段，自动与 `outputPlugins['builtin:ask-user-question']` 同步）。 */
+  askUserQuestionEnabled?: boolean;
+  /** 新建会话的纯 XML 交互插件覆写映射（未设置某个插件表示跟随全局默认开关）。 */
+  outputPlugins?: Record<string, boolean>;
   /** 按 Agent ID 隔离保存的模型与思考深度偏好。 */
   byAgent: Record<string, AgentLastUsedPrefs>;
 };
@@ -96,6 +101,21 @@ export function normalizeDraftComposerPrefs(raw: unknown): DraftComposerPrefs {
   const record = raw as Record<string, unknown>;
   const agentId = nonEmptyString(record.agentId);
   const cwd = nonEmptyString(record.cwd);
+  const legacyAsk = typeof record.askUserQuestionEnabled === 'boolean' ? record.askUserQuestionEnabled : undefined;
+  const outputPlugins: Record<string, boolean> = {};
+  if (record.outputPlugins && typeof record.outputPlugins === 'object' && !Array.isArray(record.outputPlugins)) {
+    for (const [rawId, val] of Object.entries(record.outputPlugins as Record<string, unknown>)) {
+      if (typeof val !== 'boolean') continue;
+      const cleanId = nonEmptyString(rawId);
+      if (!cleanId || FORBIDDEN_KEYS.has(cleanId)) continue;
+      outputPlugins[normalizeOutputPluginId(cleanId)] = val;
+    }
+  }
+  if (legacyAsk !== undefined && outputPlugins[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] === undefined) {
+    outputPlugins[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] = legacyAsk;
+  }
+  const askUserQuestionEnabled = outputPlugins[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID];
+  const hasOutputPlugins = Object.keys(outputPlugins).length > 0;
   const byAgent: Record<string, AgentLastUsedPrefs> = {};
 
   if (record.byAgent && typeof record.byAgent === 'object' && !Array.isArray(record.byAgent)) {
@@ -115,6 +135,8 @@ export function normalizeDraftComposerPrefs(raw: unknown): DraftComposerPrefs {
     version: 1,
     ...(agentId ? { agentId } : {}),
     ...(cwd ? { cwd } : {}),
+    ...(askUserQuestionEnabled !== undefined ? { askUserQuestionEnabled } : {}),
+    ...(hasOutputPlugins ? { outputPlugins } : {}),
     byAgent
   };
 }
@@ -241,6 +263,57 @@ export function withLastUsedReasoningEffort(
     agentId: cleanAgentId,
     byAgent: nextByAgent
   };
+}
+
+/**
+ * 更新新建会话草稿栏的单个交互插件覆写偏好：
+ * - `boolean`：显式覆盖全局默认并记住；
+ * - `undefined`：移除覆写，恢复跟随全局默认开关。
+ */
+export function withDraftOutputPluginOverride(
+  prefs: DraftComposerPrefs,
+  pluginId: string,
+  enabled: boolean | undefined
+): DraftComposerPrefs {
+  const canonicalId = normalizeOutputPluginId(pluginId);
+  if (!canonicalId || FORBIDDEN_KEYS.has(canonicalId)) return prefs;
+  const currentMap: Record<string, boolean> = {
+    ...(prefs.outputPlugins ?? {}),
+    ...(typeof prefs.askUserQuestionEnabled === 'boolean' && prefs.outputPlugins?.[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] === undefined
+      ? { [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: prefs.askUserQuestionEnabled }
+      : {})
+  };
+  if (currentMap[canonicalId] === enabled) return prefs;
+  if (enabled === undefined) {
+    delete currentMap[canonicalId];
+  } else {
+    currentMap[canonicalId] = enabled;
+  }
+  const { askUserQuestionEnabled: _oldAsk, outputPlugins: _oldMap, ...rest } = prefs;
+  const nextAsk = currentMap[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID];
+  return {
+    ...rest,
+    version: 1,
+    ...(nextAsk !== undefined ? { askUserQuestionEnabled: nextAsk } : {}),
+    ...(Object.keys(currentMap).length ? { outputPlugins: currentMap } : {})
+  };
+}
+
+/** 清空草稿栏的全部交互插件覆写，全部恢复跟随全局默认。 */
+export function withoutDraftOutputPluginOverrides(prefs: DraftComposerPrefs): DraftComposerPrefs {
+  if (!prefs.outputPlugins && prefs.askUserQuestionEnabled === undefined) return prefs;
+  const { askUserQuestionEnabled: _oldAsk, outputPlugins: _oldMap, ...rest } = prefs;
+  return { ...rest, version: 1 };
+}
+
+/**
+ * 更新新建会话草稿栏的 XML 询问卡片覆写偏好（兼容入口，同步写入 `outputPlugins`）。
+ */
+export function withDraftAskUserQuestionEnabled(
+  prefs: DraftComposerPrefs,
+  enabled: boolean | undefined
+): DraftComposerPrefs {
+  return withDraftOutputPluginOverride(prefs, BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, enabled);
 }
 
 /**

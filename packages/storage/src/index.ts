@@ -6,7 +6,19 @@ import { basename, dirname } from 'node:path';
 import { openDatabase, type NativeBindingFallback } from './native.js';
 import { createUsageRepository } from './usage.js';
 import { createBoardRepository } from './boards.js';
-import type { AgentConfig, AgentEvent, ProjectRecord, RepositoryBundle, ScheduleRecord, ScheduleRunRecord, Session, TaskRecord } from '@agent-dock/agent-dock-shared';
+import {
+  BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+  mergeSessionOutputPluginsPatch,
+  normalizeSessionOutputPlugins,
+  type AgentConfig,
+  type AgentEvent,
+  type ProjectRecord,
+  type RepositoryBundle,
+  type ScheduleRecord,
+  type ScheduleRunRecord,
+  type Session,
+  type TaskRecord
+} from '@agent-dock/agent-dock-shared';
 import { agentConfigs, channelMappings, configs, errors, events, machines, permissionRequests, projects, scheduleRuns, schedules, sessions, tasks, toolCalls } from './schema.js';
 export * from './native.js';
 export * from './schema.js';
@@ -83,7 +95,7 @@ export function createRepositories(filename: string, options: { nativeFallback?:
     CREATE TABLE IF NOT EXISTS agent_configs (id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS machines (id TEXT PRIMARY KEY, name TEXT NOT NULL, metadata TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, machine_id TEXT, name TEXT NOT NULL, cwd TEXT NOT NULL, pinned_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, state TEXT NOT NULL, interrupt_intent TEXT, cwd TEXT NOT NULL, model TEXT, reasoning_effort TEXT, system_prompt TEXT, permission_mode TEXT DEFAULT 'full-trust', source TEXT, source_id TEXT, ssh_host TEXT, archived_at TEXT, protocol TEXT, last_message_at TEXT, custom_title TEXT, agent_title TEXT, pinned_at TEXT, run_id TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, state TEXT NOT NULL, interrupt_intent TEXT, cwd TEXT NOT NULL, model TEXT, reasoning_effort TEXT, system_prompt TEXT, permission_mode TEXT DEFAULT 'full-trust', source TEXT, source_id TEXT, ssh_host TEXT, archived_at TEXT, protocol TEXT, last_message_at TEXT, custom_title TEXT, agent_title TEXT, pinned_at TEXT, ask_user_question_enabled INTEGER, output_plugins TEXT, run_id TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, prompt TEXT NOT NULL, sent_prompt TEXT, final_text TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, type TEXT NOT NULL, timestamp TEXT NOT NULL, data TEXT NOT NULL, raw TEXT);
     CREATE UNIQUE INDEX IF NOT EXISTS events_session_seq ON events(session_id, sequence);
@@ -119,6 +131,10 @@ export function createRepositories(filename: string, options: { nativeFallback?:
   if (!sessionColumns.some(column => column.name === 'agent_title')) sqlite.exec('ALTER TABLE sessions ADD COLUMN agent_title TEXT');
   // 置顶：只增列，旧库补 ALTER，历史行保持 NULL（未置顶），行为与旧版一致。
   if (!sessionColumns.some(column => column.name === 'pinned_at')) sqlite.exec('ALTER TABLE sessions ADD COLUMN pinned_at TEXT');
+  // 会话级 XML 询问卡片覆写：NULL = 跟随全局默认，1 = 显式开启，0 = 显式关闭。
+  if (!sessionColumns.some(column => column.name === 'ask_user_question_enabled')) sqlite.exec('ALTER TABLE sessions ADD COLUMN ask_user_question_enabled INTEGER');
+  // 会话级纯 XML 交互插件覆写映射 JSON（Record<pluginId, boolean>）；兼容并与 ask_user_question_enabled 双向同步。
+  if (!sessionColumns.some(column => column.name === 'output_plugins')) sqlite.exec('ALTER TABLE sessions ADD COLUMN output_plugins TEXT');
   const projectColumns = sqlite.pragma('table_info(projects)') as Array<{ name: string }>;
   if (!projectColumns.some(column => column.name === 'pinned_at')) sqlite.exec('ALTER TABLE projects ADD COLUMN pinned_at TEXT');
   const taskColumns = sqlite.pragma('table_info(tasks)') as Array<{ name: string }>;
@@ -142,6 +158,38 @@ export function createRepositories(filename: string, options: { nativeFallback?:
   const channelMappingColumns = sqlite.pragma('table_info(channel_mappings)') as Array<{ name: string }>;
   if (!channelMappingColumns.some(column => column.name === 'extra')) sqlite.exec('ALTER TABLE channel_mappings ADD COLUMN extra TEXT');
   const db = drizzle(sqlite);
+  const parseSessionOutputPluginsColumn = (raw: string | null | undefined, legacyAsk: boolean | null | undefined): Record<string, boolean> => {
+    let parsed: unknown;
+    if (raw?.trim()) {
+      try { parsed = JSON.parse(raw); } catch { parsed = undefined; }
+    }
+    return normalizeSessionOutputPlugins(parsed, legacyAsk);
+  };
+  const hydrateSessionRow = (row: typeof sessions.$inferSelect): Session => {
+    const mergedPlugins = parseSessionOutputPluginsColumn(row.outputPlugins, row.askUserQuestionEnabled);
+    const askEnabled = typeof mergedPlugins[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] === 'boolean'
+      ? mergedPlugins[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]
+      : null;
+    const { outputPlugins: _rawPlugins, ...rest } = row;
+    return {
+      ...(rest as unknown as Session),
+      askUserQuestionEnabled: askEnabled,
+      ...(Object.keys(mergedPlugins).length ? { outputPlugins: mergedPlugins } : {})
+    };
+  };
+  const serializeSessionPluginColumns = (
+    overrides: Record<string, boolean | null> | null | undefined,
+    legacyAsk?: boolean | null
+  ): { outputPluginsJson: string | null; askUserQuestionEnabled: boolean | null } => {
+    const normalized = normalizeSessionOutputPlugins(overrides, legacyAsk);
+    const askEnabled = typeof normalized[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] === 'boolean'
+      ? normalized[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]
+      : null;
+    return {
+      outputPluginsJson: Object.keys(normalized).length ? JSON.stringify(normalized) : null,
+      askUserQuestionEnabled: askEnabled
+    };
+  };
   return {
     agents: {
       async list() { return db.select().from(agentConfigs).all().map(r => JSON.parse(r.json)); },
@@ -150,8 +198,8 @@ export function createRepositories(filename: string, options: { nativeFallback?:
       async delete(id) { db.delete(agentConfigs).where(eq(agentConfigs.id, id)).run(); }
     },
     sessions: {
-      async list() { return db.select().from(sessions).orderBy(asc(sessions.createdAt)).all() as Session[]; },
-      async get(id) { return db.select().from(sessions).where(eq(sessions.id, id)).get() as Session | undefined; },
+      async list() { return db.select().from(sessions).orderBy(asc(sessions.createdAt)).all().map(hydrateSessionRow); },
+      async get(id) { const row = db.select().from(sessions).where(eq(sessions.id, id)).get(); return row ? hydrateSessionRow(row) : undefined; },
       /**
        * 整行 upsert。**刻意不写会话名那两列**（custom_title / agent_title）。
        *
@@ -161,18 +209,33 @@ export function createRepositories(filename: string, options: { nativeFallback?:
        * 会话名因此只走 `saveTitles()` 这条窄路径，任何整行 save 都不可能把它冲掉。
        */
       async save(s) {
-        // 会话名与置顶都只走各自的窄写入口：这里的 s 可能是过期内存快照。
+        // 会话名、置顶与会话级交互插件开关都走各自的窄写入口：这里的 s 可能是过期内存快照。
+        // 首次插入时保留 outputPlugins / askUserQuestionEnabled（支持创建会话即携带覆写），
+        // 冲突更新时跳过这两列，避免正在跑的驱动收尾整行 save 时把用户中途切换的开关覆写回旧值。
         // error / interruptIntent / archivedAt 是显式可清空的状态列：drizzle 的 upsert 会跳过
         // undefined，不显式写成 null 会导致旧的报错或中断意图永远留在库里（例如 daemon 重启或
         // 上一轮打断之后，新一轮正常完成仍带着旧 error/interruptIntent）。
-        const { customTitle: _customTitle, agentTitle: _agentTitle, pinnedAt: _pinnedAt, ...row } = s;
+        const {
+          customTitle: _customTitle,
+          agentTitle: _agentTitle,
+          pinnedAt: _pinnedAt,
+          askUserQuestionEnabled,
+          outputPlugins,
+          ...row
+        } = s;
         const persisted = {
           ...row,
           error: row.error ?? null,
           interruptIntent: row.interruptIntent ?? null,
           archivedAt: row.archivedAt ?? null
         };
-        db.insert(sessions).values(persisted).onConflictDoUpdate({ target: sessions.id, set: persisted }).run();
+        const pluginColumns = serializeSessionPluginColumns(outputPlugins, askUserQuestionEnabled);
+        const inserted = {
+          ...persisted,
+          askUserQuestionEnabled: pluginColumns.askUserQuestionEnabled,
+          outputPlugins: pluginColumns.outputPluginsJson
+        };
+        db.insert(sessions).values(inserted).onConflictDoUpdate({ target: sessions.id, set: persisted }).run();
       },
       /**
        * 会话名的唯一写入口，按列定向更新，不受整行 save 的快照新鲜度影响。
@@ -183,6 +246,28 @@ export function createRepositories(filename: string, options: { nativeFallback?:
       },
       async savePinned(id, pinnedAt) {
         db.update(sessions).set({ pinnedAt }).where(eq(sessions.id, id)).run();
+      },
+      async saveAskUserQuestionEnabled(id, enabled, updatedAt) {
+        const existing = db.select({
+          outputPlugins: sessions.outputPlugins,
+          askUserQuestionEnabled: sessions.askUserQuestionEnabled
+        }).from(sessions).where(eq(sessions.id, id)).get();
+        const current = parseSessionOutputPluginsColumn(existing?.outputPlugins, existing?.askUserQuestionEnabled);
+        const merged = mergeSessionOutputPluginsPatch(current, { [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: enabled });
+        const pluginColumns = serializeSessionPluginColumns(merged);
+        db.update(sessions).set({
+          askUserQuestionEnabled: pluginColumns.askUserQuestionEnabled,
+          outputPlugins: pluginColumns.outputPluginsJson,
+          updatedAt: updatedAt ?? new Date().toISOString()
+        }).where(eq(sessions.id, id)).run();
+      },
+      async saveOutputPlugins(id, overrides, updatedAt) {
+        const pluginColumns = serializeSessionPluginColumns(overrides);
+        db.update(sessions).set({
+          askUserQuestionEnabled: pluginColumns.askUserQuestionEnabled,
+          outputPlugins: pluginColumns.outputPluginsJson,
+          updatedAt: updatedAt ?? new Date().toISOString()
+        }).where(eq(sessions.id, id)).run();
       }
     },
     tasks: {

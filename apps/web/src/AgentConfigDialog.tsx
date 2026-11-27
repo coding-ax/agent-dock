@@ -1,7 +1,7 @@
 import { Spinner } from './Loaders';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Bot, MessagesSquare, Plug, Plus, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Bot, MessagesSquare, Plug, Plus, Puzzle, RefreshCw, X } from 'lucide-react';
 import { Input, Segmented } from 'antd';
 import { api, type Agent } from './api';
 import { ConfirmDialog } from './ui-controls';
@@ -9,6 +9,7 @@ import { useModalFocusTrap } from './useModalFocusTrap';
 import { agentToDraft, canSave, draftToPayload, newAgentDraft, uniqueAgentId, validateDraft, type AgentFormDraft, type FormError } from './agent-config-form';
 import { LlmEndpointPanel } from './LlmEndpointPanel';
 import { SideChatConfigPanel } from './SideChatConfigPanel';
+import { OutputPluginsCenterPanel } from './output-plugins/OutputPluginsCenterPanel';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { AgentIcon } from './AgentIcon';
 import { AgentUsagePanel } from './AgentUsagePanel';
@@ -29,16 +30,16 @@ function ReadOnlyField({ label, value, mono = false, hint }: { label: string; va
   </div>;
 }
 
-type SettingsTab = 'llm' | 'agents' | 'side-chat';
+type SettingsTab = 'llm' | 'agents' | 'side-chat' | 'output-plugins';
 
-export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): void; initialTab?: SettingsTab }) {
+export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): void; initialTab?: SettingsTab | 'ask-user-question' }) {
   const panelRef = useRef<HTMLDivElement>(null);
   useModalFocusTrap({ panel: panelRef, initial: panelRef, dismissible: true, onDismiss: () => requestClose() });
   const queryClient = useQueryClient();
   // 配置面板需要看到停用的内置项（置灰）：仅 master token 生效，会话令牌拿到的仍是过滤后列表。
   const agents = useQuery({ queryKey: ['agents-admin'], queryFn: () => api.agents(true), refetchOnWindowFocus: false });
   // 模型端点是平台拿模型能力的唯一来源，默认落在这一页：它是先要配好的那一半。
-  const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const [tab, setTab] = useState<SettingsTab>(initialTab === 'ask-user-question' ? 'output-plugins' : initialTab);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [draft, setDraft] = useState<AgentFormDraft>(newAgentDraft());
@@ -144,7 +145,7 @@ export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): 
           <div className="flex items-center gap-2 text-[16px] font-semibold text-zinc-900"><Bot size={16}/>Agent 设置</div>
           <button type="button" onClick={requestClose} aria-label="关闭" className="grid h-9 w-9 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800 md:order-3 md:ml-auto md:h-8 md:w-8"><X size={16}/></button>
         </div>
-        <span className="w-full md:order-2 md:ml-4 md:w-auto"><Segmented<typeof tab> block value={tab} onChange={setTab} options={[{ value: 'llm', label: '模型端点', icon: <Plug size={12}/> }, { value: 'agents', label: 'Agent', icon: <Bot size={12}/> }, { value: 'side-chat', label: '侧边对话', icon: <MessagesSquare size={12}/> }]}/></span>
+        <span className="w-full overflow-x-auto no-scrollbar md:order-2 md:ml-4 md:w-auto"><Segmented<typeof tab> block value={tab} onChange={setTab} options={[{ value: 'llm', label: '模型端点', icon: <Plug size={12}/> }, { value: 'agents', label: 'Agent', icon: <Bot size={12}/> }, { value: 'side-chat', label: '侧边对话', icon: <MessagesSquare size={12}/> }, { value: 'output-plugins', label: '交互插件', icon: <Puzzle size={12}/> }]}/></span>
       </div>
 
       <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5"><DeferredSkeleton/></div>}>
@@ -152,6 +153,8 @@ export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): 
         ? <LlmEndpointPanel/>
         : tab === 'side-chat'
           ? <SideChatConfigPanel/>
+        : tab === 'output-plugins'
+          ? <OutputPluginsCenterPanel/>
         : <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[220px_1fr]">
           {/* 移动端使用横向胶囊条切换 Agent，避免列表占满上半屏挤压表单；md 以上恢复左侧栏。 */}
           <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-zinc-100 bg-zinc-50/60 px-3 py-2 md:hidden">

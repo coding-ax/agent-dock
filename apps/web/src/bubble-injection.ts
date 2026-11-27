@@ -21,6 +21,12 @@ const INJECTION_TAG_RULES: ReadonlyArray<{ pattern: RegExp; label: string }> = [
   { pattern: /\[AgentDock 飞书当前消息/, label: '飞书消息上下文' },
   { pattern: /\[AgentDock 安全策略/, label: '安全策略' },
   { pattern: /\[(?:当前飞书会话|飞书聊天上下文)\]/, label: '飞书聊天上下文' },
+  { pattern: /\[AgentDock 用户询问卡片协议\]/, label: '询问卡片协议' },
+  { pattern: /用户询问卡片协议已关闭/, label: '询问卡片协议' },
+  { pattern: /\[AgentDock 操作确认卡片协议\]/, label: '操作确认协议' },
+  { pattern: /操作确认卡片协议已关闭/, label: '操作确认协议' },
+  { pattern: /\[AgentDock 交互插件协议/, label: '交互插件协议' },
+  { pattern: /交互插件「[^」]+」已关闭/, label: '交互插件协议' },
   { pattern: /\[AgentDock 定时任务\b/, label: '定时任务' },
   { pattern: /\[AgentDock\]/, label: '运行约束' }
 ];

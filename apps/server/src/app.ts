@@ -31,6 +31,8 @@ import { registerTerminalWebSockets } from './terminal-ws.js';
 import { registerFsRoutes } from './fs-routes.js';
 import { registerLlmRoutes, type LlmRoutesOptions } from './llm/service.js';
 import { registerSideChatConfigRoutes, type SideChatConfigService } from './side-chat-config.js';
+import { registerAskUserQuestionRoutes, type AskUserQuestionService } from './ask-user-question.js';
+import { registerOutputPluginRoutes, type OutputPluginService } from './output-plugins/index.js';
 import { registerNotificationRoutes } from './notifications/routes.js';
 import type { NotificationService } from './notifications/service.js';
 import { registerBoardRoutes } from './boards/routes.js';
@@ -108,6 +110,10 @@ export interface BuildAppOptions {
   llm?: LlmRoutesOptions;
   /** 侧边对话与 /btw 共享配置；不传表示这套路由不挂。 */
   sideChatConfig?: SideChatConfigService;
+  /** 纯 XML 协议版 AskUserQuestion 兼容路由；不传表示不挂。 */
+  askUserQuestion?: AskUserQuestionService;
+  /** 纯 XML 交互插件注册中心与统一交互路由；不传表示不挂。 */
+  outputPlugins?: OutputPluginService;
   /** 多通道通知设置与全局轻量通知 SSE；不传表示这套路由不挂。 */
   notifications?: NotificationService;
   /** 自由拖拽看板模式与全局多路复用看板 SSE；不传表示这套路由不挂。 */
@@ -381,7 +387,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
         && process.env.AGENTDOCK_ALLOW_REACTION_TEST === 'true'
     });
   }
-  await registerLarkRoutes(app, { ...options.lark, assistant: options.lark?.assistant ?? options.assistant, runtime: options.lark?.runtime ?? runtime, ...(options.larkAvatar ? { larkAvatar: options.larkAvatar } : {}) });
+  await registerLarkRoutes(app, { ...options.lark, assistant: options.lark?.assistant ?? options.assistant, runtime: options.lark?.runtime ?? runtime, ...(options.outputPlugins ? { outputPlugins: options.lark?.outputPlugins ?? options.outputPlugins } : {}), ...(options.askUserQuestion ? { askUserQuestion: options.lark?.askUserQuestion ?? options.askUserQuestion } : {}), ...(options.larkAvatar ? { larkAvatar: options.larkAvatar } : {}) });
   app.get('/api/agents', async request => {
     // 停用的内置 agent 只在配置面板展示，面板入口仅 master token 可用（会话令牌拿到的列表不含停用项）。
     const url = new URL(request.url, 'http://agent-dock.local');
@@ -546,10 +552,33 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   });
   // 只透传白名单字段：resumeSessionId / importTurns 只能由 /api/sessions/import 生成，
   // import、lark 来源由各自入口建会话，不能被普通建会话请求冒充。
-  app.post<{ Body: { agentId: string; cwd?: string; model?: string; reasoningEffort?: string; systemPrompt?: string; source?: string; sourceId?: string } }>('/api/sessions', async request => {
-    const { agentId, cwd, model, reasoningEffort, systemPrompt, source, sourceId } = request.body ?? {};
+  app.post<{ Body: { agentId: string; cwd?: string; model?: string; reasoningEffort?: string; systemPrompt?: string; source?: string; sourceId?: string; askUserQuestionEnabled?: boolean | null; outputPlugins?: Record<string, boolean | null> } }>('/api/sessions', async request => {
+    const { agentId, cwd, model, reasoningEffort, systemPrompt, source, sourceId, askUserQuestionEnabled, outputPlugins } = request.body ?? {};
     if (source === 'import' || source === 'lark') throw new RuntimeError('INVALID_SOURCE', `source=${source} 只能由对应入口创建`, 400);
-    return runtime.start({ agentId, cwd, model, reasoningEffort, systemPrompt, source, sourceId });
+    if (askUserQuestionEnabled !== undefined && askUserQuestionEnabled !== null && typeof askUserQuestionEnabled !== 'boolean') {
+      throw new RuntimeError('INVALID_ASK_USER_QUESTION_ENABLED', 'askUserQuestionEnabled 必须是布尔值或 null', 400);
+    }
+    if (outputPlugins !== undefined) {
+      if (!outputPlugins || typeof outputPlugins !== 'object' || Array.isArray(outputPlugins)) {
+        throw new RuntimeError('INVALID_OUTPUT_PLUGINS', 'outputPlugins 必须是插件 ID 到布尔值/null 的映射对象', 400);
+      }
+      for (const [key, value] of Object.entries(outputPlugins)) {
+        if (!key.trim() || (value !== null && typeof value !== 'boolean')) {
+          throw new RuntimeError('INVALID_OUTPUT_PLUGINS', `outputPlugins["${key}"] 必须是布尔值或 null`, 400);
+        }
+      }
+    }
+    return runtime.start({
+      agentId,
+      cwd,
+      model,
+      reasoningEffort,
+      systemPrompt,
+      source,
+      sourceId,
+      ...(askUserQuestionEnabled !== undefined ? { askUserQuestionEnabled } : {}),
+      ...(outputPlugins !== undefined ? { outputPlugins } : {})
+    });
   });
   // 导入一个外部 ACP 会话：接管上下文 +（可选）把外部历史回填成 AgentDock 轮次。
   // 与 /api/sessions 分开，是因为 full 模式要先读一次外部转录再建会话，失败要做成明确的导入错误。
@@ -638,19 +667,46 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   // 改名字是纯本地元数据，混在一起会让「切模型失败」和「改名失败」共用同一套错误路径。
   // 空串/null = 恢复自动命名（回落到 Agent 名 / 首条 prompt 摘要），不是存一个空标题。
   app.patch<{ Params: { id: string }; Body: { title?: string | null } }>('/api/sessions/:id/title', async request => runtime.setSessionTitle(request.params.id, request.body?.title ?? null));
-  app.patch<{ Params: { id: string }; Body: { model?: string; reasoningEffort?: string } }>('/api/sessions/:id/config', async request => {
+  app.patch<{ Params: { id: string }; Body: { model?: string; reasoningEffort?: string; askUserQuestionEnabled?: boolean | null; outputPlugins?: Record<string, boolean | null> } }>('/api/sessions/:id/config', async request => {
     const model = request.body?.model?.trim();
     const reasoningEffort = request.body?.reasoningEffort?.trim();
-    if (!model && !reasoningEffort) {
-      throw new RuntimeError('INVALID_SESSION_CONFIG', 'Model or reasoning effort is required', 400);
+    const hasAskOverride = request.body !== undefined
+      && Object.prototype.hasOwnProperty.call(request.body, 'askUserQuestionEnabled')
+      && request.body.askUserQuestionEnabled !== undefined;
+    const hasOutputPluginsOverride = request.body !== undefined
+      && Object.prototype.hasOwnProperty.call(request.body, 'outputPlugins')
+      && request.body.outputPlugins !== undefined;
+    if (hasAskOverride && request.body.askUserQuestionEnabled !== null && typeof request.body.askUserQuestionEnabled !== 'boolean') {
+      throw new RuntimeError('INVALID_SESSION_CONFIG', 'askUserQuestionEnabled must be boolean or null', 400);
+    }
+    if (hasOutputPluginsOverride) {
+      const patch = request.body.outputPlugins;
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).length === 0) {
+        throw new RuntimeError('INVALID_SESSION_CONFIG', 'outputPlugins must be a non-empty object mapping pluginId to boolean or null', 400);
+      }
+      for (const [key, value] of Object.entries(patch)) {
+        if (!key.trim() || (value !== null && typeof value !== 'boolean')) {
+          throw new RuntimeError('INVALID_SESSION_CONFIG', `outputPlugins["${key}"] must be boolean or null`, 400);
+        }
+      }
+    }
+    if (!model && !reasoningEffort && !hasAskOverride && !hasOutputPluginsOverride) {
+      throw new RuntimeError('INVALID_SESSION_CONFIG', 'Model, reasoning effort, outputPlugins, or askUserQuestionEnabled is required', 400);
     }
     let updated = model ? await runtime.setModel(request.params.id, model) : undefined;
     if (reasoningEffort) {
       updated = await runtime.setReasoningEffort(request.params.id, reasoningEffort);
     }
+    if (hasOutputPluginsOverride) {
+      updated = await runtime.setOutputPlugins(request.params.id, request.body.outputPlugins!);
+    }
+    if (hasAskOverride) {
+      updated = await runtime.setAskUserQuestionEnabled(request.params.id, request.body.askUserQuestionEnabled ?? null);
+    }
     // 活跃 ACP 连接切完模型/思考深度后，直接用适配器内存里的最新 configOptions 回填服务端缓存
     // 并随响应带回，省去前端二次往返触发慢速 oneshot 模型探测。
-    if (updated && !updated.sshHost) {
+    // 仅切换 askUserQuestionEnabled 时跳过，绝不触碰模型探测或 CLI 进程。
+    if ((model || reasoningEffort) && updated && !updated.sshHost) {
       const configOptions = typeof (runtime as { getSessionConfigOptions?: (id: string) => Array<Record<string, any>> | undefined }).getSessionConfigOptions === 'function'
         ? (runtime as { getSessionConfigOptions: (id: string) => Array<Record<string, any>> | undefined }).getSessionConfigOptions(request.params.id)
         : undefined;
@@ -760,6 +816,8 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   await registerFsRoutes(app, runtime);
   await registerLlmRoutes(app, options.llm);
   if (options.sideChatConfig) registerSideChatConfigRoutes(app, options.sideChatConfig);
+  if (options.outputPlugins) registerOutputPluginRoutes(app, options.outputPlugins);
+  if (options.askUserQuestion) registerAskUserQuestionRoutes(app, options.askUserQuestion);
   if (options.notifications) registerNotificationRoutes(app, options.notifications, streams);
   if (options.boards) registerBoardRoutes(app, options.boards, streams);
   if (options.themes) registerThemeRoutes(app, options.themes, streams);

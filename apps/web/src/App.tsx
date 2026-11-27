@@ -13,7 +13,7 @@ import { WebBaseUrlInput } from './WebBaseUrlInput';
 import { KeyboardEvent, lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { useMount, useEventListener, useUpdateEffect, useLocalStorageState, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlarmClock, AlertTriangle, Archive, BarChart3, Bell, Bot, Check, ChevronRight, Columns3, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MonitorDown, Palette, PanelLeftOpen, Pin, Plus, RefreshCw, Regex, Search, RotateCcw, Settings2, Smartphone, Trash2, Wrench, X } from 'lucide-react';
+import { AlarmClock, AlertTriangle, Archive, BarChart3, Bell, Bot, Check, ChevronRight, Columns3, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MonitorDown, Palette, PanelLeftOpen, Pin, Plus, Puzzle, RefreshCw, Regex, Search, RotateCcw, Settings2, Smartphone, Trash2, Wrench, X } from 'lucide-react';
 import { Input, InputNumber, Switch } from 'antd';
 import { defaultLarkTraceLimit, validateHighRiskPattern } from '@agent-dock/agent-dock-shared';
 import { api, WebAccessDeniedError, type Agent, type AssistantTask, type Project, type Session } from './api';
@@ -23,6 +23,7 @@ import { PaneHost } from './PaneHost';
 import { AgentIcon, BotAvatar } from './AgentIcon';
 import { PaneTypeMenu } from './PaneTypeMenu';
 import { shortcutLabel, useShortcuts, type Shortcut } from './useShortcuts';
+import { useOutputPluginsCatalog } from './output-plugins/useOutputPlugins';
 import { DEFAULT_SIDE_CHAT_CONFIG, findReusableSideChatSession, resolveSideChatStartOptions } from './side-chat-config';
 import { createClientMessageId } from './client-message-id';
 import { sideChatParentId } from './side-chat-link';
@@ -774,6 +775,8 @@ export default function App() {
     refetchOnWindowFocus: false
   });
   const sideChatConfig = sideChatConfigQuery.data?.config ?? DEFAULT_SIDE_CHAT_CONFIG;
+  const outputPluginsCatalog = useOutputPluginsCatalog(!webDenied);
+  const askUserQuestionXmlEnabled = outputPluginsCatalog.askUserQuestionGlobalEnabled;
 
   /**
    * 侧边聊天统一入口（副屏按钮、⌘⇧S、/btw 共用同一份 sideChatConfig）：
@@ -1131,7 +1134,7 @@ export default function App() {
               </div>}
       </div>
       {/* 两个入口都开弹窗：归档列表早先挂在会话树最底部，点了要滚到底才看得见，看起来像点不开。 */}
-      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} onUsage={() => { setSidebarOpen(false); openAppDialog('usage'); }} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onSideChatConfig={() => { setSidebarOpen(false); openAppDialog('side-chat'); }} onAssistant={openAssistantSettings} onNotifications={() => { setSidebarOpen(false); openAppDialog('notifications'); }} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkRegexTriggers={() => { setSidebarOpen(false); openAppDialog('lark-regex'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onThemeStudio={() => { setSidebarOpen(false); openAppDialog('theme-studio'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
+      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} outputPluginsEnabledCount={outputPluginsCatalog.enabledCount} outputPluginsTotalCount={outputPluginsCatalog.totalCount} onUsage={() => { setSidebarOpen(false); openAppDialog('usage'); }} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onSideChatConfig={() => { setSidebarOpen(false); openAppDialog('side-chat'); }} onOutputPlugins={() => { setSidebarOpen(false); openAppDialog('output-plugins'); }} onAssistant={openAssistantSettings} onNotifications={() => { setSidebarOpen(false); openAppDialog('notifications'); }} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkRegexTriggers={() => { setSidebarOpen(false); openAppDialog('lark-regex'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onThemeStudio={() => { setSidebarOpen(false); openAppDialog('theme-studio'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
       </div>
       {/* 收起态细条（仅桌面）：展开 + 快捷新建 + 两个设置入口 */}
       <div className={`hidden h-full w-full flex-col items-center gap-1 py-3 ${sidebarCollapsed ? 'md:flex' : ''}`}>
@@ -1145,6 +1148,7 @@ export default function App() {
           <HoverTooltip content="消耗看板"><button type="button" onClick={() => openAppDialog('usage')} aria-label="消耗看板" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><BarChart3 size={15}/></button></HoverTooltip>
           <HoverTooltip content="定时任务"><button type="button" onClick={() => openAppDialog('schedule')} aria-label="定时任务" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><AlarmClock size={15}/></button></HoverTooltip><HoverTooltip content="归档会话"><button type="button" onClick={() => openAppDialog('archived')} aria-label="归档会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Archive size={15}/></button></HoverTooltip>
           <HoverTooltip content="导入外部会话"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('import'); }} aria-label="导入外部会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><FolderOpen size={15}/></button></HoverTooltip><HoverTooltip content="Agent 设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('agent'); }} aria-label="Agent 设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Bot size={15}/></button></HoverTooltip>
+          <HoverTooltip content="交互插件中心"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('output-plugins'); }} aria-label="交互插件中心" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Puzzle size={15}/></button></HoverTooltip>
           <HoverTooltip content="通知设置"><button type="button" onClick={() => openAppDialog('notifications')} aria-label="通知设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Bell size={15}/></button></HoverTooltip>
           <HoverTooltip content="飞书设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('lark'); }} aria-label="飞书设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Settings2 size={15}/></button></HoverTooltip>
           {pwa.visible && pwa.canPrompt && <HoverTooltip content="安装为桌面应用"><button type="button" disabled={pwa.installing} onClick={() => void triggerPwaInstall()} aria-label="安装为桌面应用" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900 disabled:opacity-50"><MonitorDown size={15}/></button></HoverTooltip>}
@@ -1170,7 +1174,7 @@ export default function App() {
         </div>
       ) : primarySession ? <>
         {/* lg 以下右栏全屏覆盖主区（小屏不并排）；lg 以上并排、宽度可拖拽（PaneHost 负责）。 */}
-        <div className={`flex min-w-0 flex-1 ${paneOpen ? 'max-lg:hidden' : ''}`}><SessionPane key={`primary:${primarySession.id}`} session={primarySession} agent={agents.data?.find(agent => agent.id === primarySession.agentId)} pane="primary" onOpenSidebar={() => setSidebarOpen(true)} paneOpen={paneOpen} onTogglePane={() => { setPaneMenuAnchor(undefined); togglePane(); }} btwEnabled={sideChatConfig.btwEnabled} btwTriggerPrefix={sideChatConfig.triggerPrefix} onSideChat={handleSessionSideChat}/></div>
+        <div className={`flex min-w-0 flex-1 ${paneOpen ? 'max-lg:hidden' : ''}`}><SessionPane key={`primary:${primarySession.id}`} session={primarySession} agent={agents.data?.find(agent => agent.id === primarySession.agentId)} pane="primary" onOpenSidebar={() => setSidebarOpen(true)} paneOpen={paneOpen} onTogglePane={() => { setPaneMenuAnchor(undefined); togglePane(); }} btwEnabled={sideChatConfig.btwEnabled} btwTriggerPrefix={sideChatConfig.triggerPrefix} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginItems={outputPluginsCatalog.plugins} outputPluginsGlobalConfig={outputPluginsCatalog.globalConfig} outputPluginRegistry={outputPluginsCatalog.registry} onSideChat={handleSessionSideChat}/></div>
         {(paneOpen || mountedTabs.length > 0) && <PaneHost tabs={tabs} mountedTabs={mountedTabs} activeTabId={activeTabId} visible={paneOpen} shortcuts={shortcuts} acceptsDrop={Boolean(dragItem?.sessionId)} onDropSession={() => { const dropped = dragItem?.sessionId; setDragItem(undefined); setDragOverItem(undefined); if (dropped) openSessionInPane(dropped); }} onActivate={activateTab} onClose={closeTab} onAdd={anchor => setPaneMenuAnchor(anchor)} onPick={openPaneKind} onHide={() => { setPaneMenuAnchor(undefined); togglePane(); }}>
           {Object.fromEntries(mountedTabs.map(tab => [tab.id,
             // 终端与文件锚定主会话；会话类标签用自己的 sessionId。三者都是廉价组件
@@ -1178,7 +1182,7 @@ export default function App() {
             tab.kind === 'terminal' ? <TerminalPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} sshHost={(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost}/>
             : tab.kind === 'files' ? <FileExplorerPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} cwd={sortedSessions.find(item => item.id === tab.anchorSessionId)?.cwd ?? primarySession.cwd} initialPath={tab.filePath} targetLine={tab.fileLine} targetEndLine={tab.fileEndLine} previewNonce={tab.filePreviewNonce} onClose={() => { setPaneMenuAnchor(undefined); togglePane(); }} disabledReason={(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost ? `SSH 远端会话（${(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost}）暂不支持文件浏览；终端面板可以直接连到远端。` : undefined}/>
             : tab.kind === 'raw' ? <RawLogPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} active={paneOpen && tab.id === activeTabId}/>
-            : (() => { const session = sortedSessions.find(item => item.id === tab.sessionId); return session ? <SessionPane key={tab.id} session={session} agent={agents.data?.find(agent => agent.id === session.agentId)} pane="secondary" onOpenSidebar={() => setSidebarOpen(true)} onOpenRawLog={openRawLog} btwEnabled={sideChatConfig.btwEnabled} btwTriggerPrefix={sideChatConfig.triggerPrefix} onSideChat={handleSessionSideChat}/> : <div className="grid h-full place-items-center text-[12px] text-zinc-400">会话已不存在。</div>; })()
+            : (() => { const session = sortedSessions.find(item => item.id === tab.sessionId); return session ? <SessionPane key={tab.id} session={session} agent={agents.data?.find(agent => agent.id === session.agentId)} pane="secondary" onOpenSidebar={() => setSidebarOpen(true)} onOpenRawLog={openRawLog} btwEnabled={sideChatConfig.btwEnabled} btwTriggerPrefix={sideChatConfig.triggerPrefix} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginItems={outputPluginsCatalog.plugins} outputPluginsGlobalConfig={outputPluginsCatalog.globalConfig} outputPluginRegistry={outputPluginsCatalog.registry} onSideChat={handleSessionSideChat}/> : <div className="grid h-full place-items-center text-[12px] text-zinc-400">会话已不存在。</div>; })()
           ]))}
         </PaneHost>}
         {/* 副屏整个收起时它带着 hidden、收不到 dragover，所以拖拽期间单独在右缘补一个落点。
@@ -1186,7 +1190,7 @@ export default function App() {
         {dragItem?.sessionId && !paneOpen && <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const dropped = dragItem?.sessionId; setDragItem(undefined); setDragOverItem(undefined); if (dropped) openSessionInPane(dropped); }} className="fixed inset-y-0 right-0 z-40 flex w-20 items-center justify-center border-l-2 border-dashed border-zinc-400 bg-zinc-900/5">
           <span className="text-[12px] font-medium text-zinc-600 [writing-mode:vertical-rl]">放到这里，在副屏打开</span>
         </div>}
-      </> : <div className="ui-page relative flex flex-1 justify-center overflow-y-auto px-4 sm:px-8"><span className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] md:hidden"><IconButton label="打开会话列表" onClick={() => setSidebarOpen(true)}><Menu size={17}/></IconButton></span><HomeStage editorRef={draftTextareaRef} agents={agents.data ?? []} sessions={sessions.data ?? []} onCreated={session => selectSession(session.id)}/></div>}
+      </> : <div className="ui-page relative flex flex-1 justify-center overflow-y-auto px-4 sm:px-8"><span className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] md:hidden"><IconButton label="打开会话列表" onClick={() => setSidebarOpen(true)}><Menu size={17}/></IconButton></span><HomeStage editorRef={draftTextareaRef} agents={agents.data ?? []} sessions={sessions.data ?? []} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginItems={outputPluginsCatalog.plugins} outputPluginsGlobalConfig={outputPluginsCatalog.globalConfig} onCreated={session => selectSession(session.id)}/></div>}
     </main>
     <ExitGate open={Boolean(paneMenuAnchor)} ms={150}>{paneMenuAnchor && <PaneTypeMenu anchor={paneMenuAnchor} shortcuts={shortcuts} onPick={openPaneKind} onClose={() => setPaneMenuAnchor(undefined)}/>}</ExitGate>
     {sessionMenu && (() => {
@@ -1215,6 +1219,7 @@ export default function App() {
       agent: <AgentConfigDialog onClose={closeAppDialog}/>,
       usage: <UsageDashboardDialog agents={agents.data ?? []} onClose={closeAppDialog} onOpenSession={selectSession}/>,
       'side-chat': <AgentConfigDialog initialTab="side-chat" onClose={closeAppDialog}/>,
+      'output-plugins': <AgentConfigDialog initialTab="output-plugins" onClose={closeAppDialog}/>,
       assistant: <AssistantSettingsDialog onClose={closeAppDialog} onOpenMain={() => { closeAppDialog(); openMain(); }} onAdopt={() => { closeAppDialog(); goAdopt(); }} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
       notifications: <NotificationSettingsDialog onClose={closeAppDialog} onOpenLarkSettings={() => openAppDialog('lark')}/>,
       schedule: sessionId => <ScheduleDialog {...(sessionId ? { session: sortedSessions.find(item => item.id === sessionId) } : {})} sessions={sortedSessions} {...(mainSessionId ? { mainSessionId } : {})} onClose={closeAppDialog} onOpenSession={selectSession}/>,

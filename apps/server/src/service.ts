@@ -14,6 +14,8 @@ import { readLarkConfigs } from './lark/config.js';
 import { createLarkCardService } from './lark/service.js';
 import { LlmEndpointService } from './llm/service.js';
 import { SideChatConfigService } from './side-chat-config.js';
+import { AskUserQuestionService } from './ask-user-question.js';
+import { OutputPluginService } from './output-plugins/index.js';
 import { NotificationService } from './notifications/service.js';
 import { BoardService } from './boards/service.js';
 import { ThemeService } from './themes/service.js';
@@ -61,6 +63,8 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
   capabilities.useHandoverLookup(createHandoverLookup(repos.config, repos.channelMappings));
   const agentTools = new LarkAgentToolsService(capabilities, repos.config, { env, groupToolsCommand: options.groupToolsCommand });
   let assistant: AssistantService | undefined;
+  let outputPlugins: OutputPluginService | undefined;
+  let askUserQuestion: AskUserQuestionService | undefined;
   const runtime = new AgentDockRuntime(repos, {
     acpxCommand: config.acpxCommand,
     driverIdleTimeoutMs: config.driverIdleTimeoutMs,
@@ -68,11 +72,15 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     // agentdock_database：告诉 Agent 自己跑在哪个 daemon 上，CLI 的自杀保护靠它区分「重启自己」和「操作沙箱」。
     sessionEnvironment: session => ({ agentdock_database: config.databaseUrl, ...capabilities.environmentFor(session) }),
     createSystemPrompt: buildInitialSystemPrompt,
-    // 先串飞书工具提示，再串主会话快照；两者都只影响实际发给 Agent 的文本，不改变时间线里的用户原话。
-    sessionPrompt: async (session, prompt, origin) => assistant
-      ? assistant.composePrompt(session, await agentTools.promptForSession(session, prompt), origin)
-      : agentTools.promptForSession(session, prompt)
+    // 先串飞书工具提示，再串主会话快照，最后按开关注入所有启用的纯 XML 交互插件协议；均只影响实际发给 Agent 的文本，不改变时间线用户原话。
+    sessionPrompt: async (session, prompt, origin) => {
+      const withTools = await agentTools.promptForSession(session, prompt);
+      const withAssistant = assistant ? await assistant.composePrompt(session, withTools, origin) : withTools;
+      return outputPlugins ? outputPlugins.promptForSession(session, withAssistant, origin) : withAssistant;
+    }
   });
+  outputPlugins = new OutputPluginService({ config: repos.config, channelMappings: repos.channelMappings, runtime, env });
+  askUserQuestion = new AskUserQuestionService({ config: repos.config, channelMappings: repos.channelMappings, runtime, outputPlugins });
   let app: Awaited<ReturnType<typeof buildApp>> | undefined;
   let schedules: ScheduleService | undefined;
   let notifications: NotificationService | undefined;
@@ -181,7 +189,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     // 分享链接接口始终挂载：访问防护关闭时 build() 会返回可操作的 409，
     // 界面据此提示用户开启局域网访问，而不是显示一个 404「接口不存在」。
     const shareLinks = new ShareLinkService({ host: config.host, port: config.port, secret: webAuth.secret ?? '', config: repos.config, env });
-    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, notifications, boards, themes, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
+    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, outputPlugins, askUserQuestion, notifications, boards, themes, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
     await app.listen(listenOptions(config));
     // 听到端口后再开始扫描：启动失败时不会先投递出去一半。
     notifications.start();

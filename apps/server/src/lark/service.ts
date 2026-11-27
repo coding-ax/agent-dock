@@ -677,6 +677,73 @@ export class LarkCardService {
     return { messageId: payload.data?.message_id || messageId, chatId: payload.data?.chat_id };
   }
 
+  /** 发送自定义 Schema 2.0 交互卡片（用于 AskUserQuestion 等富交互场景）。 */
+  async sendInteractiveCard(input: {
+    chatId?: string;
+    receiveId?: string;
+    receiveIdType?: LarkReceiveIdType;
+    card: Record<string, unknown>;
+    idempotencyKey?: string;
+  }): Promise<LarkMessageResult> {
+    if (input.chatId && input.receiveId) {
+      throw new LarkServiceError('CONFLICTING_RECIPIENTS', 'chatId and receiveId cannot be used together', 400);
+    }
+    const chatId = input.chatId?.trim();
+    if (chatId && !chatId.startsWith('oc_')) {
+      throw new LarkServiceError('INVALID_CHAT_ID', 'chatId must start with oc_', 400);
+    }
+    const receiveId = required(chatId ?? input.receiveId ?? this.config.defaultReceiveId, 'chatId or receiveId');
+    const resolvedType = receiveIdType(chatId ? 'chat_id' : input.receiveIdType ?? this.config.defaultReceiveIdType);
+    const idempotencyKey = input.idempotencyKey?.trim().slice(0, 50);
+    const payload = await this.request(`/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(resolvedType)}`, {
+      body: {
+        receive_id: receiveId,
+        msg_type: 'interactive',
+        content: JSON.stringify(input.card),
+        ...(idempotencyKey ? { uuid: idempotencyKey } : {})
+      }
+    });
+    const messageId = payload.data?.message_id;
+    if (!messageId) {
+      throw new LarkServiceError('INVALID_LARK_RESPONSE', 'Lark interactive card response did not include message_id', 502);
+    }
+    return { messageId, chatId: payload.data?.chat_id ?? chatId };
+  }
+
+  /** 在指定消息下回复自定义 Schema 2.0 交互卡片（支持 reply_in_thread）。 */
+  async replyInteractiveCard(input: {
+    messageId: string;
+    card: Record<string, unknown>;
+    replyInThread?: boolean;
+    idempotencyKey?: string;
+  }): Promise<LarkMessageResult> {
+    const messageId = required(input.messageId, 'messageId');
+    const idempotencyKey = input.idempotencyKey?.trim().slice(0, 50);
+    const payload = await this.request(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
+      body: {
+        msg_type: 'interactive',
+        content: JSON.stringify(input.card),
+        ...(input.replyInThread ? { reply_in_thread: true } : {}),
+        ...(idempotencyKey ? { uuid: idempotencyKey } : {})
+      }
+    });
+    const replyId = payload.data?.message_id;
+    if (!replyId) {
+      throw new LarkServiceError('INVALID_LARK_RESPONSE', 'Lark interactive card reply response did not include message_id', 502);
+    }
+    return { messageId: replyId, chatId: payload.data?.chat_id };
+  }
+
+  /** 原地更新已发送的自定义 Schema 2.0 交互卡片（如切换为「✅ 已回答」锁定态）。 */
+  async updateInteractiveCard(input: { messageId: string; card: Record<string, unknown> }): Promise<LarkMessageResult> {
+    const messageId = required(input.messageId, 'messageId');
+    const payload = await this.request(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
+      method: 'PATCH',
+      body: { content: JSON.stringify(input.card) }
+    });
+    return { messageId: payload.data?.message_id || messageId, chatId: payload.data?.chat_id };
+  }
+
   /**
    * 发送轻量终态通知卡片（支持私聊 open_id 或群聊 chat_id），用于「Agent 运行完成 / 失败 / 待审批」通知推送。
    * 带 config.summary 以便手机锁屏和飞书会话列表直接展示清晰摘要。

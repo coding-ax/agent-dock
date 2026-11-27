@@ -6,6 +6,8 @@ export * from './chat-name.js';
 export * from './lark-reaction-emoji.js';
 export * from './fractional-index.js';
 export * from './boards.js';
+export * from './ask-user-question.js';
+export * from './output-plugins/index.js';
 export * from './themes.js';
 import type { BoardRepository } from './boards.js';
 
@@ -194,6 +196,18 @@ export interface Session {
    * 归档时自动清空，归档会话不能再被置顶。
    */
   pinnedAt?: string | null;
+  /**
+   * 会话级 XML 询问卡片开关覆写（历史兼容字段，与 `outputPlugins['builtin:ask-user-question']` 同步）：
+   * - `null` / `undefined`：跟随全局默认开关（默认开启）；
+   * - `true` / `false`：本会话显式开启或关闭。
+   */
+  askUserQuestionEnabled?: boolean | null;
+  /**
+   * 会话级纯 XML 交互插件开关覆写映射：
+   * - key 为规范插件 ID（如 `builtin:ask-user-question`）；
+   * - `true` / `false` 表示显式覆写；缺失或 `null` 表示跟随全局默认。
+   */
+  outputPlugins?: Record<string, boolean | null>;
 }
 
 /**
@@ -226,6 +240,10 @@ export interface StartSessionInput {
    * 不产生任何用户消息——需要「注入上下文但不出现在转录里」时用这个（侧边会话即如此）。
    */
   systemPrompt?: string;
+  /** 可选的会话级 XML 询问卡片覆写；null/undefined 表示跟随全局默认（向后兼容）。 */
+  askUserQuestionEnabled?: boolean | null;
+  /** 可选的会话级纯 XML 交互插件覆写映射；缺省或 null 表示跟随全局默认。 */
+  outputPlugins?: Record<string, boolean | null>;
 }
 export interface SendInput { prompt: string }
 export interface AgentCapabilities { protocol: Exclude<Protocol, 'auto'>; available: boolean; detail?: string; pause: boolean; resume: boolean }
@@ -255,6 +273,16 @@ export interface SessionRepository {
    * 让置顶走窄路径，才不会被正在跑的会话收尾时覆盖回 null。
    */
   savePinned(id: string, pinnedAt: string | null): Promise<void>;
+  /**
+   * 会话级 XML 询问卡片开关唯一写入口（窄列更新，兼容旧调用方）：
+   * 防止正在运行的驱动在轮次收尾整行 save 时用旧内存快照冲掉用户刚切的开关。
+   */
+  saveAskUserQuestionEnabled(id: string, enabled: boolean | null, updatedAt?: string): Promise<void>;
+  /**
+   * 会话级交互插件开关唯一写入口（窄列更新）：
+   * 同步更新 `output_plugins` JSON 与兼容列 `ask_user_question_enabled`，防旧快照整行 save 覆写。
+   */
+  saveOutputPlugins(id: string, overrides: Record<string, boolean | null>, updatedAt?: string): Promise<void>;
 }
 export interface TaskRecord { id: string; sessionId: string; prompt: string; /** 实际提交给 ACP Agent 的本轮文本；旧任务或未执行任务为空。 */ sentPrompt?: string | null; /** 本轮最终输出（该轮最后一条 assistant 文本）；未跑完判定流程的轮次为空。 */ finalText?: string | null; status: string; /** 任务来源；`injected` 表示 daemon 注入的督办消息，网页不渲染成用户气泡。 */ origin?: string | null; createdAt: string; updatedAt: string }
 export interface TaskRepository { save(task: TaskRecord): Promise<void>; listBySession(sessionId: string): Promise<TaskRecord[]>; firstPromptBySessions(sessionIds: string[]): Promise<Record<string, string>> }

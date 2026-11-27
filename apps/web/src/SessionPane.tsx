@@ -1,14 +1,30 @@
 import { ExitGate } from './ExitGate';
-import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Search, StickyNote, Sunset, Archive, X, RefreshCw, RotateCcw, ScrollText, MoreHorizontal } from 'lucide-react';
+import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Puzzle, Search, StickyNote, Sunset, Archive, X, RefreshCw, RotateCcw, ScrollText, MoreHorizontal } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  ASK_USER_QUESTION_ANSWER_ORIGIN,
+  BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+  defaultOutputPluginRegistry,
+  getSessionOutputPluginOverride,
+  mergeSessionOutputPluginsPatch,
+  outputPluginInstanceKey,
+  resolveOutputPluginEnabled,
+  type AskUserQuestionAnswerItem,
+  type DeclarativeInteractionField,
+  type OutputPluginCatalogItem,
+  type OutputPluginMetadata,
+  type OutputPluginRegistry,
+  type OutputPluginsGlobalConfig
+} from '@agent-dock/agent-dock-shared';
 import { api, type Agent, type DockEvent, type LlmAssistContext, type Session, type Task } from './api';
 import { AiTextAssistControl, useAiFlash } from './AiTextAssist';
 import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, EMOJI_TRIGGER_ORIGIN, groupTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, turnTimeBadge, waitingQueuedTasks, type OptimisticMessage } from './timeline';
 import { ActivityPanel, SystemPromptBubble, TimelineItem } from './TimelineItems';
 import { TimelineTurn } from './SendTimeHint';
-import { Composer } from './Composer';
+import { Composer, type ComposerOutputPluginItem } from './Composer';
+import { buildFallbackOutputPluginCatalogItems } from './output-plugins/useOutputPlugins';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { elapsedText, resolveElapsed } from './elapsed';
 import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, parsePromptToDraft, queuedImageThumbnailUrl, resolveActiveSteeringTaskId, type ComposerReference } from './composer-utils';
@@ -56,8 +72,8 @@ function CompanionPlaceholder() {
 
 type SendMode = 'queue' | 'interrupt';
 /** 表情触发的轮次不能出现在「等待发送」面板：它不是用户可编辑的消息。 */
-// 整理轮次和交接说明是系统轮次：排队时也不进「等待发送」，免得完整指令被当成用户消息编辑或取消。
-const HIDDEN_QUEUE_ORIGINS: ReadonlySet<string> = new Set([EMOJI_TRIGGER_ORIGIN, 'maintenance', 'handoff']);
+// 整理轮次、交接说明与问答提交轮次不进「等待发送」编辑面板，避免系统指令或结构化 JSON 暴露成可编辑草稿。
+const BASE_HIDDEN_QUEUE_ORIGINS: ReadonlyArray<string> = [EMOJI_TRIGGER_ORIGIN, 'maintenance', 'handoff', ASK_USER_QUESTION_ANSWER_ORIGIN];
 
 /**
  * 会话标题栏的副屏开关。空副屏里直接展示可打开的面板类型。
@@ -190,7 +206,7 @@ function MainSessionMoreMenu({
   return <SessionMenu groups={allGroups} indicator={indicator} tooltip={tooltip}/>;
 }
 
-export const SessionPane = memo(function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onTogglePane, onOpenRawLog, btwEnabled = false, btwTriggerPrefix = DEFAULT_SIDE_CHAT_TRIGGER_PREFIX, onSideChat }: {
+export const SessionPane = memo(function SessionPane({ session, agent, pane, onOpenSidebar, paneOpen, onTogglePane, onOpenRawLog, btwEnabled = false, btwTriggerPrefix = DEFAULT_SIDE_CHAT_TRIGGER_PREFIX, askUserQuestionXmlEnabled = true, outputPluginItems, outputPluginsGlobalConfig, outputPluginRegistry = defaultOutputPluginRegistry, onSideChat }: {
   session: Session;
   agent?: Agent;
   pane: PaneKind;
@@ -200,6 +216,10 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   onOpenRawLog?(sessionId: string): void;
   btwEnabled?: boolean;
   btwTriggerPrefix?: string;
+  askUserQuestionXmlEnabled?: boolean;
+  outputPluginItems?: OutputPluginCatalogItem[];
+  outputPluginsGlobalConfig?: OutputPluginsGlobalConfig;
+  outputPluginRegistry?: OutputPluginRegistry;
   onSideChat?(source: Session, options?: { initialPrompt?: string; fromBtw?: boolean }): Promise<void> | void;
 }) {
   const qc = useQueryClient();
@@ -208,11 +228,17 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const [prompt, setPrompt] = useState(() => loadSessionDraft(getBrowserDraftStorage(), session.id)); const [composerReferences, setComposerReferences] = useState<ComposerReference[]>([]); const [quotedText, setQuotedText] = useState<string>(); const [sendMode, setSendMode] = useState<SendMode>('queue');
   useEffect(() => { setQuotedText(undefined); }, [session.id]);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
+  const [optimisticPluginInteractions, setOptimisticPluginInteractions] = useState<Record<string, unknown>>({});
+  const [submittingPluginKey, setSubmittingPluginKey] = useState<string>();
+  const [pluginSubmitErrors, setPluginSubmitErrors] = useState<Record<string, string>>({});
   const [heldSteeringTaskId, setHeldSteeringTaskId] = useState<string>();
   const steerInFlight = useRef(false);
   useEffect(() => {
     steerInFlight.current = false;
     setHeldSteeringTaskId(undefined);
+    setOptimisticPluginInteractions({});
+    setSubmittingPluginKey(undefined);
+    setPluginSubmitErrors({});
   }, [session.id]);
   const [actionError, setActionError] = useState<string>(); const [archiveConfirm, setArchiveConfirm] = useState(false); const [mainArchiveBlocked, setMainArchiveBlocked] = useState(false);
   const composerTextarea = useRef<ComposerEditorHandle>(null);
@@ -278,10 +304,66 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const [pendingReasoningEffort, setPendingReasoningEffort] = useState<string>();
   const [modelJustSwitched, setModelJustSwitched] = useState(false);
   const [reasoningJustSwitched, setReasoningJustSwitched] = useState(false);
+  const [switchingPluginId, setSwitchingPluginId] = useState<string>();
+  const [pluginsJustSwitched, setPluginsJustSwitched] = useState(false);
   const modelSwitchLaneRef = useRef(createSessionConfigSwitchLane());
   const reasoningSwitchLaneRef = useRef(createSessionConfigSwitchLane());
+  const pluginSwitchVersionRef = useRef(0);
+  const pluginSwitchInFlightRef = useRef(false);
   const modelSavedTimerRef = useRef<number | undefined>(undefined);
   const reasoningSavedTimerRef = useRef<number | undefined>(undefined);
+  const pluginSavedTimerRef = useRef<number | undefined>(undefined);
+
+  const effectivePluginCatalog = useMemo<OutputPluginCatalogItem[]>(
+    () => (outputPluginItems?.length ? outputPluginItems : buildFallbackOutputPluginCatalogItems()),
+    [outputPluginItems]
+  );
+  const effectiveGlobalPluginsConfig = useMemo<OutputPluginsGlobalConfig>(() => {
+    const base: Record<string, boolean> = {};
+    for (const item of effectivePluginCatalog) {
+      base[item.id] = item.globalEnabled;
+    }
+    if (outputPluginsGlobalConfig?.plugins) {
+      Object.assign(base, outputPluginsGlobalConfig.plugins);
+    } else {
+      base[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] = askUserQuestionXmlEnabled;
+    }
+    return { plugins: base };
+  }, [effectivePluginCatalog, outputPluginsGlobalConfig, askUserQuestionXmlEnabled]);
+
+  const composerOutputPlugins = useMemo<ComposerOutputPluginItem[]>(
+    () => effectivePluginCatalog.map(plugin => {
+      const globalEnabled = resolveOutputPluginEnabled(plugin.id, {
+        defaultEnabled: plugin.globalEnabled,
+        globalConfig: effectiveGlobalPluginsConfig
+      });
+      const override = getSessionOutputPluginOverride(plugin.id, session.outputPlugins, session.askUserQuestionEnabled);
+      const enabled = resolveOutputPluginEnabled(plugin.id, {
+        defaultEnabled: globalEnabled,
+        globalConfig: effectiveGlobalPluginsConfig,
+        sessionOverrides: session.outputPlugins,
+        legacySessionAskEnabled: session.askUserQuestionEnabled
+      });
+      return {
+        id: plugin.id,
+        name: plugin.name,
+        description: plugin.description,
+        icon: plugin.icon,
+        tagName: plugin.tagName,
+        builtin: plugin.builtin,
+        enabled,
+        globalEnabled,
+        override
+      };
+    }),
+    [effectivePluginCatalog, effectiveGlobalPluginsConfig, session.outputPlugins, session.askUserQuestionEnabled]
+  );
+
+  const enabledOutputPluginIds = useMemo(
+    () => new Set(composerOutputPlugins.filter(item => item.enabled).map(item => item.id)),
+    [composerOutputPlugins]
+  );
+  const effectiveAskUserQuestionEnabled = enabledOutputPluginIds.has(BUILTIN_ASK_USER_QUESTION_PLUGIN_ID);
 
   const outputLabel = session.model ?? agent?.name ?? session.agentId ?? 'Agent';
   // 切换模型请求在途时先稳住目录查询 key，待服务端返回内联 discoveredModels 并写入 fresh 缓存后再切 key，
@@ -346,6 +428,21 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     for (const task of tasks.data ?? []) if (task.sentPrompt) map.set(task.id, task.sentPrompt);
     return map;
   }, [tasks.data]);
+  const pluginInteractionsByKey = useMemo(() => {
+    const map = new Map<string, unknown>();
+    for (const event of timeline) {
+      if (event.type === 'text') {
+        const parsed = outputPluginRegistry.parseInteractionEvent(event.data.origin, event.data.text);
+        if (parsed) {
+          map.set(outputPluginInstanceKey(parsed.plugin.id, parsed.instanceId), parsed.payload);
+        }
+      }
+    }
+    for (const [key, payload] of Object.entries(optimisticPluginInteractions)) {
+      if (!map.has(key)) map.set(key, payload);
+    }
+    return map;
+  }, [timeline, optimisticPluginInteractions, outputPluginRegistry]);
   const rowKeys = useMemo(() => optimisticRowKeys(optimisticMessages), [optimisticMessages]);
   let latestUserIndex = -1;
   for (let index = timeline.length - 1; index >= 0; index--) if (timeline[index].type === 'text' && timeline[index].data.role === 'user') { latestUserIndex = index; break; }
@@ -353,7 +450,14 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 为什么不按「第几批 payload」判断：刷新后的 SSE 补发也会把旧内容带回来，按批次判会把
   // 已经显示过的整段当成新内容重播一遍——那正是「每次刷新都重新跑一遍」的来源。
   const mountedAt = useRef(new Date().toISOString()).current;
-  const queuedTasks = useMemo(() => waitingQueuedTasks(tasks.data, sessionBusy, optimisticMessages, HIDDEN_QUEUE_ORIGINS), [tasks.data, sessionBusy, optimisticMessages]);
+  const hiddenQueueOrigins = useMemo(() => {
+    const set = new Set<string>(BASE_HIDDEN_QUEUE_ORIGINS);
+    for (const plugin of outputPluginRegistry.list()) {
+      if (plugin.interactionOrigin) set.add(plugin.interactionOrigin);
+    }
+    return set;
+  }, [outputPluginRegistry]);
+  const queuedTasks = useMemo(() => waitingQueuedTasks(tasks.data, sessionBusy, optimisticMessages, hiddenQueueOrigins), [tasks.data, sessionBusy, optimisticMessages, hiddenQueueOrigins]);
   const hasOngoingActivity = timelineSections.some(section => isTurnOngoing(section, sessionBusy));
   const showFirstOutputPlaceholder = awaitsFirstOutput(timeline[latestUserIndex], tasks.data, sessionBusy, hasOngoingActivity);
   const timelineScroll = useTimelineAutoScroll(session.id, timeline, sessionBusy);
@@ -371,8 +475,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const searchPaneKey = `${pane}:${session.id}`;
   const effectiveSearchQuery = searchOpen ? normalizeSearchQuery(debouncedSearchQuery) : '';
   const searchMatches = useMemo(
-    () => (effectiveSearchQuery ? searchTimeline({ turns: timelineTurns, rowKeys, systemPrompt: session.systemPrompt, query: effectiveSearchQuery }) : []),
-    [effectiveSearchQuery, timelineTurns, rowKeys, session.systemPrompt]
+    () => (effectiveSearchQuery ? searchTimeline({ turns: timelineTurns, rowKeys, systemPrompt: session.systemPrompt, query: effectiveSearchQuery, outputPluginRegistry }) : []),
+    [effectiveSearchQuery, timelineTurns, rowKeys, session.systemPrompt, outputPluginRegistry]
   );
   const clampedSearchIndex = searchMatches.length ? Math.min(searchIndex, searchMatches.length - 1) : -1;
   const activeSearchMatch = clampedSearchIndex >= 0 ? searchMatches[clampedSearchIndex] : undefined;
@@ -630,19 +734,27 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     // 切换会话时重置本会话的切换态与计时器。
     modelSwitchLaneRef.current.reset();
     reasoningSwitchLaneRef.current.reset();
+    pluginSwitchVersionRef.current += 1;
+    pluginSwitchInFlightRef.current = false;
     setPendingModel(undefined);
     setPendingReasoningEffort(undefined);
     setModelJustSwitched(false);
     setReasoningJustSwitched(false);
+    setSwitchingPluginId(undefined);
+    setPluginsJustSwitched(false);
     window.clearTimeout(modelSavedTimerRef.current);
     window.clearTimeout(reasoningSavedTimerRef.current);
+    window.clearTimeout(pluginSavedTimerRef.current);
   }, [session.id]);
 
   useEffect(() => () => {
     modelSwitchLaneRef.current.reset();
     reasoningSwitchLaneRef.current.reset();
+    pluginSwitchVersionRef.current += 1;
+    pluginSwitchInFlightRef.current = false;
     window.clearTimeout(modelSavedTimerRef.current);
     window.clearTimeout(reasoningSavedTimerRef.current);
+    window.clearTimeout(pluginSavedTimerRef.current);
   }, []);
 
   const handleModelChange = useCallback((nextModel: string) => {
@@ -719,6 +831,67 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     });
   }, [qc, session.agentId, session.id, session.reasoningEffort, session.sshHost]);
 
+  const handlePatchOutputPlugins = useCallback((patch: Record<string, boolean | null>, activePluginId?: string) => {
+    if (session.archivedAt) return;
+    if (!Object.keys(patch).length) return;
+    const previousPlugins = session.outputPlugins;
+    const previousAsk = typeof session.askUserQuestionEnabled === 'boolean' ? session.askUserQuestionEnabled : null;
+    const merged = mergeSessionOutputPluginsPatch(previousPlugins, patch, previousAsk);
+    const nextAsk = typeof merged[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] === 'boolean'
+      ? merged[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]
+      : null;
+
+    const version = ++pluginSwitchVersionRef.current;
+    pluginSwitchInFlightRef.current = true;
+    setActionError(undefined);
+    setSwitchingPluginId(activePluginId);
+    setPluginsJustSwitched(true);
+    window.clearTimeout(pluginSavedTimerRef.current);
+    pluginSavedTimerRef.current = window.setTimeout(() => setPluginsJustSwitched(false), 900);
+    qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => (
+      item.id === session.id
+        ? { ...item, outputPlugins: Object.keys(merged).length ? merged : undefined, askUserQuestionEnabled: nextAsk }
+        : item
+    )));
+    void api.setSessionOutputPlugins(session.id, patch).then(updatedSession => {
+      if (pluginSwitchVersionRef.current !== version) return;
+      pluginSwitchInFlightRef.current = false;
+      setSwitchingPluginId(undefined);
+      const activeModel = modelSwitchLaneRef.current.pending;
+      const activeReasoning = reasoningSwitchLaneRef.current.pending;
+      qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === updatedSession.id ? {
+        ...updatedSession,
+        ...(activeModel !== undefined ? { model: activeModel } : {}),
+        ...(activeReasoning !== undefined ? { reasoningEffort: activeReasoning } : {})
+      } : item));
+    }).catch(error => {
+      if (pluginSwitchVersionRef.current !== version) return;
+      pluginSwitchInFlightRef.current = false;
+      setSwitchingPluginId(undefined);
+      setPluginsJustSwitched(false);
+      qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => (
+        item.id === session.id
+          ? { ...item, outputPlugins: previousPlugins, askUserQuestionEnabled: previousAsk }
+          : item
+      )));
+      const message = error instanceof Error ? error.message : String(error);
+      setActionError(message);
+      syncToastRef.current.show(`切换交互插件失败：${message}`, 'error');
+    });
+  }, [qc, session.archivedAt, session.askUserQuestionEnabled, session.id, session.outputPlugins]);
+
+  const handleSetOutputPlugin = useCallback((pluginId: string, next: boolean | null) => {
+    handlePatchOutputPlugins({ [pluginId]: next }, pluginId);
+  }, [handlePatchOutputPlugins]);
+
+  const handleResetAllOutputPlugins = useCallback(() => {
+    const patch: Record<string, null> = {};
+    for (const item of composerOutputPlugins) {
+      if (item.override !== null) patch[item.id] = null;
+    }
+    if (Object.keys(patch).length) handlePatchOutputPlugins(patch);
+  }, [composerOutputPlugins, handlePatchOutputPlugins]);
+
   const switchingModel = pendingModel !== undefined;
   const switchingReasoningEffort = pendingReasoningEffort !== undefined;
   const modelReadiness = getModelReadiness({ loaded: models.data !== undefined, loading: models.data === undefined && (models.isPending || models.isFetching || refreshModels.isPending), switching: switchingModel, failed: models.data === undefined && models.isError });
@@ -747,7 +920,17 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
           ? { interruptIntent: typeof event.data.interruptIntent === 'string' ? event.data.interruptIntent : undefined }
           : event.data.state !== 'interrupted' ? { interruptIntent: undefined } : {}),
         ...(typeof event.data.model === 'string' && !modelSwitchLaneRef.current.pending ? { model: event.data.model } : {}),
-        ...(typeof event.data.reasoningEffort === 'string' && !reasoningSwitchLaneRef.current.pending ? { reasoningEffort: event.data.reasoningEffort } : {})
+        ...(typeof event.data.reasoningEffort === 'string' && !reasoningSwitchLaneRef.current.pending ? { reasoningEffort: event.data.reasoningEffort } : {}),
+        ...(Object.hasOwn(event.data, 'askUserQuestionEnabled') && !pluginSwitchInFlightRef.current
+          ? { askUserQuestionEnabled: typeof event.data.askUserQuestionEnabled === 'boolean' ? event.data.askUserQuestionEnabled : null }
+          : {}),
+        ...(Object.hasOwn(event.data, 'outputPlugins') && !pluginSwitchInFlightRef.current
+          ? {
+              outputPlugins: event.data.outputPlugins && typeof event.data.outputPlugins === 'object' && Object.keys(event.data.outputPlugins).length > 0
+                ? event.data.outputPlugins
+                : undefined
+            }
+          : {})
       } : item));
       if (event.type === 'task' && event.data.task) {
         const task = event.data.task as Task;
@@ -764,6 +947,71 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     setQuotedText(normalized);
     requestAnimationFrame(() => composerTextarea.current?.focus());
   };
+
+  const handleInteractOutputPlugin = useCallback(async (
+    plugin: OutputPluginMetadata,
+    spec: unknown,
+    input: unknown
+  ) => {
+    if (session.archivedAt) return;
+    const def = outputPluginRegistry.get(plugin.id);
+    const instanceId = def ? def.getInstanceId(spec) : String((spec as { id?: string })?.id ?? '');
+    if (!instanceId) return;
+    const title = def?.getTitle?.(spec);
+    const key = outputPluginInstanceKey(plugin.id, instanceId);
+
+    setSubmittingPluginKey(current => (current ? current : key));
+    setPluginSubmitErrors(current => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    try {
+      const payloadInput = (input ?? {}) as {
+        answers?: AskUserQuestionAnswerItem[];
+        decision?: 'confirm' | 'cancel';
+        decisionLabel?: string;
+        risk?: 'low' | 'medium' | 'high';
+        comment?: string;
+        actionValue?: string;
+        actionLabel?: string;
+        fields?: DeclarativeInteractionField[];
+        note?: string;
+      };
+      const result = await api.interactOutputPlugin(session.id, plugin.id, {
+        instanceId,
+        ...(title ? { title } : {}),
+        ...(payloadInput.answers ? { answers: payloadInput.answers } : {}),
+        ...(payloadInput.decision ? { decision: payloadInput.decision } : {}),
+        ...(payloadInput.decisionLabel ? { decisionLabel: payloadInput.decisionLabel } : {}),
+        ...(payloadInput.risk ? { risk: payloadInput.risk } : {}),
+        ...(payloadInput.comment ? { comment: payloadInput.comment } : {}),
+        ...(payloadInput.actionValue ? { actionValue: payloadInput.actionValue } : {}),
+        ...(payloadInput.actionLabel ? { actionLabel: payloadInput.actionLabel } : {}),
+        ...(payloadInput.fields ? { fields: payloadInput.fields } : {}),
+        ...(payloadInput.note ? { note: payloadInput.note } : {}),
+        clientMessageId: createClientMessageId()
+      });
+      if ('alreadySubmitted' in result) {
+        setOptimisticPluginInteractions(current => ({ ...current, [key]: result.existing }));
+        syncToastRef.current.show('该交互卡片已在其他端完成响应，已同步最新结果', 'info');
+        void events.refetch();
+        void tasks.refetch();
+        return;
+      }
+      setOptimisticPluginInteractions(current => ({ ...current, [key]: result.payload }));
+      qc.setQueryData<Task[]>(['tasks', session.id], current => upsertTask(current, result.task));
+      timelineScroll.scrollToBottom();
+      void events.refetch();
+      void tasks.refetch();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '提交操作失败，请重试';
+      setPluginSubmitErrors(current => ({ ...current, [key]: message }));
+    } finally {
+      setSubmittingPluginKey(current => (current === key ? undefined : current));
+    }
+  }, [events, outputPluginRegistry, qc, session.archivedAt, session.id, tasks, timelineScroll]);
 
   const submit = (submittedValue: string) => {
     if (modelReadiness.kind === 'blocked' || send.isPending || sendInFlight.current) return;
@@ -888,10 +1136,34 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     maxChars: 20
   }), [buildSessionAiContext]);
 
-  // ⋯ 菜单：统一收纳会话级低频操作（定时任务、系统提示词、飞书托管、同步、归档等），
+  // ⋯ 菜单：统一收纳会话级操作（交互插件中心、定时任务、系统提示词、飞书托管、同步、归档等），
   // 顶栏只保留搜索、副屏与「更多」，零重复、高呼吸感。
+  const enabledPluginsCount = enabledOutputPluginIds.size;
+  const totalPluginsCount = composerOutputPlugins.length;
+  const hasPluginOverrides = composerOutputPlugins.some(item => item.override !== null);
   const regularMenuGroups: SessionMenuGroup[] = [
     { items: [
+      ...(!session.archivedAt && totalPluginsCount > 0 ? [{
+        id: 'output-plugins-center',
+        label: '交互插件',
+        icon: <Puzzle size={16} className={enabledPluginsCount > 0 ? 'text-sky-600 dark:text-sky-400' : undefined}/>,
+        trailing: (
+          <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[11px] font-medium tabular-nums ${
+            enabledPluginsCount > 0
+              ? 'border-sky-200 bg-sky-50 text-sky-700 dark:text-sky-300'
+              : 'border-zinc-200 bg-zinc-100 text-zinc-500'
+          }`}>
+            {enabledPluginsCount}/{totalPluginsCount} 启用
+          </span>
+        ),
+        onSelect: () => openAppDialog('output-plugins')
+      } satisfies SessionMenuItem] : []),
+      ...(!session.archivedAt && hasPluginOverrides ? [{
+        id: 'output-plugins-reset-all',
+        label: '插件恢复跟随全局',
+        icon: <RotateCcw size={15}/>,
+        onSelect: handleResetAllOutputPlugins
+      } satisfies SessionMenuItem] : []),
       ...(!session.archivedAt ? [{
         id: 'schedules', label: '定时任务', icon: <AlarmClock size={16}/>,
         ...(activeSchedules ? { trailing: <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-zinc-500">{activeSchedules}</span> } : {}),
@@ -1042,12 +1314,29 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
                 const itemKey = timelineRowKey(section.event, rowKeys);
                 const isSearchActive = activeSearchMatch?.itemKey === itemKey;
                 return <div key={itemKey} data-search-item-key={itemKey} data-search-active={isSearchActive ? 'true' : undefined} className={isSearchActive ? 'ui-search-active-item' : undefined}>
-                  <TimelineItem event={section.event} sentPrompt={typeof section.event.data.taskId === 'string' ? sentPromptByTaskId.get(section.event.data.taskId) : undefined} final={section.final} streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))} replay={section.event.timestamp < mountedAt} assistantLabel={outputLabel} sessionId={session.id}/>
+                  <TimelineItem
+                    event={section.event}
+                    sentPrompt={typeof section.event.data.taskId === 'string' ? sentPromptByTaskId.get(section.event.data.taskId) : undefined}
+                    final={section.final}
+                    streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))}
+                    replay={section.event.timestamp < mountedAt}
+                    assistantLabel={outputLabel}
+                    sessionId={session.id}
+                    askUserQuestionXmlEnabled={effectiveAskUserQuestionEnabled}
+                    outputPluginRegistry={outputPluginRegistry}
+                    enabledOutputPluginIds={enabledOutputPluginIds}
+                    pluginInteractionsByKey={pluginInteractionsByKey}
+                    submittingPluginKey={submittingPluginKey}
+                    pluginSubmitErrors={pluginSubmitErrors}
+                    askDisabled={Boolean(session.archivedAt) || mainNeedsRestart}
+                    askDisabledReason={session.archivedAt ? '该会话已归档，无法提交操作' : mainNeedsRestart ? '请先恢复主会话后再操作' : undefined}
+                    onInteractOutputPlugin={handleInteractOutputPlugin}
+                  />
                 </div>;
               }
               const isSearchActive = activeSearchMatch?.itemKey === section.id;
               return <div key={section.id} data-search-item-key={section.id} data-search-active={isSearchActive ? 'true' : undefined} className={isSearchActive ? 'ui-search-active-item' : undefined}>
-                <ActivityPanel groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt} forceOpen={isSearchActive} activeStepId={isSearchActive ? activeSearchMatch?.stepId : undefined}/>
+                <ActivityPanel groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt} forceOpen={isSearchActive} activeStepId={isSearchActive ? activeSearchMatch?.stepId : undefined} askUserQuestionXmlEnabled={effectiveAskUserQuestionEnabled} outputPluginRegistry={outputPluginRegistry} enabledOutputPluginIds={enabledOutputPluginIds}/>
               </div>;
             })}
           </TimelineTurn>;
@@ -1063,7 +1352,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             </button>
           </div>
           : <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已归档，仅支持查看。</div>
-        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} quotedText={quotedText} onClearQuote={() => setQuotedText(undefined)} sending={send.isPending} sendingMode={send.isPending ? send.variables?.mode : undefined} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={activeSteeringTaskId} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchingModel} switchingReasoningEffort={switchingReasoningEffort} pendingModel={pendingModel} pendingReasoningEffort={pendingReasoningEffort} modelJustSwitched={modelJustSwitched} reasoningJustSwitched={reasoningJustSwitched} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} aiContext={buildSessionAiContext} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={handleSteerQueued} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={handleModelChange} onReasoningEffortChange={handleReasoningEffortChange} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
+        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} quotedText={quotedText} onClearQuote={() => setQuotedText(undefined)} sending={send.isPending} sendingMode={send.isPending ? send.variables?.mode : undefined} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={activeSteeringTaskId} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchingModel} switchingReasoningEffort={switchingReasoningEffort} pendingModel={pendingModel} pendingReasoningEffort={pendingReasoningEffort} modelJustSwitched={modelJustSwitched} reasoningJustSwitched={reasoningJustSwitched} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} aiContext={buildSessionAiContext} outputPlugins={composerOutputPlugins} switchingOutputPluginId={switchingPluginId} outputPluginsJustSwitched={pluginsJustSwitched} onSetOutputPlugin={handleSetOutputPlugin} onResetAllOutputPlugins={handleResetAllOutputPlugins} onOpenOutputPluginsCenter={() => openAppDialog('output-plugins')} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={handleSteerQueued} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={handleModelChange} onReasoningEffortChange={handleReasoningEffortChange} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>
       </div>
     </section>
@@ -1078,4 +1367,4 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 会话数据更新（流式消息、任务轮询）会带着新的 props 渲染本组件。不在这里兜住的话，
   // 长会话会把整条时间线上千个节点全部重新 diff 一遍。弹窗开关已移到 dialog-store，
   // 打开弹窗不再经过 App/SessionPane；这里只兜住父子数据更新。
-}, (prev, next) => prev.session === next.session && prev.agent === next.agent && prev.pane === next.pane && prev.paneOpen === next.paneOpen && prev.btwEnabled === next.btwEnabled && prev.btwTriggerPrefix === next.btwTriggerPrefix);
+}, (prev, next) => prev.session === next.session && prev.agent === next.agent && prev.pane === next.pane && prev.paneOpen === next.paneOpen && prev.btwEnabled === next.btwEnabled && prev.btwTriggerPrefix === next.btwTriggerPrefix && prev.askUserQuestionXmlEnabled === next.askUserQuestionXmlEnabled && prev.outputPluginItems === next.outputPluginItems && prev.outputPluginsGlobalConfig === next.outputPluginsGlobalConfig && prev.outputPluginRegistry === next.outputPluginRegistry);

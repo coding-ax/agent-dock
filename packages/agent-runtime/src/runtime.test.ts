@@ -1496,4 +1496,88 @@ describe('会话名的三级回退', () => {
     expect((await h.runtime.getSession(session.id))?.reasoningEffort).toBe('xhigh');
     await h.runtime.shutdown(); h.repos.close();
   });
+
+  it('persists askUserQuestionEnabled on start and toggles dormant sessions instantly without cold-starting CLI', async () => {
+    const h = harness();
+    await h.runtime.initialize([agent]);
+
+    // 创建时可显式关闭
+    const created = await h.runtime.start({ agentId: 'mock', askUserQuestionEnabled: false });
+    expect(created.askUserQuestionEnabled).toBe(false);
+    expect((await h.runtime.getSession(created.id))?.askUserQuestionEnabled).toBe(false);
+
+    // 构造一个无活跃驱动的休眠会话，切换开关不得冷启 CLI，并立即广播 status SSE
+    const dormantAt = '2026-11-27T00:00:00.000Z';
+    await h.repos.sessions.save({
+      id: 'ses_dormant_ask',
+      agentId: 'mock',
+      state: 'idle',
+      cwd: '/tmp',
+      permissionMode: 'full-trust',
+      protocol: 'acp',
+      runId: 'run_dormant_ask',
+      createdAt: dormantAt,
+      updatedAt: dormantAt
+    });
+    const sseEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = h.runtime.subscribe('ses_dormant_ask', event => {
+      sseEvents.push({ type: event.type, data: event.data as Record<string, unknown> });
+    });
+
+    const initialStarts = h.configuredAgents.length;
+    const turnedOff = await h.runtime.setAskUserQuestionEnabled('ses_dormant_ask', false);
+    expect(turnedOff.askUserQuestionEnabled).toBe(false);
+    expect((await h.runtime.getSession('ses_dormant_ask'))?.askUserQuestionEnabled).toBe(false);
+
+    const restored = await h.runtime.setAskUserQuestionEnabled('ses_dormant_ask', null);
+    expect(restored.askUserQuestionEnabled).toBeNull();
+    expect((await h.runtime.getSession('ses_dormant_ask'))?.askUserQuestionEnabled ?? null).toBeNull();
+
+    // 零冷启动 CLI 进程
+    expect(h.configuredAgents).toHaveLength(initialStarts);
+    expect(sseEvents.filter(e => e.type === 'status' && 'askUserQuestionEnabled' in e.data).map(e => e.data.askUserQuestionEnabled)).toEqual([false, null]);
+
+    // 非法入参与归档会话校验
+    await expect(h.runtime.setAskUserQuestionEnabled('ses_dormant_ask', 'yes' as any)).rejects.toMatchObject({ code: 'INVALID_ASK_USER_QUESTION_ENABLED' });
+    await h.runtime.archive('ses_dormant_ask');
+    await expect(h.runtime.setAskUserQuestionEnabled('ses_dormant_ask', true)).rejects.toMatchObject({ code: 'SESSION_ARCHIVED' });
+
+    unsubscribe();
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('persists outputPlugins on start, updates dormant sessions via setOutputPlugins, and broadcasts SSE', async () => {
+    const h = harness();
+    await h.runtime.initialize([agent]);
+
+    const created = await h.runtime.start({
+      agentId: 'mock',
+      outputPlugins: {
+        'builtin:ask-user-question': false,
+        'local:deploy-approval': true
+      }
+    });
+    expect(created.askUserQuestionEnabled).toBe(false);
+    expect(created.outputPlugins).toEqual({
+      'builtin:ask-user-question': false,
+      'local:deploy-approval': true
+    });
+
+    const sseEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = h.runtime.subscribe(created.id, event => {
+      sseEvents.push({ type: event.type, data: event.data as Record<string, unknown> });
+    });
+
+    const updated = await h.runtime.setOutputPlugins(created.id, {
+      'ask-user-question': true,
+      'local:deploy-approval': null
+    });
+    expect(updated.askUserQuestionEnabled).toBe(true);
+    expect(updated.outputPlugins).toEqual({ 'builtin:ask-user-question': true });
+    expect(sseEvents.some(e => e.type === 'status' && e.data.askUserQuestionEnabled === true && (e.data.outputPlugins as Record<string, boolean>)?.['builtin:ask-user-question'] === true)).toBe(true);
+
+    await expect(h.runtime.setOutputPlugins(created.id, {})).rejects.toMatchObject({ code: 'INVALID_OUTPUT_PLUGINS' });
+    unsubscribe();
+    await h.runtime.shutdown(); h.repos.close();
+  });
 });

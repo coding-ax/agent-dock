@@ -1,17 +1,29 @@
 import { isLarkOperatorAllowed, resolveLarkAccessConfig } from './access-config.js';
 import { EventDispatcher, LoggerLevel, WSClient } from './sdk.js';
 import type { WSClient as LarkWSClient } from './sdk.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import type { AgentConfig, AgentEvent, ConfigRepository, ChannelMappingRepository, PermissionMode, Session, TaskRecord, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
-import { defaultHighRiskPattern, defaultLarkTraceLimit, type StoredLarkConfig } from './config.js';
+import type { AgentConfig, AgentEvent, AskUserQuestionAnswerItem, AskUserQuestionAnswerPayload, AskUserQuestionSpec, ConfirmActionInteractionPayload, ConfirmActionSpec, ConfigRepository, ChannelMappingRepository, PermissionMode, Session, TaskRecord, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
+import { defaultHighRiskPattern, defaultLarkTraceLimit, readLarkConfig, type StoredLarkConfig } from './config.js';
 import { parseLarkMessageContent, type LarkMessageResource } from './message-content.js';
 import { boundLarkCardElements, createLarkCardService, larkIdentityPermissionHelp, LarkServiceError, type LarkCardActionButton, type LarkCardService } from './service.js';
 import { clearSessionReplyMode, getSessionReplyMode, type AgentReplyMode } from './agent-tools.js';
 import { larkHandoverChannel } from './handover-binding.js';
 import { buildSideSessionSeed, matchSideChatTrigger, readSideChatConfig, type SideChatConfig } from '../side-chat-config.js';
+import { readAskUserQuestionConfig, type AskUserQuestionService } from '../ask-user-question.js';
+import { readOutputPluginsGlobalConfig, type OutputPluginService } from '../output-plugins/service.js';
+import {
+  LARK_ASK_CARD_CHANNEL,
+  type PersistedLarkAskCard
+} from './ask-user-question-card.js';
+import {
+  defaultLarkOutputPluginAdapterRegistry,
+  LARK_OUTPUT_PLUGIN_CARD_CHANNEL,
+  type LarkOutputPluginAdapterRegistry,
+  type PersistedLarkOutputPluginCard
+} from './output-plugins/index.js';
 import {
   buildRegexTriggerPrompt,
   findMatchingRealtimeRegexTrigger,
@@ -19,7 +31,28 @@ import {
   type LarkRegexReplyMode,
   type LarkRegexTriggerHitType
 } from './regex-triggers.js';
-import { isAgentStreamErrorText, isAgentWarningText, isCarriedOverToolCall, pickFinalAssistantEntry, stripAgentStreamErrorSuffix, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
+import {
+  ASK_USER_QUESTION_ANSWER_ORIGIN,
+  BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+  BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+  CONFIRM_ACTION_INTERACTION_ORIGIN,
+  defaultOutputPluginRegistry,
+  formatAskUserQuestionAnswerForAgent,
+  formatConfirmActionInteractionForAgent,
+  isAgentStreamErrorText,
+  isAgentWarningText,
+  isCarriedOverToolCall,
+  normalizeOutputPluginId,
+  now,
+  pickFinalAssistantEntry,
+  resolveOutputPluginEnabled,
+  serializeAskUserQuestionAnswer,
+  serializeConfirmActionInteraction,
+  stripAgentStreamErrorSuffix,
+  summarizeAskUserQuestionAnswer,
+  type OutputPluginRegistry,
+  unresolvedToolCallsAfterAnswer
+} from '@agent-dock/agent-dock-shared';
 
 type ListenerLog = {
   info(details: unknown, message?: string): void;
@@ -35,7 +68,7 @@ export interface LarkRuntime {
   stop?(id: string): Promise<unknown>;
   setPermissionMode?(id: string, mode: PermissionMode): Promise<Session>;
   send(id: string, prompt: string, agentPrompt?: string): Promise<unknown>;
-  dispatch?(id: string, prompt: string, mode?: 'queue' | 'interrupt', agentPrompt?: string, riskPolicy?: ToolRiskPolicy): Promise<{ id: string; status: string; queuedAhead?: number }>;
+  dispatch?(id: string, prompt: string, mode?: 'queue' | 'interrupt', agentPrompt?: string, riskPolicy?: ToolRiskPolicy, origin?: string, clientMessageId?: string): Promise<{ id: string; status: string; queuedAhead?: number }>;
   getTasks?(id: string): Promise<TaskRecord[]>;
   getEvents?(id: string, afterSequence?: number): Promise<AgentEvent[]>;
   getRecentEvents?(id: string, limit: number): Promise<AgentEvent[]>;
@@ -170,7 +203,25 @@ type LarkTask = {
     triggerRootId: string;
     config: SideChatConfig;
   };
+  /** 任务来源（例如 AskUserQuestion 作答轮次为 ask-user-question-answer）。 */
+  origin?: string;
+  /** 覆盖发给 Agent 的自然语言正文（当 task.prompt 承载结构化载荷时使用）。 */
+  agentPromptOverride?: string;
+  /** 客户端幂等键，用于防重派发。 */
+  clientMessageId?: string;
+  /** 卡片顶栏展示用的可读任务摘要（避免暴露结构化 JSON）。 */
+  taskDisplayName?: string;
+  /** 由卡片回调发起的续跑轮次无需给原消息贴确认表情。 */
+  skipReaction?: boolean;
 };
+
+export interface LarkCardActionContext {
+  formValue?: Record<string, unknown>;
+  openMessageId?: string;
+  openChatId?: string;
+  option?: string;
+  inputValue?: string;
+}
 type PersistedLarkCardTask = {
   app_id: string;
   chat_id: string;
@@ -987,6 +1038,12 @@ const groupPanel = (group: TraceGroup, index: number, terminal = false): LarkCar
  *  严格规则取不到、但本轮确有正文时退化为末条文本（Agent 答完又做了收尾动作的轮次）。 */
 const findFinalMessageEntry = (entries: TraceEntry[]): TraceEntry | undefined => pickFinalAssistantEntry(entries);
 
+/** 提取轮次原始未截断最终回复文本（用于完整解析末尾 AskUserQuestion XML）。 */
+const extractRawFinalText = (events: AgentEvent[]): string => {
+  const finalMessage = findFinalMessageEntry(compactTrace(events));
+  return typeof finalMessage?.data?.text === 'string' ? finalMessage.data.text : '';
+};
+
 /** 提取轮次最终回复文本（直接 compact 事件并定位）。 */
 const extractFinalText = (events: AgentEvent[]): string => {
   const finalMessage = findFinalMessageEntry(compactTrace(events));
@@ -997,13 +1054,65 @@ export function renderLarkCardElements(
   events: AgentEvent[],
   config: Pick<StoredLarkConfig, 'traceLimit'>,
   completed = false,
-  compensation = false
+  compensation = false,
+  options?: {
+    askUserQuestionXmlEnabled?: boolean;
+    outputPluginRegistry?: OutputPluginRegistry;
+    enabledOutputPluginIds?: ReadonlySet<string>;
+    larkPluginAdapters?: LarkOutputPluginAdapterRegistry;
+  }
 ): LarkCardElement[] {
+  const pluginRegistry = options?.outputPluginRegistry ?? defaultOutputPluginRegistry;
+  const pluginAdapters = options?.larkPluginAdapters ?? defaultLarkOutputPluginAdapterRegistry;
+  const enabledPluginIds = options?.enabledOutputPluginIds
+    ?? (options?.askUserQuestionXmlEnabled === false
+      ? new Set<string>()
+      : new Set<string>([BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]));
+  const hasEnabledPlugins = enabledPluginIds.size > 0;
   const entries = compactTrace(events);
   // final 文本仅用于 completed 终态卡片；运行中/其他状态不提升 final_output。
   const finalMessage = completed ? findFinalMessageEntry(entries) : undefined;
-  const finalText = finalMessage ? truncate(finalMessage.data.text, 6_000) : '';
+  let finalText = '';
+  if (finalMessage) {
+    const rawText = String(finalMessage.data.text ?? '');
+    const extracted = hasEnabledPlugins ? pluginRegistry.parseTrailingOutput(rawText, enabledPluginIds) : null;
+    if (extracted) {
+      const plugin = pluginRegistry.get(extracted.pluginId);
+      const adapter = plugin ? pluginAdapters.resolve(plugin) : undefined;
+      const hintMd = adapter?.trailingHintMarkdown || "<font color='grey'>👇 请在下方交互卡片中确认并作答</font>";
+      finalText = extracted.proseText
+        ? `${truncate(extracted.proseText, 5_800)}\n\n${hintMd}`
+        : plugin?.capabilities.interactive === false
+          ? `请在下方查看「${plugin.name}」卡片。`
+          : '请在下方交互卡片中确认并作答。';
+    } else {
+      finalText = truncate(rawText, 6_000);
+    }
+  }
   let activityEntries = finalMessage ? entries.filter(entry => entry !== finalMessage) : entries;
+  if (!completed && hasEnabledPlugins && activityEntries.length) {
+    // 流式阶段若最后一条正文正在输出任一已启用插件的 XML 标签，屏蔽裸 XML 源码。
+    let lastTextIdx = -1;
+    for (let i = activityEntries.length - 1; i >= 0; i--) {
+      if (activityEntries[i]!.type === 'text') { lastTextIdx = i; break; }
+    }
+    if (lastTextIdx >= 0) {
+      const target = activityEntries[lastTextIdx]!;
+      const raw = String(target.data.text ?? '');
+      const split = pluginRegistry.splitStreamingOutput(raw, true, enabledPluginIds);
+      if (split.kind !== 'none') {
+        const plugin = pluginRegistry.get(split.pluginId);
+        const adapter = plugin ? pluginAdapters.resolve(plugin) : undefined;
+        const placeholder = adapter?.streamingPlaceholderText || '⏳ 正在生成选项卡片…';
+        const sanitized = split.proseText
+          ? `${split.proseText}\n\n${placeholder}`
+          : placeholder;
+        activityEntries = activityEntries.map((entry, idx) => idx === lastTextIdx
+          ? { ...entry, data: { ...entry.data, text: sanitized } }
+          : entry);
+      }
+    }
+  }
   // 先全量分组，再按 group 数量裁剪。
   // 若在 entry 级别切片，滑动窗口可能切断 group 边界，导致 group 数量随新事件到来而跳变。
   // 按 group 级别裁剪后，group 数量单调递增，超过 traceLimit 时才丢弃最旧的 group，计数稳定。
@@ -1061,6 +1170,10 @@ export class LarkMessageCoordinator {
   /** 单人群聊免 @ 唤醒用的群人类成员数短缓存（15s TTL），避免连发消息反复查飞书接口，同时拉入第二个人后尽快失效。 */
   private readonly chatUserCounts = new Map<string, { count?: number; fetchedAt: number }>();
   private readonly chatUserCountFetches = new Map<string, Promise<number | undefined>>();
+  /** 纯 XML 交互插件飞书卡片内存镜像（同时双写 cardMappings，兼容重启与无库单测）。 */
+  private readonly pluginCards = new Map<string, PersistedLarkOutputPluginCard>();
+  /** 无 OutputPluginService 注入时的本地兜底幂等记录。 */
+  private readonly localAnsweredPlugins = new Map<string, unknown>();
 
   constructor(
     private readonly runtime: LarkRuntime,
@@ -1070,8 +1183,225 @@ export class LarkMessageCoordinator {
     private readonly botOpenId?: string,
     private readonly peerBotAuthorized?: (chatId: string, senderOpenId: string) => Promise<boolean>,
     private readonly cardMappings?: ChannelMappingRepository,
-    private readonly configRepository?: ConfigRepository
+    private readonly configRepository?: ConfigRepository,
+    private readonly askUserQuestion?: AskUserQuestionService,
+    private readonly outputPlugins?: OutputPluginService,
+    private readonly larkPluginAdapters: LarkOutputPluginAdapterRegistry = defaultLarkOutputPluginAdapterRegistry
   ) {}
+
+  private get resolvedOutputPlugins(): OutputPluginService | undefined {
+    return this.outputPlugins ?? this.askUserQuestion?.outputPlugins;
+  }
+
+  private get resolvedPluginRegistry(): OutputPluginRegistry {
+    return this.resolvedOutputPlugins?.registry ?? defaultOutputPluginRegistry;
+  }
+
+  private cardChannelForPlugin(pluginId: string): string {
+    return normalizeOutputPluginId(pluginId) === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID
+      ? LARK_ASK_CARD_CHANNEL
+      : LARK_OUTPUT_PLUGIN_CARD_CHANNEL;
+  }
+
+  private async resolveEnabledOutputPluginIds(sessionId?: string): Promise<Set<string>> {
+    const session = sessionId ? await this.runtime.getSession(sessionId).catch(() => undefined) : undefined;
+    if (this.resolvedOutputPlugins) {
+      return this.resolvedOutputPlugins.enabledPluginIdsForSession(session);
+    }
+    const globalState = await readOutputPluginsGlobalConfig(this.configRepository);
+    const askGlobal = (await readAskUserQuestionConfig(this.configRepository)).askUserQuestionXmlEnabled;
+    const mergedGlobal = {
+      plugins: {
+        [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: askGlobal,
+        ...globalState.config.plugins
+      }
+    };
+    const enabled = new Set<string>();
+    for (const plugin of this.resolvedPluginRegistry.list()) {
+      if (resolveOutputPluginEnabled(plugin.id, {
+        defaultEnabled: plugin.defaultEnabled,
+        globalConfig: mergedGlobal,
+        sessionOverrides: session?.outputPlugins,
+        legacySessionAskEnabled: session?.askUserQuestionEnabled
+      })) {
+        enabled.add(plugin.id);
+      }
+    }
+    return enabled;
+  }
+
+  private normalizePersistedCard(raw: Record<string, unknown>): PersistedLarkOutputPluginCard | undefined {
+    const cardId = typeof raw.cardId === 'string' ? raw.cardId : '';
+    const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId : '';
+    if (!cardId || !sessionId || !raw.spec) return undefined;
+    const pluginId = typeof raw.pluginId === 'string' && raw.pluginId.trim()
+      ? normalizeOutputPluginId(raw.pluginId)
+      : BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
+    const instanceId = typeof raw.instanceId === 'string' && raw.instanceId.trim()
+      ? raw.instanceId
+      : typeof raw.questionId === 'string' && raw.questionId.trim()
+        ? raw.questionId
+        : '';
+    if (!instanceId) return undefined;
+    return {
+      ...(raw as unknown as PersistedLarkOutputPluginCard),
+      pluginId,
+      instanceId,
+      ...(pluginId === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID ? { questionId: instanceId } : {})
+    };
+  }
+
+  private async hasSentPluginCardFor(sessionId: string, pluginId: string, instanceId: string): Promise<boolean> {
+    const canonicalId = normalizeOutputPluginId(pluginId);
+    for (const record of this.pluginCards.values()) {
+      if (record.sessionId === sessionId && record.pluginId === canonicalId && record.instanceId === instanceId) return true;
+    }
+    if (this.cardMappings) {
+      const channel = this.cardChannelForPlugin(canonicalId);
+      const persisted = await this.cardMappings.list(channel).catch(() => []);
+      for (const mapping of persisted) {
+        if (mapping.sessionId !== sessionId || !mapping.extra) continue;
+        try {
+          const parsed = this.normalizePersistedCard(JSON.parse(mapping.extra) as Record<string, unknown>);
+          if (parsed && parsed.pluginId === canonicalId && parsed.instanceId === instanceId) return true;
+        } catch { /* ignore malformed */ }
+      }
+    }
+    return false;
+  }
+
+  private async lookupPluginCard(cardId: string, preferredPluginId?: string): Promise<PersistedLarkOutputPluginCard | undefined> {
+    const cached = this.pluginCards.get(cardId);
+    if (cached) return cached;
+    if (!this.cardMappings) return undefined;
+    const channels = preferredPluginId
+      ? [this.cardChannelForPlugin(preferredPluginId), LARK_ASK_CARD_CHANNEL, LARK_OUTPUT_PLUGIN_CARD_CHANNEL]
+      : [LARK_ASK_CARD_CHANNEL, LARK_OUTPUT_PLUGIN_CARD_CHANNEL];
+    const visited = new Set<string>();
+    for (const channel of channels) {
+      if (visited.has(channel)) continue;
+      visited.add(channel);
+      const mapping = await this.cardMappings.get(channel, cardId).catch(() => undefined);
+      if (!mapping?.extra) continue;
+      try {
+        const parsed = this.normalizePersistedCard(JSON.parse(mapping.extra) as Record<string, unknown>);
+        if (parsed) {
+          this.pluginCards.set(parsed.cardId, parsed);
+          return parsed;
+        }
+      } catch { /* ignore malformed */ }
+    }
+    return undefined;
+  }
+
+  /** 向对应飞书群/私聊发送任意已注册纯 XML 插件的 Schema 2.0 卡片，并持久化映射以支持回调与跨重启响应。 */
+  async pushOutputPluginCard(input: {
+    config: StoredLarkConfig;
+    sessionId: string;
+    taskId?: string;
+    chatId: string;
+    chatType: string;
+    replyToMessageId?: string;
+    replyInThread?: boolean;
+    forceMainThread?: boolean;
+    threadId?: string;
+    rootId?: string;
+    pluginId: string;
+    spec: unknown;
+  }): Promise<PersistedLarkOutputPluginCard | undefined> {
+    const canonicalId = normalizeOutputPluginId(input.pluginId);
+    const plugin = this.resolvedPluginRegistry.get(canonicalId);
+    if (!plugin) return undefined;
+    const adapter = this.larkPluginAdapters.resolve(plugin);
+    if (!adapter) return undefined;
+    const instanceId = plugin.getInstanceId(input.spec);
+    if (!instanceId) return undefined;
+    if (await this.hasSentPluginCardFor(input.sessionId, canonicalId, instanceId)) return undefined;
+
+    const isAsk = canonicalId === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
+    const cardId = `${isAsk ? 'askc' : 'outpc'}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    const card = adapter.buildCard({
+      cardId,
+      plugin,
+      spec: input.spec,
+      sessionId: input.sessionId,
+      webBaseUrl: input.config.webBaseUrl
+    });
+    const canReply = !input.forceMainThread
+      && Boolean(input.replyToMessageId?.trim())
+      && !input.replyToMessageId!.startsWith('askq-reply-')
+      && !input.replyToMessageId!.startsWith('outp-reply-');
+    const idempotencyKey = `${isAsk ? 'askq' : 'outp'}-${cardId}`;
+    const sent = canReply
+      ? await this.service.replyInteractiveCard({
+          messageId: input.replyToMessageId!,
+          card,
+          replyInThread: Boolean(input.replyInThread),
+          idempotencyKey
+        })
+      : await this.service.sendInteractiveCard({
+          chatId: input.chatId,
+          card,
+          idempotencyKey
+        });
+    const record: PersistedLarkOutputPluginCard = {
+      cardId,
+      pluginId: canonicalId,
+      appId: input.config.appId,
+      chatId: input.chatId,
+      chatType: input.chatType,
+      messageId: sent.messageId,
+      ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+      ...(input.replyInThread ? { replyInThread: true } : {}),
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      ...(input.rootId ? { rootId: input.rootId } : {}),
+      sessionId: input.sessionId,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      instanceId,
+      ...(isAsk ? { questionId: instanceId } : {}),
+      spec: input.spec,
+      ...(input.config.webBaseUrl ? { webBaseUrl: input.config.webBaseUrl } : {}),
+      createdAt: now()
+    };
+    this.pluginCards.set(cardId, record);
+    if (this.pluginCards.size > 2_000) {
+      const oldest = this.pluginCards.keys().next().value;
+      if (oldest) this.pluginCards.delete(oldest);
+    }
+    if (this.cardMappings) {
+      const channel = this.cardChannelForPlugin(canonicalId);
+      await this.cardMappings.save({
+        id: `${channel}:${cardId}`,
+        channel,
+        externalId: cardId,
+        sessionId: input.sessionId,
+        extra: JSON.stringify(record),
+        createdAt: record.createdAt
+      });
+    }
+    return record;
+  }
+
+  /** 向后兼容包装：推送内置 AskUserQuestion 飞书交互卡片。 */
+  async pushAskUserQuestionCard(input: {
+    config: StoredLarkConfig;
+    sessionId: string;
+    taskId?: string;
+    chatId: string;
+    chatType: string;
+    replyToMessageId?: string;
+    replyInThread?: boolean;
+    forceMainThread?: boolean;
+    threadId?: string;
+    rootId?: string;
+    spec: AskUserQuestionSpec;
+  }): Promise<PersistedLarkAskCard | undefined> {
+    const pushed = await this.pushOutputPluginCard({
+      ...input,
+      pluginId: BUILTIN_ASK_USER_QUESTION_PLUGIN_ID
+    });
+    return pushed as PersistedLarkAskCard | undefined;
+  }
 
   /**
    * 终态判定必须基于完整轮次事件，不能用被截断的心跳缓冲（见 maxBufferedEvents）：
@@ -1952,13 +2282,16 @@ export class LarkMessageCoordinator {
     });
   }
 
-  async handleAction(value: unknown, operatorOpenId?: string) {
+  async handleAction(value: unknown, operatorOpenId?: string, context?: LarkCardActionContext) {
     let parsed = value;
     if (typeof parsed === 'string') {
       try { parsed = JSON.parse(parsed); } catch { return { type: 'error', content: '无法识别卡片操作' }; }
     }
     if (!parsed || typeof parsed !== 'object') return { type: 'error', content: '无法识别卡片操作' };
     const action = String((parsed as any).action ?? '');
+    if (this.larkPluginAdapters.isPluginCardAction(action, parsed as Record<string, unknown>)) {
+      return this.handleOutputPluginAction(action, parsed as Record<string, unknown>, operatorOpenId, context);
+    }
     const taskId = String((parsed as any).task_id ?? (parsed as any).taskId ?? '');
     const task = this.tasks.get(taskId);
     if (!task) return { type: 'warning', content: '任务已过期，请重新发送消息' };
@@ -2050,6 +2383,282 @@ export class LarkMessageCoordinator {
     return { type: 'error', content: '不支持的卡片操作' };
   }
 
+  private async handleOutputPluginAction(
+    action: string,
+    value: Record<string, unknown>,
+    operatorOpenId?: string,
+    context?: LarkCardActionContext
+  ): Promise<{ type: 'success' | 'warning' | 'error' | 'info'; content: string }> {
+    const hintedPluginId = typeof value.plugin_id === 'string' && value.plugin_id.trim()
+      ? normalizeOutputPluginId(value.plugin_id)
+      : undefined;
+
+    if (action === 'ask_user_question_preview') {
+      return { type: 'info', content: '这是 AskUserQuestion 样式预览卡片；实际对话中点击将提交回答并驱动 Agent 继续执行' };
+    }
+    if (action === 'confirm_action_preview') {
+      return { type: 'info', content: '这是操作确认样式预览卡片；实际对话中点击将提交决定并驱动 Agent 继续执行' };
+    }
+    if (action === 'output_plugin_preview') {
+      return { type: 'info', content: '这是交互插件样式预览卡片；实际对话中点击将提交响应并驱动 Agent 继续执行' };
+    }
+
+    const cardId = String(value.card_id ?? value.cardId ?? '').trim();
+    if (!cardId) return { type: 'error', content: '交互卡片缺少标识，无法提交' };
+
+    const record = await this.lookupPluginCard(cardId, hintedPluginId);
+    if (!record) return { type: 'warning', content: '交互卡片已失效，请在会话中直接回复' };
+
+    const plugin = this.resolvedPluginRegistry.get(record.pluginId);
+    if (!plugin) return { type: 'warning', content: `对应交互插件（${record.pluginId}）当前未加载` };
+    const adapter = this.larkPluginAdapters.resolve(plugin);
+    if (!adapter || !adapter.parseAction) {
+      return { type: 'error', content: '当前插件暂不支持飞书交互回调' };
+    }
+
+    const botConfig = (this.reconcileConfig?.appId === record.appId ? this.reconcileConfig : undefined)
+      ?? (await readLarkConfig(this.configRepository, record.appId))
+      ?? ({
+        appId: record.appId,
+        appSecret: '',
+        listening: true,
+        groupToolsEnabled: false,
+        groupToolsAllowSend: false,
+        groupSessionScope: 'user',
+        pushIntervalMs: 1_000,
+        hideTraceOnComplete: false,
+        quietReply: false,
+        allowedUsers: [],
+        allowedEmails: [],
+        allowedBots: [],
+        peerBotsAllowed: true,
+        highRiskAllowedUsers: [],
+        highRiskAllowedEmails: [],
+        highRiskPattern: defaultHighRiskPattern,
+        gateEnabled: false,
+        softGateEnabled: false,
+        hardGateEnabled: false,
+        hookTrustConfirmed: false,
+        preInjectPrompt: '',
+        ...(record.webBaseUrl ? { webBaseUrl: record.webBaseUrl } : {})
+      } satisfies StoredLarkConfig);
+
+    const allowed = await this.isOperatorAllowed(botConfig, operatorOpenId, record.chatId);
+    if (!allowed) {
+      return { type: 'warning', content: '当前账号不在机器人白名单中，无法提交操作' };
+    }
+
+    const parsedAction = adapter.parseAction(record.spec, action, value, context?.formValue);
+    if (!parsedAction.ok) {
+      return { type: 'warning', content: parsedAction.error };
+    }
+
+    const actedBy = operatorOpenId && typeof this.service.getUserName === 'function'
+      ? (await this.service.getUserName(operatorOpenId).catch(() => '')) || undefined
+      : undefined;
+
+    const cardMessageId = context?.openMessageId?.trim() || record.messageId;
+    const webBaseUrl = record.webBaseUrl ?? botConfig.webBaseUrl;
+    const isAsk = plugin.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
+
+    const updateCardToAnswered = async (payload: unknown) => {
+      if (!cardMessageId || typeof this.service.updateInteractiveCard !== 'function' || !adapter.buildAnsweredCard) return;
+      try {
+        await this.service.updateInteractiveCard({
+          messageId: cardMessageId,
+          card: adapter.buildAnsweredCard({
+            plugin,
+            payload,
+            sessionId: record.sessionId,
+            webBaseUrl
+          })
+        });
+      } catch (error) {
+        this.log.warn({ error, cardId, pluginId: plugin.id, messageId: cardMessageId }, '更新飞书交互插件锁定卡片失败');
+      }
+    };
+
+    const dispatchFollowUp = async (params: {
+      prompt: string;
+      agentPrompt: string;
+      origin: string;
+      clientMessageId: string;
+      payload: unknown;
+    }) => {
+      const groupKey = `${record.appId}:outp:${record.sessionId}`;
+      let group = this.groups.get(groupKey);
+      if (!group) {
+        group = { boundSessionId: record.sessionId, tail: Promise.resolve() };
+        this.groups.set(groupKey, group);
+      } else {
+        group.boundSessionId = record.sessionId;
+      }
+
+      const displaySummary = plugin.summarizeInteraction
+        ? plugin.summarizeInteraction(params.payload)
+        : `已响应「${plugin.name}」`;
+
+      const syntheticEvent: LarkMessageEvent = {
+        messageId: record.replyToMessageId || record.messageId || `outp-reply-${record.cardId}`,
+        chatId: record.chatId,
+        chatType: record.chatType || 'group',
+        ...(record.threadId ? { threadId: record.threadId } : {}),
+        ...(record.rootId ? { rootId: record.rootId } : {}),
+        messageType: 'text',
+        content: JSON.stringify({ text: displaySummary }),
+        ...(operatorOpenId ? { senderOpenId: operatorOpenId } : {}),
+        senderType: 'user',
+        mentions: []
+      };
+
+      const followUpTask: LarkTask = {
+        id: `lark_${isAsk ? 'askq' : 'outp'}_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+        group,
+        event: syntheticEvent,
+        prompt: params.prompt,
+        resources: [],
+        config: botConfig,
+        state: 'queued',
+        events: [],
+        turn: 0,
+        sessionId: record.sessionId,
+        ...(record.replyInThread || record.threadId ? { forceReplyInThread: true } : {}),
+        origin: params.origin,
+        agentPromptOverride: params.agentPrompt,
+        clientMessageId: params.clientMessageId,
+        taskDisplayName: displaySummary,
+        skipReaction: true
+      };
+
+      this.tasks.set(followUpTask.id, followUpTask);
+      if (this.tasks.size > 5_000) this.tasks.delete(this.tasks.keys().next().value!);
+
+      const runPromise = group.tail.then(() => this.runTurn(followUpTask));
+      group.tail = runPromise.catch(error => {
+        this.log.error({ error, cardId, pluginId: plugin.id, sessionId: record.sessionId }, '飞书交互插件续跑轮次失败');
+      });
+
+      if (this.runtime.dispatch) {
+        await runPromise;
+      }
+      return { id: followUpTask.runtimeTaskId ?? followUpTask.id, status: followUpTask.state };
+    };
+
+    try {
+      const outputPluginsService = this.resolvedOutputPlugins;
+      const specTitle = plugin.getTitle?.(record.spec);
+
+      if (outputPluginsService) {
+        const result = await outputPluginsService.submitInteraction({
+          pluginId: plugin.id,
+          sessionId: record.sessionId,
+          instanceId: record.instanceId,
+          ...(specTitle ? { title: specTitle } : {}),
+          source: 'lark',
+          actedBy,
+          ...parsedAction.interaction,
+          dispatchTurn: dispatchFollowUp
+        });
+        if (result.status === 'already_submitted') {
+          await updateCardToAnswered(result.existing);
+          return { type: 'info', content: isAsk ? '该询问已作答，无需重复提交' : '该卡片已响应，无需重复提交' };
+        }
+        await updateCardToAnswered(result.payload);
+        return { type: 'success', content: isAsk ? '已提交回答，Agent 正在继续处理' : '已提交操作，Agent 正在继续处理' };
+      }
+
+      // 独立单测 / 未注入 OutputPluginService 时的本地幂等兜底
+      const localKey = `${plugin.id}:${record.sessionId}:${record.instanceId}`;
+      const existing = this.localAnsweredPlugins.get(localKey);
+      if (existing) {
+        await updateCardToAnswered(existing);
+        return { type: 'info', content: isAsk ? '该询问已作答，无需重复提交' : '该卡片已响应，无需重复提交' };
+      }
+
+      if (isAsk) {
+        const payload: AskUserQuestionAnswerPayload = {
+          version: 1,
+          questionId: record.instanceId,
+          ...(specTitle ? { title: specTitle } : {}),
+          source: 'lark',
+          ...(actedBy ? { answeredBy: actedBy } : {}),
+          answeredAt: now(),
+          answers: (parsedAction.interaction.answers ?? []) as AskUserQuestionAnswerItem[]
+        };
+        this.localAnsweredPlugins.set(localKey, payload);
+        await dispatchFollowUp({
+          prompt: serializeAskUserQuestionAnswer(payload),
+          agentPrompt: formatAskUserQuestionAnswerForAgent(payload),
+          origin: ASK_USER_QUESTION_ANSWER_ORIGIN,
+          clientMessageId: `askq:${record.sessionId}:${record.instanceId}`,
+          payload
+        });
+        await updateCardToAnswered(payload);
+        return { type: 'success', content: '已提交回答，Agent 正在继续处理' };
+      }
+
+      if (plugin.id === BUILTIN_CONFIRM_ACTION_PLUGIN_ID) {
+        const confirmSpec = record.spec as ConfirmActionSpec;
+        const decision = parsedAction.interaction.decision ?? 'confirm';
+        const decisionLabel = parsedAction.interaction.decisionLabel?.trim()
+          || (decision === 'confirm' ? confirmSpec.confirmLabel : confirmSpec.cancelLabel)
+          || (decision === 'confirm' ? '确认执行' : '取消');
+        const comment = parsedAction.interaction.comment?.trim() || undefined;
+        const payload: ConfirmActionInteractionPayload = {
+          version: 1,
+          pluginId: BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+          actionId: record.instanceId,
+          ...(specTitle ? { title: specTitle } : {}),
+          ...(parsedAction.interaction.risk ?? confirmSpec.risk ? { risk: parsedAction.interaction.risk ?? confirmSpec.risk } : {}),
+          decision,
+          decisionLabel,
+          ...(comment ? { comment } : {}),
+          source: 'lark',
+          ...(actedBy ? { decidedBy: actedBy } : {}),
+          decidedAt: now()
+        };
+        this.localAnsweredPlugins.set(localKey, payload);
+        await dispatchFollowUp({
+          prompt: serializeConfirmActionInteraction(payload),
+          agentPrompt: formatConfirmActionInteractionForAgent(payload),
+          origin: CONFIRM_ACTION_INTERACTION_ORIGIN,
+          clientMessageId: `outp:${plugin.id}:${record.sessionId}:${record.instanceId}`,
+          payload
+        });
+        await updateCardToAnswered(payload);
+        return { type: 'success', content: '已提交操作决定，Agent 正在继续处理' };
+      }
+
+      const fallbackPayload = {
+        version: 1 as const,
+        pluginId: plugin.id,
+        pluginName: plugin.name,
+        instanceId: record.instanceId,
+        ...(specTitle ? { title: specTitle } : {}),
+        source: 'lark' as const,
+        ...(actedBy ? { actedBy } : {}),
+        actedAt: now(),
+        ...(parsedAction.interaction.actionValue ? { actionValue: parsedAction.interaction.actionValue } : {}),
+        ...(parsedAction.interaction.actionLabel ? { actionLabel: parsedAction.interaction.actionLabel } : {}),
+        fields: parsedAction.interaction.fields ?? [],
+        ...(parsedAction.interaction.note ? { note: parsedAction.interaction.note } : {})
+      };
+      this.localAnsweredPlugins.set(localKey, fallbackPayload);
+      await dispatchFollowUp({
+        prompt: plugin.serializeInteraction!(fallbackPayload),
+        agentPrompt: plugin.formatInteractionForAgent!(fallbackPayload),
+        origin: plugin.interactionOrigin!,
+        clientMessageId: `outp:${plugin.id}:${record.sessionId}:${record.instanceId}`,
+        payload: fallbackPayload
+      });
+      await updateCardToAnswered(fallbackPayload);
+      return { type: 'success', content: '已提交操作，Agent 正在继续处理' };
+    } catch (error) {
+      this.log.error({ error, cardId, pluginId: plugin.id, sessionId: record.sessionId }, '处理飞书交互插件提交失败');
+      return { type: 'error', content: `提交失败：${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+
   stop() {
     this.stopped = true;
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer);
@@ -2058,6 +2667,8 @@ export class LarkMessageCoordinator {
     this.groups.clear();
     this.tasks.clear();
     this.handledMessages.clear();
+    this.pluginCards.clear();
+    this.localAnsweredPlugins.clear();
   }
 
   private async sessionFor(group: LarkGroup, config: StoredLarkConfig, chatId: string, chatType: LarkMessageEvent['chatType'], scopeId: string) {
@@ -2180,13 +2791,14 @@ export class LarkMessageCoordinator {
         ? { replyInThread: false, forceMainThread: true }
         : {};
     const prompt = task.prompt;
-    const cardTaskName = task.regexTrigger
-      ? `[${task.regexTrigger.ruleName}] ${task.regexTrigger.messagePreview}`.slice(0, 80)
-      : prompt.slice(0, 80);
+    const cardTaskName = task.taskDisplayName
+      ?? (task.regexTrigger
+        ? `[${task.regexTrigger.ruleName}] ${task.regexTrigger.messagePreview}`.slice(0, 80)
+        : prompt.slice(0, 80));
     const firstAttempt = !task.cardMessageId;
     const emojiType = acknowledgementEmojis[Math.floor(this.random() * acknowledgementEmojis.length)] ?? acknowledgementEmojis[0];
     let reactionId: string | undefined;
-    if (firstAttempt) {
+    if (firstAttempt && !task.skipReaction) {
       try {
         reactionId = (await this.service.addReaction(event.messageId, emojiType)).reactionId;
       } catch (error) {
@@ -2446,13 +3058,18 @@ export class LarkMessageCoordinator {
       });
       return updateChain;
     };
+    let enabledOutputPluginIds = await this.resolveEnabledOutputPluginIds(task.sessionId);
     const update = (state: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted', completed = false) => {
       if (config.quietReply) return Promise.resolve();
       if (timer) { clearTimeout(timer); timer = undefined; }
       const actions = this.sessionReopenActions(task, state);
       const elements = actions
         ? boundLarkCardElements(this.sessionReopenElements())
-        : boundLarkCardElements(renderLarkCardElements(task.events, config, completed));
+        : boundLarkCardElements(renderLarkCardElements(task.events, config, completed, false, {
+            outputPluginRegistry: this.resolvedPluginRegistry,
+            enabledOutputPluginIds,
+            larkPluginAdapters: this.larkPluginAdapters
+          }));
       pendingUpdate = {
         terminal: state !== 'running',
         completed,
@@ -2476,9 +3093,18 @@ export class LarkMessageCoordinator {
       const sessionId = task.sessionId ?? '';
       const agentReplyMode = getSessionReplyMode(sessionId);
       if (agentReplyMode) clearSessionReplyMode(sessionId);
+      enabledOutputPluginIds = await this.resolveEnabledOutputPluginIds(sessionId || task.sessionId);
+      const rawFinalText = completed ? extractRawFinalText(task.events) : '';
+      const extractedPlugin = completed && enabledOutputPluginIds.size > 0
+        ? this.resolvedPluginRegistry.parseTrailingOutput(rawFinalText, enabledOutputPluginIds)
+        : null;
+      const defaultReplyInThread = task.regexTrigger
+        ? task.regexTrigger.replyMode === 'thread'
+        : Boolean(task.forceReplyInThread || event.threadId?.trim());
+      const resolvedReplyInThread = agentReplyMode ? agentReplyMode === 'thread' : defaultReplyInThread;
       // 静默模式：不展示 trace 卡片，由服务把最终回复以文本自动发送到会话。
       if (config.quietReply) {
-        const finalText = extractFinalText(task.events);
+        const finalText = extractedPlugin ? truncate(extractedPlugin.proseText, 6_000) : extractFinalText(task.events);
         const suffix = state === 'failed'
           ? '\n\n（任务未完全成功，详见 AgentDock Web 会话记录。）'
           : state === 'interrupted'
@@ -2486,33 +3112,50 @@ export class LarkMessageCoordinator {
             : '';
         // 静默模式唯一的终态交付通道：必须保证最终回复送达，瞬态失败要重试。
         const reply = `${finalText}${suffix}`;
-        const maxQuietReplyAttempts = 3;
-        let lastQuietError: unknown;
-        for (let attempt = 1; attempt <= maxQuietReplyAttempts; attempt++) {
-          try {
-            await sendQuietFinalReply(this.service, event, reply, this.log, task.forceReplyInThread, forceMainThread);
-            lastQuietError = undefined;
-            break;
-          } catch (error) {
-            lastQuietError = error;
-            if (attempt < maxQuietReplyAttempts) {
-              const delay = isLarkMessageRateLimit(error) ? larkRateLimitBackoffMs(attempt) : attempt * 500;
-              this.log.warn({ error, attempt, chatId: event.chatId, messageId: event.messageId }, '发送静默终态回复失败，准备重试');
-              await new Promise(resolve => setTimeout(resolve, delay));
+        if (reply.trim() || !extractedPlugin) {
+          const maxQuietReplyAttempts = 3;
+          let lastQuietError: unknown;
+          for (let attempt = 1; attempt <= maxQuietReplyAttempts; attempt++) {
+            try {
+              await sendQuietFinalReply(this.service, event, reply, this.log, task.forceReplyInThread, forceMainThread);
+              lastQuietError = undefined;
+              break;
+            } catch (error) {
+              lastQuietError = error;
+              if (attempt < maxQuietReplyAttempts) {
+                const delay = isLarkMessageRateLimit(error) ? larkRateLimitBackoffMs(attempt) : attempt * 500;
+                this.log.warn({ error, attempt, chatId: event.chatId, messageId: event.messageId }, '发送静默终态回复失败，准备重试');
+                await new Promise(resolve => setTimeout(resolve, delay));
+              }
             }
           }
+          if (lastQuietError !== undefined) {
+            // 重试耗尽仍失败：静默模式没有卡片可补偿/对账，把失败显式抛出，交还给终态回调的
+            // 统一错误出口（带 taskId/runtimeTaskId 上下文），避免「最终回复未送达」被静默吞掉。
+            // 不在本级再打一条 error，否则同一失败会重复记录两条。
+            throw lastQuietError;
+          }
         }
-        if (lastQuietError !== undefined) {
-          // 重试耗尽仍失败：静默模式没有卡片可补偿/对账，把失败显式抛出，交还给终态回调的
-          // 统一错误出口（带 taskId/runtimeTaskId 上下文），避免「最终回复未送达」被静默吞掉。
-          // 不在本级再打一条 error，否则同一失败会重复记录两条。
-          throw lastQuietError;
+        if (extractedPlugin && sessionId) {
+          await this.pushOutputPluginCard({
+            config,
+            sessionId,
+            taskId: task.runtimeTaskId ?? task.id,
+            chatId: event.chatId,
+            chatType: event.chatType,
+            replyToMessageId: event.messageId,
+            replyInThread: resolvedReplyInThread,
+            forceMainThread,
+            threadId: event.threadId,
+            rootId: event.rootId,
+            pluginId: extractedPlugin.pluginId,
+            spec: extractedPlugin.spec
+          }).catch(error => {
+            this.log.warn({ error, sessionId, pluginId: extractedPlugin.pluginId }, '静默模式发送飞书交互插件卡片失败');
+          });
         }
         return;
       }
-      const defaultReplyInThread = task.regexTrigger
-        ? task.regexTrigger.replyMode === 'thread'
-        : Boolean(task.forceReplyInThread || event.threadId?.trim());
       const agentReplyInThread = agentReplyMode === 'thread';
       if (agentReplyMode && agentReplyInThread !== defaultReplyInThread) {
         task.replyMode = agentReplyMode;
@@ -2540,15 +3183,37 @@ export class LarkMessageCoordinator {
           elapsedSeconds: (Date.now() - task.startedAt!) / 1_000,
           sessionId: task.sessionId,
           ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
-          elements: boundLarkCardElements(renderLarkCardElements(task.events, config, completed)),
+          elements: boundLarkCardElements(renderLarkCardElements(task.events, config, completed, false, {
+            outputPluginRegistry: this.resolvedPluginRegistry,
+            enabledOutputPluginIds,
+            larkPluginAdapters: this.larkPluginAdapters
+          })),
           ...(replyActions ? { actions: replyActions } : {}),
           replyInThread: agentReplyInThread
         }, this.log);
         task.cardMessageId = replacement.messageId;
         await this.saveCardTask(task, state);
-        return;
+      } else {
+        await update(state, completed);
       }
-      await update(state, completed);
+      if (extractedPlugin && sessionId) {
+        await this.pushOutputPluginCard({
+          config,
+          sessionId,
+          taskId: task.runtimeTaskId ?? task.id,
+          chatId: event.chatId,
+          chatType: event.chatType,
+          replyToMessageId: event.messageId,
+          replyInThread: resolvedReplyInThread,
+          forceMainThread,
+          threadId: event.threadId,
+          rootId: event.rootId,
+          pluginId: extractedPlugin.pluginId,
+          spec: extractedPlugin.spec
+        }).catch(error => {
+          this.log.warn({ error, sessionId, pluginId: extractedPlugin.pluginId }, '发送飞书交互插件卡片失败');
+        });
+      }
     };
     const scheduleHeartbeat = () => {
       // 静默模式无卡片可更新，跳过心跳定时器。
@@ -2611,7 +3276,8 @@ export class LarkMessageCoordinator {
     const staticAlreadyInjected = group.staticPrompt?.sessionId === session.id && group.staticPrompt.signature === staticSignature;
     const injected = [...(staticAlreadyInjected ? [] : staticInjected), ...dynamicInjected];
     if (!staticAlreadyInjected) group.staticPrompt = { sessionId: session.id, signature: staticSignature };
-    const agentPrompt = injected.length ? `${injected.join('\n\n')}\n\n[用户请求]\n${prompt}` : prompt;
+    const effectiveUserPrompt = task.agentPromptOverride ?? prompt;
+    const agentPrompt = injected.length ? `${injected.join('\n\n')}\n\n[用户请求]\n${effectiveUserPrompt}` : effectiveUserPrompt;
 
     if (this.runtime.dispatch) {
       task.state = 'queued';
@@ -2679,7 +3345,9 @@ export class LarkMessageCoordinator {
         else receive(agentEvent);
       });
       try {
-        const runtimeTask = await this.runtime.dispatch(session.id, prompt, 'queue', agentPrompt, riskPolicy);
+        const runtimeTask = task.origin || task.clientMessageId
+          ? await this.runtime.dispatch(session.id, prompt, 'queue', agentPrompt, riskPolicy, task.origin, task.clientMessageId)
+          : await this.runtime.dispatch(session.id, prompt, 'queue', agentPrompt, riskPolicy);
         runtimeTaskId = runtimeTask.id;
         task.runtimeTaskId = runtimeTask.id;
         await this.saveCardTask(task, runtimeTask.status === 'queued' ? 'queued' : task.state);
@@ -2765,6 +3433,9 @@ export interface LarkLongConnectionListenerOptions {
   runtime?: LarkRuntime;
   cardMappings?: ChannelMappingRepository;
   configRepository?: ConfigRepository;
+  askUserQuestion?: AskUserQuestionService;
+  outputPlugins?: OutputPluginService;
+  larkPluginAdapters?: LarkOutputPluginAdapterRegistry;
   env?: NodeJS.ProcessEnv;
   fetcher?: typeof globalThis.fetch;
   /** 覆盖飞书 OpenAPI 域名（Lark 国际版或私有网关）。 */
@@ -2840,7 +3511,10 @@ export class LarkLongConnectionListener implements LarkListener {
       botOpenId,
       (chatId, senderOpenId) => this.options.peerBotAuthorized?.(config.appId, chatId, senderOpenId) ?? Promise.resolve(false),
       this.options.cardMappings,
-      this.options.configRepository
+      this.options.configRepository,
+      this.options.askUserQuestion,
+      this.options.outputPlugins,
+      this.options.larkPluginAdapters
     ) : undefined;
     try { await coordinator?.startReconciliation(config); }
     catch (error) { this.log.warn({ error, appId: config.appId }, '飞书卡片终态对账启动失败，继续建立消息监听'); }
@@ -2908,7 +3582,14 @@ export class LarkLongConnectionListener implements LarkListener {
             this.log.error({ error, operatorOpenId }, '处理飞书卡片旁路操作失败');
           }
         }
-        const result = await coordinator?.handleAction(event.action?.value, operatorOpenId);
+        const actionContext: LarkCardActionContext = {
+          ...(event.action?.form_value && typeof event.action.form_value === 'object' ? { formValue: event.action.form_value } : {}),
+          ...(event.context?.open_message_id ? { openMessageId: String(event.context.open_message_id) } : {}),
+          ...(event.context?.open_chat_id ? { openChatId: String(event.context.open_chat_id) } : {}),
+          ...(typeof event.action?.option === 'string' ? { option: event.action.option } : {}),
+          ...(typeof event.action?.input_value === 'string' ? { inputValue: event.action.input_value } : {})
+        };
+        const result = await coordinator?.handleAction(event.action?.value, operatorOpenId, actionContext);
         if (!result) return;
         return { toast: result };
       }
