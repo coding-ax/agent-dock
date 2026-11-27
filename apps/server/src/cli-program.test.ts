@@ -234,4 +234,99 @@ describe('AgentDock CLI', () => {
     for (const action of ['enable', 'disable', 'status']) createCliProgram('0.0.5', { autostart }).parse(['node', 'agent-dock', 'autostart', action, '--json']);
     expect(autostart.mock.calls.map(call => [call[0], call[1].json])).toEqual([['enable', true], ['disable', true], ['status', true]]);
   });
+
+  it('parses the full board command tree (boards, columns, cards, export/import, ask-kitten)', async () => {
+    const boardList = vi.fn();
+    const boardCreate = vi.fn();
+    const boardShow = vi.fn();
+    const boardUse = vi.fn();
+    const boardColumnAdd = vi.fn();
+    const boardCardAdd = vi.fn();
+    const boardCardMove = vi.fn();
+    const boardCardUpdate = vi.fn();
+    const boardAskKitten = vi.fn();
+    const program = createCliProgram('0.3.25', {
+      boardList, boardCreate, boardShow, boardUse,
+      boardColumnAdd, boardCardAdd, boardCardMove, boardCardUpdate, boardAskKitten
+    });
+    await program.parseAsync(['node', 'agent-dock', 'board', 'list', '--archived', '--json']);
+    await program.parseAsync(['node', 'agent-dock', 'board', 'create', '发布冲刺', '--template', 'status', '--view', 'grid', '--density', 'comfortable', '--default', '--json']);
+    await program.parseAsync(['node', 'agent-dock', 'board', 'show', 'brd_1', '--watch', '--column', '进行中']);
+    await program.parseAsync(['node', 'agent-dock', 'board', 'use', 'brd_1', '-q']);
+    await program.parseAsync(['node', 'agent-dock', 'board', 'column', 'add', 'brd_1', '--name', '待回归', '--color', 'amber', '--wip', '5', '--rule', '{"taskStates":["review"]}', '--on-drop', 'prompt_kitten']);
+    await program.parseAsync(['node', 'agent-dock', 'board', 'card', 'add', 'brd_1', '--column', 'bcol_1', '--task', 'atask_1', '--tag', 'p0', '--tag', 'ui', '--pin']);
+    await program.parseAsync(['node', 'agent-dock', 'board', 'card', 'move', 'bitem_1', 'bitem_2', '--to-column', 'bcol_2', '--top', '--apply-action']);
+    await program.parseAsync(['node', 'agent-dock', 'board', 'card', 'update', 'bitem_1', '--kitten-note', '截图验收通过', '--add-tag', 'verified', '--reset-rule-override']);
+    await program.parseAsync(['node', 'agent-dock', 'board', 'ask-kitten', 'brd_1', '--cards', 'bitem_1,bitem_2', '--prompt', '汇总进展']);
+
+    expect(boardList).toHaveBeenCalledWith(expect.objectContaining({ archived: true, json: true }));
+    expect(boardCreate).toHaveBeenCalledWith('发布冲刺', expect.objectContaining({ template: 'status', view: 'grid', density: 'comfortable', default: true, json: true }));
+    expect(boardShow).toHaveBeenCalledWith('brd_1', expect.objectContaining({ watch: true, column: '进行中' }));
+    expect(boardUse).toHaveBeenCalledWith('brd_1', expect.objectContaining({ quiet: true }));
+    expect(boardColumnAdd).toHaveBeenCalledWith('brd_1', expect.objectContaining({ name: '待回归', color: 'amber', wip: '5', rule: '{"taskStates":["review"]}', onDrop: 'prompt_kitten' }));
+    expect(boardCardAdd).toHaveBeenCalledWith('brd_1', expect.objectContaining({ column: 'bcol_1', task: 'atask_1', tag: ['p0', 'ui'], pin: true }));
+    expect(boardCardMove).toHaveBeenCalledWith(['bitem_1', 'bitem_2'], expect.objectContaining({ toColumn: 'bcol_2', top: true, applyAction: true }));
+    expect(boardCardUpdate).toHaveBeenCalledWith('bitem_1', expect.objectContaining({ kittenNote: '截图验收通过', addTag: ['verified'], resetRuleOverride: true }));
+    expect(boardAskKitten).toHaveBeenCalledWith('brd_1', expect.objectContaining({ cards: 'bitem_1,bitem_2', prompt: '汇总进展' }));
+  });
+
+  it('keeps backward compatibility for `notify "<text>"` while supporting config/channel/test subcommands', async () => {
+    const notify = vi.fn();
+    const notifyStatus = vi.fn();
+    const notifyConfigSet = vi.fn();
+    const notifyChannelLarkSet = vi.fn();
+    const notifyWebhookAdd = vi.fn();
+    const notifyChannelCommandSet = vi.fn();
+    const notifyTest = vi.fn();
+    const program = createCliProgram('0.3.25', {
+      notify, notifyStatus, notifyConfigSet, notifyChannelLarkSet, notifyWebhookAdd, notifyChannelCommandSet, notifyTest
+    });
+
+    await program.parseAsync(['node', 'agent-dock', 'notify', '请拍板', '--ask', '--urgent']);
+    await program.parseAsync(['node', 'agent-dock', 'notify', 'send', '显式发送', '--json']);
+    await program.parseAsync(['node', 'agent-dock', 'notify', 'status', '--json']);
+    await program.parseAsync(['node', 'agent-dock', 'notify', 'config', 'show', '--json']);
+    await program.parseAsync(['node', 'agent-dock', 'notify', 'config', 'set', '--min-duration', '20', '--remote-only-when-away', '--scope-scheduled', 'failed_only']);
+    await program.parseAsync(['node', 'agent-dock', 'notify', 'channel', 'lark', 'set', '--enabled', '--mode', 'direct_user', '--target', 'ou_123']);
+    await program.parseAsync(['node', 'agent-dock', 'notify', 'channel', 'webhook', 'add', '--name', 'Ops', '--url', 'https://example.com/hook', '--preset', 'bark', '--header', 'X-Key=1']);
+    await program.parseAsync(['node', 'agent-dock', 'notify', 'channel', 'command', 'set', '--enabled', '--cmd', 'echo ok', '--trust-confirm']);
+    await program.parseAsync(['node', 'agent-dock', 'notify', 'test', 'webhook', '--webhook', 'wh_1']);
+
+    expect(notify).toHaveBeenNthCalledWith(1, '请拍板', expect.objectContaining({ ask: true, urgent: true }));
+    expect(notify).toHaveBeenNthCalledWith(2, '显式发送', expect.objectContaining({ json: true }));
+    expect(notifyStatus).toHaveBeenCalledTimes(2);
+    expect(notifyConfigSet).toHaveBeenCalledWith(expect.objectContaining({ minDuration: '20', remoteOnlyWhenAway: true, scopeScheduled: 'failed_only' }));
+    expect(notifyChannelLarkSet).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, mode: 'direct_user', target: 'ou_123' }));
+    expect(notifyWebhookAdd).toHaveBeenCalledWith(expect.objectContaining({ name: 'Ops', url: 'https://example.com/hook', preset: 'bark', header: ['X-Key=1'] }));
+    expect(notifyChannelCommandSet).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, cmd: 'echo ok', trustConfirm: true }));
+    expect(notifyTest).toHaveBeenCalledWith('webhook', expect.objectContaining({ webhook: 'wh_1' }));
+  });
+
+  it('parses lark avatar platform commands and usage quota', async () => {
+    const larkAvatarStatus = vi.fn();
+    const larkAvatarConfigSet = vi.fn();
+    const larkAvatarListen = vi.fn();
+    const larkAvatarInboxCleanup = vi.fn();
+    const larkAvatarDraftSend = vi.fn();
+    const usageQuota = vi.fn();
+    const program = createCliProgram('0.3.25', {
+      larkAvatarStatus, larkAvatarConfigSet, larkAvatarListen, larkAvatarInboxCleanup, larkAvatarDraftSend, usageQuota
+    });
+
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'avatar', 'status', '--json']);
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'avatar', 'config', 'set', '--reply-forward', 'final_only', '--inbox-max', '120', '--cleanup-warn', '250', '--listen-chats', 'oc_1,oc_2']);
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'avatar', 'listen', 'start']);
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'avatar', 'listen', 'stop']);
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'avatar', 'inbox', 'cleanup', '--keep-latest', '50', '--json']);
+    await program.parseAsync(['node', 'agent-dock', 'lark', 'avatar', 'draft', 'send', 'lad_1', '--text', '收到']);
+    await program.parseAsync(['node', 'agent-dock', 'usage', 'quota', 'codex', '--refresh', '--json']);
+
+    expect(larkAvatarStatus).toHaveBeenCalledWith(expect.objectContaining({ json: true }));
+    expect(larkAvatarConfigSet).toHaveBeenCalledWith(expect.objectContaining({ replyForward: 'final_only', inboxMax: '120', cleanupWarn: '250', listenChats: 'oc_1,oc_2' }));
+    expect(larkAvatarListen).toHaveBeenNthCalledWith(1, true, expect.anything());
+    expect(larkAvatarListen).toHaveBeenNthCalledWith(2, false, expect.anything());
+    expect(larkAvatarInboxCleanup).toHaveBeenCalledWith(expect.objectContaining({ keepLatest: '50', json: true }));
+    expect(larkAvatarDraftSend).toHaveBeenCalledWith('lad_1', expect.objectContaining({ text: '收到' }));
+    expect(usageQuota).toHaveBeenCalledWith('codex', expect.objectContaining({ refresh: true, json: true }));
+  });
 });

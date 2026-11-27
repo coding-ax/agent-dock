@@ -450,6 +450,35 @@ describe('HTTP API boundary', () => {
     expect(runtime.start).toHaveBeenCalledWith({ agentId: 'mock', model: 'model-selected-in-web', reasoningEffort: 'high' }); expect(runtime.dispatch).toHaveBeenCalledWith('s1', 'hello', 'queue'); expect(runtime.setModel).toHaveBeenCalledWith('s1', 'model-b'); expect(runtime.setReasoningEffort).toHaveBeenCalledWith('s1', 'high'); expect(runtime.cancelQueued).toHaveBeenCalledWith('s1', 't1'); expect(runtime.updateQueued).toHaveBeenCalledWith('s1', 't1', 'edited'); expect(runtime.steerQueued).toHaveBeenCalledWith('s1', 't1'); expect(runtime.stop).toHaveBeenCalledOnce();
   });
 
+  it('returns inline discoveredModels from active ACP configOptions on PATCH /api/sessions/:id/config', async () => {
+    const agent = { id: 'mock', name: 'Mock', command: '/nonexistent', args: [], protocol: 'acp', cwd: '/tmp', env: {}, permissionMode: 'full-trust', timeout: 10, capabilities: { pause: false, resume: true }, builtin: false };
+    const session = { id: 's_live', agentId: 'mock', state: 'idle', cwd: '/tmp', model: 'model-a', permissionMode: 'full-trust', runId: 'r1', createdAt: '', updatedAt: '' };
+    const liveConfigOptions = [
+      { id: 'model', category: 'model', currentValue: 'model-b', options: [{ value: 'model-a', name: 'Model A' }, { value: 'model-b', name: 'Model B' }] },
+      { id: 'effort', category: 'thought_level', currentValue: 'high', options: [{ value: 'low', name: '低' }, { value: 'high', name: '高' }] }
+    ];
+    const runtime: any = {
+      listAgents: vi.fn(async () => [agent]),
+      setModel: vi.fn(async () => ({ ...session, model: 'model-b' })),
+      setReasoningEffort: vi.fn(async () => ({ ...session, model: 'model-b', reasoningEffort: 'high' })),
+      getSessionConfigOptions: vi.fn((id: string) => id === 's_live' ? liveConfigOptions : undefined)
+    };
+    const app = await buildApp(runtime); apps.push(app);
+    const res = await app.inject({ method: 'PATCH', url: '/api/sessions/s_live/config', payload: { model: 'model-b' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      id: 's_live',
+      model: 'model-b',
+      discoveredModels: {
+        defaultModel: 'model-b',
+        defaultReasoningEffort: 'high',
+        source: 'acp',
+        models: [{ id: 'model-a', name: 'Model A' }, { id: 'model-b', name: 'Model B' }],
+        reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }]
+      }
+    });
+  });
+
   it('blocks archiving the active main session before touching Runtime, but leaves normal sessions alone', async () => {
     const session = { id: 'ses_main', agentId: 'mock', state: 'idle', cwd: '/tmp', runId: 'r1', createdAt: '', updatedAt: '' };
     const runtime: any = { archive: vi.fn(async () => ({ ...session, archivedAt: 'now' })) };
@@ -600,6 +629,35 @@ describe('HTTP API boundary', () => {
     const address = app.server.address(); if (!address || typeof address === 'string') throw new Error('No port');
     const controller = new AbortController(); await fetch(`http://127.0.0.1:${address.port}/api/sessions/s1/stream?after=4`, { headers: { 'Last-Event-ID': '9' }, signal: controller.signal }); controller.abort();
     expect(runtime.getEventPage).toHaveBeenCalledWith('s1', 9, expect.any(Number));
+  });
+
+  it('buffers live task events emitted during SSE replay without dropping or duplicating them', async () => {
+    let listener: ((event: any) => void) | undefined;
+    const replayed = { id: 'e2', sessionId: 's1', sequence: 2, type: 'task', timestamp: new Date().toISOString(), data: { task: { id: 't1', status: 'queued' } } };
+    const live = { id: 'e3', sessionId: 's1', sequence: 3, type: 'task', timestamp: new Date().toISOString(), data: { task: { id: 't1', status: 'running' } } };
+    const runtime: any = {
+      listAgents: async () => [], listSessions: async () => [], getSession: async () => undefined,
+      subscribe: vi.fn((_id: string, cb: (event: any) => void) => { listener = cb; return () => {}; }),
+      getEventPage: vi.fn(async (_id: string, after: number) => {
+        if (after === 1) {
+          // 模拟回放进行中同时发来重复的 seq=2 和新的 seq=3。
+          listener?.(replayed);
+          listener?.(live);
+          return [replayed];
+        }
+        return [];
+      })
+    };
+    const app = await buildApp(runtime); apps.push(app); await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address(); if (!address || typeof address === 'string') throw new Error('No port');
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/sessions/s1/stream?after=1`, { signal: controller.signal });
+    const reader = response.body!.getReader(); const decoder = new TextDecoder(); let chunk = '';
+    while (!chunk.includes('id: 3')) { const next = await reader.read(); if (next.done) break; chunk += decoder.decode(next.value); }
+    controller.abort();
+    expect(chunk.match(/id: 2\n/g)).toHaveLength(1);
+    expect(chunk.match(/id: 3\n/g)).toHaveLength(1);
+    expect(chunk).toContain('"status":"running"');
   });
 
   // 无 limit 的 /events 改成流式输出后，响应体必须还是原来那个 JSON 数组：客户端拿它直接

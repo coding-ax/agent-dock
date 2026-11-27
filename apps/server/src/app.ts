@@ -11,14 +11,11 @@ import { registerLarkRoutes, type LarkRoutesOptions } from './lark/routes.js';
 import { larkKittenAvatarPath } from './lark/kitten-handover.js';
 import { registerLarkAvatarRoutes } from './lark-avatar/routes.js';
 import type { LarkAvatarService } from './lark-avatar/service.js';
-import { discoverAgentModels } from './agent-models.js';
+import { discoverAgentModels, seedAgentModelsCache } from './agent-models.js';
 import { describeAcpError, listExternalSessions, loadExternalSessionTranscript, supportsSshAgent, wrapAgentForSsh } from '@agent-dock/agent-dock-acp-client';
 import { listSshHosts, probeSshHost, isValidSshHost } from './ssh/hosts.js';
 import { collectAgentDockOwnedSessionIds } from './agent-owned-sessions.js';
-import { getCodexUsage } from './codex-usage.js';
-import { getClaudeUsage } from './claude-usage.js';
-import { getCursorUsage } from './cursor-usage.js';
-import { getAntigravityUsage } from './antigravity-usage.js';
+import { resolveAgentUsage, type UsageSourcePreference } from './magpie-usage.js';
 import { createUsageBackfiller } from './usage-backfill.js';
 import { registerSystemRoutes, type SystemRoutesOptions } from './system-routes.js';
 import { registerShareLinkRoutes, type ShareLinkService } from './share-link.js';
@@ -34,6 +31,10 @@ import { registerTerminalWebSockets } from './terminal-ws.js';
 import { registerFsRoutes } from './fs-routes.js';
 import { registerLlmRoutes, type LlmRoutesOptions } from './llm/service.js';
 import { registerSideChatConfigRoutes, type SideChatConfigService } from './side-chat-config.js';
+import { registerNotificationRoutes } from './notifications/routes.js';
+import type { NotificationService } from './notifications/service.js';
+import { registerBoardRoutes } from './boards/routes.js';
+import type { BoardService } from './boards/service.js';
 import { registerJsonCompression } from './json-compression.js';
 import { LoginRateLimiter, readWebPasswordHash, verifyWebPassword, webPasswordPath } from './web-password.js';
 import { isLocalOwnerRequest, issueMasterToken, parseCookieHeader, sessionTokenAllows, verifyWebToken, webAccessCookieName, webAccessCookieNameFor, webAccessSessionCookieName, type VerifiedWebToken } from './web-access.js';
@@ -103,6 +104,10 @@ export interface BuildAppOptions {
   llm?: LlmRoutesOptions;
   /** 侧边对话与 /btw 共享配置；不传表示这套路由不挂。 */
   sideChatConfig?: SideChatConfigService;
+  /** 多通道通知设置与全局轻量通知 SSE；不传表示这套路由不挂。 */
+  notifications?: NotificationService;
+  /** 自由拖拽看板模式与全局多路复用看板 SSE；不传表示这套路由不挂。 */
+  boards?: BoardService;
   /** 本地 Web 访问凭证防护；不传（或 enabled=false）时不挂防护中间件。 */
   webAuth?: { enabled?: boolean; secret?: string; /** 访问密码哈希文件；默认 ~/.agentdock/web-password，文件不存在即未启用密码。 */ passwordFile?: string; /** 会话分享令牌寿命；与启动时的 AGENTDOCK_WEB_TOKEN_TTL_DAYS 对齐。 */ sessionTokenTtlMs?: number };
   /** 扫码链接；不传表示这套路由不挂。 */
@@ -371,10 +376,78 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     return runtime.listAgents(includeDisabled);
   });
   // 账号额度属于本机控制台所有者，不放在 /api/agents 下（会话分享令牌可读该前缀）。
-  app.get<{ Querystring: { refresh?: string } }>('/api/codex/usage', async request => getCodexUsage(request.query.refresh === '1'));
-  app.get<{ Querystring: { refresh?: string } }>('/api/claude/usage', async request => getClaudeUsage(request.query.refresh === '1'));
-  app.get<{ Querystring: { refresh?: string } }>('/api/cursor/usage', async request => getCursorUsage(request.query.refresh === '1'));
-  app.get<{ Querystring: { refresh?: string } }>('/api/antigravity/usage', async request => getAntigravityUsage(request.query.refresh === '1'));
+  type UsageQuotaQuery = { agentId?: string; model?: string; sessionId?: string; source?: string; refresh?: string };
+  const resolveQuotaFor = async (agentId: string, query: UsageQuotaQuery) => {
+    const normalizedId = agentId.trim().toLowerCase();
+    const refresh = query.refresh === '1' || query.refresh === 'true';
+    const rawSource = query.source?.trim().toLowerCase();
+    const source: UsageSourcePreference = rawSource === 'magpie' || rawSource === 'official' ? rawSource : 'auto';
+    const sessionId = query.sessionId?.trim() || undefined;
+    const session = sessionId && typeof runtime.getSession === 'function'
+      ? await runtime.getSession(sessionId).catch(() => undefined)
+      : undefined;
+    const agents = typeof runtime.listAgents === 'function'
+      ? await runtime.listAgents(true).catch(() => [])
+      : [];
+    const configuredAgent = agents.find(item => item.id === normalizedId);
+    const model = query.model?.trim() || session?.model || configuredAgent?.model || undefined;
+    return resolveAgentUsage({
+      agentId: normalizedId,
+      model,
+      sessionId,
+      sessionCwd: session?.cwd ?? configuredAgent?.cwd,
+      source,
+      refresh,
+      agentEnv: configuredAgent?.env
+    });
+  };
+  app.get<{ Querystring: UsageQuotaQuery }>('/api/codex/usage', async request => resolveQuotaFor('codex', request.query));
+  app.get<{ Querystring: UsageQuotaQuery }>('/api/claude/usage', async request => resolveQuotaFor('claude', request.query));
+  app.get<{ Querystring: UsageQuotaQuery }>('/api/cursor/usage', async request => resolveQuotaFor('cursor', request.query));
+  app.get<{ Querystring: UsageQuotaQuery }>('/api/antigravity/usage', async request => resolveQuotaFor('antigravity', request.query));
+  // 统一单 Agent 额度入口（支持顶栏小面板按 agentId/model/sessionId/source 精准识别 Magpie 供应商或官方直连）。
+  app.get<{ Querystring: UsageQuotaQuery }>('/api/usage/quota', async request => {
+    const agentId = request.query.agentId?.trim();
+    if (!agentId) {
+      throw new RuntimeError('INVALID_AGENT_ID', 'agentId 必填', 400);
+    }
+    return resolveQuotaFor(agentId, request.query);
+  });
+  // 统一聚合账号额度接口：给 CLI `agent-dock usage quota` 与未来新 Provider（如 Magpie）提供一致契约。
+  app.get<{ Querystring: { refresh?: string; agent?: string; source?: string } }>('/api/usage/quotas', async request => {
+    const rawAgent = request.query.agent?.trim().toLowerCase();
+    const sharedQuery: UsageQuotaQuery = { refresh: request.query.refresh, source: request.query.source };
+    const providers = [
+      { id: 'codex', name: 'Codex', fetch: () => resolveQuotaFor('codex', sharedQuery) },
+      { id: 'claude', name: 'Claude Code', fetch: () => resolveQuotaFor('claude', sharedQuery) },
+      { id: 'cursor', name: 'Cursor', fetch: () => resolveQuotaFor('cursor', sharedQuery) },
+      { id: 'antigravity', name: 'Antigravity', fetch: () => resolveQuotaFor('antigravity', sharedQuery) }
+    ] as const;
+    if (rawAgent && rawAgent !== 'all') {
+      const target = providers.find(p => p.id === rawAgent);
+      if (!target) {
+        throw new RuntimeError('UNSUPPORTED_QUOTA_PROVIDER', `暂不支持查询 ${rawAgent} 的账号额度（当前支持：${providers.map(p => p.id).join(' / ')}）`, 400);
+      }
+      const usage = await target.fetch();
+      return {
+        checkedAt: Date.now(),
+        providers: [{ id: target.id, name: target.name, usage }]
+      };
+    }
+    const results = await Promise.all(
+      providers.map(async provider => ({
+        id: provider.id,
+        name: provider.name,
+        usage: await provider.fetch().catch(error => ({
+          status: 'unavailable' as const,
+          reason: error instanceof Error ? error.message : String(error),
+          windows: [],
+          checkedAt: Date.now()
+        }))
+      }))
+    );
+    return { checkedAt: Date.now(), providers: results };
+  });
 
   const usageBackfiller = createUsageBackfiller(runtime);
   const parseUsageFilter = (query: { from?: string; to?: string; agentId?: string; project?: string; sessionId?: string; model?: string }) => ({
@@ -554,10 +627,28 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   app.patch<{ Params: { id: string }; Body: { title?: string | null } }>('/api/sessions/:id/title', async request => runtime.setSessionTitle(request.params.id, request.body?.title ?? null));
   app.patch<{ Params: { id: string }; Body: { model?: string; reasoningEffort?: string } }>('/api/sessions/:id/config', async request => {
     const model = request.body?.model?.trim();
-    if (model) return runtime.setModel(request.params.id, model);
     const reasoningEffort = request.body?.reasoningEffort?.trim();
-    if (reasoningEffort) return runtime.setReasoningEffort(request.params.id, reasoningEffort);
-    throw new RuntimeError('INVALID_SESSION_CONFIG', 'Model or reasoning effort is required', 400);
+    if (!model && !reasoningEffort) {
+      throw new RuntimeError('INVALID_SESSION_CONFIG', 'Model or reasoning effort is required', 400);
+    }
+    let updated = model ? await runtime.setModel(request.params.id, model) : undefined;
+    if (reasoningEffort) {
+      updated = await runtime.setReasoningEffort(request.params.id, reasoningEffort);
+    }
+    // 活跃 ACP 连接切完模型/思考深度后，直接用适配器内存里的最新 configOptions 回填服务端缓存
+    // 并随响应带回，省去前端二次往返触发慢速 oneshot 模型探测。
+    if (updated && !updated.sshHost) {
+      const configOptions = typeof (runtime as { getSessionConfigOptions?: (id: string) => Array<Record<string, any>> | undefined }).getSessionConfigOptions === 'function'
+        ? (runtime as { getSessionConfigOptions: (id: string) => Array<Record<string, any>> | undefined }).getSessionConfigOptions(request.params.id)
+        : undefined;
+      if (configOptions?.length && typeof runtime.listAgents === 'function') {
+        const agents = await runtime.listAgents(true).catch(() => []);
+        const agent = agents.find(item => item.id === updated.agentId);
+        const discoveredModels = agent ? seedAgentModelsCache(agent, updated.model, configOptions) : undefined;
+        if (discoveredModels) return { ...updated, discoveredModels };
+      }
+    }
+    return updated;
   });
   app.delete<{ Params: { id: string; taskId: string } }>('/api/sessions/:id/queue/:taskId', async request => runtime.cancelQueued(request.params.id, request.params.taskId));
   app.patch<{ Params: { id: string; taskId: string }; Body: { prompt: string } }>('/api/sessions/:id/queue/:taskId', async request => {
@@ -656,6 +747,8 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   await registerFsRoutes(app, runtime);
   await registerLlmRoutes(app, options.llm);
   if (options.sideChatConfig) registerSideChatConfigRoutes(app, options.sideChatConfig);
+  if (options.notifications) registerNotificationRoutes(app, options.notifications, streams);
+  if (options.boards) registerBoardRoutes(app, options.boards, streams);
 
   const mimeToExt: Record<string, string> = {
     'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',
@@ -777,7 +870,14 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     streams.add(reply.raw);
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     reply.raw.write(': connected\n\n');
-    const write = (event: any) => reply.raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    let lastSequence = after;
+    const write = (event: any) => {
+      if (typeof event?.sequence === 'number') {
+        if (event.sequence <= lastSequence) return true;
+        lastSequence = event.sequence;
+      }
+      return reply.raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    };
     // 回放历史：逐行迭代 + 尊重背压。以前是 getEvents 先把整段历史物化成对象再逐条 write，
     // 实测 145 万行 / 235 MB 的会话能直接把 daemon 拖到 OOM；写不动 socket 还继续全速生产，
     // 内存只是从「解析后的对象」挪到「待发送的字符串」，一样会炸。
@@ -786,15 +886,41 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       reply.raw.once('drain', finish);
       reply.raw.once('close', finish);
     });
-    // SSE 是无限流，故意不钉快照上界：回放期间新产生的事件直接顺带发出去，
-    // 比「钉死上界 → 订阅」少一个丢事件的窗口。
-    for await (const event of pagedEvents((cursor, limit) => runtime.getEventPage(request.params.id, cursor, limit), after)) {
-      if (request.raw.destroyed) break;
-      if (!write(event)) await drain();
-    }
-    const unsubscribe = runtime.subscribe(request.params.id, write);
+    // 先订阅再回放，回放期间实时事件先暂存，回放完按 sequence 去重补发：
+    // 消除「最后一页回放结束 → subscribe」间隙漏掉 task/status 事件的窗口，同时在回放期间断连也能立即清理。
+    let replaying = true;
+    const buffered: any[] = [];
+    const unsubscribe = runtime.subscribe(request.params.id, event => {
+      if (replaying) {
+        buffered.push(event);
+        return;
+      }
+      if (!request.raw.destroyed) write(event);
+    });
     const heartbeat = setInterval(() => reply.raw.write(': heartbeat\n\n'), 15_000);
-    request.raw.once('close', () => { clearInterval(heartbeat); unsubscribe(); streams.delete(reply.raw); });
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+      streams.delete(reply.raw);
+    };
+    request.raw.once('close', cleanup);
+    try {
+      for await (const event of pagedEvents((cursor, limit) => runtime.getEventPage(request.params.id, cursor, limit), after)) {
+        if (closed || request.raw.destroyed) break;
+        if (!write(event)) await drain();
+      }
+      replaying = false;
+      for (const event of buffered.splice(0)) {
+        if (closed || request.raw.destroyed) break;
+        if (!write(event)) await drain();
+      }
+    } catch {
+      cleanup();
+      if (!reply.raw.writableEnded) reply.raw.end();
+    }
   });
 
   if (options.webRoot) {

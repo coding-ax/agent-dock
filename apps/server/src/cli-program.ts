@@ -12,7 +12,13 @@ import type {
   LarkMessageListenCliOptions, LarkMessageReadCliOptions, LarkMessageSendCliOptions
 } from './lark/message-cli.js';
 import type {
+  LarkAvatarCommonCliOptions,
+  LarkAvatarConfigSetCliOptions,
   LarkAvatarDiagnosticsCliOptions,
+  LarkAvatarDraftListCliOptions,
+  LarkAvatarDraftWriteCliOptions,
+  LarkAvatarInboxCleanupCliOptions,
+  LarkAvatarInboxListCliOptions,
   LarkAvatarReactionCliOptions,
   LarkAvatarReactionRouteCliOptions,
   LarkAvatarSendCliOptions
@@ -21,7 +27,16 @@ import type {
   HandoffCliOptions, LifecycleCliOptions, MaintenanceConfigCliOptions, MaintenanceRunCliOptions,
   NotesArchiveCliOptions, NotesListCliOptions, NotesUnarchiveCliOptions
 } from './assistant/lifecycle-cli.js';
-import type { UsageBreakdownCliOptions, UsageFilterCliOptions, UsageSessionCliOptions } from './usage-cli.js';
+import type { UsageBreakdownCliOptions, UsageFilterCliOptions, UsageQuotaCliOptions, UsageSessionCliOptions } from './usage-cli.js';
+import type {
+  BoardAskKittenOptions, BoardCardAddOptions, BoardCardListOptions, BoardCardMoveOptions, BoardCardRemoveOptions, BoardCardUpdateOptions,
+  BoardColumnAddOptions, BoardColumnDeleteOptions, BoardColumnMoveOptions, BoardColumnUpdateOptions,
+  BoardCommonOptions, BoardCreateOptions, BoardDeleteOptions, BoardExportOptions, BoardImportOptions, BoardShowOptions, BoardUpdateOptions
+} from './boards/cli.js';
+import type {
+  NotifyChannelCommandSetCliOptions, NotifyChannelLarkSetCliOptions, NotifyCommonCliOptions, NotifyConfigSetCliOptions,
+  NotifyTestCliOptions, NotifyWebhookAddCliOptions, NotifyWebhookUpdateCliOptions
+} from './notifications/cli.js';
 
 export interface CliOptions {
   host?: string;
@@ -192,6 +207,48 @@ export interface CliHandlers {
   usageSummary?(options: UsageFilterCliOptions): void | Promise<void>;
   usageBreakdown?(options: UsageBreakdownCliOptions): void | Promise<void>;
   usageSession?(sessionId: string | undefined, options: UsageSessionCliOptions): void | Promise<void>;
+  usageQuota?(agent: string | undefined, options: UsageQuotaCliOptions): void | Promise<void>;
+  boardList?(options: BoardCommonOptions & { archived?: boolean }): void | Promise<void>;
+  boardCreate?(name: string, options: BoardCreateOptions): void | Promise<void>;
+  boardShow?(boardId: string | undefined, options: BoardShowOptions): void | Promise<void>;
+  boardUpdate?(boardId: string, options: BoardUpdateOptions): void | Promise<void>;
+  boardUse?(boardId: string, options: BoardCommonOptions): void | Promise<void>;
+  boardDelete?(boardId: string, options: BoardDeleteOptions): void | Promise<void>;
+  boardExport?(boardId: string | undefined, options: BoardExportOptions): void | Promise<void>;
+  boardImport?(file: string, options: BoardImportOptions): void | Promise<void>;
+  boardAskKitten?(boardId: string | undefined, options: BoardAskKittenOptions): void | Promise<void>;
+  boardColumnList?(boardId: string | undefined, options: BoardCommonOptions): void | Promise<void>;
+  boardColumnAdd?(boardId: string | undefined, options: BoardColumnAddOptions): void | Promise<void>;
+  boardColumnUpdate?(colId: string, options: BoardColumnUpdateOptions): void | Promise<void>;
+  boardColumnMove?(colId: string, options: BoardColumnMoveOptions): void | Promise<void>;
+  boardColumnDelete?(colId: string, options: BoardColumnDeleteOptions): void | Promise<void>;
+  boardCardList?(boardId: string | undefined, options: BoardCardListOptions): void | Promise<void>;
+  boardCardAdd?(boardId: string | undefined, options: BoardCardAddOptions): void | Promise<void>;
+  boardCardMove?(cardIds: string[], options: BoardCardMoveOptions): void | Promise<void>;
+  boardCardUpdate?(cardId: string, options: BoardCardUpdateOptions): void | Promise<void>;
+  boardCardRemove?(cardIds: string[], options: BoardCardRemoveOptions): void | Promise<void>;
+  notifyStatus?(options: NotifyCommonCliOptions): void | Promise<void>;
+  notifyConfigSet?(options: NotifyConfigSetCliOptions): void | Promise<void>;
+  notifyChannelLarkSet?(options: NotifyChannelLarkSetCliOptions): void | Promise<void>;
+  notifyWebhookList?(options: NotifyCommonCliOptions): void | Promise<void>;
+  notifyWebhookAdd?(options: NotifyWebhookAddCliOptions): void | Promise<void>;
+  notifyWebhookUpdate?(id: string, options: NotifyWebhookUpdateCliOptions): void | Promise<void>;
+  notifyWebhookRemove?(id: string, options: NotifyCommonCliOptions): void | Promise<void>;
+  notifyChannelCommandSet?(options: NotifyChannelCommandSetCliOptions): void | Promise<void>;
+  notifyTest?(channel: string, options: NotifyTestCliOptions): void | Promise<void>;
+  larkAvatarStatus?(options: LarkAvatarCommonCliOptions): void | Promise<void>;
+  larkAvatarConfigShow?(options: LarkAvatarCommonCliOptions): void | Promise<void>;
+  larkAvatarConfigSet?(options: LarkAvatarConfigSetCliOptions): void | Promise<void>;
+  larkAvatarListen?(enabled: boolean, options: LarkAvatarCommonCliOptions): void | Promise<void>;
+  larkAvatarChats?(options: LarkAvatarCommonCliOptions): void | Promise<void>;
+  larkAvatarPoll?(options: LarkAvatarCommonCliOptions): void | Promise<void>;
+  larkAvatarInboxList?(options: LarkAvatarInboxListCliOptions): void | Promise<void>;
+  larkAvatarInboxCleanup?(options: LarkAvatarInboxCleanupCliOptions): void | Promise<void>;
+  larkAvatarDraftList?(options: LarkAvatarDraftListCliOptions): void | Promise<void>;
+  larkAvatarDraftCreate?(options: LarkAvatarDraftWriteCliOptions): void | Promise<void>;
+  larkAvatarDraftUpdate?(id: string, options: LarkAvatarDraftWriteCliOptions): void | Promise<void>;
+  larkAvatarDraftSend?(id: string, options: LarkAvatarDraftWriteCliOptions): void | Promise<void>;
+  larkAvatarDraftDiscard?(id: string, options: LarkAvatarCommonCliOptions): void | Promise<void>;
 }
 
 const collect = (value: string, previous: string[] = []) => [...previous, value];
@@ -315,6 +372,74 @@ Examples:
     .option('--operator <id>', '操作人 open_id')
     .option('--json', '输出 JSON')
     .action(options => handlers.larkAvatarReactionRoute?.(options));
+
+  larkAvatar.command('status')
+    .description('查看 AI 飞书替身连接状态、监听态与收件箱保留统计')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.larkAvatarStatus?.(options));
+
+  const larkAvatarConfig = larkAvatar.command('config').description('查看或修改 AI 飞书替身配置（三档回复策略、保留上限、表情触发等）');
+  larkAvatarConfig.command('show')
+    .description('查看当前配置')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.larkAvatarConfigShow?.(options));
+  larkAvatarConfig.command('set')
+    .description('更新配置项（增量生效）')
+    .option('--region <region>', '区域：feishu 或 lark')
+    .option('--reply-forward <mode>', '回复转发策略：all / final_only / none')
+    .option('--reply-mode <mode>', '主会话回复方式：direct / quote / thread')
+    .option('--reply-in-topic', '话题内消息回到原话题')
+    .option('--no-reply-in-topic', '话题内消息发到主会话')
+    .option('--inbox-max <n>', '消息记录保留上限（0 表示不限制）')
+    .option('--cleanup-warn <n>', '清理提醒阈值（0 表示关闭提醒）')
+    .option('--trigger-prefix <prefix>', '触发前缀，如 /ai')
+    .option('--context-messages <n>', '上下文携带条数')
+    .option('--context-scope <scope>', '上下文范围：anchor 或 chat')
+    .option('--emoji-reactions', '开启自动表情回应')
+    .option('--no-emoji-reactions', '关闭自动表情回应')
+    .option('--reaction-trigger <on|off>', '开关表情触发 Agent 轮次')
+    .option('--reaction-emoji <emoji>', '触发用飞书 emoji_type，如 OK / THUMBSUP')
+    .option('--reaction-route <route>', '表情触发路由：main / independent / ask')
+    .option('--reaction-ignore-bots', '忽略机器人/应用表情')
+    .option('--no-reaction-ignore-bots', '不忽略机器人/应用表情')
+    .option('--reply-signature <text>', '回复签名后缀')
+    .option('--agent-timeout <sec>', 'Agent 单轮超时秒数（0 表示不限）')
+    .option('--agent <id>', '执行 Agent ID')
+    .option('--model <model>', '执行模型')
+    .option('--reasoning-effort <effort>', '推理强度')
+    .option('--workspace <dir>', '工作目录')
+    .option('--listen-chats <ids>', '逗号分隔监听群 chat_id 列表')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.larkAvatarConfigSet?.(options));
+
+  const larkAvatarListen = larkAvatar.command('listen').description('开启或暂停 AI 飞书替身监听');
+  larkAvatarListen.command('start').description('开启监听').option('--json', '输出 JSON').action(options => handlers.larkAvatarListen?.(true, options));
+  larkAvatarListen.command('stop').description('暂停监听（保留登录态）').option('--json', '输出 JSON').action(options => handlers.larkAvatarListen?.(false, options));
+
+  larkAvatar.command('chats').description('列出已同步的飞书会话列表').option('--json', '输出 JSON').action(options => handlers.larkAvatarChats?.(options));
+  larkAvatar.command('poll').description('立即执行一次消息补拉').option('--json', '输出 JSON').action(options => handlers.larkAvatarPoll?.(options));
+
+  const larkAvatarInbox = larkAvatar.command('inbox').description('查看或清理 AI 飞书替身消息记录');
+  larkAvatarInbox.command('list')
+    .description('列出收件箱消息记录')
+    .option('--state <states>', '按状态过滤，如 new,handled')
+    .option('--tier <tier>', '按分层过滤：action / fyi / noise')
+    .option('--limit <n>', '返回条数')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.larkAvatarInboxList?.(options));
+  larkAvatarInbox.command('cleanup')
+    .description('清理旧消息记录')
+    .option('--keep-latest <n>', '保留最近 N 条')
+    .option('--all', '清空全部消息记录')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.larkAvatarInboxCleanup?.(options));
+
+  const larkAvatarDraft = larkAvatar.command('draft').description('管理 AI 飞书替身回复草稿');
+  larkAvatarDraft.command('list').description('列出草稿').option('--state <state>', 'pending / sent / failed / discarded').option('--json', '输出 JSON').action(options => handlers.larkAvatarDraftList?.(options));
+  larkAvatarDraft.command('create').description('创建草稿').requiredOption('--target <target>', '目标会话').option('--text <text>', '正文').option('--text-file <file>', '正文文件；- 表示 stdin').option('--item <id>', '关联收件箱项 ID').option('--thread-key <key>', '话题键').option('--reply-root <id>', '回复根消息 ID').option('--json', '输出 JSON').action(options => handlers.larkAvatarDraftCreate?.(options));
+  larkAvatarDraft.command('update').description('修改草稿正文').argument('<draft-id>').option('--text <text>', '正文').option('--text-file <file>', '正文文件；- 表示 stdin').option('--json', '输出 JSON').action((id, options) => handlers.larkAvatarDraftUpdate?.(id, options));
+  larkAvatarDraft.command('send').description('发送草稿').argument('<draft-id>').option('--text <text>', '可选覆盖正文').option('--text-file <file>', '正文文件；- 表示 stdin').option('--json', '输出 JSON').action((id, options) => handlers.larkAvatarDraftSend?.(id, options));
+  larkAvatarDraft.command('discard').description('丢弃草稿').argument('<draft-id>').option('--json', '输出 JSON').action((id, options) => handlers.larkAvatarDraftDiscard?.(id, options));
 
   const larkMessage = lark.command('message')
     .description('Generic Lark IM messages using a configured bot (does not create AgentDock sessions)');
@@ -569,14 +694,110 @@ Notes:
   watch.command('run').description('立即执行一次').argument('<watch-id>').option('--json', '输出 JSON').action((id, options) => handlers.watchRun?.(id, options));
   watch.command('remove').description('删除 watch').argument('<watch-id>').option('--json', '输出 JSON').action((id, options) => handlers.watchRemove?.(id, options));
 
-  program.command('notify')
-    .description('让主会话主动通知用户')
+  const notify = program.command('notify')
+    .description('主会话主动通知，及多通道通知配置/测试（兼容 agent-dock notify "<text>"）')
+    .argument('[text]', '通知内容（兼容既有快捷发送）')
+    .option('--ask', '需要用户拍板')
+    .option('--urgent', '紧急通知：系统轮次里也放行')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action((text, options, command: Command) => {
+      if (!text) {
+        command.outputHelp();
+        return;
+      }
+      return handlers.notify?.(text, options);
+    });
+  notify.command('send')
+    .description('让主会话主动发送一条通知（等同 agent-dock notify "<text>"）')
     .argument('<text>', '通知内容')
     .option('--ask', '需要用户拍板')
     .option('--urgent', '紧急通知：系统轮次里也放行')
     .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
     .option('--json', '输出 JSON')
     .action((text, options) => handlers.notify?.(text, options));
+  notify.command('status')
+    .description('查看通知设置摘要与各通道最近投递健康状态')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.notifyStatus?.(options));
+  const notifyConfig = notify.command('config').description('查看或修改多通道通知规则与防打扰配置');
+  notifyConfig.command('show').description('查看当前通知配置（密文已脱敏）').option('--json', '输出 JSON').action(options => handlers.notifyStatus?.(options));
+  notifyConfig.command('set')
+    .description('修改通知开关、触发事件、防刷屏与范围分层')
+    .option('--enabled', '开启通知中心')
+    .option('--disabled', '关闭通知中心')
+    .option('--events <list>', '逗号分隔启用的事件：completed,failed,waiting_approval')
+    .option('--min-duration <sec>', '正常完成的最短耗时阈值（秒）')
+    .option('--coalesce-ms <ms>', '远程通道短窗合并毫秒数')
+    .option('--remote-only-when-away', '仅离开电脑时推远程通道')
+    .option('--always-remote', '始终推远程通道')
+    .option('--away-after <sec>', '离机判定秒数')
+    .option('--scope-normal <on|off>', '普通会话是否通知')
+    .option('--scope-subtasks <on|off>', '主小猫便签子会话是否通知')
+    .option('--scope-scheduled <mode>', '定时任务通知模式：all / failed_only / off')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.notifyConfigSet?.(options));
+  const notifyChannel = notify.command('channel').description('配置飞书 / Webhook / 本地命令 Hook 通知通道');
+  const notifyLark = notifyChannel.command('lark').description('飞书机器人通知通道');
+  notifyLark.command('set')
+    .description('配置飞书通知通道')
+    .option('--enabled', '启用飞书通知')
+    .option('--disabled', '停用飞书通知')
+    .option('--app <appId>', '指定飞书机器人 App ID')
+    .option('--mode <mode>', 'auto_handover_then_fallback / direct_user / chat')
+    .option('--target <id>', '兜底接收者 open_id 或群 chat_id')
+    .option('--target-type <type>', 'open_id 或 chat_id')
+    .option('--skip-original', '跳过原本就是飞书发起的会话')
+    .option('--include-original', '飞书发起的会话也照推')
+    .option('--include-summary', '附带结果摘要')
+    .option('--no-summary', '不附带摘要')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.notifyChannelLarkSet?.(options));
+  const notifyWebhook = notifyChannel.command('webhook').description('通用 Webhook 通道（支持飞书群机器人/钉钉/企微/Bark/ntfy/Slack/Discord）');
+  notifyWebhook.command('list').description('列出已配置 Webhook').option('--json', '输出 JSON').action(options => handlers.notifyWebhookList?.(options));
+  notifyWebhook.command('add')
+    .description('新增一个 Webhook 通道')
+    .requiredOption('--name <name>', '名称')
+    .requiredOption('--url <url>', 'Webhook 地址')
+    .option('--preset <preset>', 'generic / lark_webhook / dingtalk / wecom / bark / ntfy / slack / discord', 'generic')
+    .option('--secret <secret>', '可选签名密钥')
+    .option('--header <K=V>', '自定义请求头，可重复', collect, [])
+    .option('--timeout <sec>', '超时秒数（1-30）', '8')
+    .option('--events <list>', '限定事件：completed,failed,waiting_approval')
+    .option('--disabled', '创建后暂不启用')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.notifyWebhookAdd?.(options));
+  notifyWebhook.command('update')
+    .description('更新指定 Webhook')
+    .argument('<webhook-id>')
+    .option('--name <name>', '新名称')
+    .option('--url <url>', '新地址')
+    .option('--preset <preset>', '预设格式')
+    .option('--secret <secret>', '更新密钥（传空串清除）')
+    .option('--header <K=V>', '替换自定义请求头，可重复', collect, [])
+    .option('--timeout <sec>', '超时秒数')
+    .option('--events <list>', '限定事件')
+    .option('--enabled', '启用')
+    .option('--disabled', '停用')
+    .option('--json', '输出 JSON')
+    .action((id, options) => handlers.notifyWebhookUpdate?.(id, options));
+  notifyWebhook.command('remove').description('删除指定 Webhook').argument('<webhook-id>').option('--json', '输出 JSON').action((id, options) => handlers.notifyWebhookRemove?.(id, options));
+  const notifyCommand = notifyChannel.command('command').description('本地 Shell Hook 通知通道');
+  notifyCommand.command('set')
+    .description('配置本地命令 Hook（--trust-confirm 仅本机用户终端可用）')
+    .option('--enabled', '启用命令 Hook')
+    .option('--disabled', '停用命令 Hook')
+    .option('--cmd <command>', '执行的 Shell 命令或脚本路径')
+    .option('--timeout <sec>', '超时秒数（1-30）')
+    .option('--trust-confirm', '确认信任本地命令执行风险（仅用户终端）')
+    .option('--json', '输出 JSON')
+    .action(options => handlers.notifyChannelCommandSet?.(options));
+  notify.command('test')
+    .description('向指定通知通道发送一条测试通知')
+    .argument('<channel>', 'lark / webhook / command')
+    .option('--webhook <id>', '测试指定 Webhook ID')
+    .option('--json', '输出 JSON')
+    .action((channel, options) => handlers.notifyTest?.(channel, options));
 
   const main = program.command('main').description('查看或指定主会话');
   main.command('show').description('查看当前主会话').option('--json', '输出 JSON').action(options => handlers.mainGet?.(options));
@@ -882,6 +1103,211 @@ Changes take effect immediately; no restart needed.`);
     .description('查询指定会话（默认当前 $agentdock_session_id）的累计消耗、TPS 与逐轮明细')
     .option('--json', '输出 JSON')
     .action(async (sessionId: string | undefined, options: UsageSessionCliOptions) => { await handlers.usageSession?.(sessionId, options); });
+  usage.command('quota [agent]')
+    .description('查询账号额度窗口（all / codex / claude / cursor / antigravity）')
+    .option('--refresh', '跳过缓存强制实时拉取')
+    .option('--json', '输出 JSON')
+    .action(async (agent: string | undefined, options: UsageQuotaCliOptions) => { await handlers.usageQuota?.(agent, options); });
+
+  const board = program.command('board').description('自由拖拽看板：一屏盯盘、定制看板/列、编排卡片并与主小猫联动');
+  board.command('list')
+    .description('列出全部看板（带 * 为当前默认记忆看板）')
+    .option('--archived', '包含已归档看板')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出看板 ID')
+    .action(options => handlers.boardList?.(options));
+  board.command('create')
+    .description('新建一个自定义看板（支持默认运行状态 / 空白自由 / 按项目模板）')
+    .argument('<name>', '看板名称')
+    .option('--template <tpl>', '模板：status / blank / project', 'blank')
+    .option('--desc <text>', '看板说明')
+    .option('--view <mode>', '视图模式：lanes 或 grid', 'lanes')
+    .option('--density <density>', '卡片密度：compact 或 comfortable', 'compact')
+    .option('--default', '创建后立即设为默认活跃看板')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出看板 ID')
+    .action((name, options) => handlers.boardCreate?.(name, options));
+  board.command('show')
+    .description('查看看板全部列与实时进度卡片（--watch 进入实时终端盯盘）')
+    .argument('[board-id]', '看板 ID；默认当前活跃看板')
+    .option('--column <idOrName>', '只看指定列')
+    .option('--state <state>', '按视觉状态筛选')
+    .option('--watch', '订阅 SSE 实时盯盘刷新')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出看板 ID')
+    .action((boardId, options) => handlers.boardShow?.(boardId, options));
+  board.command('update')
+    .description('更新看板名称、视图模式、密度或默认状态')
+    .argument('<board-id>', '看板 ID（支持 default）')
+    .option('--name <name>', '新名称')
+    .option('--desc <text>', '新说明')
+    .option('--view <mode>', 'lanes 或 grid')
+    .option('--density <density>', 'compact 或 comfortable')
+    .option('--default', '设为默认活跃看板')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出看板 ID')
+    .action((boardId, options) => handlers.boardUpdate?.(boardId, options));
+  board.command('use')
+    .description('切换默认活跃看板（记忆并同步到前端快速切换）')
+    .argument('<board-id>', '看板 ID')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出看板 ID')
+    .action((boardId, options) => handlers.boardUse?.(boardId, options));
+  board.command('delete')
+    .description('删除或归档看板（不删除底层便签与会话）')
+    .argument('<board-id>', '看板 ID')
+    .option('--archive', '归档而非永久删除')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出看板 ID')
+    .action((boardId, options) => handlers.boardDelete?.(boardId, options));
+  board.command('export')
+    .description('导出看板列结构与规则模板为 JSON')
+    .argument('[board-id]', '看板 ID；默认当前活跃看板')
+    .option('--file <path>', '输出到文件；- 或省略打印到 stdout')
+    .option('--include-items', '包含手动编排卡片列表')
+    .option('--json', '输出 JSON')
+    .action((boardId, options) => handlers.boardExport?.(boardId, options));
+  board.command('import')
+    .description('从模板 JSON 文件或 stdin(-) 导入并创建看板')
+    .argument('<file>', '模板路径或 -')
+    .option('--name <name>', '覆盖看板名称')
+    .option('--default', '导入后设为默认活跃看板')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出看板 ID')
+    .action((file, options) => handlers.boardImport?.(file, options));
+  board.command('ask-kitten')
+    .description('圈选看板中的一张或多张卡片交给主小猫处理')
+    .argument('[board-id]', '看板 ID；默认当前活跃看板')
+    .option('--cards <ids>', '逗号分隔的卡片 ID（bitem_* / virt:* / atask_* / ses_*）')
+    .option('--prompt <text>', '指令内容')
+    .option('--prompt-file <file>', '从文件读指令；- 表示 stdin')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .action((boardId, options) => handlers.boardAskKitten?.(boardId, options));
+
+  const boardColumn = board.command('column').description('管理看板自定义列与智能规则列');
+  boardColumn.command('list')
+    .description('列出看板全部列')
+    .argument('[board-id]', '看板 ID；默认当前活跃看板')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出列 ID')
+    .action((boardId, options) => handlers.boardColumnList?.(boardId, options));
+  boardColumn.command('add')
+    .description('新建一列（手动列或智能规则列）')
+    .argument('[board-id]', '看板 ID；默认当前活跃看板')
+    .requiredOption('--name <name>', '列名称')
+    .option('--color <color>', '色标：zinc / blue / amber / orange / emerald / sky / red', 'zinc')
+    .option('--wip <n>', 'WIP 上限提醒（0 表示不限）')
+    .option('--collapsed', '默认折叠为细条')
+    .option('--rule <json>', '智能规则 JSON，如 \'{"taskStates":["running"]}\'')
+    .option('--on-drop <action>', '拖入动作：none / start_plan / archive_session / prompt_kitten', 'none')
+    .option('--before <col-id>', '插在该列之前')
+    .option('--after <col-id>', '插在该列之后')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出列 ID')
+    .action((boardId, options) => handlers.boardColumnAdd?.(boardId, options));
+  boardColumn.command('update')
+    .description('修改列名称、色标、折叠态、WIP 或智能规则')
+    .argument('<col-id>', '列 ID（bcol_*）')
+    .option('--name <name>', '新名称')
+    .option('--color <color>', '新色标')
+    .option('--wip <n>', 'WIP 上限（0 清除）')
+    .option('--collapsed', '折叠为细条')
+    .option('--expanded', '展开列')
+    .option('--rule <json|clear>', '设置新规则 JSON，传 clear 改为纯手动列')
+    .option('--on-drop <action>', '拖入动作')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出列 ID')
+    .action((colId, options) => handlers.boardColumnUpdate?.(colId, options));
+  boardColumn.command('move')
+    .description('调整列的横向顺序')
+    .argument('<col-id>', '列 ID（bcol_*）')
+    .option('--before <col-id>', '移到该列之前')
+    .option('--after <col-id>', '移到该列之后')
+    .option('--index <n>', '移到第 N 个位置（0-based）')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .action((colId, options) => handlers.boardColumnMove?.(colId, options));
+  boardColumn.command('delete')
+    .description('删除一列（可选先将卡片迁移到其他列）')
+    .argument('<col-id>', '列 ID（bcol_*）')
+    .option('--move-cards-to <col-id>', '将列内卡片迁移到此列')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .action((colId, options) => handlers.boardColumnDelete?.(colId, options));
+
+  const boardCard = board.command('card').description('编排看板卡片（关联便签 atask_*、会话 ses_* 或轻量文字便签）');
+  boardCard.command('list')
+    .description('列出看板上的卡片')
+    .argument('[board-id]', '看板 ID；默认当前活跃看板')
+    .option('--column <idOrName>', '按列过滤')
+    .option('--kind <kind>', 'task / session / note')
+    .option('--state <state>', '按视觉状态过滤')
+    .option('--agent <id>', '按 Agent 过滤')
+    .option('--tag <tag>', '按标签过滤')
+    .option('--pinned', '仅看置顶卡片')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出卡片 ID')
+    .action((boardId, options) => handlers.boardCardList?.(boardId, options));
+  boardCard.command('add')
+    .description('将便签、会话或纯文字卡片添加到看板指定列')
+    .argument('[board-id]', '看板 ID；默认当前活跃看板')
+    .requiredOption('--column <col-id>', '目标列 ID')
+    .option('--task <task-id>', '关联主小猫便签（atask_*）')
+    .option('--session <session-id>', '关联普通会话（ses_*）')
+    .option('--title <text>', '新建纯文字卡片内容')
+    .option('--note <text>', '用户备注')
+    .option('--kitten-note <text>', '主小猫督办批注')
+    .option('--tag <tag>', '标签，可重复', collect, [])
+    .option('--pin', '置顶于列首')
+    .option('--top', '插入列顶部')
+    .option('--bottom', '追加到列底部')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出卡片 ID')
+    .action((boardId, options) => handlers.boardCardAdd?.(boardId, options));
+  boardCard.command('move')
+    .description('移动单张或多张卡片到指定列（自动记住 manual_override 防被规则吸回）')
+    .argument('<card-ids...>', '卡片 ID（支持多个批量移动）')
+    .requiredOption('--to-column <col-id>', '目标列 ID')
+    .option('--board <board-id>', '看板 ID；默认当前活跃看板')
+    .option('--before <card-id>', '插到该卡之前')
+    .option('--after <card-id>', '插到该卡之后')
+    .option('--top', '放到列首')
+    .option('--bottom', '放到列尾')
+    .option('--apply-action', '显式触发目标列绑定的落入动作')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .action((cardIds, options) => handlers.boardCardMove?.(cardIds, options));
+  boardCard.command('update')
+    .description('更新卡片备注、小猫批注、标签、置顶或重置规则归位')
+    .argument('<card-id>', '卡片 ID')
+    .option('--board <board-id>', '看板 ID；默认当前活跃看板')
+    .option('--note <text>', '用户备注')
+    .option('--kitten-note <text>', '主小猫督办/验收批注')
+    .option('--add-tag <tag>', '新增标签，可重复', collect, [])
+    .option('--remove-tag <tag>', '移除标签，可重复', collect, [])
+    .option('--pin', '置顶')
+    .option('--unpin', '取消置顶')
+    .option('--reset-rule-override', '解除手动锁位，让智能规则列重新自动接管')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .option('-q, --quiet', '仅输出卡片 ID')
+    .action((cardId, options) => handlers.boardCardUpdate?.(cardId, options));
+  boardCard.command('remove')
+    .description('从看板移出卡片（不删除底层便签或会话）')
+    .argument('<card-ids...>', '卡片 ID')
+    .option('--board <board-id>', '看板 ID；默认当前活跃看板')
+    .option('--from <session-id>', '来源会话')
+    .option('--json', '输出 JSON')
+    .action((cardIds, options) => handlers.boardCardRemove?.(cardIds, options));
 
   return program
     .addHelpText('after', `
