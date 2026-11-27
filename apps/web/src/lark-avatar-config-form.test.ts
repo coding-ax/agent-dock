@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_LARK_AVATAR_REPLY_FORWARD_MODE,
+  LARK_AVATAR_REACTION_ROUTE_OPTIONS,
+  LARK_AVATAR_REPLY_FORWARD_OPTIONS,
+  LARK_AVATAR_REPLY_FORWARD_SUMMARY,
   buildLarkAvatarAgentOptions,
+  describeLarkAvatarReplyForwardMode,
+  normalizeLarkAvatarReactionRoute,
+  normalizeLarkAvatarReplyForwardMode,
   resolveFallbackAgentId,
   resolveSaveAgentId
 } from './lark-avatar-config-form';
@@ -66,5 +73,47 @@ describe('lark avatar config form agent preservation', () => {
     expect(resolveSaveAgentId('', 'trae')).toBe('trae');
     expect(resolveSaveAgentId('   ', 'trae')).toBe('trae');
     expect(resolveSaveAgentId('claude', 'trae')).toBe('claude');
+  });
+});
+
+describe('lark avatar replyForwardMode options and hydration', () => {
+  it('exposes the three reply forward modes with clear Chinese labels and comparison summary', () => {
+    expect(LARK_AVATAR_REPLY_FORWARD_OPTIONS.map(option => [option.value, option.label])).toEqual([
+      ['all', '回复所有 AgentText'],
+      ['final_only', '仅回复最终回复'],
+      ['none', '不在飞书回复']
+    ]);
+    expect(LARK_AVATAR_REPLY_FORWARD_SUMMARY).toContain('回复所有 AgentText');
+    expect(LARK_AVATAR_REPLY_FORWARD_SUMMARY).toContain('仅回复最终回复');
+    expect(LARK_AVATAR_REPLY_FORWARD_SUMMARY).toContain('不在飞书回复');
+  });
+
+  it('normalizes legacy/missing/unknown values to default final_only while preserving valid modes', () => {
+    expect(DEFAULT_LARK_AVATAR_REPLY_FORWARD_MODE).toBe('final_only');
+    expect(normalizeLarkAvatarReplyForwardMode(undefined)).toBe('final_only');
+    expect(normalizeLarkAvatarReplyForwardMode(null)).toBe('final_only');
+    expect(normalizeLarkAvatarReplyForwardMode('')).toBe('final_only');
+    expect(normalizeLarkAvatarReplyForwardMode('invalid')).toBe('final_only');
+    expect(normalizeLarkAvatarReplyForwardMode('all')).toBe('all');
+    expect(normalizeLarkAvatarReplyForwardMode('final_only')).toBe('final_only');
+    expect(normalizeLarkAvatarReplyForwardMode('none')).toBe('none');
+  });
+
+  it('describes each replyForwardMode accurately and preserves saved agentId alongside mode switches', () => {
+    expect(describeLarkAvatarReplyForwardMode('all').description).toContain('逐条发回飞书');
+    expect(describeLarkAvatarReplyForwardMode('final_only').description).toContain('屏蔽中间过程');
+    expect(describeLarkAvatarReplyForwardMode('none').description).toContain('不向飞书发送');
+
+    // 切换转发策略并保存时，即便草稿 agentId 尚未水合完成，也不能丢掉已保存的 trae
+    expect(resolveSaveAgentId('', 'trae')).toBe('trae');
+  });
+
+  it('exposes only supported reaction routes and downgrades legacy private_chat to main', () => {
+    expect(LARK_AVATAR_REACTION_ROUTE_OPTIONS.map(option => option.value)).toEqual(['main', 'independent', 'ask']);
+    expect(normalizeLarkAvatarReactionRoute('main')).toBe('main');
+    expect(normalizeLarkAvatarReactionRoute('independent')).toBe('independent');
+    expect(normalizeLarkAvatarReactionRoute('ask')).toBe('ask');
+    expect(normalizeLarkAvatarReactionRoute('private_chat')).toBe('main');
+    expect(normalizeLarkAvatarReactionRoute(undefined)).toBe('main');
   });
 });

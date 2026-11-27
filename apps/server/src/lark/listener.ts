@@ -12,6 +12,13 @@ import { boundLarkCardElements, createLarkCardService, larkIdentityPermissionHel
 import { clearSessionReplyMode, getSessionReplyMode, type AgentReplyMode } from './agent-tools.js';
 import { larkHandoverChannel } from './handover-binding.js';
 import { buildSideSessionSeed, matchSideChatTrigger, readSideChatConfig, type SideChatConfig } from '../side-chat-config.js';
+import {
+  buildRegexTriggerPrompt,
+  findMatchingRealtimeRegexTrigger,
+  recordLarkRegexTriggerHit,
+  type LarkRegexReplyMode,
+  type LarkRegexTriggerHitType
+} from './regex-triggers.js';
 import { isAgentStreamErrorText, isAgentWarningText, isCarriedOverToolCall, pickFinalAssistantEntry, stripAgentStreamErrorSuffix, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 
 type ListenerLog = {
@@ -105,6 +112,7 @@ export interface LarkListener {
   readonly listening: boolean;
   start(config: StoredLarkConfig): Promise<void>;
   stop(): void;
+  coordinatorFor?(): LarkMessageCoordinator | undefined;
 }
 
 type TraceEntry = { type: AgentEvent['type']; data: Record<string, any>; timestamp: string };
@@ -137,6 +145,24 @@ type LarkTask = {
   replyMode?: AgentReplyMode;
   /** 侧边对话强制以话题形式回复触发消息（reply_in_thread），无论群聊还是私聊。 */
   forceReplyInThread?: boolean;
+  /** 命中群聊正则监听规则或历史补偿时的上下文。 */
+  regexTrigger?: {
+    ruleId: string;
+    ruleName: string;
+    chatName: string;
+    pattern: string;
+    flags: string;
+    replyMode: LarkRegexReplyMode;
+    promptTemplate: string;
+    matchedText: string;
+    messagePreview: string;
+    senderName?: string;
+    triggerType: LarkRegexTriggerHitType;
+    allowBotSender?: boolean;
+    backfillByAdmin?: boolean;
+  };
+  /** 记录本轮预检或启动阶段的失败原因，便于历史补偿 API 回传精准报错。 */
+  failureReason?: string;
   /** 命中侧边对话触发词时的上下文：按 SideChatConfig 创建并绑定侧边会话，不阻塞主会话。 */
   sideChat?: {
     parentGroupKey: string;
@@ -417,23 +443,28 @@ async function materializeLarkResources(messageId: string, prompt: string, resou
 }
 
 // 群消息统一回复触发消息；有 thread_id 的消息显式 reply_in_thread，避免卡片脱离提问人的话题。
-// input 可携带 replyInThread 覆盖默认的「按 thread_id 判断」逻辑，供 Agent 指定回复方式。
+// input 可携带 replyInThread / forceMainThread 覆盖默认的「按 thread_id 判断」逻辑，供 Agent 或正则规则指定回复方式。
 async function sendTaskCard(
   service: Pick<LarkCardService, 'send' | 'reply'>,
   event: LarkMessageEvent,
-  input: Omit<Parameters<LarkCardService['send']>[0], 'chatId'> & { replyInThread?: boolean },
+  input: Omit<Parameters<LarkCardService['send']>[0], 'chatId'> & { replyInThread?: boolean; forceMainThread?: boolean },
   log?: { warn: (...args: any[]) => void }
 ) {
-  if ((event.chatType === 'group' || input.replyInThread) && typeof service.reply === 'function') {
+  const { forceMainThread, ...cardInput } = input;
+  if (forceMainThread && event.threadId?.trim()) {
+    return await service.send({ chatId: event.chatId, ...cardInput });
+  }
+  if ((event.chatType === 'group' || cardInput.replyInThread) && typeof service.reply === 'function') {
     try {
-      return await service.reply({ ...larkReplyContext(event), ...input });
+      const replyContext = forceMainThread ? { messageId: event.messageId } : larkReplyContext(event);
+      return await service.reply({ ...replyContext, ...cardInput });
     } catch (error) {
       // 回复触发消息失败（例如消息已被删除）时，回退为群内发送，保证卡片仍能送达。
       log?.warn({ error, messageId: event.messageId, chatId: event.chatId }, '回复卡片失败，回退为群内发送');
-      return await service.send({ chatId: event.chatId, ...input });
+      return await service.send({ chatId: event.chatId, ...cardInput });
     }
   }
-  return await service.send({ chatId: event.chatId, ...input });
+  return await service.send({ chatId: event.chatId, ...cardInput });
 }
 
 // 进程重启后的 reconciliation 可能无法更新原 running 卡片，只能补发终态卡片。
@@ -468,12 +499,18 @@ async function sendQuietFinalReply(
   event: LarkMessageEvent,
   text: string,
   log?: { warn: (...args: any[]) => void },
-  forceReplyInThread?: boolean
+  forceReplyInThread?: boolean,
+  forceMainThread?: boolean
 ): Promise<void> {
   const content = text.trim() || '（Agent 未返回最终输出）';
+  if (forceMainThread && event.threadId?.trim()) {
+    await service.sendText({ chatId: event.chatId, text: content });
+    return;
+  }
   if ((event.chatType === 'group' || forceReplyInThread) && typeof service.replyText === 'function') {
     try {
-      await service.replyText({ messageId: event.messageId, text: content, ...(forceReplyInThread || event.threadId?.trim() ? { replyInThread: true } : {}) });
+      const replyInThread = forceMainThread ? false : Boolean(forceReplyInThread || event.threadId?.trim());
+      await service.replyText({ messageId: event.messageId, text: content, ...(replyInThread ? { replyInThread: true } : {}) });
       return;
     } catch (error) {
       // 回复触发消息失败（例如消息已被删除）时回退为群内发送，保证最终回复仍能送达。
@@ -488,7 +525,7 @@ async function deliverTaskFailure(
   service: Pick<LarkCardService, 'send' | 'reply' | 'sendText' | 'replyText'>,
   event: LarkMessageEvent,
   config: Pick<StoredLarkConfig, 'quietReply'>,
-  input: Omit<Parameters<LarkCardService['send']>[0], 'chatId'> & { replyInThread?: boolean },
+  input: Omit<Parameters<LarkCardService['send']>[0], 'chatId'> & { replyInThread?: boolean; forceMainThread?: boolean },
   log?: { warn: (...args: any[]) => void }
 ): Promise<{ messageId: string }> {
   if (config.quietReply) {
@@ -500,7 +537,7 @@ async function deliverTaskFailure(
       .replace(/`/g, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim() || '（AgentDock 处理失败）';
-    await sendQuietFinalReply(service, event, text, log, input.replyInThread);
+    await sendQuietFinalReply(service, event, text, log, input.replyInThread, input.forceMainThread);
     return { messageId: '' };
   }
   return await sendTaskCard(service, event, input, log);
@@ -636,28 +673,183 @@ const toolIcon = (kind: TraceToolKind) => ({
   tool: 'setting_outlined'
 }[kind]);
 
+const larkSubagentInvokeNames = new Set([
+  'invoke_subagent', 'agent', 'task', 'subagent', 'spawn_agent', 'spawn_subagent',
+  'resume_agent', 'delegate_task', 'delegate_agent', 'call_subagent', 'run_subagent', 'create_subagent'
+]);
+const larkBoilerplatePrograms = new Set([
+  'cd', 'pushd', 'popd', 'export', 'set', 'unset', 'umask', 'echo', 'printf', 'date', 'sleep', 'true', 'mkdir', 'pwd'
+]);
+
+const larkShellProgram = (rawCommand: string): { program: string; args: string[]; hasGroup: boolean; hasWriteRedirect: boolean } => {
+  const withoutHeredoc = rawCommand.split('\n').reduce<{ lines: string[]; end?: string }>((acc, line) => {
+    if (acc.end) {
+      if (line.trim() === acc.end) acc.end = undefined;
+      return acc;
+    }
+    const hd = line.match(/<<-?\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z0-9_.-]+))/);
+    if (hd && !line.includes('<<<')) {
+      acc.lines.push(line.slice(0, hd.index));
+      acc.end = hd[1] ?? hd[2] ?? hd[3];
+    } else {
+      acc.lines.push(line);
+    }
+    return acc;
+  }, { lines: [] }).lines.join('\n');
+  const statements = withoutHeredoc.split(/\s*(?:&&|\|\||;|\n)\s*/).map(s => s.trim()).filter(Boolean);
+  const parsed = statements.map(statement => {
+    const head = statement.split(/\s*(?<!\|)\|(?!\|)\s*/)[0]?.trim() ?? '';
+    const hasWriteRedirect = /(?:^|\s)1?>>?\s*(?!\/dev\/null\b)\S/.test(head);
+    const tokens = head.replace(/(?:2?>&[0-9]+|2>>?\s*\S+|&>>?\s*\S+|1?>>?\s*\S+)/g, ' ').trim().split(/\s+/).filter(Boolean);
+    let idx = 0;
+    while (idx < tokens.length) {
+      const tok = tokens[idx]!;
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) { idx++; continue; }
+      const base = tok.replace(/^['"(]+|['"]+$/g, '').split('/').at(-1)?.toLowerCase() ?? '';
+      if (base === 'env' || base === 'time' || base === 'nohup' || base === 'exec' || base === 'sudo') { idx++; continue; }
+      break;
+    }
+    const rawProg = tokens[idx] ?? '';
+    const program = rawProg.replace(/^['"(]+|['"]+$/g, '').split('/').at(-1)?.toLowerCase() ?? '';
+    return { program, args: tokens.slice(idx + 1), hasWriteRedirect };
+  }).filter(item => Boolean(item.program));
+  const hasGroup = parsed.some(item =>
+    !item.args.includes('-h') && !item.args.includes('--help') && (
+      (item.program === 'agent-dock' && item.args[0] === 'group' && ['self', 'peers', 'messages', 'send', 'wait'].includes(item.args[1] ?? ''))
+      || (item.program === 'group' && ['self', 'peers', 'messages', 'send', 'wait'].includes(item.args[0] ?? ''))
+    )
+  );
+  const primary = parsed.find(item => !larkBoilerplatePrograms.has(item.program)) ?? parsed[0];
+  return { program: primary?.program ?? '', args: primary?.args ?? [], hasGroup, hasWriteRedirect: primary?.hasWriteRedirect ?? false };
+};
+
 const toolPresentation = (entry: TraceEntry) => {
   const data = entry.data;
+  const inputRecord = data.input && typeof data.input === 'object' && !Array.isArray(data.input) ? data.input as Record<string, unknown> : undefined;
   const name = String(data.name ?? data.title ?? '工具').trim();
-  const normalized = name.toLowerCase();
-  const command = typeof data.input === 'string' ? data.input.trim() : firstValue(data.input, ['command', 'cmd']);
-  const url = firstValue(data.input, ['url', 'href']);
-  const path = firstValue(data.input, ['path', 'file_path', 'cwd']);
-  const description = firstValue(data.input, ['description']) ?? (typeof data.description === 'string' ? data.description.trim() : undefined);
-  let action = /^(?:tool|tool call)$/i.test(name) ? '工具调用' : name;
+  const stripped = name.replace(/^Run\s+([A-Za-z0-9_.:-]+)$/, '$1').replace(/^default_api:([A-Za-z0-9_.:-]+)$/, '$1');
+  const toolKey = stripped.toLowerCase();
+  const acpKind = typeof data.kind === 'string' ? data.kind.trim().toLowerCase() : undefined;
+  const rawCommand = typeof data.input === 'string'
+    ? data.input.trim()
+    : firstValue(data.input, ['command', 'cmd', 'CommandLine']);
+  const command = rawCommand ? rawCommand.replace(/\s+/g, ' ').trim() : undefined;
+  const url = firstValue(data.input, ['url', 'Url', 'URL', 'href']);
+  const path = firstValue(data.input, ['file_path', 'filePath', 'path', 'Path', 'TargetFile', 'AbsolutePath', 'DirectoryPath', 'cwd']);
+  const query = firstValue(data.input, ['query', 'Query', 'pattern', 'Pattern', 'glob', 'Glob']);
+  const description = firstValue(data.input, ['description', 'command_description', 'toolSummary']) ?? (typeof data.description === 'string' ? data.description.trim() : undefined);
+  const isGeneric = /^(?:tool|tool call|unknown tool)$/i.test(name);
+  let action = isGeneric ? '工具调用' : stripped;
   let kind: TraceToolKind = 'tool';
-  const haystack = `${normalized} ${command ?? ''}`;
-  if (/\b(?:apply_patch|patch|edit|write|replace|create_file)\b/.test(haystack)) { action = '修改文件'; kind = 'edit'; }
-  else if (/\b(?:read|cat|head|tail|sed\s+-n|open_file)\b/.test(haystack)) { action = '读取文件'; kind = 'read'; }
-  else if (/\b(?:rg|grep|find|search|glob|query)\b/.test(haystack)) { action = '搜索内容'; kind = 'search'; }
-  else if (url || /\b(?:browser|web|fetch|curl|wget|open_url)\b/.test(haystack)) { action = '访问网页'; kind = 'web'; }
-  else if (/\bgit\b/.test(haystack)) { action = 'Git 操作'; kind = 'git'; }
-  else if (/\b(?:vitest|jest|pytest|go\s+test|pnpm\s+test|npm\s+test|yarn\s+test)\b/.test(haystack)) { action = '运行测试'; kind = 'test'; }
-  else if (/\b(?:sqlite|sql|database|postgres|mysql)\b/.test(haystack)) { action = '查询数据'; kind = 'data'; }
-  else if (/\b(?:agent|spawn|delegate|group\s+(?:self|peers|messages|send|wait))\b/.test(haystack)) { action = 'Agent 协作'; kind = 'agent'; }
-  else if (command || /shell|bash|terminal|exec|command/.test(normalized)) { action = '运行命令'; kind = 'command'; }
-  const fullDetail = command ?? url ?? path ?? (/^(?:tool|tool call)$/i.test(name) ? '' : name);
-  const detail = truncateInline(fullDetail);
+  let extractedDetail: string | undefined;
+
+  const hasEditKeys = Boolean(inputRecord && ['Target', 'Replacement', 'TargetContent', 'ReplacementContent', 'old_string', 'new_string', 'oldText', 'newText', 'edits'].some(k => inputRecord[k] !== undefined));
+  const hasPatchKeys = Boolean(inputRecord && ['patch', 'diff', 'unified_diff', 'unifiedDiff'].some(k => inputRecord[k] !== undefined));
+  const hasWriteKeys = Boolean(inputRecord && ['Content', 'content', 'CodeContent', 'file_text', 'file_content', 'Overwrite', 'Append'].some(k => inputRecord[k] !== undefined));
+
+  if (command && rawCommand) {
+    const shell = larkShellProgram(rawCommand);
+    let subArg: string | undefined;
+    for (let i = 0; i < shell.args.length; i++) {
+      const arg = shell.args[i]!;
+      if (arg === '--') { subArg = shell.args[i + 1]?.toLowerCase(); break; }
+      if (['--filter', '-F', '-C', '--dir', '-p', '--prefix'].includes(arg)) { i++; continue; }
+      if (arg.startsWith('-')) continue;
+      subArg = arg.toLowerCase();
+      break;
+    }
+    if (shell.hasGroup) { action = 'Agent 群协作'; kind = 'agent'; }
+    else if (['apply_patch', 'patch'].includes(shell.program)) { action = '应用补丁'; kind = 'edit'; }
+    else if (['ego-browser', 'ego-lite', 'playwright', 'puppeteer'].includes(shell.program) || (['npx', 'pnpm', 'npm', 'yarn', 'bun'].includes(shell.program) && ['ego-browser', 'playwright', 'puppeteer'].includes(subArg ?? ''))) { action = '操作浏览器'; kind = 'web'; }
+    else if (['vitest', 'jest', 'pytest', 'mocha', 'ava'].includes(shell.program) || (['npx', 'pnpm', 'npm', 'yarn', 'bun'].includes(shell.program) && ['test', 'vitest', 'jest', 'pytest'].includes(subArg ?? '')) || ((shell.program === 'go' || shell.program === 'cargo') && shell.args[0] === 'test')) { action = '运行测试'; kind = 'test'; }
+    else if (shell.program === 'git') { action = 'Git 操作'; kind = 'git'; }
+    else if (['sqlite', 'sqlite3', 'psql', 'mysql', 'mariadb', 'duckdb'].includes(shell.program)) { action = '查询数据'; kind = 'data'; }
+    else if (['curl', 'wget', 'http', 'httpie'].includes(shell.program)) { action = '读取网页'; kind = 'web'; }
+    else if (['ls', 'll', 'tree', 'exa', 'eza'].includes(shell.program)) { action = '查看目录'; kind = 'search'; }
+    else if (['find', 'fd', 'fdfind'].includes(shell.program) || (shell.program === 'rg' && shell.args.includes('--files'))) { action = '查找文件'; kind = 'search'; }
+    else if (['rg', 'ripgrep', 'grep', 'egrep', 'fgrep', 'ag', 'ack'].includes(shell.program)) { action = '搜索内容'; kind = 'search'; }
+    else if (!shell.hasWriteRedirect && (['cat', 'head', 'tail', 'nl', 'bat', 'less', 'more'].includes(shell.program) || (shell.program === 'sed' && shell.args.some(a => /^-[a-zA-Z]*n/.test(a)) && !shell.args.some(a => /^-[a-zA-Z]*i/.test(a))))) { action = '读取文件'; kind = 'read'; }
+    else { action = '执行命令'; kind = 'command'; }
+  } else {
+    const mcpMatch = stripped.match(/^mcp__([^_](?:.*?)?)__(.+)$/i) ?? stripped.match(/^mcp[.:]([^.:/\s]+)[.:](.+)$/i);
+    const mcpServer = firstValue(data.input, ['server', 'mcp_server']) ?? mcpMatch?.[1];
+    const mcpTool = firstValue(data.input, ['tool', 'mcp_tool']) ?? mcpMatch?.[2];
+    const agyFile = name.match(/^File\s+(.+)$/);
+    if (mcpServer && mcpTool) {
+      extractedDetail = `${mcpServer} / ${mcpTool}`;
+      if (/^(?:playwright|puppeteer|chrome[-_]?devtools|browser|ego[-_]?browser)/i.test(mcpServer) || /^(?:browser_|playwright_)/i.test(mcpTool)) { action = '操作浏览器'; kind = 'web'; }
+      else { action = '调用 MCP'; kind = 'tool'; }
+    } else if (/^(?:ego-browser|browser|browser_subagent|playwright|(?:browser|playwright)_[a-z0-9_]+)$/.test(toolKey)) {
+      action = '操作浏览器'; kind = 'web';
+    } else if (agyFile) {
+      extractedDetail = agyFile[1]!.trim();
+      if (hasEditKeys || acpKind === 'edit') { action = '修改文件'; kind = 'edit'; }
+      else if (hasPatchKeys) { action = '应用补丁'; kind = 'edit'; }
+      else if (hasWriteKeys) { action = '写入文件'; kind = 'edit'; }
+      else if (acpKind === 'delete') { action = '删除文件'; kind = 'edit'; }
+      else if (acpKind === 'move') { action = '移动文件'; kind = 'edit'; }
+      else { action = '读取文件'; kind = 'read'; }
+    } else if (['view_file_outline', 'view_code_item'].includes(toolKey)) { action = '查看代码结构'; kind = 'read'; }
+    else if (['view_image', 'read_image'].includes(toolKey) || /^View\s+Image(?:\s+(.+))?$/i.test(name)) { action = '查看图片'; kind = 'read'; extractedDetail = name.match(/^View\s+Image\s+(.+)$/i)?.[1]; }
+    else if (['read_file', 'read', 'view_file', 'open_file'].includes(toolKey) || /^Read(?:\s+File|\s+file\s+.+|\s+.+)$/i.test(name)) {
+      action = '读取文件'; kind = 'read';
+      extractedDetail = name.match(/^Read\s+file\s+['"]?(.+?)['"]?$/i)?.[1] ?? (name.match(/^Read\s+(?!File$)(.+)$/i)?.[1]);
+    } else if (['apply_patch', 'patch'].includes(toolKey)) { action = '应用补丁'; kind = 'edit'; }
+    else if (['write_file', 'write', 'write_to_file', 'create_file'].includes(toolKey) || /^Preparing file…$/i.test(name) || /^Write\s+.+$/i.test(name)) {
+      action = '写入文件'; kind = 'edit'; extractedDetail = name.match(/^Write\s+(.+)$/i)?.[1];
+    } else if (['edit_file', 'edit', 'multiedit', 'strreplace', 'replace_file_content', 'multi_replace_file_content', 'notebookedit'].includes(toolKey) || /^Editing files?$/i.test(name) || /^Edit\s+.+$/i.test(name)) {
+      action = '修改文件'; kind = 'edit'; extractedDetail = name.match(/^Edit\s+(.+)$/i)?.[1];
+    } else if (['delete_file', 'delete'].includes(toolKey) || acpKind === 'delete') { action = '删除文件'; kind = 'edit'; }
+    else if (['move_file', 'rename_file'].includes(toolKey) || acpKind === 'move') { action = '移动文件'; kind = 'edit'; }
+    else if (['list_dir', 'ls', 'list', 'list_directory'].includes(toolKey) || /^List\s+files(?:\s+in\s+.+)?$/i.test(name)) {
+      action = '查看目录'; kind = 'search'; extractedDetail = name.match(/^List\s+files\s+in\s+['"]?(.+?)['"]?$/i)?.[1];
+    } else if (['glob', 'find_by_name', 'file_search', 'glob_file_search', 'find'].includes(toolKey) || /^Find(?:\s+.+)?$/i.test(name)) {
+      action = '查找文件'; kind = 'search';
+    } else if (['grep', 'grep_search', 'search', 'search_content', 'codebase_search', 'semantic_search', 'ripgrep', 'rg'].includes(toolKey) || /^grep(?:\s+.+)?$/i.test(name) || /^Search\s+for\s+.+$/i.test(name)) {
+      action = '搜索内容'; kind = 'search';
+    } else if (['search_web', 'websearch', 'web_search', 'search_query'].includes(toolKey) || /^Web\s+search(?::\s*.+)?$/i.test(name) || /\son\s+Web$/i.test(name) || /^Search\s+"/.test(name)) {
+      action = '搜索网页'; kind = 'web';
+    } else if (['webfetch', 'web_fetch', 'read_url_content', 'fetch_url', 'open_url', 'fetch'].includes(toolKey) || /^Fetch(?:\s+.+)?$/i.test(name)) {
+      action = '读取网页'; kind = 'web'; extractedDetail = name.match(/^Fetch\s+(.+)$/i)?.[1];
+    } else if (['command_status', 'bash_output', 'bashoutput'].includes(toolKey)) { action = '查看命令输出'; kind = 'command'; }
+    else if (['write_stdin', 'send_command_input'].includes(toolKey)) { action = '向命令发送输入'; kind = 'command'; }
+    else if (['run_command', 'bash', 'shell', 'powershell', 'terminal', 'exec_command', 'run_terminal_cmd'].includes(toolKey)) { action = '执行命令'; kind = 'command'; }
+    else if (['generate_image', 'image-generator', 'image_generator', 'edit_image'].includes(toolKey) || ['image-generator', 'image_generator'].includes((firstValue(data.input, ['TypeName', 'subagent_type']) ?? '').toLowerCase())) { action = '生成图片'; kind = 'tool'; }
+    else if (/^group\s+(?:self|peers|messages|send|wait)\b/i.test(name)) { action = 'Agent 群协作'; kind = 'agent'; }
+    else if (['define_subagent', 'register_subagent'].includes(toolKey)) { action = '定义子 Agent'; kind = 'agent'; }
+    else if (['manage_subagents', 'listagents', 'list_agents', 'close_agent'].includes(toolKey)) { action = '管理子 Agent'; kind = 'agent'; }
+    else if (['send_message', 'sendmessage'].includes(toolKey)) { action = '发送消息'; kind = 'agent'; }
+    else if (toolKey === 'swarm') { action = '多 Agent 协作'; kind = 'agent'; }
+    else if (['run_workflow', 'execute_workflow'].includes(toolKey)) { action = '运行工作流'; kind = 'agent'; }
+    else if (
+      larkSubagentInvokeNames.has(toolKey)
+      || /^Task\s+\((?:low|medium|high|max)\s+effort\)$/i.test(name)
+      || acpKind === 'subagent'
+      || Boolean(inputRecord && (typeof inputRecord.subagent_type === 'string' || typeof inputRecord.agent_type === 'string' || (typeof inputRecord.TypeName === 'string' && typeof inputRecord.Role === 'string' && typeof inputRecord.Prompt === 'string')))
+    ) {
+      action = '调用子 Agent'; kind = 'agent';
+      extractedDetail = firstValue(data.input, ['Role', 'role', 'description', 'subagent_type', 'TypeName']);
+    } else if (['ask_question', 'askuserquestion', 'askquestion', 'question'].includes(toolKey) || /^Asking for your input$/i.test(name) || Array.isArray(inputRecord?.questions)) { action = '发起提问'; kind = 'tool'; }
+    else if (['todowrite', 'todo_write', 'todoread'].includes(toolKey) || /^Update TODOs/i.test(name) || Array.isArray(inputRecord?.todos)) { action = '更新待办'; kind = 'tool'; }
+    else if (['update_plan', 'plan', 'taskcreate', 'taskupdate', 'tasklist', 'taskget'].includes(toolKey) || /^(?:Create|Update|List|Get)\s+tasks?/i.test(name)) { action = '更新计划'; kind = 'tool'; }
+    else if (['manage_task', 'monitor'].includes(toolKey)) { action = '管理后台任务'; kind = 'tool'; }
+    else if (['taskstop', 'stop_task'].includes(toolKey)) { action = '停止后台任务'; kind = 'tool'; }
+    else if (['schedule', 'cron', 'set_timer'].includes(toolKey)) { action = '设置定时任务'; kind = 'tool'; }
+    else if (['skill', 'load_skill'].includes(toolKey) || /^Load skill/i.test(name)) { action = '加载技能'; kind = 'tool'; extractedDetail = firstValue(data.input, ['skill']) ?? name.match(/^Load skill:\s*(.+)$/i)?.[1]; }
+    else if (['compact', 'compact_conversation'].includes(toolKey) || /^Compact conversation$/i.test(name)) { action = '压缩上下文'; kind = 'tool'; }
+    else if (isGeneric && hasEditKeys) { action = '修改文件'; kind = 'edit'; }
+    else if (isGeneric && hasWriteKeys) { action = '写入文件'; kind = 'edit'; }
+    else if (isGeneric && path) { action = '读取文件'; kind = 'read'; }
+    else if (isGeneric && url) { action = '读取网页'; kind = 'web'; }
+    else if (acpKind === 'read') { action = '读取文件'; kind = 'read'; }
+    else if (acpKind === 'edit') { action = '修改文件'; kind = 'edit'; }
+    else if (acpKind === 'search') { action = '搜索内容'; kind = 'search'; }
+    else if (acpKind === 'fetch') { action = '读取网页'; kind = 'web'; }
+    else if (acpKind === 'execute') { action = '执行命令'; kind = 'command'; }
+  }
+
+  const fullDetail = command ?? extractedDetail ?? url ?? path ?? query ?? (isGeneric ? '' : name);
+  const detail = truncateInline(fullDetail === action ? '' : fullDetail);
   const status = String(data.status ?? (entry.type === 'tool_result' ? 'completed' : 'running')).toLowerCase();
   const failed = /fail|error|reject|cancel/.test(status);
   const running = /running|pending|started|in_progress/.test(status);
@@ -1077,20 +1269,26 @@ export class LarkMessageCoordinator {
 
   private async saveCardTask(task: LarkTask, state = task.state) {
     if (!this.cardMappings || !task.sessionId || !task.cardMessageId || !task.startedAt) return;
+    const cardTaskName = task.regexTrigger
+      ? `[${task.regexTrigger.ruleName}] ${task.regexTrigger.messagePreview}`.slice(0, 80)
+      : task.prompt.slice(0, 80);
+    const forceMainFromThread = task.regexTrigger?.replyMode === 'main' && Boolean(task.event.threadId?.trim());
     const extra: PersistedLarkCardTask = {
       app_id: task.config.appId,
       chat_id: task.event.chatId,
       card_message_id: task.cardMessageId,
       ...(task.runtimeTaskId ? { runtime_task_id: task.runtimeTaskId } : {}),
-      task_name: task.prompt.slice(0, 80),
+      task_name: cardTaskName,
       prompt: task.prompt,
       state,
       ...(task.lastSuccessfulElements?.length ? { last_successful_elements: task.lastSuccessfulElements } : {}),
-      ...(task.event.chatType === 'group' || task.forceReplyInThread ? {
+      ...(!forceMainFromThread && (task.event.chatType === 'group' || task.forceReplyInThread) ? {
         reply_message_id: task.event.messageId,
         ...(task.replyMode
           ? { reply_in_thread: task.replyMode === 'thread' }
-          : (task.forceReplyInThread || task.event.threadId?.trim()) ? { reply_in_thread: true } : {})
+          : task.regexTrigger
+            ? { reply_in_thread: task.regexTrigger.replyMode === 'thread' }
+            : (task.forceReplyInThread || task.event.threadId?.trim()) ? { reply_in_thread: true } : {})
       } : {}),
       started_at: task.startedAt
     };
@@ -1420,6 +1618,44 @@ export class LarkMessageCoordinator {
     const existingSideThread = await this.lookupSideChatThread(config.appId, event);
     const inSideChatFollowUp = Boolean(existingSideThread) && (event.chatType === 'p2p' || mentionsBot || event.mentions.length === 0);
     let shouldWake = event.chatType === 'p2p' || (event.chatType === 'group' && mentionsBot) || inSideChatFollowUp;
+
+    // 群聊正则自动唤起：当消息未直接 @ 本机器人时，匹配对应 botId + chatId 的已启用正则规则。
+    // 若同一消息已经 @ 了本机器人（shouldWake 已为 true），直接走常规 @ 路径且只触发一轮，避免重复唤起。
+    let matchedRegex: Awaited<ReturnType<typeof findMatchingRealtimeRegexTrigger>>;
+    let regexParsedText = '';
+    if (
+      !shouldWake
+      && !this.stopped
+      && !this.handledMessages.has(event.messageId)
+      && event.chatType === 'group'
+      && this.configRepository
+    ) {
+      const isSelfBot = Boolean(this.botOpenId && event.senderOpenId === this.botOpenId);
+      if (!isSelfBot) {
+        try {
+          const quickParsed = await parseLarkMessageContent(event.messageType, event.content, { messageId: event.messageId });
+          regexParsedText = renderPromptMentions(quickParsed.text, event.mentions, mention => this.isSelfMention(config, mention)).trim();
+          matchedRegex = await findMatchingRealtimeRegexTrigger(this.configRepository, {
+            botId: config.appId,
+            chatId: event.chatId,
+            messageId: event.messageId,
+            messageText: regexParsedText,
+            ...(event.senderType ? { senderType: event.senderType } : {}),
+            isSelfBot
+          });
+          if (matchedRegex) {
+            shouldWake = true;
+            this.log.info(
+              { messageId: event.messageId, chatId: event.chatId, appId: config.appId, ruleId: matchedRegex.rule.id, ruleName: matchedRegex.rule.name, replyMode: matchedRegex.rule.replyMode },
+              '飞书群消息命中正则规则，自动唤起机器人'
+            );
+          }
+        } catch (error) {
+          this.log.warn({ error, messageId: event.messageId, chatId: event.chatId, appId: config.appId }, '检测飞书群聊正则监听规则失败');
+        }
+      }
+    }
+
     // 单人群聊（群内只有 1 名人类成员，不含机器人）且未 @ 别人时，免 @ 自动响应；群内超过 1 人自动关闭。
     if (
       !shouldWake
@@ -1449,7 +1685,7 @@ export class LarkMessageCoordinator {
 
     // 轻量检测消息正文是否命中侧边对话触发前缀（默认 /btw），不阻塞主会话队列。
     let matchedNewSideChat = false;
-    if (!existingSideThread && sideChatConfig.btwEnabled) {
+    if (!matchedRegex && !existingSideThread && sideChatConfig.btwEnabled) {
       try {
         const quickParsed = await parseLarkMessageContent(event.messageType, event.content, { messageId: event.messageId });
         const quickText = renderPromptMentions(quickParsed.text, event.mentions, mention => this.isSelfMention(config, mention)).trim();
@@ -1458,10 +1694,15 @@ export class LarkMessageCoordinator {
     }
 
     const triggerRootId = event.rootId?.trim() || event.messageId;
-    const isSideChat = Boolean(existingSideThread) || matchedNewSideChat;
+    const isSideChat = !matchedRegex && (Boolean(existingSideThread) || matchedNewSideChat);
+    const regexGroupKey = matchedRegex
+      ? (matchedRegex.rule.replyMode === 'thread'
+          ? `${event.chatId}:${event.threadId?.trim() ? `thread:${event.threadId.trim()}` : `regex-thread:${event.messageId}`}`
+          : mainGroupKey)
+      : undefined;
     const groupKey = isSideChat
       ? `side-chat:${event.chatId}:${existingSideThread ? existingSideThread.key : triggerRootId}`
-      : mainGroupKey;
+      : (regexGroupKey ?? mainGroupKey);
     const group = this.groups.get(groupKey) ?? { tail: Promise.resolve() };
     if (existingSideThread) {
       group.boundSessionId = existingSideThread.sessionId;
@@ -1469,7 +1710,7 @@ export class LarkMessageCoordinator {
       if (event.threadId?.trim()) {
         void this.saveSideChatThread(config.appId, [existingSideThread.key, event.threadId.trim()], existingSideThread.sessionId);
       }
-    } else if (!isSideChat && !group.boundSessionId && this.cardMappings) {
+    } else if (!isSideChat && !matchedRegex && !group.boundSessionId && this.cardMappings) {
       // 「托管给机器人」：该群被显式绑定到某个会话时，忽略常规的 sourceId 复用，强制用这个会话。
       try {
         const mapping = await this.cardMappings.get(larkHandoverChannel(config.appId), event.chatId);
@@ -1489,7 +1730,22 @@ export class LarkMessageCoordinator {
       state: 'queued',
       events: [],
       turn: 0,
-      ...(isSideChat ? { forceReplyInThread: true } : {}),
+      ...(isSideChat || matchedRegex?.rule.replyMode === 'thread' ? { forceReplyInThread: true } : {}),
+      ...(matchedRegex ? {
+        regexTrigger: {
+          ruleId: matchedRegex.rule.id,
+          ruleName: matchedRegex.rule.name,
+          chatName: matchedRegex.rule.chatName,
+          pattern: matchedRegex.rule.pattern,
+          flags: matchedRegex.rule.flags,
+          replyMode: matchedRegex.rule.replyMode,
+          promptTemplate: matchedRegex.rule.promptTemplate,
+          matchedText: matchedRegex.matchedText,
+          messagePreview: regexParsedText.slice(0, 120),
+          triggerType: 'realtime',
+          allowBotSender: !matchedRegex.rule.ignoreBotMessages
+        }
+      } : {}),
       ...(matchedNewSideChat ? {
         sideChat: {
           parentGroupKey: mainGroupKey,
@@ -1509,13 +1765,160 @@ export class LarkMessageCoordinator {
         appId: config.appId,
         ...(stripSideChatTriggerPrefix ? { stripSideChatTriggerPrefix } : {})
       });
-      task.prompt = parsed.prompt;
+      if (task.regexTrigger) {
+        let senderName = task.regexTrigger.senderName;
+        if (!senderName && event.senderOpenId && event.senderType !== 'app' && event.senderType !== 'bot') {
+          senderName = await this.service.getUserName(event.senderOpenId).catch(() => undefined);
+          if (senderName) task.regexTrigger.senderName = senderName;
+        }
+        const chatName = task.regexTrigger.chatName && task.regexTrigger.chatName !== event.chatId
+          ? task.regexTrigger.chatName
+          : (await this.resolveCurrentChatName(config, event)) || event.chatId;
+        task.regexTrigger.chatName = chatName;
+        const messageText = parsed.prompt || regexParsedText;
+        task.regexTrigger.messagePreview = messageText.slice(0, 120);
+        task.prompt = buildRegexTriggerPrompt({
+          promptTemplate: task.regexTrigger.promptTemplate,
+          chatName,
+          chatId: event.chatId,
+          botName: config.name ?? config.appId,
+          botId: config.appId,
+          ruleName: task.regexTrigger.ruleName,
+          pattern: task.regexTrigger.pattern,
+          flags: task.regexTrigger.flags,
+          replyMode: task.regexTrigger.replyMode,
+          ...(senderName ? { senderName } : {}),
+          ...(event.senderOpenId ? { senderId: event.senderOpenId } : {}),
+          messageId: event.messageId,
+          ...(event.createTime ? { messageTime: event.createTime } : {}),
+          messageText,
+          matchedText: task.regexTrigger.matchedText,
+          triggerType: 'realtime'
+        });
+      } else {
+        task.prompt = parsed.prompt;
+      }
       task.resources = parsed.resources;
       await this.runTurn(task);
+      if (task.regexTrigger) {
+        await recordLarkRegexTriggerHit(this.configRepository, {
+          ruleId: task.regexTrigger.ruleId,
+          botId: config.appId,
+          chatId: event.chatId,
+          messageId: event.messageId,
+          ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+          ...(task.cardMessageId ? { cardMessageId: task.cardMessageId } : {}),
+          matchedText: task.regexTrigger.matchedText,
+          ...(task.regexTrigger.senderName ? { senderName: task.regexTrigger.senderName } : {}),
+          messagePreview: task.regexTrigger.messagePreview,
+          triggerType: 'realtime',
+          status: task.state === 'failed' ? 'failed' : 'triggered',
+          ...(task.failureReason ? { error: task.failureReason } : {})
+        });
+      }
     }).catch(error => {
       this.log.error({ error, chatId: event.chatId, messageId: event.messageId }, '处理飞书唤醒消息失败');
     });
     this.groups.set(groupKey, group);
+  }
+
+  /**
+   * 历史命中消息补偿入口：100% 复用当前机器人的飞书设置（Agent/模型/工作区/预注入 Prompt/群协作工具/门禁/卡片流式推送），
+   * 按规则的 replyMode（话题内或主线程）发起一轮 Agent，并在派发成功后立即返回 sessionId 与 cardMessageId。
+   */
+  async triggerRegexMatch(input: {
+    event: LarkMessageEvent;
+    config: StoredLarkConfig;
+    rule: {
+      id: string;
+      name: string;
+      chatName: string;
+      pattern: string;
+      flags: string;
+      replyMode: LarkRegexReplyMode;
+      promptTemplate: string;
+    };
+    matchedText: string;
+    messageText: string;
+    senderName?: string;
+    triggerType?: LarkRegexTriggerHitType;
+  }): Promise<{ sessionId?: string; cardMessageId?: string; taskId: string }> {
+    const { event, config, rule } = input;
+    const triggerType = input.triggerType ?? 'backfill';
+    const mainGroupKey = larkGroupKey(event, config.groupSessionScope);
+    const groupKey = rule.replyMode === 'thread'
+      ? `${event.chatId}:${event.threadId?.trim() ? `thread:${event.threadId.trim()}` : `regex-thread:${event.messageId}`}`
+      : mainGroupKey;
+    const group = this.groups.get(groupKey) ?? { tail: Promise.resolve() };
+    this.groups.set(groupKey, group);
+
+    const chatName = rule.chatName?.trim() || event.chatId;
+    const prompt = buildRegexTriggerPrompt({
+      promptTemplate: rule.promptTemplate,
+      chatName,
+      chatId: event.chatId,
+      botName: config.name ?? config.appId,
+      botId: config.appId,
+      ruleName: rule.name,
+      pattern: rule.pattern,
+      flags: rule.flags,
+      replyMode: rule.replyMode,
+      ...(input.senderName ? { senderName: input.senderName } : {}),
+      ...(event.senderOpenId ? { senderId: event.senderOpenId } : {}),
+      messageId: event.messageId,
+      ...(event.createTime ? { messageTime: event.createTime } : {}),
+      messageText: input.messageText,
+      matchedText: input.matchedText,
+      triggerType
+    });
+
+    const taskId = triggerType === 'backfill' ? `${event.messageId}:bf:${Date.now().toString(36)}` : event.messageId;
+    const task: LarkTask = {
+      id: taskId,
+      group,
+      event,
+      prompt,
+      resources: [],
+      config,
+      state: 'queued',
+      events: [],
+      turn: 0,
+      ...(rule.replyMode === 'thread' ? { forceReplyInThread: true } : {}),
+      regexTrigger: {
+        ruleId: rule.id,
+        ruleName: rule.name,
+        chatName,
+        pattern: rule.pattern,
+        flags: rule.flags,
+        replyMode: rule.replyMode,
+        promptTemplate: rule.promptTemplate,
+        matchedText: input.matchedText,
+        messagePreview: input.messageText.slice(0, 120),
+        ...(input.senderName ? { senderName: input.senderName } : {}),
+        triggerType,
+        allowBotSender: true,
+        backfillByAdmin: triggerType === 'backfill'
+      }
+    };
+    this.tasks.set(task.id, task);
+    if (this.tasks.size > 5_000) this.tasks.delete(this.tasks.keys().next().value!);
+    this.handledMessages.add(event.messageId);
+    if (this.handledMessages.size > 5_000) this.handledMessages.delete(this.handledMessages.values().next().value!);
+
+    const runPromise = group.tail.then(() => this.runTurn(task));
+    group.tail = runPromise.catch(error => {
+      this.log.error({ error, chatId: event.chatId, messageId: event.messageId, ruleId: rule.id }, '飞书历史补偿轮次执行失败');
+    });
+    await runPromise;
+
+    if (task.state === 'failed' && (!task.sessionId || task.failureReason)) {
+      throw new LarkServiceError('LARK_BACKFILL_FAILED', task.failureReason || '发起历史补偿轮次失败', 502);
+    }
+    return {
+      taskId: task.id,
+      ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+      ...(task.cardMessageId ? { cardMessageId: task.cardMessageId } : {})
+    };
   }
 
   /**
@@ -1770,8 +2173,16 @@ export class LarkMessageCoordinator {
         ? '用户开启了侧边对话，但未输入具体问题。请简短说明侧边对话已就绪，用户可在本话题中继续提问。'
         : await this.buildEmptyMessageFallback(event, config);
     }
-    const replyInThreadOpt = task.forceReplyInThread ? { replyInThread: true } : {};
+    const forceMainThread = task.regexTrigger?.replyMode === 'main';
+    const replyDeliveryOpt = task.forceReplyInThread
+      ? { replyInThread: true }
+      : forceMainThread
+        ? { replyInThread: false, forceMainThread: true }
+        : {};
     const prompt = task.prompt;
+    const cardTaskName = task.regexTrigger
+      ? `[${task.regexTrigger.ruleName}] ${task.regexTrigger.messagePreview}`.slice(0, 80)
+      : prompt.slice(0, 80);
     const firstAttempt = !task.cardMessageId;
     const emojiType = acknowledgementEmojis[Math.floor(this.random() * acknowledgementEmojis.length)] ?? acknowledgementEmojis[0];
     let reactionId: string | undefined;
@@ -1783,15 +2194,20 @@ export class LarkMessageCoordinator {
       }
     }
 
-    try {
-      config = await resolveLarkAccessConfig(config, this.service, event.senderType === 'app' || event.senderType === 'bot' ? 'bot' : 'user', this.configRepository);
-      task.config = config;
-    } catch (error) {
-      task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
-      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: '白名单身份解析失败', markdown: `**暂时无法验证白名单身份。**\n\n${error instanceof Error ? error.message : String(error)}\n\n请确认机器人与名单中的成员在同一群中，且具备读取群成员权限；修正后重新发送消息。`, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) }, this.log);
-      if (card.messageId) task.cardMessageId = card.messageId;
-      if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
-      return;
+    const backfillByAdmin = task.regexTrigger?.backfillByAdmin === true;
+    const allowRegexBotSender = task.regexTrigger?.allowBotSender === true;
+    if (!backfillByAdmin) {
+      try {
+        config = await resolveLarkAccessConfig(config, this.service, event.senderType === 'app' || event.senderType === 'bot' ? 'bot' : 'user', this.configRepository);
+        task.config = config;
+      } catch (error) {
+        task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
+        task.failureReason = error instanceof Error ? error.message : String(error);
+        const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: '白名单身份解析失败', markdown: `**暂时无法验证白名单身份。**\n\n${error instanceof Error ? error.message : String(error)}\n\n请确认机器人与名单中的成员在同一群中，且具备读取群成员权限；修正后重新发送消息。`, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
+        if (card.messageId) task.cardMessageId = card.messageId;
+        if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
+        return;
+      }
     }
     let actorEmails: string[] = [];
     const allowedUsers = config.allowedUsers ?? [];
@@ -1803,27 +2219,31 @@ export class LarkMessageCoordinator {
     const highRiskPattern = config.highRiskPattern || defaultHighRiskPattern;
     const gateEnabled = config.gateEnabled === true;
     const botSender = event.senderType === 'app' || event.senderType === 'bot';
-    if (botSender) {
-      try {
-        if (config.groupToolsEnabled && event.senderOpenId) await this.peerBotAuthorized?.(event.chatId, event.senderOpenId);
-      } catch (error) {
-        task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
-        const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: 'Agent 协作身份校验失败', markdown: `**无法验证发起交接的 Agent。**\n\n${error instanceof Error ? error.message : String(error)}`, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) }, this.log);
-        if (card.messageId) task.cardMessageId = card.messageId;
-        if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
-        return;
-      }
-    } else if ((!allowedUsers.length && allowedEmails.length) || (gateEnabled && !highRiskAllowedUsers.length && highRiskAllowedEmails.length)) {
-      try {
-        if (!event.senderOpenId) throw new Error('消息事件未包含发送人 open_id');
-        actorEmails = await this.service.getUserEmails(event.senderOpenId);
-        if (!actorEmails.length) throw new LarkServiceError('LARK_SENDER_EMAIL_EMPTY', '飞书没有返回当前发送人的邮箱字段', 409);
-      } catch (error) {
-        task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
-        const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: '身份解析权限缺失', markdown: larkIdentityPermissionHelp(error, config.appId), ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) }, this.log);
-        if (card.messageId) task.cardMessageId = card.messageId;
-        if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
-        return;
+    if (!backfillByAdmin) {
+      if (botSender) {
+        try {
+          if (!allowRegexBotSender && config.groupToolsEnabled && event.senderOpenId) await this.peerBotAuthorized?.(event.chatId, event.senderOpenId);
+        } catch (error) {
+          task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
+          task.failureReason = error instanceof Error ? error.message : String(error);
+          const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: 'Agent 协作身份校验失败', markdown: `**无法验证发起交接的 Agent。**\n\n${error instanceof Error ? error.message : String(error)}`, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
+          if (card.messageId) task.cardMessageId = card.messageId;
+          if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
+          return;
+        }
+      } else if ((!allowedUsers.length && allowedEmails.length) || (gateEnabled && !highRiskAllowedUsers.length && highRiskAllowedEmails.length)) {
+        try {
+          if (!event.senderOpenId) throw new Error('消息事件未包含发送人 open_id');
+          actorEmails = await this.service.getUserEmails(event.senderOpenId);
+          if (!actorEmails.length) throw new LarkServiceError('LARK_SENDER_EMAIL_EMPTY', '飞书没有返回当前发送人的邮箱字段', 409);
+        } catch (error) {
+          task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
+          task.failureReason = error instanceof Error ? error.message : String(error);
+          const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: '身份解析权限缺失', markdown: larkIdentityPermissionHelp(error, config.appId), ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
+          if (card.messageId) task.cardMessageId = card.messageId;
+          if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
+          return;
+        }
       }
     }
     const senderOpenId = event.senderOpenId ?? '';
@@ -1831,12 +2251,15 @@ export class LarkMessageCoordinator {
     const allowedBot = allowedBots.find(bot => bot.openId === senderOpenId);
     const highRiskAllowedUser = highRiskAllowedUsers.find(user => user.openId === senderOpenId);
     const accessRestricted = allowedUsers.length > 0 || allowedEmails.length > 0 || Boolean(config.allowedUserNames?.length);
-    const allowed = botSender
-      ? (!accessRestricted || peerBotsAllowed || Boolean(allowedBot))
-      : !accessRestricted || (allowedUsers.length ? Boolean(allowedUser) : actorEmails.some(email => allowedEmails.includes(email)));
+    const allowed = backfillByAdmin
+      ? true
+      : botSender
+        ? (allowRegexBotSender || !accessRestricted || peerBotsAllowed || Boolean(allowedBot))
+        : !accessRestricted || (allowedUsers.length ? Boolean(allowedUser) : actorEmails.some(email => allowedEmails.includes(email)));
     if (!allowed) {
       task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
-      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: '访问被拒绝', markdown: '**当前账号不在机器人白名单中。**\n\n如需使用，请联系机器人管理员添加你。', ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) }, this.log);
+      task.failureReason = '当前账号不在机器人白名单中';
+      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: '访问被拒绝', markdown: '**当前账号不在机器人白名单中。**\n\n如需使用，请联系机器人管理员添加你。', ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
       if (card.messageId) task.cardMessageId = card.messageId;
       if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
       return;
@@ -1856,16 +2279,20 @@ export class LarkMessageCoordinator {
       ...(actorEmail ? { actorEmail } : {}),
       reason: '当前飞书发送人不在高危操作允许名单中'
     };
+    const regexScopeId = task.regexTrigger?.replyMode === 'thread'
+      ? (event.threadId?.trim() ? `thread:${event.threadId.trim()}` : `regex-thread:${event.messageId}`)
+      : undefined;
     let session: Session;
     try {
       session = task.sideChat
         ? await this.sideChatSessionFor(task)
-        : await this.sessionFor(group, config, event.chatId, event.chatType, larkGroupScopeId(event, config.groupSessionScope));
+        : await this.sessionFor(group, config, event.chatId, event.chatType, regexScopeId ?? larkGroupScopeId(event, config.groupSessionScope));
     }
     catch (error) {
       task.state = 'failed'; task.startedAt = Date.now();
-      const markdown = `**Agent 启动失败**\n\n${error instanceof Error ? error.message : String(error)}`;
-      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', taskId: task.id, taskName: prompt.slice(0, 80), markdown, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyInThreadOpt }, this.log);
+      task.failureReason = error instanceof Error ? error.message : String(error);
+      const markdown = `**Agent 启动失败**\n\n${task.failureReason}`;
+      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', taskId: task.id, taskName: cardTaskName, markdown, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
       if (card.messageId) task.cardMessageId = card.messageId;
       if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
       return;
@@ -1881,9 +2308,9 @@ export class LarkMessageCoordinator {
     } else {
       const initialElements = boundLarkCardElements(renderLarkCardElements([], config));
       if (task.cardMessageId) {
-        await this.service.update({ messageId: task.cardMessageId, state: 'running', taskId: task.id, taskName: prompt.slice(0, 80), markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
+        await this.service.update({ messageId: task.cardMessageId, state: 'running', taskId: task.id, taskName: cardTaskName, markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
       } else {
-        const card = await sendTaskCard(this.service, event, { state: 'running', taskId: task.id, taskName: prompt.slice(0, 80), markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyInThreadOpt }, this.log);
+        const card = await sendTaskCard(this.service, event, { state: 'running', taskId: task.id, taskName: cardTaskName, markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
         task.cardMessageId = card.messageId;
       }
       task.lastSuccessfulElements = initialElements;
@@ -1969,13 +2396,14 @@ export class LarkMessageCoordinator {
               const replacement = await sendTaskCard(this.service, event, {
                 state: pending.input.state,
                 taskId: task.id,
-                taskName: prompt.slice(0, 80),
+                taskName: cardTaskName,
                 elapsedSeconds: pending.input.elapsedSeconds,
                 sessionId: task.sessionId,
                 ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
                 elements: replacementElements,
                 ...(replacementActions ? { actions: replacementActions } : {}),
-                idempotencyKey: `comp_${pending.input.messageId}_${pending.input.state}`.slice(0, 50)
+                idempotencyKey: `comp_${pending.input.messageId}_${pending.input.state}`.slice(0, 50),
+                ...replyDeliveryOpt
               }, this.log);
               task.cardMessageId = replacement.messageId;
               task.lastSuccessfulElements = replacementElements;
@@ -1989,13 +2417,14 @@ export class LarkMessageCoordinator {
                   const minimal = await sendTaskCard(this.service, event, {
                     state: pending.input.state,
                     taskId: task.id,
-                    taskName: prompt.slice(0, 80),
+                    taskName: cardTaskName,
                     elapsedSeconds: pending.input.elapsedSeconds,
                     sessionId: task.sessionId,
                     ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
                     elements: patchedElements,
                     ...(minimalActions ? { actions: minimalActions } : {}),
-                    idempotencyKey: `comp_safe_${pending.input.messageId}_${pending.input.state}`.slice(0, 50)
+                    idempotencyKey: `comp_safe_${pending.input.messageId}_${pending.input.state}`.slice(0, 50),
+                    ...replyDeliveryOpt
                   }, this.log);
                   task.cardMessageId = minimal.messageId;
                   task.lastSuccessfulElements = patchedElements;
@@ -2031,7 +2460,7 @@ export class LarkMessageCoordinator {
           messageId: task.cardMessageId!,
           state,
           taskId: task.id,
-          taskName: prompt.slice(0, 80),
+          taskName: cardTaskName,
           elapsedSeconds: (Date.now() - task.startedAt!) / 1_000,
           sessionId: task.sessionId,
           ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
@@ -2061,7 +2490,7 @@ export class LarkMessageCoordinator {
         let lastQuietError: unknown;
         for (let attempt = 1; attempt <= maxQuietReplyAttempts; attempt++) {
           try {
-            await sendQuietFinalReply(this.service, event, reply, this.log, task.forceReplyInThread);
+            await sendQuietFinalReply(this.service, event, reply, this.log, task.forceReplyInThread, forceMainThread);
             lastQuietError = undefined;
             break;
           } catch (error) {
@@ -2081,7 +2510,9 @@ export class LarkMessageCoordinator {
         }
         return;
       }
-      const defaultReplyInThread = Boolean(task.forceReplyInThread || event.threadId?.trim());
+      const defaultReplyInThread = task.regexTrigger
+        ? task.regexTrigger.replyMode === 'thread'
+        : Boolean(task.forceReplyInThread || event.threadId?.trim());
       const agentReplyInThread = agentReplyMode === 'thread';
       if (agentReplyMode && agentReplyInThread !== defaultReplyInThread) {
         task.replyMode = agentReplyMode;
@@ -2093,7 +2524,7 @@ export class LarkMessageCoordinator {
             messageId: task.cardMessageId!,
             state,
             taskId: task.id,
-            taskName: prompt.slice(0, 80),
+            taskName: cardTaskName,
             elapsedSeconds: (Date.now() - task.startedAt!) / 1_000,
             sessionId: task.sessionId,
             ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
@@ -2105,7 +2536,7 @@ export class LarkMessageCoordinator {
         const replacement = await sendTaskCard(this.service, event, {
           state,
           taskId: task.id,
-          taskName: prompt.slice(0, 80),
+          taskName: cardTaskName,
           elapsedSeconds: (Date.now() - task.startedAt!) / 1_000,
           sessionId: task.sessionId,
           ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}),
@@ -2256,14 +2687,16 @@ export class LarkMessageCoordinator {
         buffered = [];
         if (runtimeTask.status === 'queued' && (runtimeTask.queuedAhead ?? 0) > 0 && task.state === 'queued') {
           if (config.quietReply) {
-            await sendQuietFinalReply(this.service, event, `已收到请求，前面还有 ${runtimeTask.queuedAhead} 个任务，完成后我会把结果发到这里。`, this.log, task.forceReplyInThread);
+            await sendQuietFinalReply(this.service, event, `已收到请求，前面还有 ${runtimeTask.queuedAhead} 个任务，完成后我会把结果发到这里。`, this.log, task.forceReplyInThread, forceMainThread);
           } else {
-            await this.service.update({ messageId: task.cardMessageId!, state: 'queued', taskId: task.id, taskName: prompt.slice(0, 80), markdown: `正在排队，前面还有 ${runtimeTask.queuedAhead} 个任务…`, sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
+            await this.service.update({ messageId: task.cardMessageId!, state: 'queued', taskId: task.id, taskName: cardTaskName, markdown: `正在排队，前面还有 ${runtimeTask.queuedAhead} 个任务…`, sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
           }
           await this.saveCardTask(task, 'queued');
         }
       } catch (error) {
-        task.events.push({ id: `lark-error-${event.messageId}`, sessionId: session.id, sequence: Number.MAX_SAFE_INTEGER, type: 'error', timestamp: new Date().toISOString(), data: { message: error instanceof Error ? error.message : String(error) } });
+        const message = error instanceof Error ? error.message : String(error);
+        task.failureReason = message;
+        task.events.push({ id: `lark-error-${event.messageId}`, sessionId: session.id, sequence: Number.MAX_SAFE_INTEGER, type: 'error', timestamp: new Date().toISOString(), data: { message } });
         task.state = 'failed';
         await finalizeCard('failed', false);
         cleanup();
@@ -2527,6 +2960,10 @@ export class LarkLongConnectionListener implements LarkListener {
     }
   }
 
+  coordinatorFor(): LarkMessageCoordinator | undefined {
+    return this.coordinator;
+  }
+
   stop() {
     this.client?.close();
     this.coordinator?.stop();
@@ -2543,6 +2980,7 @@ export interface LarkListenerPool {
   readonly activeAppIds: string[];
   sync(configs: StoredLarkConfig[]): Promise<void>;
   stop(): void;
+  coordinatorFor?(appId: string): LarkMessageCoordinator | undefined;
 }
 
 export class LarkLongConnectionListenerPool implements LarkListenerPool {
@@ -2560,6 +2998,9 @@ export class LarkLongConnectionListenerPool implements LarkListenerPool {
 
   get listening() { return this.listeners.size > 0; }
   get activeAppIds() { return [...this.listeners.keys()]; }
+  coordinatorFor(appId: string): LarkMessageCoordinator | undefined {
+    return this.listeners.get(appId)?.coordinatorFor?.();
+  }
 
   async sync(configs: StoredLarkConfig[]) {
     const enabled = new Map(configs.filter(config => config.listening).map(config => [config.appId, config]));

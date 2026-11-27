@@ -17,8 +17,6 @@ const failedLabels: Record<string, string> = {
   missing_message: '找不到被反应的消息',
   message_fetch_failed: '读取消息失败',
   no_main_session: '还没有主会话',
-  private_chat_not_configured: '未配置私密接收会话',
-  private_chat_same_as_target: '私密接收会话与原群相同，已拦截防泄密',
   ask_card_failed: '询问卡片发送失败',
   dispatch_failed: '派发 Agent 轮次失败',
   dispatch_uncertain: '上次派发后进程中断，无法确认是否已开始'
@@ -33,9 +31,7 @@ export function reactionOutcomeLabel(outcome?: string): string {
       ? '已发到主会话'
       : detail === 'independent'
         ? '已开独立轮次'
-        : detail === 'private_chat'
-          ? '已私密转发到指定会话'
-          : '已触发一轮 Agent';
+        : '已触发一轮 Agent';
   }
   if (kind === 'awaiting_route') return '已发询问卡片，等待选择';
   if (kind === 'route') return detail === 'failed' ? '卡片选择后执行失败' : '卡片选择后已执行';

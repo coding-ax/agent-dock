@@ -4,22 +4,30 @@ import type {
   LarkAvatarDraft,
   LarkAvatarInboxItem,
   LarkAvatarReactionTrigger,
+  LarkAvatarReplyForwardMode,
   LarkAvatarState,
   LarkRegionName
 } from './types.js';
-import { intentFromUnknown, normalizeReactionEmoji, routeFromUnknown } from './reaction-trigger.js';
+import { normalizeReactionEmoji, routeFromUnknown } from './reaction-trigger.js';
 
 /**
- * 最近消息面板只用于回看刚刚发生的对话，不是归档。
- * 保持一个很小的全局上限，并在每次写入时立即裁掉最旧记录，避免数据库无限长。
+ * 最近消息面板默认保留条数。
+ * 可通过配置 `inboxMaxItems` 自定义（0 表示不限制）；未设置时兼容老默认值 60。
  */
 export const MAX_INBOX_ITEMS = 60;
+export const DEFAULT_INBOX_MAX_ITEMS = MAX_INBOX_ITEMS;
+/** 默认飞书回复转发策略：仅在整轮完成后发送最终回复，避免中间过程 AgentText 在飞书刷屏。 */
+export const DEFAULT_REPLY_FORWARD_MODE: LarkAvatarReplyForwardMode = 'final_only';
+/** 打开飞书替身面板时，超过该条数后提醒清理（0 表示关闭提醒）。 */
+export const DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD = 200;
+/** 可配置的消息记录上限与提醒阈值最大允许值。 */
+export const MAX_CONFIGURABLE_INBOX_ITEMS = 100_000;
 /** 回复记录也按同一个原则限量；pending 保留等待发送，其余状态超限时从最旧开始丢弃。 */
 export const MAX_DRAFT_ITEMS = 80;
 /**
  * 持久化消息去重集合上限。
- * avatar_inbox 只保留最近 60 条用于 UI 展示，不能承担幂等防线；
- * 即使旧消息从展示面板淘汰，也必须在此表保留足够长的已处理记录。
+ * avatar_inbox 默认只保留最近若干条（或可由用户清理），不能承担幂等防线；
+ * 即使旧消息从展示面板淘汰或被手动清理，也必须在此表保留足够长的已处理记录。
  */
 export const MAX_SEEN_MESSAGES = 10_000;
 /** 表情触发账本只用于幂等与排障，保留最近若干条即可。 */
@@ -77,6 +85,11 @@ const parseJson = <T>(value: unknown, fallback: T): T => {
   try { return JSON.parse(String(value ?? '')) as T; } catch { return fallback; }
 };
 
+const normalizeStoredInboxCount = (value: unknown, fallback: number): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(MAX_CONFIGURABLE_INBOX_ITEMS, Math.max(0, Math.floor(value)));
+};
+
 const stateFromRow = (row: StateRow): LarkAvatarState => {
   const parsed = parseJson<Partial<LarkAvatarState['config']>>(row.config, {});
   const region: LarkRegionName = parsed.region === 'lark' ? 'lark' : 'feishu';
@@ -102,19 +115,26 @@ const stateFromRow = (row: StateRow): LarkAvatarState => {
       contextScope: parsed.contextScope === 'chat' ? 'chat' : 'anchor',
       replyInTopic: typeof parsed.replyInTopic === 'boolean' ? parsed.replyInTopic : true,
       replyMode: parsed.replyMode === 'quote' || parsed.replyMode === 'thread' ? parsed.replyMode : 'direct',
+      replyForwardMode: parsed.replyForwardMode === 'all' || parsed.replyForwardMode === 'final_only' || parsed.replyForwardMode === 'none'
+        ? parsed.replyForwardMode
+        : DEFAULT_REPLY_FORWARD_MODE,
       emojiReactions: parsed.emojiReactions === true,
       reactionTriggerEnabled: parsed.reactionTriggerEnabled === true,
       reactionTriggerEmoji: normalizeReactionEmoji(parsed.reactionTriggerEmoji) ?? '',
+      // 历史配置可能残留已下线的 private_chat 等路由，读库时平滑降级为安全的 main。
       reactionTriggerRoute: routeFromUnknown(parsed.reactionTriggerRoute) ?? 'main',
-      reactionTriggerIntent: intentFromUnknown(parsed.reactionTriggerIntent) ?? 'auto',
       reactionTriggerIgnoreBots: parsed.reactionTriggerIgnoreBots !== false,
-      privateReplyChatId: typeof parsed.privateReplyChatId === 'string' ? parsed.privateReplyChatId.trim() : '',
       replySignature: typeof parsed.replySignature === 'string' ? parsed.replySignature : '',
       agentTimeoutSeconds: Number.isFinite(Number(parsed.agentTimeoutSeconds))
         ? Math.min(86_400, Math.max(0, Math.floor(Number(parsed.agentTimeoutSeconds))))
         : 7_200,
       listening: typeof parsed.listening === 'boolean' ? parsed.listening : true,
       listenChats: Array.isArray(parsed.listenChats) ? parsed.listenChats : [],
+      inboxMaxItems: normalizeStoredInboxCount(parsed.inboxMaxItems, DEFAULT_INBOX_MAX_ITEMS),
+      inboxCleanupWarnThreshold: normalizeStoredInboxCount(
+        parsed.inboxCleanupWarnThreshold,
+        DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD
+      ),
       allowedSenders: Array.isArray(parsed.allowedSenders) ? parsed.allowedSenders : [],
       agentId: typeof parsed.agentId === 'string' && parsed.agentId.trim() ? parsed.agentId.trim() : 'codex',
       model: typeof parsed.model === 'string' ? parsed.model.trim() : '',
@@ -167,7 +187,7 @@ const reactionTriggerFromRow = (row: StateRow): LarkAvatarReactionTrigger => ({
   ...(row.operator_id ? { operatorId: String(row.operator_id) } : {}),
   ...(row.operator_type ? { operatorType: String(row.operator_type) } : {}),
   emoji: String(row.emoji),
-  route: routeFromUnknown(row.route) ?? 'ask',
+  route: routeFromUnknown(row.route) ?? 'main',
   state: String(row.state) as LarkAvatarReactionTrigger['state'],
   ...(row.action_time ? { actionTime: String(row.action_time) } : {}),
   ...(row.reason ? { reason: String(row.reason) } : {}),
@@ -321,20 +341,35 @@ export class LarkAvatarStore {
     return result.changes;
   }
 
-  listInbox(states?: string[], tier?: string): LarkAvatarInboxItem[] {
+  inboxMaxItems(): number {
+    return this.getState()?.config.inboxMaxItems ?? DEFAULT_INBOX_MAX_ITEMS;
+  }
+
+  inboxCount(): number {
+    return Number((this.sqlite.prepare('SELECT count(*) AS count FROM avatar_inbox').get() as { count?: number } | undefined)?.count ?? 0);
+  }
+
+  listInbox(states?: string[], tier?: string, limit?: number): LarkAvatarInboxItem[] {
     const filters: string[] = [];
     const params: unknown[] = [];
     if (states?.length) { filters.push(`state IN (${states.map(() => '?').join(',')})`); params.push(...states); }
     if (tier) { filters.push('tier = ?'); params.push(tier); }
     const where = filters.length ? ` WHERE ${filters.join(' AND ')}` : '';
-    const rows = this.sqlite.prepare(`SELECT * FROM avatar_inbox${where} ORDER BY received_at DESC LIMIT ${MAX_INBOX_ITEMS}`)
+    const effectiveLimit = limit !== undefined
+      ? (Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 0)
+      : this.inboxMaxItems();
+    const limitClause = effectiveLimit > 0 ? ' LIMIT ?' : '';
+    if (effectiveLimit > 0) params.push(effectiveLimit);
+    const rows = this.sqlite.prepare(`SELECT * FROM avatar_inbox${where} ORDER BY received_at DESC, rowid DESC${limitClause}`)
       .all(...params) as StateRow[];
     return rows.map(inboxFromRow);
   }
 
-  pruneInbox(limit = MAX_INBOX_ITEMS): number {
-    const count = Number((this.sqlite.prepare('SELECT count(*) AS count FROM avatar_inbox').get() as { count?: number } | undefined)?.count ?? 0);
-    const excess = count - limit;
+  pruneInbox(limit?: number): number {
+    const effectiveLimit = limit !== undefined ? Math.floor(limit) : this.inboxMaxItems();
+    if (!Number.isFinite(effectiveLimit) || effectiveLimit <= 0) return 0;
+    const count = this.inboxCount();
+    const excess = count - effectiveLimit;
     if (excess <= 0) return 0;
     const result = this.sqlite.prepare(`
       DELETE FROM avatar_inbox WHERE rowid IN (
@@ -342,6 +377,24 @@ export class LarkAvatarStore {
       )
     `).run(excess);
     return result.changes;
+  }
+
+  /**
+   * 清理展示用的消息记录，保留最近 keepLatest 条（0 表示清空全部）。
+   * 不清理 avatar_seen_messages、avatar_chat_cursor 与 avatar_drafts，
+   * 确保已处理消息不会被重复触发。
+   */
+  cleanupInbox(keepLatest = 0): { deleted: number; remaining: number } {
+    const keep = Math.max(0, Math.floor(keepLatest));
+    const run = this.sqlite.transaction(() => {
+      if (keep === 0) {
+        const result = this.sqlite.prepare('DELETE FROM avatar_inbox').run();
+        return { deleted: result.changes, remaining: 0 };
+      }
+      const deleted = this.pruneInbox(keep);
+      return { deleted, remaining: this.inboxCount() };
+    });
+    return run();
   }
 
   inboxItem(id: string): LarkAvatarInboxItem | undefined {

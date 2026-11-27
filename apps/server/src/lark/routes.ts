@@ -6,7 +6,8 @@ import { createLarkCardService, LarkServiceError, larkConfigurationStatus, type 
 import { parseLarkMessageContent } from './message-content.js';
 import { isLarkOperatorAllowed, type OperatorAccessInput } from './access-config.js';
 import { defaultHighRiskPattern, deleteLarkConfig, publicLarkConfigs, readLarkConfig, readLarkConfigs, saveLarkConfig, type SaveLarkConfigInput } from './config.js';
-import { LarkLongConnectionListenerPool, larkHandoverChannel, type LarkListenerPool } from './listener.js';
+import { LarkLongConnectionListenerPool, LarkMessageCoordinator, larkHandoverChannel, type LarkListenerPool, type LarkMessageEvent } from './listener.js';
+import { LarkBotChatCache, registerLarkRegexTriggerRoutes } from './regex-triggers.js';
 import type { LarkAvatarService, LarkReactionPort, LarkReactionSourceStatus } from '../lark-avatar/service.js';
 import type { LarkChatMessage } from './service.js';
 import { installLarkHook, larkHookStatus } from './security-hooks.js';
@@ -320,7 +321,24 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
       }, 'AI 替身已启用表情触发，但飞书机器人 reaction 事件通道未就绪');
     }
   }
-  app.addHook('onClose', async () => listener.stop());
+  const chatCache = new LarkBotChatCache(20_000);
+  const fallbackCoordinators = new Map<string, LarkMessageCoordinator>();
+  const clearFallbackCoordinator = (appId?: string) => {
+    if (!appId) {
+      for (const coordinator of fallbackCoordinators.values()) coordinator.stop();
+      fallbackCoordinators.clear();
+      return;
+    }
+    const existing = fallbackCoordinators.get(appId);
+    if (existing) {
+      existing.stop();
+      fallbackCoordinators.delete(appId);
+    }
+  };
+  app.addHook('onClose', async () => {
+    clearFallbackCoordinator();
+    listener.stop();
+  });
   // 下面这组托管/选人路由统一把 LarkServiceError 翻成对应状态码；全局 errorHandler 只认 RuntimeError，
   // 不包一层的话缺参、已托管、飞书会话不可托管都会变成 500。
   const larkErrors = <Req extends FastifyRequest>(handler: (request: Req) => Promise<unknown>) => async (request: Req, reply: FastifyReply) => {
@@ -587,12 +605,75 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
       reply.raw.end();
     }
   });
-  app.get<{ Params: { appId: string }; Querystring: { pageToken?: string } }>('/api/lark/bots/:appId/chats', async (request, reply) => {
+  app.get<{ Params: { appId: string }; Querystring: { pageToken?: string; all?: string; refresh?: string } }>('/api/lark/bots/:appId/chats', async (request, reply) => {
     try {
-      return await (await resolveService(undefined, request.params.appId)).listChats(request.query.pageToken);
+      const botService = await resolveService(undefined, request.params.appId);
+      const all = request.query.all === '1' || request.query.all === 'true';
+      const refresh = request.query.refresh === '1' || request.query.refresh === 'true';
+      return await chatCache.list(request.params.appId, botService, {
+        ...(request.query.pageToken ? { pageToken: request.query.pageToken } : {}),
+        all,
+        refresh
+      });
     } catch (error) {
-      if (error instanceof LarkServiceError) return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
+      if (error instanceof LarkServiceError) return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message, ...(error.details?.consoleUrl ? { consoleUrl: error.details.consoleUrl } : {}) } });
       throw error;
+    }
+  });
+  registerLarkRegexTriggerRoutes(app, {
+    config: options.config,
+    chatCache,
+    resolveService: appId => resolveService(undefined, appId),
+    dispatchBackfillTurn: async input => {
+      if (!options.runtime) {
+        throw new LarkServiceError('LARK_RUNTIME_UNAVAILABLE', 'Agent runtime 不可用，无法发起轮次', 503);
+      }
+      const { botConfig, rule, message, matchedText, triggerType } = input;
+      let coordinator = listener.coordinatorFor?.(botConfig.appId);
+      if (!coordinator) {
+        coordinator = fallbackCoordinators.get(botConfig.appId);
+        if (!coordinator) {
+          const botService = await resolveService(undefined, botConfig.appId);
+          coordinator = new LarkMessageCoordinator(
+            options.runtime,
+            botService,
+            app.log,
+            Math.random,
+            undefined,
+            (chatId, senderOpenId) => options.agentTools?.isConfiguredPeer(botConfig.appId, chatId, senderOpenId) ?? Promise.resolve(false),
+            options.cardMappings,
+            options.config
+          );
+          fallbackCoordinators.set(botConfig.appId, coordinator);
+        }
+      }
+      const event: LarkMessageEvent = {
+        messageId: message.messageId,
+        chatId: rule.chatId,
+        chatType: 'group',
+        ...(message.createTime ? { createTime: message.createTime } : message.createdAt ? { createTime: message.createdAt } : {}),
+        ...(message.rootId ? { rootId: message.rootId } : {}),
+        ...(message.parentId ? { parentId: message.parentId } : {}),
+        ...(message.threadId ? { threadId: message.threadId } : {}),
+        messageType: message.msgType || 'text',
+        content: JSON.stringify({ text: message.text }),
+        ...(message.senderId ? { senderOpenId: message.senderId } : {}),
+        ...(message.senderType ? { senderType: message.senderType } : {}),
+        mentions: []
+      };
+      const result = await coordinator.triggerRegexMatch({
+        event,
+        config: botConfig,
+        rule,
+        matchedText,
+        messageText: message.text,
+        ...(message.senderName ? { senderName: message.senderName } : {}),
+        triggerType
+      });
+      return {
+        ...(result.sessionId ? { sessionId: result.sessionId } : {}),
+        ...(result.cardMessageId ? { cardMessageId: result.cardMessageId } : {})
+      };
     }
   });
   app.get<{ Params: { appId: string; chatId: string }; Querystring: { pageToken?: string } }>('/api/lark/bots/:appId/chats/:chatId/members', async (request, reply) => {
@@ -673,6 +754,8 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
         if (!hook.supported || !hook.installed || !hook.writable) throw new LarkServiceError('HARD_GATE_NOT_READY', hook.reason ?? 'Install the selected Agent hook before enabling the hard gate', 409);
       }
       const saved = await saveLarkConfig(options.config, options.agents, listeningDisabled ? { ...input, listening: undefined } : input);
+      chatCache.invalidate(input.originalAppId || input.appId);
+      clearFallbackCoordinator(input.originalAppId || input.appId);
       if (!listeningDisabled) await syncListeners(saved);
       if (!options.service) service = undefined;
       return publicLarkConfigs(saved, { activeAppIds: listener.activeAppIds, listeningDisabled });
@@ -684,6 +767,8 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
   app.delete<{ Params: { appId: string } }>('/api/lark/config/:appId', async (request, reply) => {
     try {
       const saved = await deleteLarkConfig(options.config, request.params.appId);
+      chatCache.invalidate(request.params.appId);
+      clearFallbackCoordinator(request.params.appId);
       if (!listeningDisabled) await syncListeners(saved);
       if (!options.service) service = undefined;
       return publicLarkConfigs(saved, { activeAppIds: listener.activeAppIds, listeningDisabled });

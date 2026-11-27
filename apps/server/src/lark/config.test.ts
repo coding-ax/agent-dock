@@ -46,3 +46,26 @@ describe('Lark bot avatar', () => {
     expect(bots[0]).not.toHaveProperty('avatarUrl');
   });
 });
+
+describe('Lark bot groupSessionScope default & persistence', () => {
+  it('defaults newly created bots to chat (全群共享) and allows switching cleanly back to user', async () => {
+    const repo = repository();
+    const created = await configured(repo);
+    expect(created.groupSessionScope).toBe('chat');
+
+    // 允许从全群共享切回按发送人隔离（修复旧实现仅认 chat 导致切不回 user 的 bug）
+    const switchedToUser = await configured(repo, { originalAppId: 'cli_test', groupSessionScope: 'user' });
+    expect(switchedToUser.groupSessionScope).toBe('user');
+
+    // 未显式传 groupSessionScope 的后续保存应保留已存的 user
+    const keptUser = await configured(repo, { originalAppId: 'cli_test', preInjectPrompt: 'hello' });
+    expect(keptUser.groupSessionScope).toBe('user');
+  });
+
+  it('keeps legacy stored bots missing groupSessionScope backwards-compatible as user', async () => {
+    const repo = repository();
+    await repo.set('lark.bots', JSON.stringify([{ appId: 'cli_legacy', appSecret: 'secret' }]));
+    const loaded = await readLarkConfig(repo, 'cli_legacy');
+    expect(loaded?.groupSessionScope).toBe('user');
+  });
+});

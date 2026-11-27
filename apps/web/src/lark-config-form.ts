@@ -1,3 +1,21 @@
+/**
+ * 新建飞书机器人表单的推荐默认值（仅作用于新建草稿；已保存的机器人始终按远端配置回填）。
+ *
+ * - `listening: true`：填完凭证并完成配置后直接上线接收消息，避免保存后无响应再折返开开关。
+ * - `groupToolsEnabled / groupToolsAllowSend: true`：默认支持群内多 Agent 协作与 @ 交接。
+ * - `groupSessionScope: 'chat'`：普通群主流消息默认全群共享上下文（话题内仍按话题隔离）。
+ */
+export const DEFAULT_NEW_LARK_BOT_FORM = {
+  listening: true,
+  groupToolsEnabled: true,
+  groupToolsAllowSend: true,
+  groupSessionScope: 'chat' as const,
+  peerBotsAllowed: true,
+  quietReply: false,
+  pushIntervalMs: 1_000,
+  gateEnabled: false
+} as const;
+
 export type HardGateFormState = {
   enabled: boolean;
   persisted: boolean;

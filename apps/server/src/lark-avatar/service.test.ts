@@ -1089,4 +1089,317 @@ describe('Lark avatar service', () => {
     const packed = varint(userId);
     expect(wire).toContain(Buffer.concat([Buffer.from([0x72, packed.length]), packed]).toString('hex'));
   });
+
+  it('supports custom inboxMaxItems (including 0 unlimited), cleanup threshold warnings, immediate trim on lower limit, and safe cleanup', async () => {
+    const fake = fakeClient();
+    const rt = fakeRuntime();
+    const service = createService({ client: fake.client, runtime: rt.runtime });
+    await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+
+    // 默认配置：上限 60、提醒阈值 200
+    expect(service.publicState()?.config).toMatchObject({
+      inboxMaxItems: 60,
+      inboxCleanupWarnThreshold: 200
+    });
+    expect(service.status().retention).toEqual({
+      inboxMaxItems: 60,
+      inboxCleanupWarnThreshold: 200,
+      inboxCount: 0,
+      shouldWarnCleanup: false
+    });
+
+    // 非法输入校验
+    await expect(service.saveConfig({ inboxMaxItems: -1 })).rejects.toMatchObject({
+      code: 'INVALID_INBOX_MAX_ITEMS',
+      statusCode: 400
+    });
+    await expect(service.saveConfig({ inboxCleanupWarnThreshold: 12.5 })).rejects.toMatchObject({
+      code: 'INVALID_CLEANUP_WARN_THRESHOLD',
+      statusCode: 400
+    });
+
+    // 设为 0（不限制）+ 阈值 70
+    const unlimited = await service.saveConfig({ inboxMaxItems: 0, inboxCleanupWarnThreshold: 70 });
+    expect(unlimited.config).toMatchObject({ inboxMaxItems: 0, inboxCleanupWarnThreshold: 70 });
+
+    // 部分更新配置不应重置保留策略
+    const partial = await service.saveConfig({ triggerPrefix: '/bot' });
+    expect(partial.config).toMatchObject({ triggerPrefix: '/bot', inboxMaxItems: 0, inboxCleanupWarnThreshold: 70 });
+
+    const baseSec = 1_767_225_600;
+    for (let index = 1; index <= 70; index++) {
+      await fake.emit({
+        messageId: `om_unlim_${index}`,
+        fromId: '100',
+        chatId: 'oc_chat',
+        createTime: baseSec + index,
+        content: `消息 ${index}`
+      });
+    }
+    // 恰好等于阈值 70 时不触发提醒（严格超过才提醒）
+    expect(service.inbox()).toHaveLength(70);
+    expect(service.status().retention).toEqual({
+      inboxMaxItems: 0,
+      inboxCleanupWarnThreshold: 70,
+      inboxCount: 70,
+      shouldWarnCleanup: false
+    });
+
+    // 第 71 条超过阈值 -> shouldWarnCleanup = true
+    await fake.emit({
+      messageId: 'om_unlim_71',
+      fromId: '100',
+      chatId: 'oc_chat',
+      createTime: baseSec + 71,
+      content: '消息 71'
+    });
+    expect(service.inbox()).toHaveLength(71);
+    expect(service.status().retention).toEqual({
+      inboxMaxItems: 0,
+      inboxCleanupWarnThreshold: 70,
+      inboxCount: 71,
+      shouldWarnCleanup: true
+    });
+
+    // 将提醒阈值设为 0 -> 关闭提醒
+    await service.saveConfig({ inboxCleanupWarnThreshold: 0 });
+    expect(service.status().retention.shouldWarnCleanup).toBe(false);
+
+    // 重新打开提醒阈值 70 并调用清理保留最近 30 条
+    await service.saveConfig({ inboxCleanupWarnThreshold: 70 });
+    expect(service.status().retention.shouldWarnCleanup).toBe(true);
+    const trimmed = service.cleanupInbox({ keepLatest: 30 });
+    expect(trimmed).toEqual({ ok: true, deleted: 41, remaining: 30, keepLatest: 30 });
+    expect(service.inbox()).toHaveLength(30);
+    expect(service.status().retention).toMatchObject({ inboxCount: 30, shouldWarnCleanup: false });
+
+    // 调小非零上限为 15 -> 保存时立即裁剪到 15 条
+    await service.saveConfig({ inboxMaxItems: 15 });
+    expect(service.inbox()).toHaveLength(15);
+    expect(service.status().counts.inbox).toBe(15);
+  });
+
+  describe('replyForwardMode (all / final_only / none)', () => {
+    const controllableRuntime = () => {
+      const sessions = new Map<string, { id: string }>();
+      const listeners = new Map<string, Set<(event: AgentEvent) => void>>();
+      const dispatched: Array<{ sessionId: string; taskId: string; prompt: string; agentPrompt?: string }> = [];
+      let sequence = 0;
+      const emit = (sessionId: string, type: AgentEvent['type'], data: unknown) => {
+        const event: AgentEvent = {
+          id: `evt_${++sequence}`,
+          sessionId,
+          sequence,
+          type,
+          timestamp: new Date().toISOString(),
+          data
+        };
+        for (const listener of listeners.get(sessionId) ?? []) listener(event);
+      };
+      const runtime: LarkAvatarRuntime = {
+        async getSession(id) { return sessions.get(id); },
+        async start() {
+          const session = { id: `ses_ctrl_${sessions.size + 1}` };
+          sessions.set(session.id, session);
+          return session;
+        },
+        async dispatch(id, prompt, _mode, agentPrompt) {
+          const taskId = `task_ctrl_${++sequence}`;
+          dispatched.push({ sessionId: id, taskId, prompt, ...(agentPrompt ? { agentPrompt } : {}) });
+          return { id: taskId, status: 'queued' };
+        },
+        subscribe(id, listener) {
+          const set = listeners.get(id) ?? new Set();
+          set.add(listener);
+          listeners.set(id, set);
+          return () => set.delete(listener);
+        },
+        async getTasks() { return []; }
+      };
+      return { runtime, dispatched, emit };
+    };
+
+    it('defaults to final_only and forwards both intermediate AgentText and final text when switched to all', async () => {
+      const fake = fakeClient();
+      const ctrl = controllableRuntime();
+      const service = createService({ client: fake.client, runtime: ctrl.runtime });
+      await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+      expect(service.publicState()?.config.replyForwardMode).toBe('final_only');
+      await service.saveConfig({ replyForwardMode: 'all' });
+      expect(service.publicState()?.config.replyForwardMode).toBe('all');
+
+      await fake.emit({ messageId: 'om_mode_all', fromId: '42', chatId: 'oc_group', chatType: 2, content: '/ai 排查一下' });
+      await vi.waitFor(() => expect(ctrl.dispatched).toHaveLength(1));
+      const { sessionId, taskId } = ctrl.dispatched[0]!;
+
+      ctrl.emit(sessionId, 'task', { task: { id: taskId, status: 'running' } });
+      ctrl.emit(sessionId, 'text', { text: '我先查一下日志。' });
+      ctrl.emit(sessionId, 'tool_call', { id: 'tc_1', status: 'running', title: 'grep' });
+      await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+      expect(fake.sent[0]?.text).toBe('我先查一下日志。');
+
+      ctrl.emit(sessionId, 'tool_result', { id: 'tc_1', status: 'completed' });
+      ctrl.emit(sessionId, 'text', { text: '最终结论：' });
+      ctrl.emit(sessionId, 'text', { text: '连接池已恢复。' });
+      ctrl.emit(sessionId, 'task', { task: { id: taskId, status: 'completed', finalText: '最终结论：连接池已恢复。' } });
+
+      await vi.waitFor(() => expect(fake.sent).toHaveLength(2));
+      expect(fake.sent.map(item => item.text)).toEqual(['我先查一下日志。', '最终结论：连接池已恢复。']);
+    });
+
+    it('suppresses intermediate AgentText in final_only mode and sends only the final reply on completion', async () => {
+      const fake = fakeClient();
+      const ctrl = controllableRuntime();
+      const service = createService({ client: fake.client, runtime: ctrl.runtime });
+      await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+      await service.saveConfig({ replyForwardMode: 'final_only', replySignature: '—— 替身', replyMode: 'quote' });
+
+      await fake.emit({ messageId: 'om_mode_final', fromId: '42', chatId: 'oc_group', chatType: 2, content: '/ai 排查最终结论' });
+      await vi.waitFor(() => expect(ctrl.dispatched).toHaveLength(1));
+      const { sessionId, taskId } = ctrl.dispatched[0]!;
+
+      ctrl.emit(sessionId, 'task', { task: { id: taskId, status: 'running' } });
+      ctrl.emit(sessionId, 'text', { text: '第一步：我先看看报错。' });
+      ctrl.emit(sessionId, 'tool_call', { id: 'tc_1', status: 'running', title: 'read_file' });
+      ctrl.emit(sessionId, 'tool_result', { id: 'tc_1', status: 'completed' });
+      ctrl.emit(sessionId, 'text', { text: '第二步：继续分析根因。' });
+      ctrl.emit(sessionId, 'thinking', { text: '思考中' });
+      ctrl.emit(sessionId, 'text', { text: '最终结论：' });
+      ctrl.emit(sessionId, 'text', { text: '配置项缺失，已补齐。' });
+
+      // 轮次未完成前绝不向飞书发送中间文本
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(fake.sent).toHaveLength(0);
+
+      ctrl.emit(sessionId, 'task', { task: { id: taskId, status: 'completed' } });
+      await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+      expect(fake.sent[0]).toMatchObject({
+        chatId: 'oc_group',
+        rootId: 'om_mode_final',
+        quote: true,
+        text: '最终结论：配置项缺失，已补齐。\n\n—— 替身'
+      });
+    });
+
+    it('uses task.finalText in final_only mode and sends nothing when turn has no final text or is stopped', async () => {
+      const fake = fakeClient();
+      const ctrl = controllableRuntime();
+      const service = createService({ client: fake.client, runtime: ctrl.runtime });
+      await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+      await service.saveConfig({ replyForwardMode: 'final_only' });
+
+      // 1) task 事件带 finalText 时直接发送 finalText
+      await fake.emit({ messageId: 'om_final_explicit', fromId: '42', chatId: 'oc_chat', content: '/ai 给明确结论' });
+      await vi.waitFor(() => expect(ctrl.dispatched).toHaveLength(1));
+      const first = ctrl.dispatched[0]!;
+      ctrl.emit(first.sessionId, 'task', { task: { id: first.taskId, status: 'running' } });
+      ctrl.emit(first.sessionId, 'text', { text: '过程说明' });
+      ctrl.emit(first.sessionId, 'task', { task: { id: first.taskId, status: 'completed', finalText: '权威最终答复' } });
+      await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+      expect(fake.sent[0]?.text).toBe('权威最终答复');
+
+      // 2) 整轮完成但无最终文本 -> 不发空消息
+      await fake.emit({ messageId: 'om_final_empty', fromId: '42', chatId: 'oc_chat', content: '/ai 空输出' });
+      await vi.waitFor(() => expect(ctrl.dispatched).toHaveLength(2));
+      const second = ctrl.dispatched[1]!;
+      ctrl.emit(second.sessionId, 'task', { task: { id: second.taskId, status: 'running' } });
+      ctrl.emit(second.sessionId, 'thinking', { text: '只思考不说话' });
+      ctrl.emit(second.sessionId, 'tool_call', { id: 'tc_empty', status: 'running' });
+      ctrl.emit(second.sessionId, 'tool_result', { id: 'tc_empty', status: 'completed' });
+      ctrl.emit(second.sessionId, 'task', { task: { id: second.taskId, status: 'completed' } });
+      await vi.waitFor(() => expect(service.inbox().find(item => item.messageId === 'om_final_empty')?.state).toBe('handled'));
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(fake.sent).toHaveLength(1);
+
+      // 3) 被主动停止（interrupted / cancelled）或失败（failed）-> 即使已有过程文本也不发飞书
+      for (const status of ['interrupted', 'cancelled', 'failed'] as const) {
+        const messageId = `om_final_${status}`;
+        await fake.emit({ messageId, fromId: '42', chatId: 'oc_chat', content: `/ai 测试 ${status}` });
+        const expectedLen = ctrl.dispatched.length + 1;
+        await vi.waitFor(() => expect(ctrl.dispatched).toHaveLength(expectedLen));
+        const current = ctrl.dispatched.at(-1)!;
+        ctrl.emit(current.sessionId, 'task', { task: { id: current.taskId, status: 'running' } });
+        ctrl.emit(current.sessionId, 'text', { text: `中断前的过程文本 ${status}` });
+        ctrl.emit(current.sessionId, 'task', { task: { id: current.taskId, status } });
+        await vi.waitFor(() => expect(service.inbox().find(item => item.messageId === messageId)?.state).toBe('handled'));
+      }
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(fake.sent).toHaveLength(1);
+    });
+
+    it('runs Agent in AgentDock without sending any Feishu messages in none mode', async () => {
+      const fake = fakeClient();
+      const ctrl = controllableRuntime();
+      const service = createService({ client: fake.client, runtime: ctrl.runtime });
+      await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+      await service.saveConfig({
+        replyForwardMode: 'none',
+        agentId: 'trae'
+      });
+      expect(service.publicState()?.config).toMatchObject({ replyForwardMode: 'none', agentId: 'trae' });
+
+      // 1) 空触发前缀也不向飞书发送提示
+      await fake.emit({ messageId: 'om_none_empty_prompt', fromId: '42', chatId: 'oc_group', chatType: 2, content: '/ai' });
+      await vi.waitFor(() => expect(service.inbox().find(item => item.messageId === 'om_none_empty_prompt')?.state).toBe('handled'));
+      expect(fake.sent).toHaveLength(0);
+
+      // 2) 正常 /ai 触发：照常派发给 AgentDock 会话，但不向飞书发任何过程或终态回复
+      await fake.emit({ messageId: 'om_none_run', fromId: '42', chatId: 'oc_group', chatType: 2, content: '/ai 仅本地留存分析' });
+      await vi.waitFor(() => expect(ctrl.dispatched).toHaveLength(1));
+      const run = ctrl.dispatched[0]!;
+      expect(run.prompt).toBe('仅本地留存分析');
+      expect(run.agentPrompt).toContain('不在飞书回复');
+
+      ctrl.emit(run.sessionId, 'task', { task: { id: run.taskId, status: 'running' } });
+      ctrl.emit(run.sessionId, 'text', { text: '中间分析过程' });
+      ctrl.emit(run.sessionId, 'tool_call', { id: 'tc_n1', status: 'running' });
+      ctrl.emit(run.sessionId, 'tool_result', { id: 'tc_n1', status: 'completed' });
+      ctrl.emit(run.sessionId, 'text', { text: '完整最终结果，只在 AgentDock 保留' });
+      ctrl.emit(run.sessionId, 'task', { task: { id: run.taskId, status: 'completed', finalText: '完整最终结果，只在 AgentDock 保留' } });
+
+      await vi.waitFor(() => expect(service.inbox().find(item => item.messageId === 'om_none_run')?.state).toBe('handled'));
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(fake.sent).toHaveLength(0);
+      expect(service.drafts()).toHaveLength(0);
+    });
+
+    it('suppresses runtime error replies and non-subscribe send replies in none mode', async () => {
+      const fake = fakeClient();
+      const sendCalls: string[] = [];
+      const nonSubscribeRuntime: LarkAvatarRuntime = {
+        async getSession() { return undefined; },
+        async start() { return { id: 'ses_send_only' }; },
+        async dispatch() { throw new Error('boom'); },
+        async send(_id, prompt) {
+          sendCalls.push(prompt);
+          return { finalText: '本地留存答案' };
+        }
+      };
+      const service = createService({ client: fake.client, runtime: nonSubscribeRuntime });
+      await service.connectWithCookie('session=session-1; passport_web_did=device-1');
+      await service.saveConfig({ replyForwardMode: 'none' });
+
+      await fake.emit({ messageId: 'om_none_send_fallback', fromId: '42', chatId: 'oc_chat', content: '/ai 用 send 路径跑' });
+      await vi.waitFor(() => expect(sendCalls).toHaveLength(1));
+      await vi.waitFor(() => expect(service.inbox().find(item => item.messageId === 'om_none_send_fallback')?.state).toBe('handled'));
+      expect(fake.sent).toHaveLength(0);
+
+      // dispatch 异常场景：在 none 模式下也不发失败提示到飞书
+      const failingRuntime: LarkAvatarRuntime = {
+        async getSession() { return undefined; },
+        async start() { return { id: 'ses_fail' }; },
+        async dispatch() { throw new Error('agent offline'); },
+        subscribe() { return () => undefined; }
+      };
+      const fake2 = fakeClient();
+      const service2 = createService({ client: fake2.client, runtime: failingRuntime });
+      await service2.connectWithCookie('session=session-1; passport_web_did=device-1');
+      await service2.saveConfig({ replyForwardMode: 'none' });
+
+      await fake2.emit({ messageId: 'om_none_error', fromId: '42', chatId: 'oc_chat', content: '/ai 触发异常' });
+      await vi.waitFor(() => expect(service2.inbox().find(item => item.messageId === 'om_none_error')?.state).toBe('handled'));
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(fake2.sent).toHaveLength(0);
+    });
+  });
 });

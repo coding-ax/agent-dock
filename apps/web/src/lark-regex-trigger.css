@@ -1,0 +1,172 @@
+/* ---------- 飞书群聊正则唤起 · 专属微动效与亮暗主题高亮（与全局 motion.css 曲线同源） ---------- */
+
+/* 列表筛选平滑收折：切到「仅看命中」时未命中消息通过 grid-template-rows 折叠淡出；
+   行间距放在内层 .ui-regex-msg-inner 的 padding-bottom，绝不动画 margin-bottom 引起重排。 */
+.ui-regex-msg-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    grid-template-rows var(--dur-panel, 240ms) var(--ease-out-expo, cubic-bezier(.16, 1, .3, 1)),
+    opacity var(--dur-base, 180ms) var(--ease-swift, ease-out),
+    transform var(--dur-panel, 240ms) var(--ease-out-expo, cubic-bezier(.16, 1, .3, 1));
+}
+
+.ui-regex-msg-wrap[data-collapsed="true"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+.ui-regex-msg-inner {
+  overflow: hidden;
+  min-height: 0;
+  padding: 2px 2px 14px;
+}
+
+/* 命中消息卡片柔和亮边与微浮起 */
+.ui-regex-bubble {
+  transition:
+    border-color var(--dur-base, 180ms) var(--ease-swift, ease),
+    box-shadow var(--dur-panel, 240ms) var(--ease-out-expo, cubic-bezier(.16, 1, .3, 1)),
+    background-color var(--dur-base, 180ms) var(--ease-swift, ease),
+    opacity var(--dur-base, 180ms) var(--ease-swift, ease);
+}
+
+.ui-regex-bubble[data-matched="true"] {
+  border-color: rgb(245 158 11 / 0.55);
+  box-shadow:
+    0 0 0 2px rgb(251 191 36 / 0.16),
+    0 4px 16px -4px rgb(245 158 11 / 0.14);
+}
+
+html[data-theme="dark"] .ui-regex-bubble[data-matched="true"] {
+  border-color: rgb(251 191 36 / 0.45);
+  box-shadow:
+    0 0 0 2px rgb(251 191 36 / 0.14),
+    0 6px 20px -6px rgb(0 0 0 / 0.45);
+}
+
+.ui-regex-bubble[data-selected="true"] {
+  border-color: rgb(14 165 233 / 0.72);
+  box-shadow:
+    0 0 0 2px rgb(14 165 233 / 0.18),
+    0 4px 16px -4px rgb(14 165 233 / 0.16);
+}
+
+html[data-theme="dark"] .ui-regex-bubble[data-selected="true"] {
+  border-color: rgb(56 189 248 / 0.62);
+  box-shadow:
+    0 0 0 2px rgb(56 189 248 / 0.2),
+    0 6px 20px -6px rgb(0 0 0 / 0.5);
+}
+
+/* 精确命中子串胶囊高亮 */
+.ui-regex-mark {
+  display: inline;
+  padding: 0.04rem 0.28rem;
+  margin: 0 0.04rem;
+  border-radius: 5px;
+  background: rgb(254 240 138 / 0.85);
+  color: rgb(120 53 15);
+  box-shadow: inset 0 0 0 1px rgb(245 158 11 / 0.35);
+  font-weight: 600;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  animation: ui-regex-mark-in var(--dur-base, 180ms) var(--ease-out-expo, cubic-bezier(.16, 1, .3, 1)) backwards;
+}
+
+html[data-theme="dark"] .ui-regex-mark {
+  background: rgb(217 119 6 / 0.34);
+  color: rgb(254 243 199);
+  box-shadow: inset 0 0 0 1px rgb(251 191 36 / 0.45);
+}
+
+@keyframes ui-regex-mark-in {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 命中数量角标平滑数字跳动 */
+.ui-regex-count-pop {
+  display: inline-block;
+  animation: ui-regex-count-pop var(--dur-panel, 240ms) var(--ease-spring-snappy, cubic-bezier(.34, 1.42, .64, 1)) backwards;
+}
+
+@keyframes ui-regex-count-pop {
+  0% { transform: scale(0.84); opacity: 0.55; }
+  60% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* 批量补偿工具条丝滑展开 */
+.ui-regex-batch-bar {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--dur-panel, 240ms) var(--ease-out-expo, cubic-bezier(.16, 1, .3, 1)),
+    opacity var(--dur-base, 180ms) var(--ease-swift, ease);
+}
+
+.ui-regex-batch-bar[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.ui-regex-batch-bar-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* 聊天骨架逐条错峰浮现 */
+.ui-regex-skeleton-row {
+  animation: ui-regex-skeleton-in var(--dur-panel, 240ms) var(--ease-out-expo, cubic-bezier(.16, 1, .3, 1)) backwards;
+}
+
+@keyframes ui-regex-skeleton-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 单条卡片悬停操作条（桌面端平滑显隐，触屏设备常显） */
+.ui-regex-hover-action {
+  opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ui-regex-hover-action {
+    opacity: 0.72;
+    transform: translateY(0);
+    transition:
+      opacity var(--dur-base, 180ms) var(--ease-swift, ease),
+      transform var(--dur-fast, 120ms) var(--ease-swift, ease),
+      background-color var(--dur-fast, 120ms) var(--ease-swift, ease),
+      color var(--dur-fast, 120ms) var(--ease-swift, ease);
+  }
+  .ui-regex-msg-card:hover .ui-regex-hover-action,
+  .ui-regex-msg-card:focus-within .ui-regex-hover-action,
+  .ui-regex-hover-action[data-busy="true"],
+  .ui-regex-hover-action[data-active="true"] {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-regex-msg-wrap,
+  .ui-regex-bubble,
+  .ui-regex-batch-bar,
+  .ui-regex-mark,
+  .ui-regex-count-pop,
+  .ui-regex-skeleton-row,
+  .ui-regex-hover-action {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+  }
+}

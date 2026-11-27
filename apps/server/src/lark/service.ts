@@ -68,6 +68,7 @@ export interface LarkChat {
   chatId: string;
   name: string;
   description?: string;
+  avatar?: string;
   ownerId?: string;
   external: boolean;
   chatMode?: string;
@@ -93,6 +94,8 @@ export interface LarkChatMessage {
   deleted: boolean;
   updated: boolean;
   threadId?: string;
+  rootId?: string;
+  parentId?: string;
   /** 合并转发消息中，上一层级的消息 ID，仅在合并转发场景会有返回值。 */
   upperMessageId?: string;
 }
@@ -674,6 +677,65 @@ export class LarkCardService {
     return { messageId: payload.data?.message_id || messageId, chatId: payload.data?.chat_id };
   }
 
+  /**
+   * 发送轻量终态通知卡片（支持私聊 open_id 或群聊 chat_id），用于「Agent 运行完成 / 失败 / 待审批」通知推送。
+   * 带 config.summary 以便手机锁屏和飞书会话列表直接展示清晰摘要。
+   */
+  async sendNotificationCard(input: {
+    receiveId: string;
+    receiveIdType: LarkReceiveIdType;
+    title: string;
+    subtitle?: string;
+    markdown: string;
+    summary?: string;
+    template?: 'green' | 'red' | 'orange' | 'blue' | 'grey';
+    actionUrl?: string;
+    actionLabel?: string;
+    idempotencyKey?: string;
+  }): Promise<LarkMessageResult> {
+    const receiveId = required(input.receiveId, 'receiveId');
+    const resolvedType = receiveIdType(input.receiveIdType);
+    const idempotencyKey = input.idempotencyKey?.trim().slice(0, 50);
+    const elements: Array<Record<string, unknown>> = [
+      { tag: 'markdown', content: input.markdown, text_align: 'left', text_size: 'normal_v2', margin: '0px' }
+    ];
+    if (input.actionUrl) {
+      elements.push({
+        tag: 'button',
+        text: { tag: 'plain_text', content: input.actionLabel || '在 AgentDock 查看' },
+        type: 'primary_text',
+        size: 'small',
+        behaviors: [{ type: 'open_url', default_url: input.actionUrl }],
+        margin: '8px 0px 0px 0px'
+      });
+    }
+    const card = {
+      schema: '2.0',
+      config: {
+        wide_screen_mode: true,
+        ...(input.summary ? { summary: { content: input.summary.slice(0, 120) } } : {})
+      },
+      header: {
+        template: input.template ?? 'blue',
+        title: { tag: 'plain_text', content: input.title },
+        ...(input.subtitle ? { subtitle: { tag: 'plain_text', content: input.subtitle } } : {})
+      },
+      body: { direction: 'vertical', elements }
+    };
+    const payload = await this.request(`/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(resolvedType)}`, {
+      body: {
+        receive_id: receiveId,
+        msg_type: 'interactive',
+        content: JSON.stringify(card),
+        ...(idempotencyKey ? { uuid: idempotencyKey } : {})
+      },
+      timeoutMs: 10_000
+    });
+    const messageId = payload.data?.message_id;
+    if (!messageId) throw new LarkServiceError('INVALID_LARK_RESPONSE', 'Lark notification card response did not include message_id', 502);
+    return { messageId, chatId: payload.data?.chat_id };
+  }
+
   async reply(input: LarkReplyInput): Promise<LarkMessageResult> {
     const messageId = required(input.messageId, 'messageId');
     const cardInput = await this.cardInput(input);
@@ -774,6 +836,7 @@ export class LarkCardService {
       const chatId = String(item.chat_id ?? '').trim();
       if (!chatId.startsWith('oc_')) return [];
       const description = String(item.description ?? '').trim() || undefined;
+      const avatar = String(item.avatar ?? '').trim() || undefined;
       const ownerId = String(item.owner_id ?? '').trim() || undefined;
       const chatMode = String(item.chat_mode ?? '').trim() || undefined;
       const chatStatus = String(item.chat_status ?? '').trim() || undefined;
@@ -781,6 +844,7 @@ export class LarkCardService {
         chatId,
         name: String(item.name ?? '').trim() || chatId,
         ...(description ? { description } : {}),
+        ...(avatar ? { avatar } : {}),
         ...(ownerId ? { ownerId } : {}),
         external: item.external === true,
         ...(chatMode ? { chatMode } : {}),
@@ -894,6 +958,8 @@ export class LarkCardService {
     }));
     const updateTime = String(item?.update_time ?? '').trim() || undefined;
     const threadId = String(item?.thread_id ?? '').trim() || undefined;
+    const rootId = String(item?.root_id ?? '').trim() || undefined;
+    const parentId = String(item?.parent_id ?? '').trim() || undefined;
     const itemChatId = String(item?.chat_id ?? '').trim() || undefined;
     const upperMessageId = String(item?.upper_message_id ?? '').trim() || undefined;
     return {
@@ -901,6 +967,7 @@ export class LarkCardService {
       sender: normalizedSender, rawContent: String(item?.body?.content ?? item?.content ?? ''), mentions,
       deleted: item?.deleted === true, updated: item?.updated === true,
       ...(itemChatId ? { chatId: itemChatId } : {}), ...(updateTime ? { updateTime } : {}), ...(threadId ? { threadId } : {}),
+      ...(rootId ? { rootId } : {}), ...(parentId ? { parentId } : {}),
       ...(upperMessageId ? { upperMessageId } : {})
     };
   }

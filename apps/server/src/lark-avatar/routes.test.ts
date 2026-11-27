@@ -473,133 +473,171 @@ describe('Lark avatar routes', () => {
     });
   });
 
-  describe('private group analysis and anti-leak safeguards', () => {
-    it('persists privateReplyChatId and reactionTriggerIntent and validates invalid intent', async () => {
-      const { app } = await buildApp();
-      const saved = await app.inject({
-        method: 'PUT',
-        url: '/api/lark-avatar/config',
-        payload: {
-          reactionTriggerRoute: 'private_chat',
-          reactionTriggerIntent: 'summary',
-          privateReplyChatId: 'oc_my_private_notes'
-        }
-      });
-      expect(saved.statusCode).toBe(200);
-      expect(saved.json().config).toMatchObject({
-        reactionTriggerRoute: 'private_chat',
-        reactionTriggerIntent: 'summary',
-        privateReplyChatId: 'oc_my_private_notes'
-      });
+  it('persists retention config, exposes over-threshold status, supports unlimited inbox query and cleanup endpoint', async () => {
+    const { app, service } = await buildApp();
 
-      const badIntent = await app.inject({
-        method: 'PUT',
-        url: '/api/lark-avatar/config',
-        payload: { reactionTriggerIntent: 'leak_to_group' }
-      });
-      expect(badIntent.statusCode).toBe(400);
-      expect(badIntent.json().error.code).toBe('INVALID_REACTION_INTENT');
+    // 默认配置与状态
+    const initial = await app.inject({ method: 'GET', url: '/api/lark-avatar/status' });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json().retention).toEqual({
+      inboxMaxItems: 60,
+      inboxCleanupWarnThreshold: 200,
+      inboxCount: 0,
+      shouldWarnCleanup: false
     });
 
-    it('analyzes a group privately without sending anything to the target group and blocks same-chat forwarding', async () => {
-      const fake = makeClient({
-        chats: [
-          { id: '7001', openChatId: 'oc_boss_group', name: '老板核心群', type: 2, chatMode: 1, userCount: 8, memberCount: 8, lastMessagePosition: 2, updateTime: 0 },
-          { id: '7002', openChatId: 'oc_my_self', name: '我自己的私聊', type: 1, chatMode: 1, userCount: 2, memberCount: 2, lastMessagePosition: 1, updateTime: 0 }
-        ],
-        history: [{
-          messageId: 'm_boss_1',
-          chatId: '7001',
-          fromId: 'u_boss',
-          type: 4,
-          chatType: 2,
-          content: '周五前把重构方案发出来',
-          createTime: 1_700_000_000_000,
-          position: 2,
-          rootId: '',
-          parentId: '',
-          threadId: '',
-          raw: {}
-        }]
-      });
-      const { app } = await buildApp(fake.client);
-      const logged = await app.inject({
-        method: 'POST',
-        url: '/api/lark-avatar/login/cookie',
-        payload: { cookie: 'session=abc; swp_csrf_token=csrf; passport_web_did=did', region: 'feishu' }
-      });
-      expect(logged.statusCode).toBe(200);
-
-      // 1. 独立会话私密分析：不发任何消息到老板群
-      const independent = await app.inject({
-        method: 'POST',
-        url: '/api/lark-avatar/private-analyze',
-        payload: { chatId: '7001', mode: 'summary', delivery: 'independent', contextMessages: 20 }
-      });
-      expect(independent.statusCode).toBe(200);
-      expect(independent.json()).toMatchObject({
-        ok: true,
-        delivery: 'independent',
-        mode: 'summary',
-        chatId: '7001',
-        chatName: '老板核心群',
-        contextCount: 1,
-        sessionId: 'ses_test'
-      });
-      expect(fake.sent).toHaveLength(0);
-
-      // 2. 自定义模式缺少 prompt 返回 400
-      const missingPrompt = await app.inject({
-        method: 'POST',
-        url: '/api/lark-avatar/private-analyze',
-        payload: { chatId: '7001', mode: 'custom', delivery: 'independent' }
-      });
-      expect(missingPrompt.statusCode).toBe(400);
-      expect(missingPrompt.json().error.code).toBe('INVALID_INPUT');
-
-      // 3. 私密转发未配置目标会话时拦截
-      const noTarget = await app.inject({
-        method: 'POST',
-        url: '/api/lark-avatar/private-analyze',
-        payload: { chatId: '7001', mode: 'analyze', delivery: 'private_chat' }
-      });
-      expect(noTarget.statusCode).toBe(400);
-      expect(noTarget.json().error.code).toBe('PRIVATE_CHAT_NOT_CONFIGURED');
-
-      // 4. 私密转发目标与原群相同时拦截防泄密
-      await app.inject({
-        method: 'PUT',
-        url: '/api/lark-avatar/config',
-        payload: { privateReplyChatId: '7001' }
-      });
-      const sameTarget = await app.inject({
-        method: 'POST',
-        url: '/api/lark-avatar/private-analyze',
-        payload: { chatId: '7001', mode: 'analyze', delivery: 'private_chat' }
-      });
-      expect(sameTarget.statusCode).toBe(400);
-      expect(sameTarget.json().error.code).toBe('PRIVATE_CHAT_SAME_AS_TARGET');
-      expect(fake.sent).toHaveLength(0);
-
-      // 5. 配置合法私密接收会话后，只允许向私密接收会话转发，绝不发到老板群
-      await app.inject({
-        method: 'PUT',
-        url: '/api/lark-avatar/config',
-        payload: { privateReplyChatId: '7002' }
-      });
-      const forwarded = await app.inject({
-        method: 'POST',
-        url: '/api/lark-avatar/private-analyze',
-        payload: { chatId: '7001', mode: 'analyze', delivery: 'private_chat' }
-      });
-      expect(forwarded.statusCode).toBe(200);
-      expect(forwarded.json()).toMatchObject({
-        ok: true,
-        delivery: 'private_chat',
-        chatId: '7001',
-        targetChatId: '7002'
-      });
-      expect(fake.sent.every(item => item.chatId !== '7001')).toBe(true);
+    // 非法保留参数返回 400
+    const badMax = await app.inject({
+      method: 'PUT',
+      url: '/api/lark-avatar/config',
+      payload: { inboxMaxItems: -5 }
     });
+    expect(badMax.statusCode).toBe(400);
+    expect(badMax.json().error.code).toBe('INVALID_INBOX_MAX_ITEMS');
+
+    const badThreshold = await app.inject({
+      method: 'PUT',
+      url: '/api/lark-avatar/config',
+      payload: { inboxCleanupWarnThreshold: 1.5 }
+    });
+    expect(badThreshold.statusCode).toBe(400);
+    expect(badThreshold.json().error.code).toBe('INVALID_CLEANUP_WARN_THRESHOLD');
+
+    // 保存为 0 不限制、阈值 65
+    const saved = await app.inject({
+      method: 'PUT',
+      url: '/api/lark-avatar/config',
+      payload: { inboxMaxItems: 0, inboxCleanupWarnThreshold: 65 }
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().config).toMatchObject({ inboxMaxItems: 0, inboxCleanupWarnThreshold: 65 });
+
+    // 写入 75 条消息（超过旧硬编码 60 与新阈值 65）
+    for (let index = 0; index < 75; index++) {
+      service.store.upsertInbox({
+        id: `item_route_${index}`,
+        threadKey: 'lark:oc_group',
+        messageId: `om_route_${index}`,
+        chatId: 'oc_group',
+        chatType: 'group',
+        chatName: '测试群',
+        senderId: '42',
+        senderName: '张三',
+        title: `群消息 ${index}`,
+        tier: 'fyi',
+        state: 'handled',
+        occurredAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+        receivedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+        payload: {}
+      });
+    }
+
+    const overStatus = await app.inject({ method: 'GET', url: '/api/lark-avatar/status' });
+    expect(overStatus.json().retention).toEqual({
+      inboxMaxItems: 0,
+      inboxCleanupWarnThreshold: 65,
+      inboxCount: 75,
+      shouldWarnCleanup: true
+    });
+
+    const allInbox = await app.inject({ method: 'GET', url: '/api/lark-avatar/inbox' });
+    expect(allInbox.json()).toHaveLength(75);
+    const limitedInbox = await app.inject({ method: 'GET', url: '/api/lark-avatar/inbox?limit=10' });
+    expect(limitedInbox.json()).toHaveLength(10);
+
+    // 非法清理参数返回 400
+    const badCleanup = await app.inject({
+      method: 'POST',
+      url: '/api/lark-avatar/inbox/cleanup',
+      payload: { keepLatest: -1 }
+    });
+    expect(badCleanup.statusCode).toBe(400);
+    expect(badCleanup.json().error.code).toBe('INVALID_CLEANUP_KEEP_LATEST');
+
+    // 保留最近 20 条
+    const trimmed = await app.inject({
+      method: 'POST',
+      url: '/api/lark-avatar/inbox/cleanup',
+      payload: { keepLatest: 20 }
+    });
+    expect(trimmed.statusCode).toBe(200);
+    expect(trimmed.json()).toEqual({ ok: true, deleted: 55, remaining: 20, keepLatest: 20 });
+
+    const afterTrim = await app.inject({ method: 'GET', url: '/api/lark-avatar/status' });
+    expect(afterTrim.json().retention).toMatchObject({ inboxCount: 20, shouldWarnCleanup: false });
+
+    // 清空全部
+    const cleared = await app.inject({
+      method: 'POST',
+      url: '/api/lark-avatar/inbox/cleanup',
+      payload: { keepLatest: 0 }
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json()).toEqual({ ok: true, deleted: 20, remaining: 0, keepLatest: 0 });
+  });
+
+  it('persists replyForwardMode (all / final_only / none), rejects invalid values, downgrades legacy private_chat and preserves saved agentId', async () => {
+    const { app } = await buildApp();
+
+    const initial = await app.inject({
+      method: 'PUT',
+      url: '/api/lark-avatar/config',
+      payload: {
+        agentId: 'trae',
+        model: 'glm-4',
+        inboxMaxItems: 120
+      }
+    });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json().config).toMatchObject({
+      agentId: 'trae',
+      model: 'glm-4',
+      inboxMaxItems: 120,
+      replyForwardMode: 'final_only'
+    });
+
+    const invalid = await app.inject({
+      method: 'PUT',
+      url: '/api/lark-avatar/config',
+      payload: { replyForwardMode: 'streaming_invalid' }
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.code).toBe('INVALID_REPLY_FORWARD_MODE');
+
+    // 已下线的私密分析路由不再暴露，历史 private_chat 路由平滑降级为 main
+    const removedPrivateRoute = await app.inject({
+      method: 'POST',
+      url: '/api/lark-avatar/private-analyze',
+      payload: { chatId: 'oc_1' }
+    });
+    expect(removedPrivateRoute.statusCode).toBe(404);
+
+    const legacyRoute = await app.inject({
+      method: 'PUT',
+      url: '/api/lark-avatar/config',
+      payload: { reactionTriggerRoute: 'private_chat' }
+    });
+    expect(legacyRoute.statusCode).toBe(200);
+    expect(legacyRoute.json().config.reactionTriggerRoute).toBe('main');
+
+    for (const mode of ['final_only', 'none', 'all'] as const) {
+      const updated = await app.inject({
+        method: 'PUT',
+        url: '/api/lark-avatar/config',
+        payload: { replyForwardMode: mode }
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json().config).toMatchObject({
+        replyForwardMode: mode,
+        agentId: 'trae',
+        model: 'glm-4',
+        inboxMaxItems: 120
+      });
+
+      const fetched = await app.inject({ method: 'GET', url: '/api/lark-avatar/config' });
+      expect(fetched.statusCode).toBe(200);
+      expect(fetched.json().config.replyForwardMode).toBe(mode);
+      expect(fetched.json().config.agentId).toBe('trae');
+    }
   });
 });

@@ -3,8 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '@agent-dock/agent-dock-storage';
-import { LarkAvatarStore, MAX_DRAFT_ITEMS, MAX_INBOX_ITEMS } from './store.js';
-import type { LarkAvatarDraft, LarkAvatarInboxItem, LarkAvatarReactionTrigger } from './types.js';
+import {
+  DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD,
+  DEFAULT_INBOX_MAX_ITEMS,
+  DEFAULT_REPLY_FORWARD_MODE,
+  LarkAvatarStore,
+  MAX_DRAFT_ITEMS,
+  MAX_INBOX_ITEMS
+} from './store.js';
+import type { LarkAvatarDraft, LarkAvatarInboxItem, LarkAvatarReactionTrigger, LarkAvatarState } from './types.js';
 
 const stores: LarkAvatarStore[] = [];
 const tempDirs: string[] = [];
@@ -242,5 +249,162 @@ describe('Lark avatar store', () => {
     } finally {
       reopened.close();
     }
+  });
+
+  const sampleState = (overrides: Partial<LarkAvatarState['config']> = {}): LarkAvatarState => ({
+    id: 'avatar_1',
+    config: {
+      region: 'feishu',
+      triggerPrefix: '/ai',
+      contextMessages: 10,
+      contextScope: 'anchor',
+      replyInTopic: true,
+      replyMode: 'direct',
+      replyForwardMode: DEFAULT_REPLY_FORWARD_MODE,
+      emojiReactions: false,
+      reactionTriggerEnabled: false,
+      reactionTriggerEmoji: '',
+      reactionTriggerRoute: 'main',
+      reactionTriggerIgnoreBots: true,
+      replySignature: '',
+      agentTimeoutSeconds: 7_200,
+      listening: true,
+      listenChats: [],
+      inboxMaxItems: DEFAULT_INBOX_MAX_ITEMS,
+      inboxCleanupWarnThreshold: DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD,
+      allowedSenders: [],
+      agentId: 'codex',
+      model: '',
+      reasoningEffort: '',
+      workspace: '',
+      ...overrides
+    },
+    state: 'connected',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
+  });
+
+  it('respects custom inboxMaxItems and preserves all records when set to 0 (unlimited) across restarts', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'avatar-retention-'));
+    tempDirs.push(dir);
+    const file = join(dir, 'avatar.db');
+
+    const store = new LarkAvatarStore(file);
+    // 自定义上限：85 条
+    store.saveState(sampleState({ inboxMaxItems: 85, inboxCleanupWarnThreshold: 70 }));
+    for (let index = 0; index < 95; index++) store.upsertInbox(item(index));
+    expect(store.inboxCount()).toBe(85);
+    expect(store.listInbox()).toHaveLength(85);
+    expect(store.inboxItem('item_0')).toBeUndefined();
+    expect(store.inboxItem('item_94')).toMatchObject({ messageId: 'om_94' });
+
+    // 改为 0（不限制）：写入更多消息不再淘汰，重启重开也不会被默认 60 裁掉
+    store.saveState(sampleState({ inboxMaxItems: 0, inboxCleanupWarnThreshold: 70 }));
+    for (let index = 95; index < 120; index++) store.upsertInbox(item(index));
+    expect(store.inboxCount()).toBe(110);
+    expect(store.listInbox()).toHaveLength(110);
+    store.close();
+
+    const reopened = new LarkAvatarStore(file);
+    stores.push(reopened);
+    expect(reopened.getState()?.config).toMatchObject({ inboxMaxItems: 0, inboxCleanupWarnThreshold: 70 });
+    expect(reopened.inboxCount()).toBe(110);
+    expect(reopened.listInbox()).toHaveLength(110);
+    expect(reopened.listInbox(undefined, undefined, 25)).toHaveLength(25);
+  });
+
+  it('cleans up inbox items cleanly without removing seen deduplication records or cursors', () => {
+    const store = new LarkAvatarStore(':memory:');
+    stores.push(store);
+    store.saveState(sampleState({ inboxMaxItems: 0, inboxCleanupWarnThreshold: 50 }));
+    for (let index = 0; index < 80; index++) store.upsertInbox(item(index));
+    store.setCursor('oc_chat', 1_767_225_900_000);
+    store.saveDraft(draft(1, 'pending'));
+
+    const trimmed = store.cleanupInbox(20);
+    expect(trimmed).toEqual({ deleted: 60, remaining: 20 });
+    expect(store.inboxCount()).toBe(20);
+    expect(store.inboxItem('item_0')).toBeUndefined();
+    expect(store.inboxItem('item_79')).toMatchObject({ messageId: 'om_79' });
+    // 去重表、游标、草稿都保持完整
+    expect(store.hasSeenMessage('om_0')).toBe(true);
+    expect(store.cursor('oc_chat')).toBe(1_767_225_900_000);
+    expect(store.draft('draft_1')).toMatchObject({ state: 'pending' });
+
+    const cleared = store.cleanupInbox(0);
+    expect(cleared).toEqual({ deleted: 20, remaining: 0 });
+    expect(store.inboxCount()).toBe(0);
+    // 已清理消息重放仍被 seen 表去重，不重新写入
+    expect(store.upsertInbox({ ...item(79), id: 'item_79_replay' }).created).toBe(false);
+    expect(store.inboxCount()).toBe(0);
+  });
+
+  it('falls back to default 60 / 200 when legacy state JSON omits or nulls retention fields', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'avatar-legacy-config-'));
+    tempDirs.push(dir);
+    const file = join(dir, 'avatar.db');
+    const sqlite = openDatabase(file);
+    sqlite.exec(`
+      CREATE TABLE avatar_state (
+        id TEXT PRIMARY KEY, config TEXT NOT NULL, account TEXT, state TEXT NOT NULL,
+        tokens TEXT, credentials TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+    `);
+    sqlite.prepare(`INSERT INTO avatar_state (id, config, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
+      .run('avatar_legacy', JSON.stringify({ region: 'feishu', inboxMaxItems: null }), 'connected', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+    sqlite.close();
+
+    const store = new LarkAvatarStore(file);
+    stores.push(store);
+    expect(store.getState()?.config).toMatchObject({
+      inboxMaxItems: DEFAULT_INBOX_MAX_ITEMS,
+      inboxCleanupWarnThreshold: DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD,
+      replyForwardMode: DEFAULT_REPLY_FORWARD_MODE
+    });
+  });
+
+  it('persists all three replyForwardMode values across store restarts and normalizes invalid stored values to final_only', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'avatar-reply-forward-mode-'));
+    tempDirs.push(dir);
+    const file = join(dir, 'avatar.db');
+
+    const store = new LarkAvatarStore(file);
+    store.saveState(sampleState({ replyForwardMode: 'final_only' }));
+    store.close();
+
+    const reopenedFinalOnly = new LarkAvatarStore(file);
+    expect(reopenedFinalOnly.getState()?.config.replyForwardMode).toBe('final_only');
+    reopenedFinalOnly.saveState(sampleState({ replyForwardMode: 'none' }));
+    reopenedFinalOnly.close();
+
+    const reopenedNone = new LarkAvatarStore(file);
+    expect(reopenedNone.getState()?.config.replyForwardMode).toBe('none');
+    reopenedNone.saveState(sampleState({ replyForwardMode: 'all' }));
+    reopenedNone.close();
+
+    const reopenedAll = new LarkAvatarStore(file);
+    expect(reopenedAll.getState()?.config.replyForwardMode).toBe('all');
+    reopenedAll.close();
+
+    // 非法历史值与已下线的 private_chat 路由应平滑回退到安全默认值
+    const sqlite = openDatabase(file);
+    sqlite.prepare('UPDATE avatar_state SET config = ? WHERE id = ?')
+      .run(JSON.stringify({
+        region: 'feishu',
+        replyForwardMode: 'unknown_mode',
+        reactionTriggerRoute: 'private_chat',
+        reactionTriggerIntent: 'summary',
+        privateReplyChatId: 'oc_old_private'
+      }), 'avatar_1');
+    sqlite.close();
+
+    const reopenedFallback = new LarkAvatarStore(file);
+    stores.push(reopenedFallback);
+    expect(reopenedFallback.getState()?.config).toMatchObject({
+      replyForwardMode: 'final_only',
+      reactionTriggerRoute: 'main'
+    });
+    expect('privateReplyChatId' in (reopenedFallback.getState()?.config ?? {})).toBe(false);
+    expect('reactionTriggerIntent' in (reopenedFallback.getState()?.config ?? {})).toBe(false);
   });
 });

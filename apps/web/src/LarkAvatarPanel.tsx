@@ -4,29 +4,41 @@ import { createPortal } from 'react-dom';
 import { Button, Switch } from 'antd';
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  ArrowLeft, Bot, Check, CheckCircle2, CircleAlert, FolderOpen, Hash, LoaderCircle, Lock, MessageCircle,
-  Pause, Play, RefreshCw, Search, Send, Settings2, ShieldCheck, Sparkles, UserRound, Users, Wifi, X
+  AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Database, FolderOpen, Hash, LoaderCircle, MessageCircle,
+  Pause, Play, RefreshCw, Search, Send, Settings2, ShieldCheck, Sparkles, Trash2, UserRound, Users, Wifi, X
 } from 'lucide-react';
 import { CompactSelect } from './CompactSelect';
+import { AiFieldHeader, AiTextAssistControl, AiUndoCapsule, useAiFlash } from './AiTextAssist';
 import { ReactionEmojiPicker } from './ReactionEmojiPicker';
 import { reactionEmojiIsCustom, reactionEmojiPayload } from './lark-avatar-emoji';
-import {
-  PRIVATE_ANALYSIS_DELIVERIES,
-  PRIVATE_ANALYSIS_MODES,
-  REACTION_INTENT_OPTIONS,
-  REACTION_ROUTE_OPTIONS,
-  privateAnalysisSuccessMessage,
-  validatePrivateAnalysisSubmission
-} from './lark-avatar-private-analysis';
 import { reactionOutcomeLabel, reactionSourceStatus, reactionStateLabel } from './lark-avatar-reaction-diagnostics';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { SuggestedValueInput } from './SuggestedValueInput';
+import { SlidingSegmented } from './ui-controls';
 import { useToast } from './Toast';
 import {
+  DEFAULT_LARK_AVATAR_REACTION_TRIGGER_EMOJI,
+  DEFAULT_LARK_AVATAR_REPLY_FORWARD_MODE,
+  LARK_AVATAR_REACTION_ROUTE_OPTIONS,
+  LARK_AVATAR_REPLY_FORWARD_OPTIONS,
+  LARK_AVATAR_REPLY_FORWARD_SUMMARY,
   buildLarkAvatarAgentOptions,
+  describeLarkAvatarReplyForwardMode,
+  normalizeLarkAvatarReactionRoute,
+  normalizeLarkAvatarReplyForwardMode,
   resolveFallbackAgentId,
   resolveSaveAgentId
 } from './lark-avatar-config-form';
+import {
+  DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD,
+  DEFAULT_INBOX_MAX_ITEMS,
+  MAX_CONFIGURABLE_INBOX_ITEMS,
+  evaluateCleanupReminder,
+  formatCleanupSuccessMessage,
+  formatRetentionSummary,
+  parseRetentionInput,
+  resolveQuickKeepLatest
+} from './lark-avatar-retention';
 import { withSavedOption } from './lark-config-form';
 import {
   api,
@@ -35,11 +47,9 @@ import {
   type LarkAvatarDraft,
   type LarkAvatarInboxItem,
   type LarkAvatarLoginSnapshot,
-  type LarkAvatarPrivateAnalyzeDelivery,
-  type LarkAvatarPrivateAnalyzeMode,
-  type LarkAvatarReactionIntent,
   type LarkAvatarReactionRoute,
   type LarkAvatarRegion,
+  type LarkAvatarReplyForwardMode,
   type LarkAvatarStatus
 } from './api';
 
@@ -59,8 +69,8 @@ type Conversation = {
 };
 type ChatOption = LarkAvatarChatSummary & { avatarFallbackUrl?: string };
 
-const input = 'mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-[12px] text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-500';
-const field = 'text-[12px] font-medium text-zinc-600';
+const input = 'mt-1.5 h-9 w-full rounded-lg border border-zinc-300 bg-white px-3 text-[12px] text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-500';
+const field = 'text-[12px] font-medium text-zinc-700';
 const section = 'rounded-xl border border-zinc-200 bg-white';
 const splitList = (value: string) => value.split(/[\s,，]+/).map(item => item.trim()).filter(Boolean);
 const errorText = (error: unknown) => error instanceof Error ? error.message : error ? String(error) : '';
@@ -91,24 +101,23 @@ function Avatar({ name, src, fallbackSrc, size = 32 }: { name?: string; src?: st
   return <span className="grid shrink-0 place-items-center rounded-full bg-zinc-900 font-semibold text-white" style={{ width: size, height: size, fontSize: Math.max(11, Math.round(size * 0.36)) }}>{initial(name)}</span>;
 }
 
-function Segmented<T extends string>({ value, onChange, options }: {
+function Segmented<T extends string>({ value, onChange, options, className = '', ariaLabel }: {
   value: T;
   onChange(value: T): void;
   options: Array<{ value: T; label: string }>;
+  className?: string;
+  ariaLabel?: string;
 }) {
   return (
-    <div className="mt-1.5 grid gap-1 rounded-xl bg-zinc-100 p-1" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
-      {options.map(option => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors ${value === option.value ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-800'}`}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <SlidingSegmented
+      value={value}
+      onChange={onChange}
+      options={options}
+      ariaLabel={ariaLabel}
+      size="md"
+      className={`h-9 w-full ${className}`}
+      itemClassName="px-2.5"
+    />
   );
 }
 
@@ -125,7 +134,7 @@ function StatusPill({ connected, state, listening = true }: { connected?: boolea
 }
 
 function Stat({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
-  return <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3"><p className="text-[11px] text-zinc-500">{label}</p><p className="mt-1 text-[24px] font-semibold leading-none text-zinc-900">{value}</p>{hint && <p className="mt-1 text-[11px] text-zinc-400">{hint}</p>}</div>;
+  return <div className="rounded-xl border border-zinc-200 bg-white px-3.5 py-3 sm:px-4"><p className="text-[11px] text-zinc-500">{label}</p><p className="mt-1 text-[22px] font-semibold leading-none text-zinc-900 sm:text-[24px]">{value}</p>{hint && <p className="mt-1 truncate text-[11px] text-zinc-400">{hint}</p>}</div>;
 }
 
 function ConnectView({
@@ -268,11 +277,12 @@ function DraftBlock({
   accountName?: string;
   accountAvatarUrl?: string;
 }) {
+  const draftFlash = useAiFlash();
   if (draft.state === 'sent') {
     const agentReply = Boolean(draft.itemId);
     return (
-      <div className="mb-5 flex items-end justify-end gap-2.5">
-        <div className="min-w-0 max-w-[78%] text-right">
+      <div className="mb-4 flex items-end justify-end gap-2 sm:mb-5 sm:gap-2.5">
+        <div className="min-w-0 max-w-[85%] text-right sm:max-w-[78%]">
           <div className="mb-1 flex flex-wrap items-center justify-end gap-2">
             <span className="text-[11px] font-medium text-zinc-700">{agentReply ? 'AI 替身' : accountName || '你'}</span>
             <span className="text-[10px] text-zinc-400">{fullTime(draft.sentAt ?? draft.updatedAt)}</span>
@@ -287,12 +297,33 @@ function DraftBlock({
     );
   }
   if (draft.state === 'discarded') {
-    return <div className="mb-5 max-w-[78%] rounded-lg border border-dashed border-zinc-200 px-3 py-2 text-[11px] text-zinc-400">已丢弃草稿：{draft.body || '（空）'}</div>;
+    return <div className="mb-4 max-w-[85%] rounded-lg border border-dashed border-zinc-200 px-3 py-2 text-[11px] text-zinc-400 sm:mb-5 sm:max-w-[78%]">已丢弃草稿：{draft.body || '（空）'}</div>;
   }
   return (
-    <div className="mb-5 max-w-[78%] rounded-xl border border-zinc-200 bg-zinc-50/70 p-3">
-      <div className="flex items-center justify-between gap-2"><span className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-600"><Sparkles size={12}/>Agent 回复</span>{draft.lastError && <span className="truncate text-[10px] text-red-600">{draft.lastError}</span>}</div>
-      <textarea className={`${input} mt-2 min-h-20 resize-y bg-white`} value={body} placeholder="AI 没有生成正文，可以手动补充。" onChange={event => onBody(event.target.value)}/>
+    <div className="mb-4 max-w-[85%] rounded-xl border border-zinc-200 bg-zinc-50/70 p-3 sm:mb-5 sm:max-w-[78%]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-600"><Sparkles size={12}/>Agent 回复</span>
+        <div className="flex items-center gap-1.5">
+          {draft.lastError && <span className="max-w-[180px] truncate text-[10px] text-red-600">{draft.lastError}</span>}
+          <AiTextAssistControl
+            mode="message_polish"
+            variant="pill"
+            size="xs"
+            popoverSide="top"
+            popoverAlign="end"
+            value={body}
+            onChange={onBody}
+            onFlash={draftFlash.triggerFlash}
+            resetKey={draft.id}
+            context={() => ({
+              field: '飞书 AI 替身待发送草稿',
+              purpose: '润色或补全即将以本人身份发送到飞书聊天的回复正文，语气自然专业'
+            })}
+            testId={`lark-avatar-draft-ai-${draft.id}`}
+          />
+        </div>
+      </div>
+      <textarea className={`${input} mt-2 min-h-20 resize-y bg-white ${draftFlash.flashClass}`} value={body} placeholder="AI 没有生成正文，可以手动补充。" onChange={event => onBody(event.target.value)}/>
       <div className="mt-2 flex flex-wrap gap-2">
         <Button size="small" type="primary" disabled={!body.trim()} loading={sending} onClick={onSend}>确认发送</Button>
         <Button size="small" danger loading={discarding} onClick={onDiscard}>丢弃</Button>
@@ -312,6 +343,7 @@ export function LarkAvatarPanel() {
   const inbox = useQuery({ queryKey: ['lark-avatar-inbox'], queryFn: () => api.larkAvatarInbox(), refetchInterval: 5_000, enabled: sessionReady });
   const drafts = useQuery({ queryKey: ['lark-avatar-drafts'], queryFn: () => api.larkAvatarDrafts(), refetchInterval: 5_000, enabled: sessionReady });
   const [tab, setTab] = useState<Tab>('overview');
+  const [mobileChatView, setMobileChatView] = useState<'list' | 'detail'>('list');
   const [showConnect, setShowConnect] = useState(false);
   const [region, setRegion] = useState<LarkAvatarRegion>('feishu');
   const [cookie, setCookie] = useState('');
@@ -320,20 +352,23 @@ export function LarkAvatarPanel() {
   const [contextScope, setContextScope] = useState<'anchor' | 'chat'>('anchor');
   const [replyInTopic, setReplyInTopic] = useState(true);
   const [replyMode, setReplyMode] = useState<'direct' | 'quote' | 'thread'>('direct');
+  const [replyForwardMode, setReplyForwardMode] = useState<LarkAvatarReplyForwardMode>(DEFAULT_LARK_AVATAR_REPLY_FORWARD_MODE);
   const [emojiReactions, setEmojiReactions] = useState(false);
   const [reactionTriggerEnabled, setReactionTriggerEnabled] = useState(false);
   const [reactionTriggerEmoji, setReactionTriggerEmoji] = useState('');
   const [reactionTriggerRoute, setReactionTriggerRoute] = useState<LarkAvatarReactionRoute>('main');
-  const [reactionTriggerIntent, setReactionTriggerIntent] = useState<LarkAvatarReactionIntent>('auto');
   const [reactionTriggerIgnoreBots, setReactionTriggerIgnoreBots] = useState(true);
-  const [privateReplyChatId, setPrivateReplyChatId] = useState('');
-  const [privateChatSearch, setPrivateChatSearch] = useState('');
   const [replySignature, setReplySignature] = useState('');
   const [agentTimeoutSeconds, setAgentTimeoutSeconds] = useState(7_200);
   const [listenMode, setListenMode] = useState<'all' | 'selected'>('all');
   const [listenChats, setListenChats] = useState<string[]>([]);
   const [manualChatIds, setManualChatIds] = useState('');
   const [chatSearch, setChatSearch] = useState('');
+  const [inboxMaxItemsInput, setInboxMaxItemsInput] = useState(String(DEFAULT_INBOX_MAX_ITEMS));
+  const [inboxCleanupWarnThresholdInput, setInboxCleanupWarnThresholdInput] = useState(String(DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD));
+  const [cleanupReminderDismissed, setCleanupReminderDismissed] = useState(false);
+  const [bannerCleanupConfirmOpen, setBannerCleanupConfirmOpen] = useState(false);
+  const [settingsCleanupConfirm, setSettingsCleanupConfirm] = useState<{ keepLatest: number } | null>(null);
   const [agentId, setAgentId] = useState('');
   const [model, setModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState('');
@@ -341,12 +376,10 @@ export function LarkAvatarPanel() {
   const [selectedKey, setSelectedKey] = useState<string>();
   const [search, setSearch] = useState('');
   const [composer, setComposer] = useState('');
-  const [privatePanelOpen, setPrivatePanelOpen] = useState(false);
-  const [privateMode, setPrivateMode] = useState<LarkAvatarPrivateAnalyzeMode>('summary');
-  const [privatePrompt, setPrivatePrompt] = useState('');
-  const [privateDelivery, setPrivateDelivery] = useState<LarkAvatarPrivateAnalyzeDelivery>('main');
-  const [privateCount, setPrivateCount] = useState(30);
-  const [privateFeedback, setPrivateFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [composerSendEpoch, setComposerSendEpoch] = useState(0);
+  const [composerUndo, setComposerUndo] = useState<{ canUndo: boolean; undoDepth: number; lastLabel?: string; undoing: boolean; undo: () => void; clearUndo: () => void }>();
+  const composerFlash = useAiFlash();
+  const signatureFlash = useAiFlash();
   const [draftBodies, setDraftBodies] = useState<Record<string, string>>({});
   // 排障区每 10 秒自动刷新，只有时间戳变化时很难看出手动刷新有没有生效；
   // 这里给按钮加一次性反馈（刷新中 / 已刷新 / 刷新失败），并保持按钮宽度不变。
@@ -354,6 +387,8 @@ export function LarkAvatarPanel() {
   const refreshFeedbackTimer = useRef<number | null>(null);
   const toast = useToast();
   const messagesRef = useRef<HTMLDivElement>(null);
+  const retentionSectionRef = useRef<HTMLElement>(null);
+  const thresholdInputRef = useRef<HTMLInputElement>(null);
   const autoOpened = useRef(false);
   const models = useQuery({
     queryKey: agentModelsQueryKey(agentId, model || undefined),
@@ -405,18 +440,19 @@ export function LarkAvatarPanel() {
     setContextScope(config.data.config.contextScope);
     setReplyInTopic(config.data.config.replyInTopic);
     setReplyMode(config.data.config.replyMode);
+    setReplyForwardMode(normalizeLarkAvatarReplyForwardMode(config.data.config.replyForwardMode));
     setEmojiReactions(config.data.config.emojiReactions);
     setReactionTriggerEnabled(config.data.config.reactionTriggerEnabled ?? false);
     setReactionTriggerEmoji(config.data.config.reactionTriggerEmoji ?? '');
-    setReactionTriggerRoute(config.data.config.reactionTriggerRoute ?? 'main');
-    setReactionTriggerIntent(config.data.config.reactionTriggerIntent ?? 'auto');
+    setReactionTriggerRoute(normalizeLarkAvatarReactionRoute(config.data.config.reactionTriggerRoute));
     setReactionTriggerIgnoreBots(config.data.config.reactionTriggerIgnoreBots ?? true);
-    setPrivateReplyChatId(config.data.config.privateReplyChatId ?? '');
     setReplySignature(config.data.config.replySignature);
     setAgentTimeoutSeconds(config.data.config.agentTimeoutSeconds);
     setListenChats(config.data.config.listenChats);
     setManualChatIds(config.data.config.listenChats.join(', '));
     setListenMode(config.data.config.listenChats.length ? 'selected' : 'all');
+    setInboxMaxItemsInput(String(config.data.config.inboxMaxItems ?? DEFAULT_INBOX_MAX_ITEMS));
+    setInboxCleanupWarnThresholdInput(String(config.data.config.inboxCleanupWarnThreshold ?? DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD));
     setAgentId(config.data.config.agentId);
     setModel(config.data.config.model);
     setReasoningEffort(config.data.config.reasoningEffort);
@@ -448,32 +484,56 @@ export function LarkAvatarPanel() {
     void qc.invalidateQueries({ queryKey: ['lark-avatar-reaction-diagnostics'] });
   };
 
+  const parsedInboxMaxItems = parseRetentionInput(inboxMaxItemsInput, '记录保留上限', '0 表示不限制');
+  const parsedCleanupThreshold = parseRetentionInput(inboxCleanupWarnThresholdInput, '清理提醒阈值', '0 表示关闭提醒');
+  const retentionInputError = !parsedInboxMaxItems.ok
+    ? parsedInboxMaxItems.error
+    : !parsedCleanupThreshold.ok
+      ? parsedCleanupThreshold.error
+      : undefined;
+
   const saveConfig = useMutation({
-    mutationFn: () => api.saveLarkAvatarConfig({
-      region,
-      triggerPrefix,
-      contextMessages,
-      contextScope,
-      replyInTopic,
-      replyMode,
-      emojiReactions,
-      reactionTriggerEnabled,
-      ...reactionEmojiPayload(reactionTriggerEmoji),
-      reactionTriggerRoute,
-      reactionTriggerIntent,
-      reactionTriggerIgnoreBots,
-      privateReplyChatId: privateReplyChatId.trim(),
-      replySignature,
-      agentTimeoutSeconds,
-      listenChats: listenMode === 'all' ? [] : splitList(manualChatIds),
-      allowedSenders: [],
-      agentId: resolveSaveAgentId(agentId, config.data?.config.agentId),
-      model,
-      reasoningEffort,
-      workspace
-    }),
+    mutationFn: () => {
+      if (!parsedInboxMaxItems.ok) return Promise.reject(new Error(parsedInboxMaxItems.error));
+      if (!parsedCleanupThreshold.ok) return Promise.reject(new Error(parsedCleanupThreshold.error));
+      return api.saveLarkAvatarConfig({
+        region,
+        triggerPrefix,
+        contextMessages,
+        contextScope,
+        replyInTopic,
+        replyMode,
+        replyForwardMode,
+        emojiReactions,
+        reactionTriggerEnabled,
+        ...reactionEmojiPayload(reactionTriggerEmoji),
+        reactionTriggerRoute,
+        reactionTriggerIgnoreBots,
+        replySignature,
+        agentTimeoutSeconds,
+        listenChats: listenMode === 'all' ? [] : splitList(manualChatIds),
+        inboxMaxItems: parsedInboxMaxItems.value,
+        inboxCleanupWarnThreshold: parsedCleanupThreshold.value,
+        allowedSenders: [],
+        agentId: resolveSaveAgentId(agentId, config.data?.config.agentId),
+        model,
+        reasoningEffort,
+        workspace
+      });
+    },
     onSuccess: () => {
-      toast.show('配置已保存，下一次触发生效', 'info');
+      setCleanupReminderDismissed(false);
+      setBannerCleanupConfirmOpen(false);
+      toast.show('配置已保存，新规则已生效', 'info');
+      invalidate();
+    }
+  });
+  const cleanupInbox = useMutation({
+    mutationFn: (keepLatest: number) => api.cleanupLarkAvatarInbox({ keepLatest }),
+    onSuccess: result => {
+      setBannerCleanupConfirmOpen(false);
+      setSettingsCleanupConfirm(null);
+      toast.show(formatCleanupSuccessMessage(result), 'info');
       invalidate();
     }
   });
@@ -531,38 +591,7 @@ export function LarkAvatarPanel() {
       const draft = await api.createLarkAvatarDraft({ target: conversation.chatId, body, threadKey: conversation.threadKey });
       return api.sendLarkAvatarDraft(draft.id);
     },
-    onSuccess: () => { setComposer(''); invalidate(); }
-  });
-  const runPrivateAnalysis = useMutation({
-    mutationFn: (input: {
-      chatId: string;
-      mode: LarkAvatarPrivateAnalyzeMode;
-      prompt: string;
-      contextMessages: number;
-      delivery: LarkAvatarPrivateAnalyzeDelivery;
-    }) => api.analyzeLarkAvatarChatPrivately({
-      chatId: input.chatId,
-      mode: input.mode,
-      ...(input.prompt.trim() ? { prompt: input.prompt.trim() } : {}),
-      contextMessages: input.contextMessages,
-      delivery: input.delivery
-    }),
-    onSuccess: result => {
-      const targetChatName = result.targetChatId
-        ? chatOptions.find(item => item.id === result.targetChatId)?.name || result.targetChatId
-        : undefined;
-      const text = privateAnalysisSuccessMessage({
-        delivery: result.delivery,
-        contextCount: result.contextCount,
-        ...(targetChatName ? { targetChatName } : {})
-      });
-      setPrivateFeedback({ ok: true, text });
-      toast.show(text, 'info');
-      setPrivatePrompt('');
-    },
-    onError: error => {
-      setPrivateFeedback({ ok: false, text: errorText(error) || '私密分析发起失败' });
-    }
+    onSuccess: () => { setComposer(''); setComposerSendEpoch(n => n + 1); invalidate(); }
   });
 
   const items = inbox.data ?? [];
@@ -690,27 +719,6 @@ export function LarkAvatarPanel() {
     const query = chatSearch.trim().toLowerCase();
     return !query || chat.name.toLowerCase().includes(query) || chat.id.toLowerCase().includes(query);
   });
-  const privateChatOptions = useMemo(() => {
-    const query = privateChatSearch.trim().toLowerCase();
-    return [...chatOptions]
-      .sort((left, right) =>
-        (left.type === 'p2p' ? 0 : 1) - (right.type === 'p2p' ? 0 : 1)
-        || (right.lastMessageAt ?? '').localeCompare(left.lastMessageAt ?? '')
-        || left.name.localeCompare(right.name, 'zh-CN')
-      )
-      .filter(chat => !query || chat.name.toLowerCase().includes(query) || chat.id.toLowerCase().includes(query));
-  }, [chatOptions, privateChatSearch]);
-  const selectedPrivateReplyChat = chatOptions.find(chat => chat.id === privateReplyChatId.trim());
-  const privateValidationError = selected
-    ? validatePrivateAnalysisSubmission({
-        chatId: selected.chatId,
-        mode: privateMode,
-        prompt: privatePrompt,
-        delivery: privateDelivery,
-        privateReplyChatId
-      })
-    : null;
-  const activePrivateModeMeta = PRIVATE_ANALYSIS_MODES.find(item => item.value === privateMode) ?? PRIVATE_ANALYSIS_MODES[0]!;
   const selectChats = (next: string[]) => {
     setListenChats(next);
     setManualChatIds(next.join(', '));
@@ -732,8 +740,42 @@ export function LarkAvatarPanel() {
   }, [selectedKey, selected?.items.length, selected?.drafts.length]);
 
   const listening = status.data?.listening !== false;
-  const actionError = [saveConfig.error, disconnect.error, poll.error, setListening.error, sendDraft.error, discardDraft.error, manualSend.error, importCookie.error, pickWorkspace.error].map(errorText).find(Boolean);
-  const selectConversation = (conversation: Conversation) => { setSelectedKey(conversation.key); setTab('chats'); };
+  const activeReplyForwardMeta = describeLarkAvatarReplyForwardMode(replyForwardMode);
+  const savedReplyForwardMeta = describeLarkAvatarReplyForwardMode(
+    normalizeLarkAvatarReplyForwardMode(config.data?.config.replyForwardMode)
+  );
+  const currentInboxCount = status.data?.retention?.inboxCount ?? status.data?.counts.inbox ?? items.length;
+  const savedInboxMaxItems = status.data?.retention?.inboxMaxItems ?? config.data?.config.inboxMaxItems ?? DEFAULT_INBOX_MAX_ITEMS;
+  const savedCleanupWarnThreshold = status.data?.retention?.inboxCleanupWarnThreshold ?? config.data?.config.inboxCleanupWarnThreshold ?? DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD;
+  const cleanupReminder = evaluateCleanupReminder({
+    inboxCount: currentInboxCount,
+    warnThreshold: savedCleanupWarnThreshold,
+    dismissed: cleanupReminderDismissed
+  });
+  const quickKeepLatest = resolveQuickKeepLatest({
+    inboxCount: currentInboxCount,
+    inboxMaxItems: savedInboxMaxItems,
+    warnThreshold: savedCleanupWarnThreshold
+  });
+  const openThresholdSettings = () => {
+    setTab('settings');
+    setBannerCleanupConfirmOpen(false);
+    window.requestAnimationFrame(() => {
+      retentionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      thresholdInputRef.current?.focus();
+    });
+  };
+  const actionError = [saveConfig.error, cleanupInbox.error, disconnect.error, poll.error, setListening.error, sendDraft.error, discardDraft.error, manualSend.error, importCookie.error, pickWorkspace.error].map(errorText).find(Boolean);
+  const openTab = (next: Tab) => {
+    setTab(next);
+    if (next === 'chats') setMobileChatView('list');
+  };
+  const selectConversation = (conversation: Conversation) => {
+    setSelectedKey(conversation.key);
+    setTab('chats');
+    setMobileChatView('detail');
+  };
+  const inMobileChatDetail = tab === 'chats' && mobileChatView === 'detail' && Boolean(selected);
 
   if (config.isPending || status.isPending) {
     return <div className="grid h-full place-items-center text-[12px] text-zinc-500">正在读取飞书替身状态…</div>;
@@ -762,57 +804,134 @@ export function LarkAvatarPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-zinc-100 px-5 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className={`${inMobileChatDetail ? 'hidden sm:block' : 'block'} shrink-0 border-b border-zinc-100 px-3.5 py-2.5 sm:px-5 sm:py-3`}>
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <Avatar name={status.data?.account?.name} src={status.data?.account?.avatarUrl} size={40}/>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2"><h3 className="truncate text-[14px] font-semibold text-zinc-900">{status.data?.account?.name || '飞书账号'}</h3><StatusPill connected={status.data?.connected} state={status.data?.state} listening={status.data?.listening}/></div>
+            <Avatar name={status.data?.account?.name} src={status.data?.account?.avatarUrl} size={38}/>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2"><h3 className="truncate text-[14px] font-semibold text-zinc-900">{status.data?.account?.name || '飞书账号'}</h3><StatusPill connected={status.data?.connected} state={status.data?.state} listening={status.data?.listening}/></div>
               <p className="mt-0.5 truncate text-[11px] text-zinc-500">{status.data?.account?.email || status.data?.account?.userId || `${status.data?.region === 'lark' ? 'Lark' : '飞书'} WebSocket`}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button size="small" icon={<RefreshCw size={12}/>} loading={poll.isPending} disabled={!listening} onClick={() => poll.mutate()}>立即同步</Button>
-            <Button size="small" icon={listening ? <Pause size={12}/> : <Play size={12}/>} loading={setListening.isPending} onClick={() => setListening.mutate(!listening)}>{listening ? '暂停监听' : '恢复监听'}</Button>
-            <Button size="small" onClick={() => setTab('settings')}>连接设置</Button>
+          <div className="grid w-full grid-cols-3 gap-1.5 sm:flex sm:w-auto sm:items-center sm:gap-2">
+            <Button size="small" className="!h-8 !w-full sm:!h-auto sm:!w-auto" icon={<RefreshCw size={12}/>} loading={poll.isPending} disabled={!listening} onClick={() => poll.mutate()}>立即同步</Button>
+            <Button size="small" className="!h-8 !w-full sm:!h-auto sm:!w-auto" icon={listening ? <Pause size={12}/> : <Play size={12}/>} loading={setListening.isPending} onClick={() => setListening.mutate(!listening)}>{listening ? '暂停监听' : '恢复监听'}</Button>
+            <Button size="small" className="!h-8 !w-full sm:!h-auto sm:!w-auto" onClick={() => openTab('settings')}>连接设置</Button>
           </div>
         </div>
-        <div className="mt-3 flex items-center gap-1">
+        <div className="mt-2.5 grid grid-cols-3 gap-1 rounded-xl bg-zinc-100 p-1 sm:mt-3 sm:flex sm:w-auto sm:items-center sm:gap-1 sm:rounded-none sm:bg-transparent sm:p-0">
           {([
             ['overview', '概览'],
             ['chats', '会话'],
             ['settings', '设置']
-          ] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setTab(value)} className={`relative rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors ${tab === value ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500 hover:bg-zinc-50 hover:text-zinc-800'}`}>{label}{value === 'chats' && pendingDrafts.length > 0 && <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">{pendingDrafts.length}</span>}</button>)}
+          ] as const).map(([value, label]) => <button key={value} type="button" onClick={() => openTab(value)} className={`relative flex items-center justify-center rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors ${tab === value ? 'bg-white text-zinc-900 shadow-sm sm:bg-zinc-100 sm:shadow-none' : 'text-zinc-500 hover:text-zinc-800 sm:hover:bg-zinc-50'}`}>{label}{value === 'chats' && pendingDrafts.length > 0 && <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">{pendingDrafts.length}</span>}</button>)}
         </div>
       </div>
 
-      {actionError && <p className="border-b border-red-100 bg-red-50 px-5 py-2 text-[12px] text-red-700">{actionError}</p>}
-      {!listening && <div className="flex flex-wrap items-center gap-2 border-b border-amber-100 bg-amber-50 px-5 py-2 text-[12px] text-amber-800"><Pause size={13}/><span>监听已暂停，不会接收新消息或触发 Agent；登录凭证仍保留，可随时恢复。</span></div>}
-      {listening && status.data?.state === 'connecting' && <p className="border-b border-amber-100 bg-amber-50 px-5 py-2 text-[12px] text-amber-800">WebSocket 正在重连{status.data.lastError ? `：${status.data.lastError}` : '…'}</p>}
+      {actionError && <p className="shrink-0 border-b border-red-100 bg-red-50 px-3.5 py-2 text-[12px] text-red-700 sm:px-5">{actionError}</p>}
+      {!listening && !inMobileChatDetail && <div className="flex shrink-0 items-start gap-2 border-b border-amber-100 bg-amber-50 px-3.5 py-2 text-[12px] text-amber-800 sm:items-center sm:px-5"><Pause size={13} className="mt-0.5 shrink-0 sm:mt-0"/><span>监听已暂停，不会接收新消息或触发 Agent；登录凭证仍保留，可随时恢复。</span></div>}
+      {listening && !inMobileChatDetail && status.data?.state === 'connecting' && <p className="shrink-0 border-b border-amber-100 bg-amber-50 px-3.5 py-2 text-[12px] text-amber-800 sm:px-5">WebSocket 正在重连{status.data.lastError ? `：${status.data.lastError}` : '…'}</p>}
+      {cleanupReminder.shouldShow && tab !== 'settings' && !inMobileChatDetail && (
+        <div
+          role="status"
+          data-testid="lark-avatar-cleanup-reminder"
+          className="border-b border-amber-200 bg-amber-50/80 px-4 py-3 text-[12px] text-amber-900 sm:px-5"
+        >
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-start gap-2.5">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600"/>
+              <div className="min-w-0">
+                <p className="font-medium leading-5 text-amber-900">
+                  当前已保留 {cleanupReminder.inboxCount} 条消息记录，已超过清理提醒阈值（{cleanupReminder.warnThreshold} 条）
+                </p>
+                <p className="mt-0.5 text-[11px] leading-4 text-amber-800">
+                  记录过多会增加本地加载与存储开销；清理仅删除展示记录，不会重复触发已处理消息。
+                </p>
+              </div>
+            </div>
+            {!bannerCleanupConfirmOpen ? (
+              <div className="flex shrink-0 flex-wrap items-center gap-2 pl-6 sm:pl-0">
+                <button
+                  type="button"
+                  onClick={() => setBannerCleanupConfirmOpen(true)}
+                  className="inline-flex h-7 items-center gap-1 rounded-lg bg-zinc-900 px-2.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90"
+                >
+                  <Trash2 size={12}/>立即清理
+                </button>
+                <button
+                  type="button"
+                  onClick={openThresholdSettings}
+                  className="inline-flex h-7 items-center rounded-lg border border-amber-200 bg-white px-2.5 text-[11px] font-medium text-amber-900 transition-colors hover:bg-amber-100/70"
+                >
+                  调整阈值
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setCleanupReminderDismissed(true); setBannerCleanupConfirmOpen(false); }}
+                  className="inline-flex h-7 items-center rounded-lg px-2 text-[11px] text-amber-800 transition-colors hover:bg-amber-100/70"
+                >
+                  暂不处理
+                </button>
+              </div>
+            ) : (
+              <div className="flex shrink-0 flex-wrap items-center gap-2 pl-6 sm:pl-0">
+                {quickKeepLatest > 0 && (
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={cleanupInbox.isPending && cleanupInbox.variables === quickKeepLatest}
+                    disabled={cleanupInbox.isPending}
+                    onClick={() => cleanupInbox.mutate(quickKeepLatest)}
+                    className="!rounded-lg !bg-zinc-900"
+                  >
+                    保留最近 {quickKeepLatest} 条
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  danger
+                  loading={cleanupInbox.isPending && cleanupInbox.variables === 0}
+                  disabled={cleanupInbox.isPending}
+                  onClick={() => cleanupInbox.mutate(0)}
+                >
+                  清空全部（{cleanupReminder.inboxCount} 条）
+                </Button>
+                <Button
+                  size="small"
+                  disabled={cleanupInbox.isPending}
+                  onClick={() => setBannerCleanupConfirmOpen(false)}
+                >
+                  取消
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {tab === 'overview' && (
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          {!listening && <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200/70 bg-amber-50/70 px-4 py-3 text-[12px] leading-5 text-amber-900"><Pause size={15} className="mt-0.5 shrink-0"/><div><p className="font-medium">当前处于暂停状态</p><p className="mt-0.5 text-amber-800">新的飞书消息不会被读取，也不会触发 Agent。点击右上角「恢复监听」后会重新连接 WebSocket 并继续定时补拉。</p></div></div>}
-          <div className="mb-4 rounded-xl border border-sky-100 bg-sky-50/60 px-4 py-3 text-[12px] leading-5 text-sky-900">
+        <div className="min-h-0 flex-1 overflow-y-auto p-3.5 sm:p-5">
+          {!listening && <div className="mb-3.5 flex items-start gap-2.5 rounded-xl border border-amber-200/70 bg-amber-50/70 px-3.5 py-3 text-[12px] leading-5 text-amber-900 sm:mb-4 sm:px-4"><Pause size={15} className="mt-0.5 shrink-0"/><div><p className="font-medium">当前处于暂停状态</p><p className="mt-0.5 text-amber-800">新的飞书消息不会被读取，也不会触发 Agent。点击上方「恢复监听」后会重新连接 WebSocket 并继续定时补拉。</p></div></div>}
+          <div className="mb-3.5 rounded-xl border border-sky-100 bg-sky-50/60 px-3.5 py-3 text-[12px] leading-5 text-sky-900 sm:mb-4 sm:px-4">
             在飞书聊天里发送 <code className="rounded bg-white/80 px-1 py-0.5 font-mono text-[11px]">{triggerPrefix} 你的问题</code>，
-            会自动带上最近 {contextMessages} 条聊天记录（文字消息，含本条触发消息）发起 Agent 轮次并直接回复。如果不想内容发到群里（例如有老板或外部人员），可在「会话」页点「私密分析」直接总结/分析群消息，或使用表情触发静默派发。后台每 {status.data?.syncIntervalSeconds ?? 30} 秒补拉一次群聊。
+            会自动带上最近 {contextMessages} 条聊天记录（文字消息，含本条触发消息）发起 Agent 轮次；当前转发策略为「{savedReplyForwardMeta.label}」（{savedReplyForwardMeta.shortHint}），可在「设置」页随时切换三档转发策略。后台每 {status.data?.syncIntervalSeconds ?? 30} 秒补拉一次群聊。
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat label="收到消息" value={items.length}/>
+          <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
+            <Stat label="收到消息" value={currentInboxCount} hint={formatRetentionSummary(savedInboxMaxItems)}/>
             <Stat label="会话" value={conversations.length}/>
             <Stat label="AI 触发" value={triggerCount} hint={`${triggerPrefix} 前缀`}/>
             <Stat label="已发送" value={sentDrafts.length} hint={pendingDrafts.length ? `${pendingDrafts.length} 条待补发` : '全部已送达'}/>
           </div>
-          <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,.65fr)]">
+          <div className="mt-4 grid gap-4 sm:mt-5 sm:gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,.65fr)]">
             <section className={`${section} overflow-hidden`}>
-              <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3"><h3 className="text-[13px] font-semibold text-zinc-900">最近会话</h3><button type="button" onClick={() => setTab('chats')} className="text-[11px] text-zinc-500 hover:text-zinc-900">全部会话</button></div>
-              {conversations.length ? <div className="divide-y divide-zinc-100">{conversations.slice(0, 6).map(conversation => <button key={conversation.key} type="button" onClick={() => selectConversation(conversation)} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-zinc-50"><Avatar name={conversation.title} src={conversation.avatarUrl} fallbackSrc={conversation.avatarFallbackUrl} size={30}/><div className="min-w-0 flex-1"><div className="flex items-center justify-between gap-2"><span className="truncate text-[12px] font-medium text-zinc-800">{conversation.title}</span><span className="shrink-0 text-[10px] text-zinc-400">{timeLabel(conversation.latestAt)}</span></div><p className="mt-0.5 truncate text-[11px] text-zinc-500">{conversation.latestText || '暂无消息'}</p></div></button>)}</div> : <div className="px-4 py-10 text-center text-[12px] text-zinc-400">还没有收到消息</div>}
+              <div className="flex items-center justify-between border-b border-zinc-100 px-3.5 py-3 sm:px-4"><h3 className="text-[13px] font-semibold text-zinc-900">最近会话</h3><button type="button" onClick={() => openTab('chats')} className="text-[11px] text-zinc-500 hover:text-zinc-900">全部会话</button></div>
+              {conversations.length ? <div className="divide-y divide-zinc-100">{conversations.slice(0, 6).map(conversation => <button key={conversation.key} type="button" onClick={() => selectConversation(conversation)} className="flex w-full items-center gap-3 px-3.5 py-3 text-left hover:bg-zinc-50 sm:px-4"><Avatar name={conversation.title} src={conversation.avatarUrl} fallbackSrc={conversation.avatarFallbackUrl} size={32}/><div className="min-w-0 flex-1"><div className="flex items-center justify-between gap-2"><span className="truncate text-[12px] font-medium text-zinc-800">{conversation.title}</span><span className="shrink-0 text-[10px] text-zinc-400">{timeLabel(conversation.latestAt)}</span></div><p className="mt-0.5 truncate text-[11px] text-zinc-500">{conversation.latestText || '暂无消息'}</p></div><ChevronRight size={14} className="shrink-0 text-zinc-300 sm:hidden"/></button>)}</div> : <div className="px-4 py-10 text-center text-[12px] text-zinc-400">还没有收到消息</div>}
             </section>
             <section className={`${section} overflow-hidden`}>
-              <div className="border-b border-zinc-100 px-4 py-3"><h3 className="text-[13px] font-semibold text-zinc-900">最近发送</h3></div>
+              <div className="border-b border-zinc-100 px-3.5 py-3 sm:px-4"><h3 className="text-[13px] font-semibold text-zinc-900">最近发送</h3></div>
               {sentDrafts.length ? <div className="divide-y divide-zinc-100">{sentDrafts.slice(0, 5).map(draft => {
                 const conversation = conversations.find(item => item.drafts.some(value => value.id === draft.id));
-                return <button key={draft.id} type="button" onClick={() => { if (conversation) selectConversation(conversation); }} className="block w-full px-4 py-3 text-left hover:bg-zinc-50"><div className="flex items-center justify-between gap-2"><span className="text-[11px] font-medium text-zinc-700">{conversation?.title || draft.target}</span><span className="text-[10px] text-zinc-400">{timeLabel(draft.updatedAt)}</span></div><p className="mt-1 line-clamp-2 text-[11px] leading-4 text-zinc-500">{draft.body || '等待补充正文'}</p></button>;
+                return <button key={draft.id} type="button" onClick={() => { if (conversation) selectConversation(conversation); }} className="block w-full px-3.5 py-3 text-left hover:bg-zinc-50 sm:px-4"><div className="flex items-center justify-between gap-2"><span className="truncate text-[11px] font-medium text-zinc-700">{conversation?.title || draft.target}</span><span className="shrink-0 text-[10px] text-zinc-400">{timeLabel(draft.updatedAt)}</span></div><p className="mt-1 line-clamp-2 text-[11px] leading-4 text-zinc-500">{draft.body || '等待补充正文'}</p></button>;
               })}</div> : <div className="px-4 py-10 text-center text-[12px] text-zinc-400">还没有发送记录</div>}
             </section>
           </div>
@@ -821,120 +940,41 @@ export function LarkAvatarPanel() {
 
       {tab === 'chats' && (
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-          <aside className="flex max-h-[180px] shrink-0 flex-col border-b border-zinc-100 sm:max-h-none sm:w-[270px] sm:border-b-0 sm:border-r">
-            <div className="p-3"><div className="relative"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400"/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索会话" className="h-8 w-full rounded-lg bg-zinc-100 pl-8 pr-3 text-[12px] text-zinc-800 outline-none placeholder:text-zinc-400"/></div></div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-              {filtered.map(conversation => <button key={conversation.key} type="button" onClick={() => setSelectedKey(conversation.key)} className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2.5 text-left ${conversation.key === selectedKey ? 'bg-zinc-100' : 'hover:bg-zinc-50'}`}><Avatar name={conversation.title} src={conversation.avatarUrl} fallbackSrc={conversation.avatarFallbackUrl} size={32}/><div className="min-w-0 flex-1"><div className="flex items-center justify-between gap-2"><span className="truncate text-[12px] font-medium text-zinc-800">{conversation.title}</span><span className="shrink-0 text-[9px] text-zinc-400">{timeLabel(conversation.latestAt)}</span></div><p className="mt-0.5 truncate text-[11px] text-zinc-500">{conversation.latestText || '暂无消息'}</p>{conversation.drafts.some(draft => draft.state === 'pending' || draft.state === 'failed') && <span className="mt-1 inline-flex items-center gap-1 text-[10px] text-amber-700"><Sparkles size={10}/>有回复待补发</span>}</div></button>)}
-              {!filtered.length && <p className="px-3 py-8 text-center text-[11px] text-zinc-400">{search ? '没有匹配的会话' : '还没有会话'}</p>}
+          <aside
+            data-testid="lark-avatar-chat-list"
+            className={`${mobileChatView === 'detail' && selected ? 'hidden sm:flex' : 'flex'} min-h-0 flex-1 flex-col sm:w-[270px] sm:flex-none sm:border-r sm:border-zinc-100`}
+          >
+            <div className="shrink-0 p-3"><div className="relative"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400"/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索会话" className="h-9 w-full rounded-lg bg-zinc-100 pl-8 pr-3 text-[12px] text-zinc-800 outline-none placeholder:text-zinc-400 sm:h-8"/></div></div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-2">
+              {filtered.map(conversation => <button key={conversation.key} type="button" data-testid={`chat-list-item-${conversation.chatId}`} onClick={() => { setSelectedKey(conversation.key); setMobileChatView('detail'); }} className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-3 text-left transition-colors sm:items-start sm:rounded-lg sm:py-2.5 ${conversation.key === selectedKey ? 'bg-zinc-100' : 'hover:bg-zinc-50'}`}><Avatar name={conversation.title} src={conversation.avatarUrl} fallbackSrc={conversation.avatarFallbackUrl} size={36}/><div className="min-w-0 flex-1"><div className="flex items-center justify-between gap-2"><span className="truncate text-[13px] font-medium text-zinc-800 sm:text-[12px]">{conversation.title}</span><span className="shrink-0 text-[10px] text-zinc-400 sm:text-[9px]">{timeLabel(conversation.latestAt)}</span></div><p className="mt-0.5 truncate text-[12px] text-zinc-500 sm:text-[11px]">{conversation.latestText || '暂无消息'}</p>{conversation.drafts.some(draft => draft.state === 'pending' || draft.state === 'failed') && <span className="mt-1 inline-flex items-center gap-1 text-[10px] text-amber-700"><Sparkles size={10}/>有回复待补发</span>}</div><ChevronRight size={15} className="shrink-0 text-zinc-300 sm:hidden"/></button>)}
+              {!filtered.length && <p className="px-3 py-10 text-center text-[12px] text-zinc-400 sm:text-[11px]">{search ? '没有匹配的会话' : '还没有会话'}</p>}
             </div>
           </aside>
-          <section className="flex min-w-0 flex-1 flex-col">
+          <section
+            data-testid="lark-avatar-chat-detail"
+            className={`${mobileChatView === 'detail' && selected ? 'flex' : 'hidden sm:flex'} min-h-0 min-w-0 flex-1 flex-col`}
+          >
             {selected ? <>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
-                <div className="flex min-w-0 items-center gap-2.5">
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-zinc-100 px-3 py-2.5 sm:px-4 sm:py-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="mobile-chat-back"
+                    aria-label="返回会话列表"
+                    onClick={() => setMobileChatView('list')}
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 sm:hidden"
+                  >
+                    <ArrowLeft size={16}/>
+                  </button>
                   <Avatar name={selected.title} src={selected.avatarUrl} fallbackSrc={selected.avatarFallbackUrl} size={30}/>
                   <div className="min-w-0">
                     <h3 className="truncate text-[13px] font-semibold text-zinc-900">{selected.title}</h3>
-                    <p className="text-[10px] text-zinc-400">{selected.chatType === 'p2p' ? '私聊' : selected.chatType === 'group' ? '群聊' : selected.chatType || '飞书会话'} · {selected.items.length} 条消息{selected.drafts.length ? ` · ${selected.drafts.length} 条回复` : ''}</p>
+                    <p className="truncate text-[10px] text-zinc-400">{selected.chatType === 'p2p' ? '私聊' : selected.chatType === 'group' ? '群聊' : selected.chatType || '飞书会话'} · {selected.items.length} 条消息{selected.drafts.length ? ` · ${selected.drafts.length} 条回复` : ''}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="hidden text-[10px] text-zinc-400 sm:inline">{pendingDrafts.filter(draft => selected.drafts.some(value => value.id === draft.id)).length} 条待补发</span>
-                  <button
-                    type="button"
-                    onClick={() => { setPrivatePanelOpen(open => !open); setPrivateFeedback(null); }}
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${privatePanelOpen ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'}`}
-                  >
-                    <Lock size={12}/>
-                    <span>私密分析</span>
-                    <span className="rounded bg-emerald-100/80 px-1 py-0.5 text-[9px] font-medium text-emerald-700">不发群</span>
-                  </button>
-                </div>
+                <span className="hidden shrink-0 text-[10px] text-zinc-400 sm:inline">{pendingDrafts.filter(draft => selected.drafts.some(value => value.id === draft.id)).length} 条待补发</span>
               </div>
-              {privatePanelOpen && (
-                <div className="border-b border-emerald-200/80 bg-emerald-50/40 px-4 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-800"><Lock size={12}/>私密总结 / 问 AI</span>
-                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">仅自己可见 · 绝不发到当前群</span>
-                    </div>
-                    <button type="button" onClick={() => setPrivatePanelOpen(false)} aria-label="收起私密分析" className="grid h-6 w-6 place-items-center rounded-md text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-700"><X size={12}/></button>
-                  </div>
-                  <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
-                    <div>
-                      <span className="text-[10px] font-medium text-zinc-500">分析方式</span>
-                      <Segmented<LarkAvatarPrivateAnalyzeMode>
-                        value={privateMode}
-                        onChange={value => { setPrivateMode(value); setPrivateFeedback(null); }}
-                        options={PRIVATE_ANALYSIS_MODES.map(item => ({ value: item.value, label: item.label }))}
-                      />
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-medium text-zinc-500">输出去向</span>
-                      <Segmented<LarkAvatarPrivateAnalyzeDelivery>
-                        value={privateDelivery}
-                        onChange={value => { setPrivateDelivery(value); setPrivateFeedback(null); }}
-                        options={PRIVATE_ANALYSIS_DELIVERIES}
-                      />
-                    </div>
-                  </div>
-                  <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-medium text-zinc-500">读取最近消息</span>
-                    {[20, 30, 50].map(count => (
-                      <button
-                        key={count}
-                        type="button"
-                        onClick={() => setPrivateCount(count)}
-                        className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${privateCount === count ? 'bg-zinc-900 text-white' : 'bg-white text-zinc-600 ring-1 ring-zinc-200 hover:bg-zinc-100'}`}
-                      >
-                        {count} 条
-                      </button>
-                    ))}
-                    {privateDelivery === 'private_chat' && selectedPrivateReplyChat && (
-                      <span className="ml-auto text-[10px] text-emerald-700">私密发往：{selectedPrivateReplyChat.name}</span>
-                    )}
-                  </div>
-                  <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:items-end">
-                    <textarea
-                      value={privatePrompt}
-                      onChange={event => { setPrivatePrompt(event.target.value); setPrivateFeedback(null); }}
-                      rows={2}
-                      placeholder={activePrivateModeMeta.placeholder}
-                      className={`${input} mt-0 min-h-[52px] flex-1 resize-y bg-white`}
-                    />
-                    <Button
-                      type="primary"
-                      size="small"
-                      loading={runPrivateAnalysis.isPending}
-                      disabled={Boolean(privateValidationError)}
-                      onClick={() => runPrivateAnalysis.mutate({
-                        chatId: selected.chatId,
-                        mode: privateMode,
-                        prompt: privatePrompt,
-                        contextMessages: privateCount,
-                        delivery: privateDelivery
-                      })}
-                      className="!h-9 !rounded-lg !border-0 !bg-emerald-600 !px-3.5 !text-white hover:!bg-emerald-700"
-                    >
-                      开始私密分析
-                    </Button>
-                  </div>
-                  {privateValidationError && (
-                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-800">
-                      <span>{privateValidationError}</span>
-                      {privateDelivery === 'private_chat' && (
-                        <button type="button" onClick={() => setTab('settings')} className="font-medium underline hover:text-amber-900">去设置私密接收会话</button>
-                      )}
-                    </div>
-                  )}
-                  {privateFeedback && (
-                    <p className={`mt-2 rounded-lg px-2.5 py-1.5 text-[10px] leading-4 ${privateFeedback.ok ? 'bg-emerald-100/70 text-emerald-800' : 'bg-red-50 text-red-700'}`}>
-                      {privateFeedback.text}
-                    </p>
-                  )}
-                </div>
-              )}
-              <div ref={messagesRef} className="min-h-0 flex-1 overflow-y-auto bg-zinc-50/40 px-5 py-4">
+              <div ref={messagesRef} className="min-h-0 flex-1 overflow-y-auto bg-zinc-50/40 px-3.5 py-3.5 sm:px-5 sm:py-4">
                 {selectedTimeline.length ? <>
                   {selectedTimeline.map(entry => {
                     if (entry.kind === 'draft') {
@@ -944,20 +984,56 @@ export function LarkAvatarPanel() {
                     const item = entry.item;
                     const isTrigger = item.title.trim().startsWith(triggerPrefix);
                     const own = Boolean(item.senderId && item.senderId === status.data?.account?.userId);
-                    return <div key={item.id} className={`mb-5 flex items-start gap-2.5 ${own ? 'flex-row-reverse' : ''}`}>
+                    return <div key={item.id} className={`mb-4 flex items-start gap-2 sm:mb-5 sm:gap-2.5 ${own ? 'flex-row-reverse' : ''}`}>
                       <Avatar name={item.senderName || selected.title} src={item.senderAvatarUrl} size={28}/>
-                      <div className={`min-w-0 max-w-[78%] ${own ? 'text-right' : ''}`}>
-                        <div className={`mb-1 flex flex-wrap items-center gap-2 ${own ? 'justify-end' : ''}`}><span className="text-[11px] font-medium text-zinc-700">{item.senderName || selected.title}</span><span className="text-[10px] text-zinc-400">{fullTime(item.occurredAt)}</span>{isTrigger && <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-700">Agent 触发</span>}</div>
-                        <div className={`inline-block whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2.5 text-left text-[13px] leading-5 ${own ? 'rounded-tr-md bg-sky-600 text-white' : 'rounded-tl-md border border-zinc-200 bg-white text-zinc-800'}`}>{item.title || item.summary}</div>
+                      <div className={`min-w-0 max-w-[85%] sm:max-w-[78%] ${own ? 'text-right' : ''}`}>
+                        <div className={`mb-1 flex flex-wrap items-center gap-1.5 sm:gap-2 ${own ? 'justify-end' : ''}`}><span className="text-[11px] font-medium text-zinc-700">{item.senderName || selected.title}</span><span className="text-[10px] text-zinc-400">{fullTime(item.occurredAt)}</span>{isTrigger && <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium text-sky-700">Agent 触发</span>}</div>
+                        <div className={`inline-block whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-left text-[13px] leading-5 sm:px-3.5 sm:py-2.5 ${own ? 'rounded-tr-md bg-sky-600 text-white' : 'rounded-tl-md border border-zinc-200 bg-white text-zinc-800'}`}>{item.title || item.summary}</div>
                       </div>
                     </div>;
                   })}
                 </> : <div className="grid h-full place-items-center text-center"><div><MessageCircle size={26} className="mx-auto text-zinc-300"/><p className="mt-2 text-[12px] text-zinc-400">这个会话还没有消息</p></div></div>}
               </div>
-              <div className="border-t border-zinc-100 p-3">
-                <div className="flex items-end gap-2 rounded-xl border border-zinc-200 bg-white p-2 focus-within:border-zinc-400">
-                  <textarea value={composer} onChange={event => setComposer(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (composer.trim() && !manualSend.isPending) manualSend.mutate({ conversation: selected, body: composer }); } }} rows={1} placeholder={`发送给 ${selected.title}，Enter 发送，Shift+Enter 换行`} className="max-h-28 min-h-8 flex-1 resize-none bg-transparent px-2 py-1.5 text-[12px] leading-5 text-zinc-800 outline-none placeholder:text-zinc-400"/>
-                  <button type="button" aria-label="发送消息" disabled={!composer.trim() || manualSend.isPending} onClick={() => manualSend.mutate({ conversation: selected, body: composer })} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-zinc-900 text-white transition-opacity hover:bg-zinc-800 disabled:opacity-30"><Send size={13}/></button>
+              <div className="shrink-0 border-t border-zinc-100 p-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:p-3">
+                {composerUndo?.canUndo && (
+                  <div className="mb-1.5 flex justify-end">
+                    <AiUndoCapsule
+                      undoDepth={composerUndo.undoDepth}
+                      lastLabel={composerUndo.lastLabel}
+                      undoing={composerUndo.undoing}
+                      onUndo={composerUndo.undo}
+                      onDismiss={composerUndo.clearUndo}
+                    />
+                  </div>
+                )}
+                <div className={`flex items-end gap-1.5 rounded-xl border border-zinc-200 bg-white p-2 focus-within:border-zinc-400 ${composerFlash.flashClass}`}>
+                  <textarea value={composer} onChange={event => setComposer(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (composer.trim() && !manualSend.isPending) manualSend.mutate({ conversation: selected, body: composer }); } }} rows={1} placeholder={`发送给 ${selected.title}…`} className="max-h-28 min-h-8 flex-1 resize-none bg-transparent px-2 py-1.5 text-[13px] leading-5 text-zinc-800 outline-none placeholder:text-zinc-400 sm:text-[12px]"/>
+                  <AiTextAssistControl
+                    mode="message_polish"
+                    variant="icon"
+                    size="sm"
+                    popoverSide="top"
+                    popoverAlign="end"
+                    value={composer}
+                    onChange={setComposer}
+                    onFlash={composerFlash.triggerFlash}
+                    hideInlineUndo
+                    onUndoStateChange={setComposerUndo}
+                    resetKey={`${selected.key}:${composerSendEpoch}`}
+                    disabled={manualSend.isPending}
+                    ariaLabel="AI 润色飞书消息"
+                    context={() => ({
+                      field: '飞书聊天回复输入框',
+                      purpose: '以本人身份发送给飞书私聊或群聊的自然得体消息',
+                      groupName: selected.title,
+                      recentMessages: selected.items.slice(-6).map(item => ({
+                        role: item.senderName || '成员',
+                        text: item.title || item.summary || ''
+                      })).filter(entry => entry.text.trim())
+                    })}
+                    testId="lark-avatar-composer-ai"
+                  />
+                  <button type="button" aria-label="发送消息" disabled={!composer.trim() || manualSend.isPending} onClick={() => manualSend.mutate({ conversation: selected, body: composer })} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-zinc-900 text-white transition-opacity hover:bg-zinc-800 disabled:opacity-30 sm:h-8 sm:w-8"><Send size={13}/></button>
                 </div>
               </div>
             </> : <div className="grid h-full place-items-center text-center"><div><MessageCircle size={28} className="mx-auto text-zinc-300"/><p className="mt-2 text-[12px] text-zinc-400">选择左侧会话查看消息</p></div></div>}
@@ -989,21 +1065,21 @@ export function LarkAvatarPanel() {
                 <div><h3 className="text-[14px] font-semibold text-zinc-900">Agent 配置</h3><p className="mt-1 text-[11px] leading-5 text-zinc-500">选择处理 /ai 轮次的 Agent、模型和运行目录。</p></div>
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <label className="block"><span className={field}>Agent</span><CompactSelect options={agentOptions} value={agentId} placeholder="选择 Agent" disabledText="没有可用 Agent" popupWidth={380} onChange={value => { setAgentId(value); setModel(''); setReasoningEffort(''); }}/></label>
-                <label className="block"><span className={field}>默认模型</span><CompactSelect options={modelOptions} value={model} placeholder="选择模型" disabledText="暂无可用模型" disabled={!models.data?.models.length} popupWidth={380} onChange={setModel}/></label>
-                <label className="block"><span className={field}>推理强度</span><CompactSelect options={reasoningOptions} value={reasoningEffort} placeholder="选择推理强度" disabledText="当前 Agent 未提供推理强度" disabled={!models.data?.reasoningEfforts.length} popupWidth={300} onChange={setReasoningEffort}/></label>
-                <div className="block">
+                <label className="flex flex-col"><span className={field}>Agent</span><CompactSelect options={agentOptions} value={agentId} placeholder="选择 Agent" disabledText="没有可用 Agent" popupWidth={380} onChange={value => { setAgentId(value); setModel(''); setReasoningEffort(''); }}/></label>
+                <label className="flex flex-col"><span className={field}>默认模型</span><CompactSelect options={modelOptions} value={model} placeholder="选择模型" disabledText="暂无可用模型" disabled={!models.data?.models.length} popupWidth={380} onChange={setModel}/></label>
+                <label className="flex flex-col"><span className={field}>推理强度</span><CompactSelect options={reasoningOptions} value={reasoningEffort} placeholder="选择推理强度" disabledText="当前 Agent 未提供推理强度" disabled={!models.data?.reasoningEfforts.length} popupWidth={300} onChange={setReasoningEffort}/></label>
+                <div className="flex flex-col">
                   <span className={field}>工作目录</span>
-                  <div className="mt-1.5 flex items-center gap-2">
-                    <div className="min-w-0 flex-1"><SuggestedValueInput value={workspace} onChange={setWorkspace} label="工作目录" placeholder="留空使用默认工作目录" suggestion={selectedAgent?.cwd || capabilities.data?.workingDirectory} suggestionLabel="使用 Agent 默认工作目录"/></div>
-                    <Button size="small" icon={<FolderOpen size={12}/>} loading={pickWorkspace.isPending} disabled={!capabilities.data?.directoryPicker} onClick={() => pickWorkspace.mutate()}>选择</Button>
+                  <div className="mt-1.5 flex items-start gap-2">
+                    <div className="min-w-0 flex-1"><SuggestedValueInput size="compact" wrapperClassName="" value={workspace} onChange={setWorkspace} label="工作目录" placeholder="留空使用默认工作目录" suggestion={selectedAgent?.cwd || capabilities.data?.workingDirectory} suggestionLabel="使用 Agent 默认工作目录"/></div>
+                    <button type="button" disabled={!capabilities.data?.directoryPicker || pickWorkspace.isPending} onClick={() => pickWorkspace.mutate()} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 text-[12px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40">{pickWorkspace.isPending ? <LoaderCircle size={12} className="animate-spin"/> : <FolderOpen size={12}/>}选择</button>
                   </div>
                 </div>
-                <label className="block"><span className={field}>单轮超时（秒）</span><input className={input} type="number" min={0} max={86400} value={agentTimeoutSeconds} onChange={event => setAgentTimeoutSeconds(Math.min(86_400, Math.max(0, Number(event.target.value) || 0)))}/><p className="mt-1 text-[10px] leading-4 text-zinc-400">0 表示不限制；超时后会结束本轮。</p></label>
-                <div className="block">
+                <label className="flex flex-col"><span className={field}>单轮超时（秒）</span><input className={`${input} tabular-nums`} type="number" min={0} max={86400} value={agentTimeoutSeconds} onChange={event => setAgentTimeoutSeconds(Math.min(86_400, Math.max(0, Number(event.target.value) || 0)))}/><p className="mt-1.5 text-[11px] leading-4 text-zinc-400">0 表示不限制；超时后会结束本轮。</p></label>
+                <div className="flex flex-col">
                   <span className={field}>Agent 记忆范围</span>
-                  <Segmented<'anchor' | 'chat'> value={contextScope} onChange={setContextScope} options={[{ value: 'anchor', label: '按话题隔离' }, { value: 'chat', label: '整个会话共享' }]}/>
-                  <p className="mt-1 text-[10px] leading-4 text-zinc-400">按话题隔离：每个飞书话题有独立的 Agent 会话；整个会话共享：同一聊天里的不同话题共用一段记忆。</p>
+                  <Segmented<'anchor' | 'chat'> ariaLabel="Agent 记忆范围" className="mt-1.5" value={contextScope} onChange={setContextScope} options={[{ value: 'anchor', label: '按话题隔离' }, { value: 'chat', label: '整个会话共享' }]}/>
+                  <p className="mt-1.5 text-[11px] leading-4 text-zinc-400">{contextScope === 'anchor' ? '每个飞书话题各自独立维护 Agent 记忆，互不串线。' : '同一聊天内的不同话题共用同一段 Agent 记忆。'}</p>
                 </div>
               </div>
               <p className="mt-3 text-[11px] leading-5 text-zinc-400">{models.isFetching ? '正在读取 Agent 能力…' : models.data?.warning || '修改 Agent 配置后，下一次 /ai 触发会创建对应的新会话。'}</p>
@@ -1014,9 +1090,7 @@ export function LarkAvatarPanel() {
                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600"><Users size={15}/></span>
                 <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-[14px] font-semibold text-zinc-900">消息监听</h3><span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] text-zinc-500">{listenMode === 'all' ? '全部会话' : `已选 ${listenChats.length} 个`}</span></div><p className="mt-1 text-[11px] leading-5 text-zinc-500">决定读取哪些会话的消息和上下文。默认监听账号可见的全部会话。</p></div>
               </div>
-              <div className="mt-4 grid grid-cols-2 gap-1 rounded-xl bg-zinc-100 p-1">
-                {([['all', '全部会话'], ['selected', '指定会话']] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setListenMode(value)} className={`rounded-lg px-3 py-2 text-[12px] font-medium transition-colors ${listenMode === value ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-800'}`}>{label}</button>)}
-              </div>
+              <Segmented<'all' | 'selected'> ariaLabel="消息监听范围" className="mt-4" value={listenMode} onChange={setListenMode} options={[{ value: 'all', label: '全部会话' }, { value: 'selected', label: '指定会话' }]}/>
               {listenMode === 'all' ? (
                 <div className="mt-3 flex items-start gap-2.5 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3.5 py-3 text-emerald-900"><Wifi size={15} className="mt-0.5 shrink-0"/><div><p className="text-[12px] font-medium">正在监听全部会话</p><p className="mt-0.5 text-[11px] leading-5 text-emerald-700">群聊和私聊都会进入上下文，并在每次触发时读取最近消息。</p></div></div>
               ) : (
@@ -1045,38 +1119,261 @@ export function LarkAvatarPanel() {
                   </details>
                 </div>
               )}
-              <p className="mt-3 text-[10px] leading-4 text-zinc-400">最近消息面板最多保留 60 条消息，写入新消息时立即丢弃最旧记录；回复记录最多保留 80 条，待发送的会保留。图片不会下载，只保存占位摘要。</p>
+              <p className="mt-3 text-[10px] leading-4 text-zinc-400">图片不会下载，只保存占位摘要；消息记录保留条数与清理提醒可在下方「消息记录保留与清理」中自定义。</p>
+            </section>
+
+            <section ref={retentionSectionRef} data-testid="lark-avatar-retention-section" className="rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,.03)] sm:p-5">
+              <div className="flex items-start gap-3">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600"><Database size={15}/></span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-[14px] font-semibold text-zinc-900">消息记录保留与清理</h3>
+                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] text-zinc-500">当前 {currentInboxCount} 条</span>
+                    {savedCleanupWarnThreshold > 0 && currentInboxCount > savedCleanupWarnThreshold && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">已超提醒阈值</span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-[11px] leading-5 text-zinc-500">自定义本地最近消息面板的保留上限（支持设为 0 不限制），并设置打开面板时的超阈值清理提醒。</p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <label className="flex flex-col">
+                  <span className={field}>记录保留上限（条，0 表示不限制）</span>
+                  <input
+                    data-testid="inbox-max-items-input"
+                    aria-invalid={!parsedInboxMaxItems.ok}
+                    className={`${input} tabular-nums`}
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={MAX_CONFIGURABLE_INBOX_ITEMS}
+                    step={1}
+                    value={inboxMaxItemsInput}
+                    onChange={event => setInboxMaxItemsInput(event.target.value)}
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {([['60', '默认 60'], ['200', '200 条'], ['500', '500 条'], ['0', '不限制 (0)']] as const).map(([val, label]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setInboxMaxItemsInput(val)}
+                        className={`inline-flex h-6 items-center rounded-md px-2 text-[11px] font-medium transition-colors ${inboxMaxItemsInput.trim() === val ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 hover:text-zinc-900'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {!parsedInboxMaxItems.ok
+                    ? <p className="mt-1.5 text-[11px] leading-4 text-red-600">{parsedInboxMaxItems.error}</p>
+                    : <p className="mt-1.5 text-[11px] leading-4 text-zinc-400">默认 60 条；设为 0 表示不限制，写入新消息时不再自动淘汰旧记录。调小非零上限保存后会立即裁剪超出的最旧记录。</p>}
+                </label>
+                <label className="flex flex-col">
+                  <span className={field}>超过多少条时打开提醒清理</span>
+                  <input
+                    ref={thresholdInputRef}
+                    data-testid="inbox-cleanup-threshold-input"
+                    aria-invalid={!parsedCleanupThreshold.ok}
+                    className={`${input} tabular-nums`}
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={MAX_CONFIGURABLE_INBOX_ITEMS}
+                    step={1}
+                    value={inboxCleanupWarnThresholdInput}
+                    onChange={event => setInboxCleanupWarnThresholdInput(event.target.value)}
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {([['100', '100 条'], ['200', '默认 200'], ['500', '500 条'], ['0', '关闭提醒 (0)']] as const).map(([val, label]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setInboxCleanupWarnThresholdInput(val)}
+                        className={`inline-flex h-6 items-center rounded-md px-2 text-[11px] font-medium transition-colors ${inboxCleanupWarnThresholdInput.trim() === val ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 hover:text-zinc-900'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {!parsedCleanupThreshold.ok
+                    ? <p className="mt-1.5 text-[11px] leading-4 text-red-600">{parsedCleanupThreshold.error}</p>
+                    : <p className="mt-1.5 text-[11px] leading-4 text-zinc-400">默认 200 条；打开飞书替身时，若本地已保留消息数超过该条数将展示清理提醒；设为 0 表示关闭提醒。</p>}
+                </label>
+              </div>
+              <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50/70 px-3.5 py-3">
+                <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-[12px] font-medium text-zinc-800">
+                      当前本地共 {currentInboxCount} 条消息记录 · {formatRetentionSummary(savedInboxMaxItems)}
+                    </p>
+                    <p className="mt-0.5 text-[10px] leading-4 text-zinc-500">
+                      {savedCleanupWarnThreshold > 0 ? `打开提醒阈值：超过 ${savedCleanupWarnThreshold} 条时提醒。` : '已关闭打开清理提醒。'}清理仅删除展示记录，不影响已处理消息去重；回复记录最多保留 80 条（待发送的会保留）。
+                    </p>
+                  </div>
+                  {!settingsCleanupConfirm ? (
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      {quickKeepLatest > 0 && (
+                        <Button
+                          size="small"
+                          disabled={cleanupInbox.isPending}
+                          onClick={() => setSettingsCleanupConfirm({ keepLatest: quickKeepLatest })}
+                        >
+                          保留最近 {quickKeepLatest} 条
+                        </Button>
+                      )}
+                      <Button
+                        size="small"
+                        danger
+                        icon={<Trash2 size={12}/>}
+                        disabled={currentInboxCount === 0 || cleanupInbox.isPending}
+                        onClick={() => setSettingsCleanupConfirm({ keepLatest: 0 })}
+                      >
+                        清空消息记录
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      <span className="text-[11px] font-medium text-amber-800">
+                        {settingsCleanupConfirm.keepLatest === 0
+                          ? `确认清空全部 ${currentInboxCount} 条？`
+                          : `确认删除更早的 ${Math.max(0, currentInboxCount - settingsCleanupConfirm.keepLatest)} 条？`}
+                      </span>
+                      <Button
+                        size="small"
+                        type="primary"
+                        danger={settingsCleanupConfirm.keepLatest === 0}
+                        loading={cleanupInbox.isPending}
+                        onClick={() => cleanupInbox.mutate(settingsCleanupConfirm.keepLatest)}
+                        className={settingsCleanupConfirm.keepLatest === 0 ? '' : '!rounded-lg !bg-zinc-900'}
+                      >
+                        确认清理
+                      </Button>
+                      <Button
+                        size="small"
+                        disabled={cleanupInbox.isPending}
+                        onClick={() => setSettingsCleanupConfirm(null)}
+                      >
+                        取消
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
             </section>
 
             <section className="rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,.03)] sm:p-5">
               <div className="flex items-start gap-3">
                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600"><MessageCircle size={15}/></span>
-                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-[14px] font-semibold text-zinc-900">回复方式</h3><span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700">发送位置</span></div><p className="mt-1 text-[11px] leading-5 text-zinc-500">控制 Agent 的回复发到主会话、原话题，还是以引用或新话题发送。</p></div>
+                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-[14px] font-semibold text-zinc-900">回复方式</h3><span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700">转发策略与位置</span></div><p className="mt-1 text-[11px] leading-5 text-zinc-500">控制 Agent 回复是否转发到飞书，以及回复发到主会话、原话题、引用或新话题。</p></div>
               </div>
               <div className="mt-4 space-y-3">
+                <div className="rounded-xl border border-zinc-200 px-3.5 py-3" data-testid="reply-forward-mode-section">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <p className="text-[13px] font-medium text-zinc-900">飞书回复转发策略</p>
+                      {activeReplyForwardMeta.badge && (
+                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${replyForwardMode === 'none' ? 'bg-emerald-50 text-emerald-700' : 'bg-zinc-100 text-zinc-600'}`}>
+                          {activeReplyForwardMeta.badge}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-[11px] leading-5 text-zinc-500">选择 /ai 触发后 Agent 文本如何发回当前飞书会话。</p>
+                  </div>
+                  <div
+                    role="radiogroup"
+                    aria-label="飞书回复转发策略"
+                    data-testid="reply-forward-mode-group"
+                    className="mt-3 grid grid-cols-1 items-stretch gap-2 sm:grid-cols-3"
+                  >
+                    {LARK_AVATAR_REPLY_FORWARD_OPTIONS.map(option => {
+                      const active = replyForwardMode === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          data-testid={`reply-forward-mode-${option.value}`}
+                          onClick={() => setReplyForwardMode(option.value)}
+                          className={`flex h-full flex-col justify-between rounded-xl border px-3 py-2.5 text-left transition-colors ${active ? 'border-zinc-900 bg-zinc-50/90 shadow-[0_1px_2px_rgba(24,24,27,.06)] ring-1 ring-zinc-900/10' : 'border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50/50'}`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                              <span className={`text-[12px] font-semibold leading-5 ${active ? 'text-zinc-900' : 'text-zinc-700'}`}>{option.label}</span>
+                              {option.badge && (
+                                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none ${option.value === 'none' ? 'bg-emerald-50 text-emerald-700' : 'bg-zinc-100 text-zinc-500'}`}>
+                                  {option.badge}
+                                </span>
+                              )}
+                            </span>
+                            <span className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border transition-colors ${active ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300 text-transparent'}`}>
+                              <Check size={10}/>
+                            </span>
+                          </div>
+                          <p className="mt-1.5 text-[11px] leading-4 text-zinc-500">{option.cardSummary}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p
+                    data-testid="reply-forward-mode-description"
+                    className={`mt-2.5 rounded-lg px-3 py-2 text-[11px] leading-5 ${replyForwardMode === 'none' ? 'bg-emerald-50/70 text-emerald-800' : 'bg-zinc-50 text-zinc-600'}`}
+                  >
+                    {activeReplyForwardMeta.description}
+                  </p>
+                  <p className="mt-1.5 text-[11px] leading-4 text-zinc-400">
+                    {LARK_AVATAR_REPLY_FORWARD_SUMMARY}
+                  </p>
+                </div>
+                {replyForwardMode === 'none' && (
+                  <p className="rounded-xl border border-amber-200/70 bg-amber-50/60 px-3.5 py-2 text-[11px] leading-5 text-amber-800">
+                    当前已选择「不在飞书回复」，下方回复位置与署名设置会继续保留，仅在重新开启飞书回复后生效。
+                  </p>
+                )}
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">话题内的消息</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">回复到原话题，或发到外面的主会话。</p></div>
-                    <div className="w-[210px] shrink-0"><Segmented<'in' | 'out'> value={replyInTopic ? 'in' : 'out'} onChange={value => setReplyInTopic(value === 'in')} options={[{ value: 'in', label: '话题内' }, { value: 'out', label: '主会话' }]}/></div>
+                  <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <div className="min-w-0"><p className="text-[13px] font-medium text-zinc-900">话题内的消息</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">回复到原话题，或发到外面的主会话。</p></div>
+                    <div className="w-full shrink-0 sm:w-[220px]"><Segmented<'in' | 'out'> ariaLabel="话题内的消息回复位置" value={replyInTopic ? 'in' : 'out'} onChange={value => setReplyInTopic(value === 'in')} options={[{ value: 'in', label: '话题内' }, { value: 'out', label: '主会话' }]}/></div>
                   </div>
                 </div>
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">主会话的消息</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">单聊和普通群都支持直接发送、引用回复或开话题回复。</p></div>
-                    <div className="w-[300px] shrink-0"><Segmented<'direct' | 'quote' | 'thread'> value={replyMode} onChange={setReplyMode} options={[{ value: 'direct', label: '直接发送' }, { value: 'quote', label: '引用回复' }, { value: 'thread', label: '开话题回复' }]}/></div>
+                  <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <div className="min-w-0"><p className="text-[13px] font-medium text-zinc-900">主会话的消息</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">单聊和普通群都支持直接发送、引用回复或开话题回复。</p></div>
+                    <div className="w-full shrink-0 sm:w-[280px]"><Segmented<'direct' | 'quote' | 'thread'> ariaLabel="主会话的消息回复方式" value={replyMode} onChange={setReplyMode} options={[{ value: 'direct', label: '直接发送' }, { value: 'quote', label: '引用回复' }, { value: 'thread', label: '开话题回复' }]}/></div>
                   </div>
                 </div>
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">随机表情回应</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">触发后先在原消息上加 2–3 个随机飞书表情，再开始生成回复；加表情失败的原因会显示在下方排障卡片。</p></div>
-                    <Switch size="small" aria-label="随机表情回应" checked={emojiReactions} onChange={setEmojiReactions}/>
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0 flex-1"><p className="text-[13px] font-medium text-zinc-900">随机表情回应</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">触发后先在原消息上加 2–3 个随机飞书表情，再开始生成回复；加表情失败的原因会显示在下方排障卡片。</p></div>
+                    <Switch size="small" className="shrink-0" aria-label="随机表情回应" checked={emojiReactions} onChange={setEmojiReactions}/>
                   </div>
                 </div>
-                <label className="block rounded-xl border border-zinc-200 px-3.5 py-3">
-                  <span className="text-[12px] font-medium text-zinc-800">回复署名（可选）</span>
-                  <input className={input} value={replySignature} maxLength={100} onChange={event => setReplySignature(event.target.value)} placeholder="例如：—— 🤖 数字分身"/>
-                  <p className="mt-1 text-[10px] leading-4 text-zinc-400">加在 Agent 发出的每条消息末尾；手动发送的消息不加。</p>
-                </label>
+                <div className="flex flex-col rounded-xl border border-zinc-200 px-3.5 py-3">
+                  <AiFieldHeader
+                    label={<span className="text-[13px] font-medium text-zinc-900">回复署名（可选）</span>}
+                    htmlFor="lark-avatar-reply-signature"
+                    assist={
+                      <AiTextAssistControl
+                        mode="description_polish"
+                        variant="pill"
+                        size="xs"
+                        popoverSide="top"
+                        popoverAlign="end"
+                        value={replySignature}
+                        onChange={setReplySignature}
+                        onFlash={signatureFlash.triggerFlash}
+                        context={() => ({
+                          field: '飞书 AI 替身回复署名',
+                          purpose: '附在飞书 AI 替身自动回复消息末尾的简短得体署名，例如「—— 🤖 数字分身」，单行且不超过 36 字',
+                          maxChars: 36,
+                          ...(status.data?.account?.name ? { extra: `飞书账号：${status.data.account.name}` } : {})
+                        })}
+                        testId="lark-avatar-signature-ai"
+                      />
+                    }
+                  />
+                  <input id="lark-avatar-reply-signature" className={`${input} ${signatureFlash.flashClass}`} value={replySignature} maxLength={100} onChange={event => setReplySignature(event.target.value)} placeholder="例如：—— 🤖 数字分身"/>
+                  <p className="mt-1.5 text-[11px] leading-4 text-zinc-400">加在 Agent 发出的每条消息末尾；手动发送的消息不加。</p>
+                </div>
               </div>
             </section>
 
@@ -1086,103 +1383,54 @@ export function LarkAvatarPanel() {
                 <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-[14px] font-semibold text-zinc-900">触发规则</h3><span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700">仅本人可触发</span></div><p className="mt-1 text-[11px] leading-5 text-zinc-500">只有你本人发送匹配前缀的消息才会发起 Agent 轮次；其他人的消息只作为上下文，即使发送相同前缀也不会触发。</p></div>
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <label className="block"><span className={field}>触发前缀</span><input className={input} value={triggerPrefix} placeholder="/ai" onChange={event => setTriggerPrefix(event.target.value)}/></label>
-                <label className="block">
+                <label className="flex flex-col"><span className={field}>触发前缀</span><input className={`${input} font-mono`} value={triggerPrefix} placeholder="/ai" onChange={event => setTriggerPrefix(event.target.value)}/><p className="mt-1.5 text-[11px] leading-4 text-zinc-400">你发送该前缀开头的消息即触发 Agent 轮次。</p></label>
+                <label className="flex flex-col">
                   <span className={field}>每轮注入条数（1–50）</span>
-                  <input className={input} type="number" min={1} max={50} value={contextMessages} onChange={event => setContextMessages(Number(event.target.value) || 10)}/>
-                  <p className="mt-1 text-[10px] leading-4 text-zinc-400">每次触发时，附上最近 N 条文字消息（含本条触发消息）给 Agent；不是 Agent 的记忆条数，也不影响最近消息面板的保留上限。</p>
+                  <input className={`${input} tabular-nums`} type="number" min={1} max={50} value={contextMessages} onChange={event => setContextMessages(Number(event.target.value) || 10)}/>
+                  <p className="mt-1.5 text-[11px] leading-4 text-zinc-400">每次触发时，附上最近 N 条文字消息（含本条触发消息）给 Agent；不是 Agent 的记忆条数，也不影响最近消息面板的保留上限。</p>
                 </label>
               </div>
-              <div className="mt-3 rounded-xl bg-zinc-50 px-3.5 py-2.5 text-[11px] leading-5 text-zinc-500">你发送 <code className="rounded bg-white px-1 py-0.5 font-mono text-zinc-700">{triggerPrefix} 你的问题</code> 即触发；所有 AgentText 会直接以你的身份发回原会话。</div>
-            </section>
-
-            <section className="rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,.03)] sm:p-5">
-              <div className="flex items-start gap-3">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-700"><Lock size={15}/></span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-[14px] font-semibold text-zinc-900">私密分析与防发群</h3>
-                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">不发原群</span>
-                  </div>
-                  <p className="mt-1 text-[11px] leading-5 text-zinc-500">适合「想让 AI 总结群消息或分析群里的问题，但不想内容发到群里（有老板或外部人员）」的场景。在「会话」页点「私密分析」即可直接拉取任意已同步群聊，无需机器人在群内。</p>
-                </div>
-              </div>
-              <div className="mt-4 space-y-3">
-                <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="text-[12px] font-medium text-zinc-800">私密结果接收会话（可选）</p>
-                      <p className="mt-0.5 text-[11px] leading-5 text-zinc-500">选择「私密转发 / 私密发到飞书」时，分析结果会发到这里（建议选自己的私聊或个人专用私密群）。系统会自动拦截与原群相同的目标，防止误发泄密。</p>
-                    </div>
-                    {privateReplyChatId.trim() && (
-                      <button type="button" onClick={() => setPrivateReplyChatId('')} className="rounded-lg border border-zinc-200 px-2 py-1 text-[10px] text-zinc-500 hover:bg-zinc-50 hover:text-zinc-800">清空</button>
-                    )}
-                  </div>
-                  {privateReplyChatId.trim() && (
-                    <div className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50/70 px-2.5 py-1 text-[11px] text-emerald-800">
-                      <Lock size={11} className="shrink-0"/>
-                      <span className="truncate">{selectedPrivateReplyChat ? `${selectedPrivateReplyChat.name} (${selectedPrivateReplyChat.id})` : privateReplyChatId.trim()}</span>
-                    </div>
-                  )}
-                  <div className="mt-2.5 overflow-hidden rounded-xl border border-zinc-200">
-                    <div className="flex items-center gap-2 border-b border-zinc-100 bg-zinc-50/70 p-2">
-                      <div className="relative min-w-0 flex-1"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400"/><input value={privateChatSearch} onChange={event => setPrivateChatSearch(event.target.value)} placeholder="搜索私聊或个人私密群" className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-8 pr-3 text-[12px] text-zinc-800 outline-none placeholder:text-zinc-400 focus:border-zinc-400"/></div>
-                      <button type="button" disabled={availableChats.isFetching} onClick={() => void availableChats.refetch()} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-200 disabled:opacity-40" aria-label="刷新私密会话列表"><RefreshCw size={13} className={availableChats.isFetching ? 'animate-spin' : ''}/></button>
-                    </div>
-                    <div className="max-h-[180px] overflow-y-auto p-1.5">
-                      {privateChatOptions.map(chat => {
-                        const checked = privateReplyChatId.trim() === chat.id;
-                        return <button key={chat.id} type="button" onClick={() => setPrivateReplyChatId(checked ? '' : chat.id)} className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${checked ? 'bg-emerald-50/80' : 'hover:bg-zinc-50'}`}><Avatar name={chat.name} src={chat.avatarUrl} fallbackSrc={chat.avatarFallbackUrl} size={28}/><div className="min-w-0 flex-1"><p className="truncate text-[12px] font-medium text-zinc-800">{chat.name}</p><p className="truncate text-[10px] text-zinc-400">{chatTypeText(chat.type)}{chat.memberCount ? ` · ${chat.memberCount} 人` : ''} · {chat.id}</p></div><span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${checked ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-zinc-300 text-transparent'}`}><Check size={11}/></span></button>;
-                      })}
-                      {!privateChatOptions.length && <div className="px-3 py-6 text-center text-[11px] text-zinc-400">{availableChats.isFetching ? '正在读取飞书会话…' : '暂无可选会话，可在下方手动填写 Chat ID'}</div>}
-                    </div>
-                  </div>
-                  <input className={`${input} mt-2 font-mono`} value={privateReplyChatId} onChange={event => setPrivateReplyChatId(event.target.value)} placeholder="手动输入私密接收会话 Chat ID（留空则仅在 AgentDock 内查看）"/>
-                </div>
-              </div>
+              <div className="mt-3 rounded-xl bg-zinc-50 px-3.5 py-2.5 text-[11px] leading-5 text-zinc-500">你发送 <code className="rounded bg-white px-1 py-0.5 font-mono text-zinc-700">{triggerPrefix} 你的问题</code> 即触发；{activeReplyForwardMeta.shortHint}。</div>
             </section>
 
             <section className="rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,.03)] sm:p-5">
               <div className="flex items-start gap-3">
                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600"><Sparkles size={15}/></span>
-                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-[14px] font-semibold text-zinc-900">表情触发</h3><span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">Beta</span></div><p className="mt-1 text-[11px] leading-5 text-zinc-500">在飞书消息上添加一个指定表情，就会以这条消息为上下文开启一轮私密 Agent。和上面的「随机表情回应」是两个方向：那个是替身发出反馈，这个是替你静默发起总结或分析。</p></div>
+                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="text-[14px] font-semibold text-zinc-900">表情触发</h3><span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">Beta</span></div><p className="mt-1 text-[11px] leading-5 text-zinc-500">在飞书消息上添加一个指定表情，就会以这条消息为上下文开启一轮 Agent。和上面的「随机表情回应」是两个方向：那个是替身发出反馈，这个是替你发起任务。</p></div>
               </div>
               <div className="mt-4 space-y-3">
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">启用表情触发</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">关闭时不因 reaction 开轮次；事件仍会到达，排障卡片会显示「表情触发未启用」，随机表情回应不受影响。</p></div>
-                    <Switch size="small" aria-label="启用表情触发" checked={reactionTriggerEnabled} onChange={setReactionTriggerEnabled}/>
-                  </div>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                    <span className="block text-[12px] font-medium text-zinc-800">触发 emoji</span>
-                    <ReactionEmojiPicker value={reactionTriggerEmoji} onChange={setReactionTriggerEmoji}/>
-                    {reactionEmojiIsCustom(reactionTriggerEmoji) && <p className="mt-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] leading-4 text-amber-700">当前值 <code className="font-mono">{reactionTriggerEmoji.trim()}</code> 不在常用集合里，保存会继续保留；也可以从列表里换一个。</p>}
-                    <p className="mt-1 text-[10px] leading-4 text-zinc-400">从常用飞书表情里选一个；已有配置如果不在列表，会显示为「当前配置」并保留。</p>
-                  </div>
-                  <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                    <p className="text-[12px] font-medium text-zinc-800">默认意图</p>
-                    <Segmented<LarkAvatarReactionIntent> value={reactionTriggerIntent} onChange={setReactionTriggerIntent} options={REACTION_INTENT_OPTIONS}/>
-                    <p className="mt-1 text-[10px] leading-4 text-zinc-400">自动处理：按目标消息直接处理；总结群消息 / 分析群问题：侧重梳理上下文要点、分歧与建议，绝不发回原群。</p>
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0 flex-1"><p className="text-[13px] font-medium text-zinc-900">启用表情触发</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">关闭时不因 reaction 开轮次；事件仍会到达，排障卡片会显示「表情触发未启用」，随机表情回应不受影响。</p></div>
+                    <Switch size="small" className="shrink-0" aria-label="启用表情触发" checked={reactionTriggerEnabled} onChange={checked => { setReactionTriggerEnabled(checked); if (checked && !reactionTriggerEmoji.trim()) setReactionTriggerEmoji(DEFAULT_LARK_AVATAR_REACTION_TRIGGER_EMOJI); }}/>
                   </div>
                 </div>
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                  <p className="text-[12px] font-medium text-zinc-800">默认路由</p>
-                  <Segmented<LarkAvatarReactionRoute> value={reactionTriggerRoute} onChange={setReactionTriggerRoute} options={REACTION_ROUTE_OPTIONS}/>
-                  <p className="mt-1 text-[10px] leading-4 text-zinc-400">主会话：静默派活到 AgentDock 主会话（推荐，不发群）；独立轮次：新开独立会话（不发群）；私密转发：发到上面配置的私密接收会话（不发原群）；先询问：在原群发卡片让你选。</p>
-                  {reactionTriggerRoute === 'ask' && <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] leading-4 text-amber-800">隐私提醒：「先询问」会在原飞书群发送交互卡片，群里所有人可见；含老板或外部人员的群请改用「主会话 / 独立轮次 / 私密转发」。</p>}
-                  {reactionTriggerRoute === 'private_chat' && !privateReplyChatId.trim() && <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] leading-4 text-amber-800">还没有配置上方的「私密结果接收会话」，保存后表情触发的私密转发会失败。</p>}
+                  <span className="block text-[13px] font-medium text-zinc-900">触发 emoji</span>
+                  <ReactionEmojiPicker value={reactionTriggerEmoji} onChange={setReactionTriggerEmoji}/>
+                  {reactionEmojiIsCustom(reactionTriggerEmoji) && <p className="mt-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-4 text-amber-700">当前值 <code className="font-mono">{reactionTriggerEmoji.trim()}</code> 不在常用集合里，保存会继续保留；也可以从列表里换一个。</p>}
+                  <p className="mt-1.5 text-[11px] leading-4 text-zinc-400">从常用飞书表情里选一个；开启表情触发时若为空会自动预填 OK，也可自由更换。</p>
                 </div>
                 <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0"><p className="text-[12px] font-medium text-zinc-800">忽略机器人添加的表情</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">其他机器人/应用加的表情不触发；替身自己加的反馈表情始终排除。</p></div>
-                    <Switch size="small" aria-label="忽略机器人添加的表情" checked={reactionTriggerIgnoreBots} onChange={setReactionTriggerIgnoreBots}/>
+                  <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-medium text-zinc-900">默认路由</p>
+                      <p className="mt-0.5 text-[11px] leading-5 text-zinc-500">主会话：派活到主会话；独立轮次：新开独立会话；先询问：卡片确认。</p>
+                    </div>
+                    <div className="w-full shrink-0 sm:w-[260px]">
+                      <Segmented<LarkAvatarReactionRoute> ariaLabel="表情触发默认路由" value={reactionTriggerRoute} onChange={setReactionTriggerRoute} options={LARK_AVATAR_REACTION_ROUTE_OPTIONS}/>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-zinc-200 px-3.5 py-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0 flex-1"><p className="text-[13px] font-medium text-zinc-900">忽略机器人添加的表情</p><p className="mt-0.5 text-[11px] leading-5 text-zinc-500">其他机器人/应用加的表情不触发；替身自己加的反馈表情始终排除。</p></div>
+                    <Switch size="small" className="shrink-0" aria-label="忽略机器人添加的表情" checked={reactionTriggerIgnoreBots} onChange={setReactionTriggerIgnoreBots}/>
                   </div>
                 </div>
                 {reactionTriggerEnabled && !reactionTriggerEmoji.trim() && <p className="rounded-xl bg-amber-50 px-3.5 py-2.5 text-[11px] leading-5 text-amber-700">还没有填触发 emoji，保存后也不会触发。</p>}
                 <div className="rounded-xl bg-zinc-50 px-3.5 py-2.5 text-[11px] leading-5 text-zinc-500">
-                  reaction 事件由已配置的飞书机器人投递：机器人需要在目标会话里，并有消息读取权限；飞书只有 reaction 事件，没有 Pin 事件。如果目标群不方便拉机器人（如老板群），可直接在「会话」页使用「私密分析」，无需机器人进群。
+                  reaction 事件由已配置的飞书机器人投递：机器人需要在目标会话里，并有消息读取权限；飞书只有 reaction 事件，没有 Pin 事件。
                 </div>
               </div>
             </section>
@@ -1251,15 +1499,35 @@ export function LarkAvatarPanel() {
                     : '还没有收到 reaction 事件。'}
                   {' '}若已在飞书加过表情：确认机器人已加入该会话、应用已订阅 <code className="rounded bg-zinc-100 px-1 font-mono text-[10px]">im.message.reaction.created_v1</code>、且替身监听没有暂停。
                 </div>}
-                {(reactionDiagnostics.data?.triggers?.length ?? 0) > 0 && <div className="overflow-hidden rounded-xl border border-zinc-200">
-                  <div className="grid grid-cols-[1fr_auto] gap-2 border-b border-zinc-100 bg-zinc-50/70 px-3 py-1.5 text-[10px] font-medium text-zinc-400"><span>最近账本</span><span>状态</span></div>
-                  {reactionDiagnostics.data!.triggers.slice(0, 5).map(trigger => <div key={trigger.key} className="grid grid-cols-[1fr_auto] items-start gap-2 border-b border-zinc-100 px-3 py-2 last:border-b-0">
-                    <div className="min-w-0">
-                      <p className="truncate text-[11px] text-zinc-700">{trigger.emoji} · {trigger.route} · {trigger.operatorType ?? 'unknown'}/{trigger.operatorId ?? '?'}</p>
-                      <p className="break-all font-mono text-[10px] leading-4 text-zinc-400">{trigger.messageId}{trigger.reason ? ` · ${trigger.reason}` : ''}</p>
-                    </div>
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] ${trigger.state === 'dispatched' ? 'bg-emerald-50 text-emerald-700' : trigger.state === 'failed' ? 'bg-red-50 text-red-700' : trigger.state === 'ignored' ? 'bg-zinc-100 text-zinc-500' : 'bg-amber-50 text-amber-700'}`}>{reactionStateLabel(trigger.state)}</span>
-                  </div>)}
+                {(reactionDiagnostics.data?.triggers?.length ?? 0) > 0 && <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-left text-[11px]">
+                      <thead>
+                        <tr className="border-b border-zinc-200/80 bg-zinc-50/80 text-[11px] font-medium text-zinc-500">
+                          <th className="whitespace-nowrap px-3 py-2 font-medium">表情 · 路由</th>
+                          <th className="px-3 py-2 font-medium">消息与说明</th>
+                          <th className="whitespace-nowrap px-3 py-2 text-right font-medium">状态</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-100">
+                        {reactionDiagnostics.data!.triggers.slice(0, 5).map(trigger => (
+                          <tr key={trigger.key} className="transition-colors hover:bg-zinc-50/80">
+                            <td className="whitespace-nowrap px-3 py-2 align-middle">
+                              <div className="font-medium text-zinc-800">{trigger.emoji}</div>
+                              <div className="text-[10px] text-zinc-400">{trigger.route} · {trigger.operatorType ?? 'unknown'}</div>
+                            </td>
+                            <td className="max-w-[320px] px-3 py-2 align-middle">
+                              <div className="truncate font-mono text-[10px] text-zinc-600">{trigger.messageId}</div>
+                              {trigger.reason && <div className="mt-0.5 truncate text-[10px] text-zinc-400">{trigger.reason}</div>}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2 text-right align-middle">
+                              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${trigger.state === 'dispatched' ? 'bg-emerald-50 text-emerald-700' : trigger.state === 'failed' ? 'bg-red-50 text-red-700' : trigger.state === 'ignored' ? 'bg-zinc-100 text-zinc-500' : 'bg-amber-50 text-amber-700'}`}>{reactionStateLabel(trigger.state)}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>}
               </div>
             </section>
@@ -1271,10 +1539,12 @@ export function LarkAvatarPanel() {
 
             </div>
           </div>
-          <div className="shrink-0 border-t border-zinc-200/80 bg-white px-4 py-3">
-            <div className="mx-auto flex max-w-[820px] flex-wrap items-center justify-between gap-3">
-              <p className="text-[11px] text-zinc-500">修改后点击保存，后续消息立即使用新规则。</p>
-              <Button type="primary" onClick={() => saveConfig.mutate()} className="!rounded-lg !bg-zinc-900">保存配置</Button>
+          <div className="shrink-0 border-t border-zinc-200/80 bg-white px-3.5 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-3">
+            <div className="mx-auto flex max-w-[820px] flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <p className={`text-[11px] ${retentionInputError ? 'text-red-600' : 'text-zinc-500'}`}>
+                {retentionInputError || '修改后点击保存，新规则立即生效。'}
+              </p>
+              <Button type="primary" loading={saveConfig.isPending} disabled={Boolean(retentionInputError)} onClick={() => saveConfig.mutate()} className="!h-9 !w-full !rounded-lg !bg-zinc-900 sm:!h-auto sm:!w-auto">保存配置</Button>
             </div>
           </div>
         </div>

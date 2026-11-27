@@ -5,7 +5,6 @@ describe('reaction diagnostics labels', () => {
   it('explains every route outcome', () => {
     expect(reactionOutcomeLabel('triggered:main')).toBe('已发到主会话');
     expect(reactionOutcomeLabel('triggered:independent')).toBe('已开独立轮次');
-    expect(reactionOutcomeLabel('triggered:private_chat')).toBe('已私密转发到指定会话');
     expect(reactionOutcomeLabel('awaiting_route:ask')).toBe('已发询问卡片，等待选择');
     expect(reactionOutcomeLabel('route:main')).toBe('卡片选择后已执行');
     expect(reactionOutcomeLabel('route:failed')).toBe('卡片选择后执行失败');
@@ -20,8 +19,6 @@ describe('reaction diagnostics labels', () => {
     expect(reactionOutcomeLabel('ignored:operator_identity_unresolved')).toContain('user_id/union_id');
     expect(reactionOutcomeLabel('failed:permission_denied')).toBe('失败：机器人没有读取消息权限');
     expect(reactionOutcomeLabel('failed:no_main_session')).toBe('失败：还没有主会话');
-    expect(reactionOutcomeLabel('failed:private_chat_not_configured')).toBe('失败：未配置私密接收会话');
-    expect(reactionOutcomeLabel('failed:private_chat_same_as_target')).toContain('防泄密');
     expect(reactionOutcomeLabel('failed:dispatch_uncertain')).toContain('无法确认');
     expect(reactionOutcomeLabel('something-new')).toBe('something-new');
     expect(reactionOutcomeLabel(undefined)).toBe('未知');

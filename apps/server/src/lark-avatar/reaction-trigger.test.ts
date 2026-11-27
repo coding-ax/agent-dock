@@ -1,15 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { larkReactionEmojiOptions } from '@agent-dock/agent-dock-shared';
 import {
-  buildPrivateAnalysisPrompt,
   buildReactionPrompt,
   evaluateReactionTrigger,
-  formatPrivateForwardMessage,
-  intentFromUnknown,
   isReactionTriggerId,
   normalizeReactionEmoji,
-  privateAnalysisDeliveryFromUnknown,
-  privateAnalysisModeFromUnknown,
   reactionSummary,
   reactionTriggerKey,
   routeFromUnknown
@@ -140,112 +135,14 @@ describe('buildReactionPrompt', () => {
     expect(prompt).toContain('最近 1 条消息');
     expect(reactionSummary(message)).toBe('张三：把发布说明整理一下');
   });
-
-  it('includes intent guidance and private_chat forwarding boundary', () => {
-    const summaryPrompt = buildReactionPrompt({
-      emoji: 'THUMBSUP',
-      route: 'private_chat',
-      intent: 'summary',
-      target: message,
-      context: [message]
-    });
-    expect(summaryPrompt).toContain('任务意图（私密总结）');
-    expect(summaryPrompt).toContain('私密转发到用户指定的私密飞书会话');
-    expect(summaryPrompt).toContain('严禁向原飞书群发送任何消息');
-
-    const analyzePrompt = buildReactionPrompt({
-      emoji: 'THUMBSUP',
-      route: 'main',
-      intent: 'analyze',
-      target: message,
-      context: [message]
-    });
-    expect(analyzePrompt).toContain('任务意图（私密分析）');
-  });
 });
 
-describe('buildPrivateAnalysisPrompt', () => {
-  const sample = [{
-    messageId: 'om_1',
-    chatId: 'oc_boss_group',
-    chatName: '产研核心群',
-    chatType: 'group',
-    senderId: 'ou_boss',
-    senderName: '老板',
-    content: '这周把发布节奏再收紧一下',
-    messageType: 'text',
-    createTime: '1700000000000'
-  }];
-
-  it('frames summary, analyze and custom modes with strict no-group-reply boundary', () => {
-    const summary = buildPrivateAnalysisPrompt({
-      mode: 'summary',
-      delivery: 'main',
-      chatId: 'oc_boss_group',
-      chatName: '产研核心群',
-      chatType: 'group',
-      context: sample
-    });
-    expect(summary).toContain('私密群聊分析');
-    expect(summary).toContain('产研核心群');
-    expect(summary).toContain('老板: 这周把发布节奏再收紧一下');
-    expect(summary).toContain('严禁向原飞书群发送任何消息');
-
-    const analyze = buildPrivateAnalysisPrompt({
-      mode: 'analyze',
-      delivery: 'private_chat',
-      chatId: 'oc_boss_group',
-      chatName: '产研核心群',
-      chatType: 'group',
-      prompt: '重点看排期风险',
-      context: sample
-    });
-    expect(analyze).toContain('拆解核心痛点/诉求');
-    expect(analyze).toContain('重点看排期风险');
-    expect(analyze).toContain('飞书私密接收会话');
-
-    const custom = buildPrivateAnalysisPrompt({
-      mode: 'custom',
-      delivery: 'independent',
-      chatId: 'oc_boss_group',
-      prompt: '帮我起草一份不卑不亢的回复',
-      context: []
-    });
-    expect(custom).toContain('帮我起草一份不卑不亢的回复');
-    expect(custom).toContain('当前未拉取到文字消息');
-  });
-
-  it('formats forwarded private message with source group label', () => {
-    expect(formatPrivateForwardMessage({
-      chatId: 'oc_boss_group',
-      chatName: '产研核心群',
-      modeLabel: '总结群消息',
-      body: '1. 结论 A\n2. 待办 B'
-    })).toBe('【总结群消息 · 产研核心群】\n1. 结论 A\n2. 待办 B');
-  });
-});
-
-describe('routeFromUnknown and intent/mode helpers', () => {
-  it('accepts only known routes, intents, modes and deliveries', () => {
+describe('routeFromUnknown', () => {
+  it('accepts only supported reaction routes and rejects removed private_chat', () => {
     expect(routeFromUnknown('ask')).toBe('ask');
     expect(routeFromUnknown('main')).toBe('main');
     expect(routeFromUnknown('independent')).toBe('independent');
-    expect(routeFromUnknown('private_chat')).toBe('private_chat');
+    expect(routeFromUnknown('private_chat')).toBeUndefined();
     expect(routeFromUnknown('nope')).toBeUndefined();
-
-    expect(intentFromUnknown('auto')).toBe('auto');
-    expect(intentFromUnknown('summary')).toBe('summary');
-    expect(intentFromUnknown('analyze')).toBe('analyze');
-    expect(intentFromUnknown('other')).toBeUndefined();
-
-    expect(privateAnalysisModeFromUnknown('summary')).toBe('summary');
-    expect(privateAnalysisModeFromUnknown('analyze')).toBe('analyze');
-    expect(privateAnalysisModeFromUnknown('custom')).toBe('custom');
-    expect(privateAnalysisModeFromUnknown('x')).toBeUndefined();
-
-    expect(privateAnalysisDeliveryFromUnknown('main')).toBe('main');
-    expect(privateAnalysisDeliveryFromUnknown('independent')).toBe('independent');
-    expect(privateAnalysisDeliveryFromUnknown('private_chat')).toBe('private_chat');
-    expect(privateAnalysisDeliveryFromUnknown('ask')).toBeUndefined();
   });
 });

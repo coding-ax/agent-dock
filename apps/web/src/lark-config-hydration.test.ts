@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_NEW_LARK_BOT_FORM } from './lark-config-form';
 
 /**
  * useSyncFormFromRemote 的触发口径。hook 本身依赖 React，node 环境跑不了，
@@ -29,5 +30,18 @@ describe('lark config form hydration gate', () => {
 
   it('waits before the first selection is decided', () => {
     expect(shouldHydrate(hydrationSource(true, null))).toBe(false);
+  });
+
+  it('uses practical defaults for newly created Lark bot drafts without overriding saved bots', () => {
+    expect(DEFAULT_NEW_LARK_BOT_FORM).toMatchObject({
+      listening: true,
+      groupToolsEnabled: true,
+      groupToolsAllowSend: true,
+      groupSessionScope: 'chat',
+      peerBotsAllowed: true,
+      quietReply: false,
+      pushIntervalMs: 1_000,
+      gateEnabled: false
+    });
   });
 });

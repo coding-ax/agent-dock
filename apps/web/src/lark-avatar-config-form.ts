@@ -1,4 +1,67 @@
+import type { LarkAvatarReactionRoute, LarkAvatarReplyForwardMode } from './api';
 import { withSavedOption } from './lark-config-form';
+
+export const DEFAULT_LARK_AVATAR_REPLY_FORWARD_MODE: LarkAvatarReplyForwardMode = 'final_only';
+export const DEFAULT_LARK_AVATAR_REACTION_TRIGGER_EMOJI = 'OK';
+
+export const LARK_AVATAR_REACTION_ROUTE_OPTIONS: Array<{ value: LarkAvatarReactionRoute; label: string }> = [
+  { value: 'main', label: '主会话' },
+  { value: 'independent', label: '独立轮次' },
+  { value: 'ask', label: '先询问' }
+];
+
+export function normalizeLarkAvatarReactionRoute(value: unknown): LarkAvatarReactionRoute {
+  return value === 'ask' || value === 'independent' || value === 'main' ? value : 'main';
+}
+
+export interface LarkAvatarReplyForwardOption {
+  value: LarkAvatarReplyForwardMode;
+  label: string;
+  cardSummary: string;
+  description: string;
+  shortHint: string;
+  badge?: string;
+}
+
+export const LARK_AVATAR_REPLY_FORWARD_OPTIONS: readonly LarkAvatarReplyForwardOption[] = [
+  {
+    value: 'all',
+    label: '回复所有 AgentText',
+    cardSummary: '过程文本与最终结果逐条发回',
+    description: '将 Agent 输出的每一段过程文本与最终结果逐条发回飞书，适合需要实时跟进执行进展的场景。',
+    shortHint: '所有 AgentText 会直接以你的身份发回原会话'
+  },
+  {
+    value: 'final_only',
+    label: '仅回复最终回复',
+    cardSummary: '屏蔽过程刷屏，只发最终答复',
+    description: '屏蔽中间过程 AgentText，仅在整轮 Agent 完成后把最终答复发回飞书（默认推荐；无最终文本或主动停止时不发空消息）。',
+    shortHint: '仅在整轮完成后把最终回复发回原会话',
+    badge: '默认'
+  },
+  {
+    value: 'none',
+    label: '不在飞书回复',
+    cardSummary: '仅在本地执行留存，不发飞书',
+    description: 'Agent 照常在 AgentDock 会话中运行并留存完整结果，不向飞书发送任何文本或回复消息。',
+    shortHint: '仅在 AgentDock 会话内运行并留存结果，不向飞书回复',
+    badge: '仅本地'
+  }
+];
+
+export const LARK_AVATAR_REPLY_FORWARD_SUMMARY =
+  '仅回复最终回复（默认）：安静不刷屏；回复所有 AgentText：逐条转发过程与结果；不在飞书回复：仅在 AgentDock 内留存、不发飞书。';
+
+export function normalizeLarkAvatarReplyForwardMode(value: unknown): LarkAvatarReplyForwardMode {
+  return value === 'all' || value === 'final_only' || value === 'none'
+    ? value
+    : DEFAULT_LARK_AVATAR_REPLY_FORWARD_MODE;
+}
+
+export function describeLarkAvatarReplyForwardMode(mode: LarkAvatarReplyForwardMode): LarkAvatarReplyForwardOption {
+  return LARK_AVATAR_REPLY_FORWARD_OPTIONS.find(option => option.value === mode)
+    ?? LARK_AVATAR_REPLY_FORWARD_OPTIONS[0]!;
+}
 
 export interface LarkAvatarAgentOption {
   value: string;

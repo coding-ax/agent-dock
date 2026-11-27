@@ -2049,6 +2049,22 @@ describe('Lark trace rendering', () => {
     expect(elements.some((element: any) => element.tag === 'markdown' && element.content === '在的。')).toBe(true);
   });
 
+  it('classifies agent-dock file reads and browser scripts accurately instead of mislabeling them as subagent calls', () => {
+    const elements = renderLarkCardElements([
+      agentEvent(1, 'tool_call', { id: 'f1', name: 'File packages/agent-runtime/src/index.ts', input: { Path: '/repo/packages/agent-runtime/src/index.ts' }, status: 'completed' }),
+      agentEvent(2, 'tool_call', { id: 'b1', name: "ego-browser nodejs <<'EOF'\nconst task = await taskSpace(42);\nEOF", input: { CommandLine: "ego-browser nodejs <<'EOF'\nconst task = await taskSpace(42);\nEOF" }, status: 'completed' }),
+      agentEvent(3, 'tool_call', { id: 's1', name: 'Run invoke_subagent', input: { TypeName: 'research', Role: 'Codebase Researcher', Prompt: 'Inspect' }, status: 'completed' })
+    ], config, false);
+    const tools: any[] = cardElements(elements).filter(element => element.element_id?.startsWith('trace_tool_'));
+    expect(tools).toHaveLength(3);
+    expect(tools[0].header.title.content).toContain('读取文件');
+    expect(tools[0].header.title.icon.token).toBe('file-link-text_outlined');
+    expect(tools[1].header.title.content).toContain('操作浏览器');
+    expect(tools[1].header.title.icon.token).toBe('web-card_outlined');
+    expect(tools[2].header.title.content).toContain('调用子 Agent');
+    expect(tools[2].header.title.icon.token).toBe('robot_outlined');
+  });
+
   it('drops the cursor-agent stream error instead of folding it into the final reply', () => {
     const elements = renderLarkCardElements([
       agentEvent(1, 'text', { text: '你好，有什么需要帮忙的？' }),

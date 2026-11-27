@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { RuntimeError } from '@agent-dock/agent-dock-shared';
 import { LarkAvatarService, type LarkReactionPort } from './service.js';
 import { LarkAvatarResolutionError, larkAvatarResolutionHttpStatus, type LarkChatMatchMode } from './id-resolution.js';
-import type { LarkRegionName } from './types.js';
-import type { LarkReactionIntent, LarkReactionRoute } from './reaction-trigger.js';
+import type { LarkAvatarReplyForwardMode, LarkRegionName } from './types.js';
+import type { LarkReactionRoute } from './reaction-trigger.js';
 
 export interface LarkAvatarRouteOptions {
   /**
@@ -32,21 +32,9 @@ export function registerLarkAvatarRoutes(app: FastifyInstance, service: LarkAvat
   app.get('/api/lark-avatar/status', async () => service.status());
   app.get('/api/lark-avatar/config', async () => service.publicState() ?? null);
   app.get('/api/lark-avatar/chats', async () => service.availableChats());
-  app.put<{ Body: { region?: LarkRegionName; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: LarkReactionRoute; reactionTriggerIntent?: LarkReactionIntent; reactionTriggerIgnoreBots?: boolean; privateReplyChatId?: string; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string } }>('/api/lark-avatar/config', async (request, reply) => {
+  app.put<{ Body: { region?: LarkRegionName; triggerPrefix?: string; contextMessages?: number; contextScope?: 'anchor' | 'chat'; replyInTopic?: boolean; replyMode?: 'direct' | 'quote' | 'thread'; replyForwardMode?: LarkAvatarReplyForwardMode; emojiReactions?: boolean; reactionTriggerEnabled?: boolean; reactionTriggerEmoji?: string; reactionTriggerRoute?: LarkReactionRoute; reactionTriggerIgnoreBots?: boolean; replySignature?: string; agentTimeoutSeconds?: number; listening?: boolean; listenChats?: string[]; inboxMaxItems?: number; inboxCleanupWarnThreshold?: number; allowedSenders?: string[]; agentId?: string; model?: string; reasoningEffort?: string; workspace?: string } }>('/api/lark-avatar/config', async (request, reply) => {
     try { return await service.saveConfig(request.body ?? {}); }
     catch (error) { return handleError(reply, error); }
-  });
-  app.post<{ Body: { chatId?: string; mode?: string; prompt?: string; contextMessages?: number; delivery?: string } }>('/api/lark-avatar/private-analyze', async (request, reply) => {
-    try {
-      const body = request.body ?? {};
-      return await service.analyzeChatPrivately({
-        chatId: body.chatId ?? '',
-        ...(body.mode !== undefined ? { mode: body.mode } : {}),
-        ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
-        ...(body.contextMessages !== undefined ? { contextMessages: body.contextMessages } : {}),
-        ...(body.delivery !== undefined ? { delivery: body.delivery } : {})
-      });
-    } catch (error) { return handleError(reply, error); }
   });
   app.post<{ Body: { region?: LarkRegionName } }>('/api/lark-avatar/login/qr', async request =>
     service.startQrLogin(request.body?.region)
@@ -118,8 +106,17 @@ export function registerLarkAvatarRoutes(app: FastifyInstance, service: LarkAvat
     try { return service.setListening(enabled); }
     catch (error) { return handleError(reply, error); }
   });
-  app.get<{ Querystring: { state?: string; tier?: string } }>('/api/lark-avatar/inbox', async request =>
-    service.inbox(request.query.state?.split(',').filter(Boolean), request.query.tier));
+  app.get<{ Querystring: { state?: string; tier?: string; limit?: string } }>('/api/lark-avatar/inbox', async request => {
+    const requested = request.query.limit !== undefined ? Number(request.query.limit) : undefined;
+    const limit = requested !== undefined && Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : undefined;
+    return service.inbox(request.query.state?.split(',').filter(Boolean), request.query.tier, limit);
+  });
+  app.post<{ Body: { keepLatest?: unknown } }>('/api/lark-avatar/inbox/cleanup', async (request, reply) => {
+    try {
+      const keepLatest = request.body?.keepLatest;
+      return service.cleanupInbox(keepLatest === undefined ? {} : { keepLatest: keepLatest as number });
+    } catch (error) { return handleError(reply, error); }
+  });
   app.get<{ Querystring: { limit?: string } }>('/api/lark-avatar/reaction-triggers', async request => {
     const requested = Number(request.query.limit);
     const limit = Number.isFinite(requested) ? Math.min(100, Math.max(1, Math.floor(requested))) : 20;

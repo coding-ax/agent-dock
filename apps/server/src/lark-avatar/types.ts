@@ -1,4 +1,4 @@
-import type { LarkReactionIntent, LarkReactionRoute } from './reaction-trigger.js';
+import type { LarkReactionRoute } from './reaction-trigger.js';
 
 export const inboxTiers = ['action', 'fyi', 'noise'] as const;
 export type InboxTier = (typeof inboxTiers)[number];
@@ -17,6 +17,9 @@ export type LarkRegionName = (typeof larkRegionNames)[number];
 
 export const replyModes = ['direct', 'quote', 'thread'] as const;
 export type LarkAvatarReplyMode = (typeof replyModes)[number];
+
+export const replyForwardModes = ['all', 'final_only', 'none'] as const;
+export type LarkAvatarReplyForwardMode = (typeof replyForwardModes)[number];
 
 export const contextScopes = ['anchor', 'chat'] as const;
 export type LarkAvatarContextScope = (typeof contextScopes)[number];
@@ -66,20 +69,18 @@ export interface LarkAvatarConfig {
   replyInTopic: boolean;
   /** 主会话消息的回复方式：直接发送、引用回复或开话题回复。 */
   replyMode: LarkAvatarReplyMode;
+  /** Agent 输出转发到飞书的策略：all 转发每段 AgentText；final_only 仅发最终回复；none 不在飞书回复。 */
+  replyForwardMode: LarkAvatarReplyForwardMode;
   /** 触发后先在原消息上加 2–3 个随机飞书表情回应。 */
   emojiReactions: boolean;
   /** 用飞书 reaction 触发 Agent 轮次（与 emojiReactions 的出站反馈是两件事）。 */
   reactionTriggerEnabled: boolean;
   /** 触发用的单个飞书 emoji_type，例如 THUMBSUP。 */
   reactionTriggerEmoji: string;
-  /** 命中后的默认路由：发到主会话、独立轮次、私密转发到指定飞书会话、或先询问。 */
+  /** 命中后的默认路由：发到主会话、独立轮次或先询问。 */
   reactionTriggerRoute: LarkReactionRoute;
-  /** 表情触发的默认任务意图：自动处理、私密总结群消息、或私密分析群问题。 */
-  reactionTriggerIntent: LarkReactionIntent;
   /** 忽略机器人/应用添加的表情，默认 true。 */
   reactionTriggerIgnoreBots: boolean;
-  /** 私密分析/表情私密转发的目标飞书会话 ID（如个人私聊或私密群，绝不发往原群）。 */
-  privateReplyChatId: string;
   /** 加在 Agent 发出的每条消息末尾。 */
   replySignature: string;
   /** Agent 单轮超时秒数；0 表示不限制。 */
@@ -87,6 +88,10 @@ export interface LarkAvatarConfig {
   /** 是否接收 WebSocket 推送和定时补拉；关闭后保留登录凭证。 */
   listening: boolean;
   listenChats: string[];
+  /** 最近消息面板最多保留条数；默认 60，设为 0 表示不限制。 */
+  inboxMaxItems: number;
+  /** 打开飞书替身面板时，消息记录超过该条数则提醒清理；默认 200，设为 0 表示关闭提醒。 */
+  inboxCleanupWarnThreshold: number;
   /** 兼容旧配置；触发权限固定为本人，其他发送者只作为上下文。 */
   allowedSenders: string[];
   /** 触发时使用的 Agent；为空时跟随服务默认值。 */
@@ -117,17 +122,18 @@ export interface PublicLarkAvatarConfig {
   contextScope: LarkAvatarContextScope;
   replyInTopic: boolean;
   replyMode: LarkAvatarReplyMode;
+  replyForwardMode: LarkAvatarReplyForwardMode;
   emojiReactions: boolean;
   reactionTriggerEnabled: boolean;
   reactionTriggerEmoji: string;
   reactionTriggerRoute: LarkReactionRoute;
-  reactionTriggerIntent: LarkReactionIntent;
   reactionTriggerIgnoreBots: boolean;
-  privateReplyChatId: string;
   replySignature: string;
   agentTimeoutSeconds: number;
   listening: boolean;
   listenChats: string[];
+  inboxMaxItems: number;
+  inboxCleanupWarnThreshold: number;
   allowedSenders: string[];
   agentId: string;
   model: string;
@@ -137,6 +143,13 @@ export interface PublicLarkAvatarConfig {
 
 export interface PublicLarkAvatarState extends Omit<LarkAvatarState, 'config'> {
   config: PublicLarkAvatarConfig;
+}
+
+export interface LarkAvatarRetentionStatus {
+  inboxMaxItems: number;
+  inboxCleanupWarnThreshold: number;
+  inboxCount: number;
+  shouldWarnCleanup: boolean;
 }
 
 export interface LarkAvatarLoginSnapshot {

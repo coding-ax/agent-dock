@@ -139,6 +139,8 @@ export interface PublicLarkConfigCollection {
 }
 
 export const defaultLarkPushIntervalMs = 1_000;
+/** 新建飞书机器人默认群主流消息全群共享；历史已落盘但缺省该字段的旧记录在 normalizeStoredConfig 仍保留 user 兼容。 */
+export const defaultLarkGroupSessionScope: StoredLarkConfig['groupSessionScope'] = 'chat';
 export { defaultLarkTraceLimit } from '@agent-dock/agent-dock-shared';
 export const defaultHighRiskPattern = String.raw`(?:^|[\s;&|])(?:sudo|rm|shred|dd|mkfs|diskutil|launchctl|kill|pkill|lark-?cli|larkcli|ssh|scp|rsync|osascript)\b|\bgit\s+(?:push|reset|clean|checkout)\b|\b(?:npm|pnpm|yarn)\s+(?:publish|unpublish)\b|\bcurl\b[^\n]*(?:-X|--request)\s*(?:POST|PUT|PATCH|DELETE)\b`;
 
@@ -342,7 +344,9 @@ async function saveLarkConfigAttempt(repository: ConfigRepository | undefined, a
   const listening = input.listening ?? current?.listening ?? false;
   const groupToolsEnabled = input.groupToolsEnabled ?? current?.groupToolsEnabled ?? false;
   const groupToolsAllowSend = groupToolsEnabled && (input.groupToolsAllowSend ?? current?.groupToolsAllowSend ?? false);
-  const groupSessionScope = input.groupSessionScope === 'chat' ? 'chat' : (current?.groupSessionScope ?? 'user');
+  const groupSessionScope = input.groupSessionScope === 'chat' || input.groupSessionScope === 'user'
+    ? input.groupSessionScope
+    : (current?.groupSessionScope ?? defaultLarkGroupSessionScope);
   const pushIntervalMs = input.pushIntervalMs ?? current?.pushIntervalMs ?? defaultLarkPushIntervalMs;
   const traceLimit = input.traceLimit === undefined ? current?.traceLimit ?? defaultLarkTraceLimit : input.traceLimit ?? defaultLarkTraceLimit;
   const hideTraceOnComplete = input.hideTraceOnComplete ?? current?.hideTraceOnComplete ?? true;
