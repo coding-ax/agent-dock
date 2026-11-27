@@ -172,12 +172,22 @@ export interface LarkGroupToolClient {
   replyImage(input: { messageId: string; imageKey: string; replyInThread?: boolean; idempotencyKey?: string }): Promise<LarkMessageResult>;
 }
 
+export interface LarkGroupSendNotification {
+  sessionId: string;
+  appId: string;
+  chatId: string;
+  messageId: string;
+  timestamp: number;
+}
+
 export interface LarkAgentToolsOptions {
   env?: NodeJS.ProcessEnv;
   fetcher?: typeof globalThis.fetch;
   clientFactory?: (config: StoredLarkConfig) => LarkGroupToolClient;
   pollIntervalMs?: number;
   groupToolsCommand?: string;
+  /** Agent 通过 group send 成功向群内发消息后的旁路通知（用于全轮次同步同轮去重与防自激循环）。 */
+  onGroupSent?: (record: LarkGroupSendNotification) => void;
 }
 
 type ToolContext = LarkAgentSessionBinding & { config: StoredLarkConfig; client: LarkGroupToolClient };
@@ -461,7 +471,7 @@ export class LarkAgentToolsService {
     const config = await readLarkConfig(this.configs, binding.appId);
     const full = !config?.groupToolsEnabled
       ? larkCredentialSecretReminder
-      : larkGroupToolsPrompt(config.groupToolsAllowSend, this.options.groupToolsCommand);
+      : larkGroupToolsPrompt(config.groupToolsAllowSend, this.options.groupToolsCommand, config.turnSync?.enabled !== false);
     if (this.injectedPrompts.get(session.id) === full) {
       const reminder = !config?.groupToolsEnabled
         ? larkCredentialSecretReminderShort
@@ -716,7 +726,17 @@ export class LarkAgentToolsService {
       const original = await this.authorized(context, 'reply', () => context.client.getMessage(replyTo));
       if (original.chatId !== context.chatId) throw new AgentGroupToolError('GROUP_REPLY_OUT_OF_SCOPE', 'replyTo 不属于当前飞书群，已拒绝跨群回复。', 403);
     }
-    const deliver = (send: () => Promise<LarkMessageResult>, action: 'send' | 'reply') => this.authorized(context, action, send);
+    const deliver = async (send: () => Promise<LarkMessageResult>, action: 'send' | 'reply') => {
+      const result = await this.authorized(context, action, send);
+      this.options.onGroupSent?.({
+        sessionId: context.sessionId,
+        appId: context.appId,
+        chatId: context.chatId,
+        messageId: result.messageId,
+        timestamp: Date.now()
+      });
+      return result;
+    };
 
     // 只要出现 at（--to 或内联）、或包含图片，一律走 post（image 也可内嵌于 post 的 img 元素）。
     const needPost = Boolean(mentionUserId || atTags.length || imgTags.length);
@@ -761,11 +781,11 @@ export class LarkAgentToolsService {
 
     // 到这里必然没有任何 mention 也没有图片，纯文本直接发送。
     if (replyTo) {
-      return this.authorized(context, 'reply', () => context.client.replyText({
+      return deliver(() => context.client.replyText({
         messageId: replyTo, text, ...(input.inThread ? { replyInThread: true } : {}), idempotencyKey
-      }));
+      }), 'reply');
     }
-    return this.authorized(context, 'send', () => context.client.sendText({ chatId: context.chatId, text, idempotencyKey }));
+    return deliver(() => context.client.sendText({ chatId: context.chatId, text, idempotencyKey }), 'send');
   }
 
   async replyMode(token: string | undefined, input: { mode?: AgentReplyMode }) {
@@ -787,7 +807,7 @@ export const agentDockGroupToolsCommand = (entrypoint: string, execPath = proces
   return `${shellQuote(execPath)}${loader ? ` --import ${shellQuote(loader)}` : ''} ${shellQuote(absoluteEntrypoint)}`;
 };
 
-export const larkGroupToolsPrompt = (allowSend: boolean, command = 'agent-dock') => `[AgentDock 飞书会话工具]
+export const larkGroupToolsPrompt = (allowSend: boolean, command = 'agent-dock', turnSyncEnabled = false) => `[AgentDock 飞书会话工具]
 ${allowSend ? '当前会话可读取和发送' : '当前会话可只读访问'}当前飞书会话的消息。必须使用以下当前服务绑定命令，不要改用 PATH 中的其他 agent-dock：
 - ${command} group self
 - ${command} group messages --limit 20 [--after <cursor>]
@@ -802,7 +822,7 @@ ${allowSend ? `- ${command} group send <内容> [--to <Agent/成员名称、appI
 - ${allowSend ? `需要其他 Agent 协助时先调用 peers 或 bots；返回的机器人中，带 agentId 字段的是本 AgentDock 实例管理的可协作 Agent，不带 agentId 的是群内其他机器人。需要 @群内人类用户时先调用 members。再用 send --to 明确目标；名称重名时使用 openId（ou_ 开头），不要臆测。openId 是唯一能生效的 @ 目标：cli_ 开头的 appId 只能用于识别机器人，不能用于 @（飞书不接受 appId 作为 at 目标），传它会被拒绝并提示改用 openId。
 - 发送前先判断消息归属：延续某条提问、回答某个话题或补充该话题结论时，使用 send --reply-to <该消息的 om_* messageId> --in-thread；独立公告、新任务或不应归入原讨论的内容，使用 send 且不要传 --reply-to/--in-thread。不要因为“能回复”就机械回复，也不要把 omt_* threadId 当作 reply-to。
 - send 支持图片：在内容里用 <img src="..."/>（也认 <image>）即可。src 可以是本地文件绝对路径、相对服务工作区的路径、http(s) 图片 URL，或 data:image/png;base64,... 数据 URI。条消息内可同时写文字与多张 <img>（自动混排）；如果整条内容只有一张 <img>，会单独作为一张图片消息发送。
-- 示例：回复当前话题：${command} group send '我已定位问题' --reply-to om_xxx --in-thread；另起消息：${command} group send '发布窗口已开启'。` : '可以发现和读取同群 Agent 与成员，但不得尝试发送、回复或 @交接。'}
+- 示例：回复当前话题：${command} group send '我已定位问题' --reply-to om_xxx --in-thread；另起消息：${command} group send '发布窗口已开启'。${turnSyncEnabled ? '\n- 绑定群全轮次同步已开启：系统督办、网页对话、定时任务等非飞书触发轮次会自动同步到绑定群主线程，正常汇报无需再手动调用 group send 重复发送同一份摘要（需要 @ 成员或发送图片时再调用 group send，服务端会自动去重）。' : ''}` : '可以发现和读取同群 Agent 与成员，但不得尝试发送、回复或 @交接。'}
 - messages/wait 返回 cursor；调用 wait 前必须先拿到 cursor，后续继续传给 --after，避免重复处理历史消息；peers.securityLimited=true 表示发现结果不完整，应明确告知用户。不要无目的地无限轮询。
 - 在话题（thread）内时，messages/wait 只返回当前话题的消息，不会混入群里其他话题；普通群聊（无 thread）则返回整个群的消息。
 - 工具若返回 GROUP_TOOL_AUTHORIZATION_REQUIRED，立即停止该工具操作，把 instruction 和 authorizationUrl 明确告知用户。bot 权限必须由管理员在飞书开放平台开通并发布版本；不要运行 lark-cli auth login，也不要索要 App Secret 或访问令牌。

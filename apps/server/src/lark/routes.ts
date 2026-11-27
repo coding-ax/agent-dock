@@ -17,9 +17,17 @@ import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
 import { createLarkCardService, LarkServiceError, larkConfigurationStatus, type LarkBotConfigInput, type LarkCardService, type LarkSendInput, type LarkUpdateInput } from './service.js';
 import { parseLarkMessageContent } from './message-content.js';
 import { isLarkOperatorAllowed, type OperatorAccessInput } from './access-config.js';
-import { defaultHighRiskPattern, deleteLarkConfig, publicLarkConfigs, readLarkConfig, readLarkConfigs, saveLarkConfig, type SaveLarkConfigInput } from './config.js';
+import { defaultHighRiskPattern, deleteLarkConfig, normalizeLarkTurnSyncConfig, publicLarkConfigs, readLarkConfig, readLarkConfigs, saveLarkConfig, type LarkTurnSyncConfigInput, type SaveLarkConfigInput } from './config.js';
 import { LarkLongConnectionListenerPool, LarkMessageCoordinator, larkHandoverChannel, type LarkListenerPool, type LarkMessageEvent } from './listener.js';
-import { createHandoverLookup } from './handover-binding.js';
+import {
+  createHandoverLookup,
+  createLarkSessionBindingLookup,
+  parseHandoverMappingExtra,
+  parseLarkSessionSourceBinding,
+  saveSessionTurnSyncOverride
+} from './handover-binding.js';
+import { LarkTurnTracker } from './turn-tracker.js';
+import { LarkTurnSyncService } from './turn-sync.js';
 import { LARK_ASK_CARD_CHANNEL } from './ask-user-question-card.js';
 import {
   defaultLarkOutputPluginAdapterRegistry,
@@ -135,6 +143,8 @@ export interface LarkRoutesOptions {
   outputPlugins?: OutputPluginService;
   /** 飞书插件卡片适配器注册表（默认包含 builtin:ask-user-question 及全部声明式插件适配器）。 */
   larkPluginAdapters?: LarkOutputPluginAdapterRegistry;
+  /** 飞书轮次归属与同轮 group send 去重追踪器（与 agentTools / listener / turnSync 共享）。 */
+  turnTracker?: LarkTurnTracker;
 }
 
 type ReactionChatInfo = { webChatId?: string; name?: string; type?: 'p2p' | 'group' | 'topic' | 'unknown' };
@@ -259,6 +269,7 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
   const resolvedOutputPlugins = options.outputPlugins ?? options.askUserQuestion?.outputPlugins;
   const resolvedPluginRegistry = resolvedOutputPlugins?.registry ?? defaultOutputPluginRegistry;
   const resolvedPluginAdapters = options.larkPluginAdapters ?? defaultLarkOutputPluginAdapterRegistry;
+  const turnTracker = options.turnTracker ?? new LarkTurnTracker();
   const listener = options.listener ?? new LarkLongConnectionListenerPool(app.log, {
     runtime: options.runtime,
     cardMappings: options.cardMappings,
@@ -266,6 +277,7 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
     askUserQuestion: options.askUserQuestion,
     outputPlugins: resolvedOutputPlugins,
     larkPluginAdapters: resolvedPluginAdapters,
+    turnTracker,
     env,
     fetcher,
     peerBotAuthorized: (appId, chatId, senderOpenId) => options.agentTools?.isConfiguredPeer(appId, chatId, senderOpenId) ?? Promise.resolve(false),
@@ -406,8 +418,33 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
 
   // 兜底桥接：若飞书绑定/托管会话由网页端触发一轮对话且以任一已启用插件的 XML 结尾，同样自动推送飞书 Schema 2.0 卡片。
   const handoverLookup = options.config && options.cardMappings
-    ? createHandoverLookup(options.config, options.cardMappings)
+    ? createHandoverLookup(options.config, options.cardMappings, lineage)
     : undefined;
+  const sessionBindingLookup = options.config && options.cardMappings
+    ? createLarkSessionBindingLookup(
+        options.config,
+        options.cardMappings,
+        sessionId => typeof options.runtime?.getSession === 'function'
+          ? options.runtime.getSession(sessionId)
+          : Promise.resolve(undefined),
+        lineage
+      )
+    : undefined;
+  // 绑定飞书群全轮次实时同步：将系统督办 / Web 对话 / 定时任务 / 可选整理维护轮次实时同步至绑定群主线程。
+  const turnSyncService = !listeningDisabled && options.runtime && typeof options.runtime.onTurnEvent === 'function' && options.config && options.cardMappings
+    ? new LarkTurnSyncService({
+        runtime: options.runtime,
+        configRepository: options.config,
+        cardMappings: options.cardMappings,
+        turnTracker,
+        resolveService: appId => resolveService(undefined, appId),
+        log: app.log,
+        getLineage: lineage,
+        outputPlugins: resolvedOutputPlugins,
+        larkPluginAdapters: resolvedPluginAdapters
+      })
+    : undefined;
+  turnSyncService?.start();
   const bridgeTimers = new Set<ReturnType<typeof setTimeout>>();
   const unsubscribeTurnBridge = !listeningDisabled && options.cardMappings && options.config && typeof options.runtime?.onTurnEvent === 'function'
     ? options.runtime.onTurnEvent(event => {
@@ -456,16 +493,17 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
             if (alreadySent) return;
 
             let target: { appId: string; chatId: string; receiveIdType: 'chat_id' | 'open_id'; chatType: 'group' | 'p2p' } | undefined;
-            const source = event.sessionSource ?? session?.source;
-            const sourceId = event.sessionSourceId ?? session?.sourceId;
-            if (source === 'lark' && sourceId) {
-              const parts = sourceId.split(':');
-              const appId = parts[0]?.trim();
-              const chatId = parts[1]?.trim();
-              const chatType = parts[2]?.trim() === 'group' ? 'group' : 'p2p';
-              if (appId && chatId && (chatId.startsWith('oc_') || chatId.startsWith('ou_'))) {
-                target = { appId, chatId, receiveIdType: chatId.startsWith('ou_') ? 'open_id' : 'chat_id', chatType };
-              }
+            const parsedSource = parseLarkSessionSourceBinding(
+              event.sessionSource ?? session?.source,
+              event.sessionSourceId ?? session?.sourceId
+            );
+            if (parsedSource) {
+              target = {
+                appId: parsedSource.appId,
+                chatId: parsedSource.chatId,
+                receiveIdType: parsedSource.receiveIdType,
+                chatType: parsedSource.chatType
+              };
             }
             if (!target && handoverLookup) {
               const handover = await handoverLookup(event.sessionId).catch(() => undefined);
@@ -490,6 +528,7 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
               }),
               idempotencyKey: `${isAsk ? 'askq' : 'outp'}-${cardId}`
             });
+            turnTracker.markOutboundMessage(sent.messageId);
             const record: PersistedLarkOutputPluginCard = {
               cardId,
               pluginId: plugin.id,
@@ -525,6 +564,7 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
   app.addHook('onClose', async () => {
     unsubscribePluginInteraction?.();
     unsubscribeTurnBridge?.();
+    turnSyncService?.close();
     for (const timer of bridgeTimers) clearTimeout(timer);
     bridgeTimers.clear();
     clearFallbackCoordinator();
@@ -542,7 +582,7 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
 
   // 「托管给机器人」：建一个飞书群（机器人做群主），并把群与某个 AgentDock 会话绑定。
   // 之后该群的消息由 listener 路由到这个会话，实现「用群聊继续这个会话」。
-  app.post<{ Params: { id: string }; Body: { appId?: string; name?: string; memberOpenIds?: string[]; syncBotProfile?: boolean } }>('/api/sessions/:id/handover', larkErrors(async request => {
+  app.post<{ Params: { id: string }; Body: { appId?: string; name?: string; memberOpenIds?: string[]; syncBotProfile?: boolean; turnSync?: LarkTurnSyncConfigInput } }>('/api/sessions/:id/handover', larkErrors(async request => {
     const sessionId = request.params.id;
     const session = await options.runtime?.getSession(sessionId);
     if (!session) throw new LarkServiceError('SESSION_NOT_FOUND', `Unknown session: ${sessionId}`, 404);
@@ -568,6 +608,10 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
     if (memberOpenIds.some(id => !id.startsWith('ou_'))) {
       throw new LarkServiceError('INVALID_HANDOVER_MEMBER', '邀请成员必须是 ou_ 开头的 open_id', 400);
     }
+    const stored = await readLarkConfig(options.config, appId);
+    const botTurnSync = normalizeLarkTurnSyncConfig(stored?.turnSync);
+    const groupTurnSync = request.body?.turnSync ? normalizeLarkTurnSyncConfig(request.body.turnSync, botTurnSync) : undefined;
+    const effectiveTurnSync = groupTurnSync ?? botTurnSync;
     const bot = await resolveService(undefined, appId);
     const chat = await bot.createChat({ name, memberOpenIds });
     await options.cardMappings.save({
@@ -575,34 +619,127 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
       channel,
       externalId: chat.chatId,
       sessionId,
-      extra: JSON.stringify({ appId, chatId: chat.chatId, sessionId, name }),
+      extra: JSON.stringify({
+        appId,
+        chatId: chat.chatId,
+        sessionId,
+        name,
+        ...(groupTurnSync ? { turnSync: groupTurnSync } : {})
+      }),
       createdAt: new Date().toISOString()
     });
     // 机器人资料是应用级的：主会话托管时顺手同步成这一代小猫。失败不影响建群，
     // 但要把「需要手动去飞书后台改」的原因带回前端。
     let botProfile: KittenBotSyncResult | null = null;
     if (kitten && request.body?.syncBotProfile !== false) {
-      const stored = await readLarkConfig(options.config, appId);
       const avatarUrl = larkKittenAvatarPublicUrl({ cdnBaseUrl: env[larkKittenCdnBaseEnv], webBaseUrl: stored?.webBaseUrl });
       botProfile = await syncKittenBotProfile({ lineage: lineage(), sessionId, bot, ...(avatarUrl ? { avatarUrl } : {}) });
     }
-    return { sessionId, appId, chatId: chat.chatId, name, kitten, botProfile, url: `https://applink.feishu.cn/client/chat/open?openChatId=${chat.chatId}` };
+    return {
+      sessionId,
+      appId,
+      chatId: chat.chatId,
+      name,
+      kitten,
+      botProfile,
+      ...(groupTurnSync ? { turnSync: groupTurnSync } : {}),
+      effectiveTurnSync,
+      url: `https://applink.feishu.cn/client/chat/open?openChatId=${chat.chatId}`
+    };
   }));
 
-  // 查这个会话是否已经托管给某个机器人（返回绑定群，供前端显示「已托管」而不是再建一个）。
-  app.get<{ Params: { id: string } }>('/api/sessions/:id/handover', larkErrors(async request => {
-    const sessionId = request.params.id;
+  const buildHandoverResponse = async (sessionId: string) => {
     const kitten = kittenFor(sessionId) ?? null;
-    if (!options.cardMappings || !options.config) return { handover: null, kitten };
-    const configs = await readLarkConfigs(options.config);
-    for (const config of configs) {
-      const mapping = (await options.cardMappings.list(larkHandoverChannel(config.appId))).find(item => item.sessionId === sessionId);
-      if (!mapping) continue;
-      const extra = (() => { try { return JSON.parse(mapping.extra ?? '{}') as { name?: string; appId?: string }; } catch { return {}; } })();
-      return { handover: { appId: config.appId, botName: config.name ?? config.appId, chatId: mapping.externalId, name: extra.name ?? '托管群', url: `https://applink.feishu.cn/client/chat/open?openChatId=${mapping.externalId}` }, kitten };
+    if (!options.cardMappings || !options.config || !sessionBindingLookup) {
+      return { handover: null, larkBinding: null, kitten };
     }
-    return { handover: null, kitten };
-  }));
+    const binding = await sessionBindingLookup(sessionId);
+    if (!binding) return { handover: null, larkBinding: null, kitten };
+    const config = await readLarkConfig(options.config, binding.appId);
+    const botTurnSync = normalizeLarkTurnSyncConfig(config?.turnSync);
+    const turnSync = binding.turnSync ? normalizeLarkTurnSyncConfig(binding.turnSync, botTurnSync) : undefined;
+    const effectiveTurnSync = turnSync ?? botTurnSync;
+    const fallbackLabel = binding.kind === 'handover'
+      ? '托管群'
+      : binding.kind === 'lark-p2p'
+        ? '飞书私聊'
+        : '飞书群聊';
+    const displayName = binding.kind === 'handover'
+      ? (binding.name ?? fallbackLabel)
+      : (cleanChatName(binding.name) || fallbackLabel);
+    const threadId = binding.kind === 'lark-group' && binding.scope?.startsWith('thread:')
+      ? binding.scope.slice('thread:'.length).trim()
+      : undefined;
+    const url = binding.chatId.startsWith('oc_')
+      ? `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(binding.chatId)}${threadId ? `&threadId=${encodeURIComponent(threadId)}` : ''}`
+      : undefined;
+    const larkBinding = {
+      kind: binding.kind,
+      appId: binding.appId,
+      botName: config?.name ?? binding.appId,
+      chatId: binding.chatId,
+      chatType: binding.chatType,
+      name: displayName,
+      ...(url ? { url } : {}),
+      ...(turnSync ? { turnSync } : {}),
+      effectiveTurnSync
+    };
+    const handover = binding.kind === 'handover'
+      ? {
+          appId: binding.appId,
+          botName: config?.name ?? binding.appId,
+          chatId: binding.chatId,
+          name: displayName,
+          ...(turnSync ? { turnSync } : {}),
+          effectiveTurnSync,
+          url: `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(binding.chatId)}`
+        }
+      : null;
+    return {
+      handover,
+      larkBinding,
+      kitten
+    };
+  };
+
+  const patchSessionTurnSync = async (sessionId: string, body: { turnSync?: LarkTurnSyncConfigInput | null } | undefined) => {
+    if (!options.cardMappings || !options.config || !sessionBindingLookup) {
+      throw new LarkServiceError('LARK_HANDOVER_UNAVAILABLE', 'channel mapping storage unavailable', 503);
+    }
+    const binding = await sessionBindingLookup(sessionId);
+    if (!binding) {
+      throw new LarkServiceError('HANDOVER_NOT_FOUND', '该会话尚未绑定飞书群或私聊', 404);
+    }
+    const config = await readLarkConfig(options.config, binding.appId);
+    const botTurnSync = normalizeLarkTurnSyncConfig(config?.turnSync);
+    if (binding.kind === 'handover' && binding.mapping) {
+      const extra = parseHandoverMappingExtra(binding.mapping.extra);
+      if (body?.turnSync === null) {
+        delete extra.turnSync;
+      } else if (body?.turnSync && typeof body.turnSync === 'object') {
+        const current = extra.turnSync ? normalizeLarkTurnSyncConfig(extra.turnSync, botTurnSync) : botTurnSync;
+        extra.turnSync = normalizeLarkTurnSyncConfig(body.turnSync, current);
+      }
+      await options.cardMappings.save({
+        ...binding.mapping,
+        extra: JSON.stringify(extra)
+      });
+    } else if (body?.turnSync === null) {
+      await saveSessionTurnSyncOverride(options.cardMappings, sessionId, null);
+    } else if (body?.turnSync && typeof body.turnSync === 'object') {
+      const current = binding.turnSync ? normalizeLarkTurnSyncConfig(binding.turnSync, botTurnSync) : botTurnSync;
+      await saveSessionTurnSyncOverride(options.cardMappings, sessionId, normalizeLarkTurnSyncConfig(body.turnSync, current));
+    }
+    return buildHandoverResponse(sessionId);
+  };
+
+  // 查这个会话是否已绑定飞书（托管群、原生飞书群聊或飞书私聊），返回绑定信息与生效的全轮次同步策略。
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/handover', larkErrors(async request => buildHandoverResponse(request.params.id)));
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/lark-binding', larkErrors(async request => buildHandoverResponse(request.params.id)));
+
+  // 更新已绑定飞书会话（托管群 / 普通飞书群聊 / 飞书私聊）的非飞书轮次同步策略；传 null 恢复继承机器人默认策略。
+  app.patch<{ Params: { id: string }; Body: { turnSync?: LarkTurnSyncConfigInput | null } }>('/api/sessions/:id/handover', larkErrors(async request => patchSessionTurnSync(request.params.id, request.body)));
+  app.patch<{ Params: { id: string }; Body: { turnSync?: LarkTurnSyncConfigInput | null } }>('/api/sessions/:id/lark-binding', larkErrors(async request => patchSessionTurnSync(request.params.id, request.body)));
 
   // 小猫头像：给前端和飞书一个稳定 URL。飞书拉图时不带 AgentDock cookie，
   // 因此这个路径在 web-access 里单独放行；它只包含一张公开的静态图。
@@ -836,7 +973,8 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
             options.config,
             options.askUserQuestion,
             resolvedOutputPlugins,
-            resolvedPluginAdapters
+            resolvedPluginAdapters,
+            turnTracker
           );
           fallbackCoordinators.set(botConfig.appId, coordinator);
         }

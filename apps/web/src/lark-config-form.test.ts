@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { canSaveHardGate, canToggleHardGate, resolveReasoningEffort, withSavedOption, type HardGateFormState } from './lark-config-form';
+import { DEFAULT_LARK_TURN_SYNC, canSaveHardGate, canToggleHardGate, normalizeLarkTurnSyncForm, resolveReasoningEffort, withSavedOption, type HardGateFormState } from './lark-config-form';
+import { summarizeLarkTurnSync } from './LarkTurnSyncControls';
 
 const state = (overrides: Partial<HardGateFormState> = {}): HardGateFormState => ({
   enabled: false,
@@ -61,4 +62,25 @@ it('preserves saved model and effort values when discovery returns no choices', 
   expect(resolveReasoningEffort('high', { reasoningEfforts: [] }, false)).toBe('high');
   expect(withSavedOption([], 'model-a')).toEqual([{ id: 'model-a', name: 'model-a（已保存）' }]);
   expect(withSavedOption([{ id: 'model-a', name: 'Model A' }], 'model-a')).toHaveLength(1);
+});
+
+describe('Lark turnSync form defaults and summary', () => {
+  it('defaults to supervision + web + schedule ON, maintenance OFF, filterSilentSchedule ON', () => {
+    expect(DEFAULT_LARK_TURN_SYNC).toEqual({
+      enabled: true,
+      sources: { supervision: true, web: true, schedule: true, maintenance: false },
+      filterSilentSchedule: true
+    });
+    expect(normalizeLarkTurnSyncForm(undefined)).toEqual(DEFAULT_LARK_TURN_SYNC);
+    expect(normalizeLarkTurnSyncForm({ sources: { maintenance: true, web: false } })).toEqual({
+      enabled: true,
+      sources: { supervision: true, web: false, schedule: true, maintenance: true },
+      filterSilentSchedule: true
+    });
+  });
+
+  it('summarizes active turn sync sources clearly', () => {
+    expect(summarizeLarkTurnSync(DEFAULT_LARK_TURN_SYNC)).toBe('已开启（小猫督办 / 网页同步 / 定时任务）');
+    expect(summarizeLarkTurnSync({ ...DEFAULT_LARK_TURN_SYNC, enabled: false })).toBe('已关闭');
+  });
 });

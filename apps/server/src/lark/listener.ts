@@ -11,6 +11,7 @@ import { parseLarkMessageContent, type LarkMessageResource } from './message-con
 import { boundLarkCardElements, createLarkCardService, larkIdentityPermissionHelp, LarkServiceError, type LarkCardActionButton, type LarkCardService } from './service.js';
 import { clearSessionReplyMode, getSessionReplyMode, type AgentReplyMode } from './agent-tools.js';
 import { larkHandoverChannel } from './handover-binding.js';
+import type { LarkTurnTracker } from './turn-tracker.js';
 import { buildSideSessionSeed, matchSideChatTrigger, readSideChatConfig, type SideChatConfig } from '../side-chat-config.js';
 import { readAskUserQuestionConfig, type AskUserQuestionService } from '../ask-user-question.js';
 import { readOutputPluginsGlobalConfig, type OutputPluginService } from '../output-plugins/service.js';
@@ -1186,7 +1187,8 @@ export class LarkMessageCoordinator {
     private readonly configRepository?: ConfigRepository,
     private readonly askUserQuestion?: AskUserQuestionService,
     private readonly outputPlugins?: OutputPluginService,
-    private readonly larkPluginAdapters: LarkOutputPluginAdapterRegistry = defaultLarkOutputPluginAdapterRegistry
+    private readonly larkPluginAdapters: LarkOutputPluginAdapterRegistry = defaultLarkOutputPluginAdapterRegistry,
+    private readonly turnTracker?: LarkTurnTracker
   ) {}
 
   private get resolvedOutputPlugins(): OutputPluginService | undefined {
@@ -1941,6 +1943,11 @@ export class LarkMessageCoordinator {
   }
 
   async handle(event: LarkMessageEvent, config: StoredLarkConfig) {
+    if (this.stopped || this.handledMessages.has(event.messageId)) return;
+    // 防自激循环：本机器人发出的任何消息（全轮次同步卡片/文本、group send 等）绝不可反向唤醒自己。
+    if (this.botOpenId && event.senderOpenId && event.senderOpenId === this.botOpenId) return;
+    if (this.turnTracker?.isOutboundMessage(event.messageId)) return;
+
     // 唤醒判定以 open_id 为主（机器人被 @ 时飞书回调给的也是 open_id），
     // 并兼容极端情况下携带 app_id 的形态。@ 唤不醒时先看下面那条日志里的原始 mentions。
     const mentionsBot = event.mentions.some(mention => this.isSelfMention(config, mention));
@@ -3344,10 +3351,17 @@ export class LarkMessageCoordinator {
         if (!runtimeTaskId) buffered.push(agentEvent);
         else receive(agentEvent);
       });
+      const releaseLarkDispatch = this.turnTracker?.beginLarkDispatch(session.id);
       try {
-        const runtimeTask = task.origin || task.clientMessageId
-          ? await this.runtime.dispatch(session.id, prompt, 'queue', agentPrompt, riskPolicy, task.origin, task.clientMessageId)
-          : await this.runtime.dispatch(session.id, prompt, 'queue', agentPrompt, riskPolicy);
+        let runtimeTask: { id: string; status: string; queuedAhead?: number };
+        try {
+          runtimeTask = task.origin || task.clientMessageId
+            ? await this.runtime.dispatch(session.id, prompt, 'queue', agentPrompt, riskPolicy, task.origin, task.clientMessageId)
+            : await this.runtime.dispatch(session.id, prompt, 'queue', agentPrompt, riskPolicy);
+          this.turnTracker?.markLarkOwnedTask(runtimeTask.id);
+        } finally {
+          releaseLarkDispatch?.();
+        }
         runtimeTaskId = runtimeTask.id;
         task.runtimeTaskId = runtimeTask.id;
         await this.saveCardTask(task, runtimeTask.status === 'queued' ? 'queued' : task.state);
@@ -3386,8 +3400,13 @@ export class LarkMessageCoordinator {
       await this.runtime.setRiskPolicy?.(session.id, riskPolicy);
       // 本轮开始前的最大 sequence：重载时用它裁掉更早轮次的事件（此路径没有 runtimeTaskId 可用）。
       const turnStartSequence = task.events.reduce((max, item) => Math.max(max, item.sequence), 0);
-      if (agentPrompt === prompt) await this.runtime.send(session.id, prompt);
-      else await this.runtime.send(session.id, prompt, agentPrompt);
+      const releaseLarkSend = this.turnTracker?.beginLarkSend(session.id);
+      try {
+        if (agentPrompt === prompt) await this.runtime.send(session.id, prompt);
+        else await this.runtime.send(session.id, prompt, agentPrompt);
+      } finally {
+        releaseLarkSend?.();
+      }
       // 若轮次已变（用户在 send 期间点击了重试），本轮不得覆盖新状态。
       if (task.turn !== currentTurn) return;
       if (task.interruptRequested) {
@@ -3436,6 +3455,7 @@ export interface LarkLongConnectionListenerOptions {
   askUserQuestion?: AskUserQuestionService;
   outputPlugins?: OutputPluginService;
   larkPluginAdapters?: LarkOutputPluginAdapterRegistry;
+  turnTracker?: LarkTurnTracker;
   env?: NodeJS.ProcessEnv;
   fetcher?: typeof globalThis.fetch;
   /** 覆盖飞书 OpenAPI 域名（Lark 国际版或私有网关）。 */
@@ -3514,7 +3534,8 @@ export class LarkLongConnectionListener implements LarkListener {
       this.options.configRepository,
       this.options.askUserQuestion,
       this.options.outputPlugins,
-      this.options.larkPluginAdapters
+      this.options.larkPluginAdapters,
+      this.options.turnTracker
     ) : undefined;
     try { await coordinator?.startReconciliation(config); }
     catch (error) { this.log.warn({ error, appId: config.appId }, '飞书卡片终态对账启动失败，继续建立消息监听'); }

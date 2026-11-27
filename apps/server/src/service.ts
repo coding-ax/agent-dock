@@ -10,6 +10,7 @@ import { SelfUpdateService } from './self-update.js';
 import { buildApp } from './app.js';
 import { createHandoverLookup } from './lark/handover-binding.js';
 import { LarkAgentToolCapabilityRegistry, LarkAgentToolsService, loadOrCreateGroupToolsSigningSecret } from './lark/agent-tools.js';
+import { LarkTurnTracker } from './lark/turn-tracker.js';
 import { readLarkConfigs } from './lark/config.js';
 import { createLarkCardService } from './lark/service.js';
 import { LlmEndpointService } from './llm/service.js';
@@ -59,10 +60,15 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
   let groupToolsSigningSecret: string;
   try { groupToolsSigningSecret = await loadOrCreateGroupToolsSigningSecret(repos.config); }
   catch (error) { repos.close(); dbLock.release(); throw error; }
-  const capabilities = new LarkAgentToolCapabilityRegistry(repos.sessions, localApiBaseUrl(config), groupToolsSigningSecret);
-  capabilities.useHandoverLookup(createHandoverLookup(repos.config, repos.channelMappings));
-  const agentTools = new LarkAgentToolsService(capabilities, repos.config, { env, groupToolsCommand: options.groupToolsCommand });
+  const larkTurnTracker = new LarkTurnTracker();
   let assistant: AssistantService | undefined;
+  const capabilities = new LarkAgentToolCapabilityRegistry(repos.sessions, localApiBaseUrl(config), groupToolsSigningSecret);
+  capabilities.useHandoverLookup(createHandoverLookup(repos.config, repos.channelMappings, () => assistant?.lifecycle.lineage() ?? []));
+  const agentTools = new LarkAgentToolsService(capabilities, repos.config, {
+    env,
+    groupToolsCommand: options.groupToolsCommand,
+    onGroupSent: record => larkTurnTracker.recordGroupSend(record)
+  });
   let outputPlugins: OutputPluginService | undefined;
   let askUserQuestion: AskUserQuestionService | undefined;
   const runtime = new AgentDockRuntime(repos, {
@@ -189,7 +195,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     // 分享链接接口始终挂载：访问防护关闭时 build() 会返回可操作的 409，
     // 界面据此提示用户开启局域网访问，而不是显示一个 404「接口不存在」。
     const shareLinks = new ShareLinkService({ host: config.host, port: config.port, secret: webAuth.secret ?? '', config: repos.config, env });
-    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, outputPlugins, askUserQuestion, notifications, boards, themes, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
+    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, outputPlugins, askUserQuestion, notifications, boards, themes, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, turnTracker: larkTurnTracker, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
     await app.listen(listenOptions(config));
     // 听到端口后再开始扫描：启动失败时不会先投递出去一半。
     notifications.start();

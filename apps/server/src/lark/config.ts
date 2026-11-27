@@ -11,6 +11,70 @@ export interface LarkAllowedUser {
   name: string;
 }
 
+export interface LarkTurnSyncSources {
+  /** 系统督办轮次（验收通过/打回返工/计划待确认/异常预警等） */
+  supervision: boolean;
+  /** Web / 桌面端对话轮次（网页/桌面/看板联动发起的对话） */
+  web: boolean;
+  /** 定时任务轮次（追加到绑定会话的定时任务产出） */
+  schedule: boolean;
+  /** 整理维护轮次（小猫自动整理归档便签与交接说明） */
+  maintenance: boolean;
+}
+
+export interface LarkTurnSyncConfig {
+  /** 总开关：同步非飞书触发的轮次到绑定飞书群（默认开启） */
+  enabled: boolean;
+  /** 按轮次来源细粒度控制 */
+  sources: LarkTurnSyncSources;
+  /** 过滤静默/无实质输出的定时任务轮次（默认开启） */
+  filterSilentSchedule: boolean;
+}
+
+export interface LarkTurnSyncConfigInput {
+  enabled?: boolean;
+  sources?: Partial<LarkTurnSyncSources>;
+  filterSilentSchedule?: boolean;
+}
+
+export const defaultLarkTurnSyncConfig: LarkTurnSyncConfig = {
+  enabled: true,
+  sources: {
+    supervision: true,
+    web: true,
+    schedule: true,
+    maintenance: false
+  },
+  filterSilentSchedule: true
+};
+
+export function normalizeLarkTurnSyncConfig(
+  input?: LarkTurnSyncConfigInput | null,
+  fallback: LarkTurnSyncConfig = defaultLarkTurnSyncConfig
+): LarkTurnSyncConfig {
+  const base: LarkTurnSyncConfig = {
+    enabled: typeof fallback.enabled === 'boolean' ? fallback.enabled : defaultLarkTurnSyncConfig.enabled,
+    sources: {
+      supervision: typeof fallback.sources?.supervision === 'boolean' ? fallback.sources.supervision : defaultLarkTurnSyncConfig.sources.supervision,
+      web: typeof fallback.sources?.web === 'boolean' ? fallback.sources.web : defaultLarkTurnSyncConfig.sources.web,
+      schedule: typeof fallback.sources?.schedule === 'boolean' ? fallback.sources.schedule : defaultLarkTurnSyncConfig.sources.schedule,
+      maintenance: typeof fallback.sources?.maintenance === 'boolean' ? fallback.sources.maintenance : defaultLarkTurnSyncConfig.sources.maintenance
+    },
+    filterSilentSchedule: typeof fallback.filterSilentSchedule === 'boolean' ? fallback.filterSilentSchedule : defaultLarkTurnSyncConfig.filterSilentSchedule
+  };
+  if (!input || typeof input !== 'object') return base;
+  return {
+    enabled: typeof input.enabled === 'boolean' ? input.enabled : base.enabled,
+    sources: {
+      supervision: typeof input.sources?.supervision === 'boolean' ? input.sources.supervision : base.sources.supervision,
+      web: typeof input.sources?.web === 'boolean' ? input.sources.web : base.sources.web,
+      schedule: typeof input.sources?.schedule === 'boolean' ? input.sources.schedule : base.sources.schedule,
+      maintenance: typeof input.sources?.maintenance === 'boolean' ? input.sources.maintenance : base.sources.maintenance
+    },
+    filterSilentSchedule: typeof input.filterSilentSchedule === 'boolean' ? input.filterSilentSchedule : base.filterSilentSchedule
+  };
+}
+
 export interface StoredLarkConfig {
   /** 管理员每次保存生成新版本；身份绑定写回不改变此版本。 */
   revision?: string;
@@ -39,6 +103,8 @@ export interface StoredLarkConfig {
   hideTraceOnComplete: boolean;
   /** 静默模式：不展示 trace 卡片，最终回复由服务自动以文本消息发送到会话。 */
   quietReply: boolean;
+  /** 绑定飞书群全轮次实时同步策略（系统督办 / Web 对话 / 定时任务 / 整理维护）。 */
+  turnSync?: LarkTurnSyncConfig;
   allowedUsers: LarkAllowedUser[];
   allowedUserNames?: string[];
   allowedEmails: string[];
@@ -76,6 +142,7 @@ export interface SaveLarkConfigInput {
   traceLimit?: number | null;
   hideTraceOnComplete?: boolean;
   quietReply?: boolean;
+  turnSync?: LarkTurnSyncConfigInput;
   allowedUsers?: LarkAllowedUser[];
   allowedUserNames?: string[];
   allowedEmails?: string[];
@@ -116,6 +183,8 @@ export interface PublicLarkConfig {
   hideTraceOnComplete: boolean;
   /** 静默模式：不展示 trace 卡片，最终回复由服务自动以文本消息发送到会话。 */
   quietReply: boolean;
+  /** 绑定飞书群全轮次实时同步策略（系统督办 / Web 对话 / 定时任务 / 整理维护）。 */
+  turnSync: LarkTurnSyncConfig;
   allowedUsers: LarkAllowedUser[];
   allowedUserNames?: string[];
   allowedEmails: string[];
@@ -200,6 +269,7 @@ function normalizeStoredConfig(parsed: Partial<StoredLarkConfig>): StoredLarkCon
     traceLimit,
     hideTraceOnComplete: parsed.hideTraceOnComplete !== false,
     quietReply: parsed.quietReply === true,
+    turnSync: normalizeLarkTurnSyncConfig(parsed.turnSync),
     allowedUsers: normalizeAllowedUsers(parsed.allowedUsers),
     allowedUserNames: normalizeNames(parsed.allowedUserNames),
     allowedEmails: normalizeEmails(parsed.allowedEmails),
@@ -274,6 +344,7 @@ export const publicLarkConfig = (config: StoredLarkConfig, activeAppIds: Readonl
   traceLimit: config.traceLimit ?? defaultLarkTraceLimit,
   hideTraceOnComplete: config.hideTraceOnComplete,
   quietReply: config.quietReply === true,
+  turnSync: normalizeLarkTurnSyncConfig(config.turnSync),
   allowedUsers: config.allowedUsers,
   allowedUserNames: config.allowedUserNames ?? [],
   allowedEmails: config.allowedEmails,
@@ -351,6 +422,7 @@ async function saveLarkConfigAttempt(repository: ConfigRepository | undefined, a
   const traceLimit = input.traceLimit === undefined ? current?.traceLimit ?? defaultLarkTraceLimit : input.traceLimit ?? defaultLarkTraceLimit;
   const hideTraceOnComplete = input.hideTraceOnComplete ?? current?.hideTraceOnComplete ?? true;
   const quietReply = input.quietReply ?? current?.quietReply ?? false;
+  const turnSync = normalizeLarkTurnSyncConfig(input.turnSync, normalizeLarkTurnSyncConfig(current?.turnSync));
   const defaultModel = input.defaultModel === undefined ? current?.defaultModel : input.defaultModel.trim() || undefined;
   const defaultReasoningEffort = input.defaultReasoningEffort === undefined ? current?.defaultReasoningEffort : input.defaultReasoningEffort.trim() || undefined;
   const preInjectPrompt = input.preInjectPrompt === undefined ? current?.preInjectPrompt ?? '' : input.preInjectPrompt.trim();
@@ -398,6 +470,7 @@ async function saveLarkConfigAttempt(repository: ConfigRepository | undefined, a
     traceLimit,
     hideTraceOnComplete,
     quietReply,
+    turnSync,
     allowedUsers,
     allowedUserNames,
     allowedEmails,

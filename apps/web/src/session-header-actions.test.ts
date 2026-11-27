@@ -50,6 +50,8 @@ describe('会话标题栏精简与聚合布局', () => {
     expect(source).toContain("id: 'system-prompt', label: '查看系统提示词'");
     expect(source).toContain("id: 'handover', label: '托管到飞书机器人'");
     expect(source).toContain("id: 'handover-open', label: `已托管：${handoverInfo.name}`");
+    expect(source).toContain("id: 'handover-settings', label: '飞书同步设置'");
+    expect(source).toContain("id: 'lark-sync-settings', label: '飞书同步设置'");
     expect(source).toContain("id: 'companion-notes'");
     expect(source).toContain("id: 'companion-retire'");
     expect(source).toContain('data-menu-indicator={indicator}');

@@ -238,7 +238,10 @@ export type UsageQuotaParams = {
 export type AgentModelsResult = { models: AgentModel[]; defaultModel?: string; reasoningEfforts: AgentModel[]; defaultReasoningEffort?: string; source?: 'acp' | 'cli' | 'agent'; warning?: string };
 export type SkillReference = { name: string; description: string; path: string; source: 'workspace' | 'user' };
 export type LarkAllowedUser = { openId: string; name: string };
-export type LarkBotConfig = { configured: true; appId: string; name: string; tabLabel: string; setupComplete: boolean; avatarUrl?: string; workspace?: string; webBaseUrl?: string; defaultAgentId?: string; defaultModel?: string; defaultReasoningEffort?: string; preInjectPrompt: string; listening: boolean; activeListening: boolean; groupToolsEnabled: boolean; groupToolsAllowSend: boolean; groupSessionScope: 'user' | 'chat'; pushIntervalMs: number; traceLimit?: number; hideTraceOnComplete: boolean; quietReply: boolean; allowedUsers: LarkAllowedUser[]; allowedUserNames?: string[]; allowedEmails: string[]; allowedBots: LarkAllowedUser[]; allowedBotNames?: string[]; peerBotsAllowed: boolean; highRiskAllowedUsers: LarkAllowedUser[]; highRiskAllowedUserNames?: string[]; highRiskAllowedEmails: string[]; highRiskPattern: string; gateEnabled: boolean; softGateEnabled: boolean; hardGateEnabled: boolean; hookTrustConfirmed: boolean };
+export type LarkTurnSyncSources = { supervision: boolean; web: boolean; schedule: boolean; maintenance: boolean };
+export type LarkTurnSyncConfig = { enabled: boolean; sources: LarkTurnSyncSources; filterSilentSchedule: boolean };
+export type LarkTurnSyncConfigInput = { enabled?: boolean; sources?: Partial<LarkTurnSyncSources>; filterSilentSchedule?: boolean };
+export type LarkBotConfig = { configured: true; appId: string; name: string; tabLabel: string; setupComplete: boolean; avatarUrl?: string; workspace?: string; webBaseUrl?: string; defaultAgentId?: string; defaultModel?: string; defaultReasoningEffort?: string; preInjectPrompt: string; listening: boolean; activeListening: boolean; groupToolsEnabled: boolean; groupToolsAllowSend: boolean; groupSessionScope: 'user' | 'chat'; pushIntervalMs: number; traceLimit?: number; hideTraceOnComplete: boolean; quietReply: boolean; turnSync: LarkTurnSyncConfig; allowedUsers: LarkAllowedUser[]; allowedUserNames?: string[]; allowedEmails: string[]; allowedBots: LarkAllowedUser[]; allowedBotNames?: string[]; peerBotsAllowed: boolean; highRiskAllowedUsers: LarkAllowedUser[]; highRiskAllowedUserNames?: string[]; highRiskAllowedEmails: string[]; highRiskPattern: string; gateEnabled: boolean; softGateEnabled: boolean; hardGateEnabled: boolean; hookTrustConfirmed: boolean };
 export type LarkConfig = { configured: boolean; bots: LarkBotConfig[]; listeningDisabled: boolean };
 export type LarkHookStatus = { agentId?: string; supported: boolean; installed: boolean; writable: boolean; trustRequired: boolean; hooksPath?: string; reason?: string; trustInstructions?: string };
 export type LarkBotChatItem = { chatId: string; name: string; description?: string; avatar?: string; ownerId?: string; external?: boolean; chatMode?: string; chatStatus?: string };
@@ -671,6 +674,26 @@ async function readEventStream(body: ReadableStream<Uint8Array>, onEvent: (event
   } finally { reader.releaseLock(); }
 }
 
+export type SessionLarkBindingKind = 'handover' | 'lark-group' | 'lark-p2p';
+
+export interface SessionLarkBinding {
+  kind: SessionLarkBindingKind;
+  appId: string;
+  botName: string;
+  chatId: string;
+  chatType: 'group' | 'p2p';
+  name: string;
+  url?: string;
+  turnSync?: LarkTurnSyncConfig;
+  effectiveTurnSync: LarkTurnSyncConfig;
+}
+
+export interface SessionHandoverResponse {
+  handover: { appId: string; botName: string; chatId: string; name: string; url: string; turnSync?: LarkTurnSyncConfig; effectiveTurnSync?: LarkTurnSyncConfig } | null;
+  larkBinding?: SessionLarkBinding | null;
+  kitten?: HandoverKitten | null;
+}
+
 export type NotificationEventKind = 'completed' | 'failed' | 'waiting_approval' | 'notify';
 export type NotificationRuleEventKind = 'completed' | 'failed' | 'waiting_approval';
 export type ScheduledNotifyMode = 'all' | 'failed_only' | 'off';
@@ -1002,7 +1025,7 @@ export const api = {
   steerQueued: (id: string, taskId: string) => json<Task>(`/api/sessions/${id}/queue/${taskId}/steer`, { method: 'POST' }),
   larkConfig: () => json<LarkConfig>('/api/lark/config'),
   inspectLarkBot: (body: { appId: string; appSecret: string }) => json<{ appName: string; openId: string; avatarUrl?: string; activateStatus?: number }>('/api/lark/bot/inspect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-  saveLarkConfig: (body: { stage: 'lark' | 'agent'; originalAppId?: string; appId?: string; appSecret?: string; workspace?: string; webBaseUrl?: string; defaultAgentId?: string; defaultModel?: string; defaultReasoningEffort?: string; preInjectPrompt?: string; listening?: boolean; groupToolsEnabled?: boolean; groupToolsAllowSend?: boolean; groupSessionScope?: 'user' | 'chat'; pushIntervalMs?: number; traceLimit?: number | null; quietReply?: boolean; allowedUsers?: LarkAllowedUser[]; allowedUserNames?: string[]; allowedEmails?: string[]; allowedBots?: LarkAllowedUser[]; allowedBotNames?: string[]; peerBotsAllowed?: boolean; highRiskAllowedUsers?: LarkAllowedUser[]; highRiskAllowedUserNames?: string[]; highRiskAllowedEmails?: string[]; highRiskPattern?: string; gateEnabled?: boolean; softGateEnabled?: boolean; hardGateEnabled?: boolean; hookTrustConfirmed?: boolean }) => json<LarkConfig>('/api/lark/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  saveLarkConfig: (body: { stage: 'lark' | 'agent'; originalAppId?: string; appId?: string; appSecret?: string; workspace?: string; webBaseUrl?: string; defaultAgentId?: string; defaultModel?: string; defaultReasoningEffort?: string; preInjectPrompt?: string; listening?: boolean; groupToolsEnabled?: boolean; groupToolsAllowSend?: boolean; groupSessionScope?: 'user' | 'chat'; pushIntervalMs?: number; traceLimit?: number | null; quietReply?: boolean; turnSync?: LarkTurnSyncConfigInput; allowedUsers?: LarkAllowedUser[]; allowedUserNames?: string[]; allowedEmails?: string[]; allowedBots?: LarkAllowedUser[]; allowedBotNames?: string[]; peerBotsAllowed?: boolean; highRiskAllowedUsers?: LarkAllowedUser[]; highRiskAllowedUserNames?: string[]; highRiskAllowedEmails?: string[]; highRiskPattern?: string; gateEnabled?: boolean; softGateEnabled?: boolean; hardGateEnabled?: boolean; hookTrustConfirmed?: boolean }) => json<LarkConfig>('/api/lark/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   deleteLarkConfig: (appId: string) => json<LarkConfig>(`/api/lark/config/${encodeURIComponent(appId)}`, { method: 'DELETE' }),
   larkHookStatus: (appId: string) => json<LarkHookStatus>(`/api/lark/hooks/status?appId=${encodeURIComponent(appId)}`),
   installLarkHook: (appId: string, highRiskPattern: string) => json<LarkHookStatus>('/api/lark/hooks/install', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appId, highRiskPattern }) }),
@@ -1199,8 +1222,9 @@ export const api = {
   larkAppOwner: (appId: string) => json<{ owner: { openId: string; name: string; ownerType?: string; avatarUrl?: string } | null }>(`/api/lark/app-owner?appId=${encodeURIComponent(appId)}`),
   larkMemberSearch: (appId: string, q: string) => json<{ users: { openId: string; name: string }[]; error?: string }>(`/api/lark/member-search?appId=${encodeURIComponent(appId)}&q=${encodeURIComponent(q)}`),
   larkChatMembers: (appId: string, chatId: string) => json<{ users: { openId: string; name: string }[] }>(`/api/lark/chat-members?appId=${encodeURIComponent(appId)}&chatId=${encodeURIComponent(chatId)}`),
-  sessionHandover: (id: string) => json<{ handover: { appId: string; botName: string; chatId: string; name: string; url: string } | null; kitten?: HandoverKitten | null }>(`/api/sessions/${id}/handover`),
-  handoverSession: (id: string, body: { appId: string; name?: string; memberOpenIds?: string[]; syncBotProfile?: boolean }) => json<{ sessionId: string; appId: string; chatId: string; name: string; url: string; kitten?: HandoverKitten | null; botProfile?: HandoverBotProfile | null }>(`/api/sessions/${id}/handover`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  sessionHandover: (id: string) => json<SessionHandoverResponse>(`/api/sessions/${id}/handover`),
+  handoverSession: (id: string, body: { appId: string; name?: string; memberOpenIds?: string[]; syncBotProfile?: boolean; turnSync?: LarkTurnSyncConfigInput }) => json<{ sessionId: string; appId: string; chatId: string; name: string; url: string; turnSync?: LarkTurnSyncConfig; effectiveTurnSync?: LarkTurnSyncConfig; kitten?: HandoverKitten | null; botProfile?: HandoverBotProfile | null }>(`/api/sessions/${id}/handover`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  updateSessionHandover: (id: string, body: { turnSync?: LarkTurnSyncConfigInput | null }) => json<SessionHandoverResponse>(`/api/sessions/${id}/handover`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   handoverSyncBot: (sessionId?: string) => json<HandoverBotProfile>('/api/lark/handover/sync-bot', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sessionId ? { sessionId } : {}) }),
   action: (id: string, action: string) => json(`/api/sessions/${id}/${action}`, { method: 'POST' }),
   permission: (id: string, permissionId: string, approved: boolean) => json(`/api/sessions/${id}/permissions/${permissionId}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved }) }),

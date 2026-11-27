@@ -69,3 +69,56 @@ describe('Lark bot groupSessionScope default & persistence', () => {
     expect(loaded?.groupSessionScope).toBe('user');
   });
 });
+
+describe('Lark bot turnSync defaults & persistence', () => {
+  it('defaults newly created and legacy bots to supervision+web+schedule ON, maintenance OFF, filterSilentSchedule ON', async () => {
+    const repo = repository();
+    const created = await configured(repo);
+    expect(created.turnSync).toEqual({
+      enabled: true,
+      sources: { supervision: true, web: true, schedule: true, maintenance: false },
+      filterSilentSchedule: true
+    });
+
+    await repo.set('lark.bots', JSON.stringify([{ appId: 'cli_legacy_sync', appSecret: 'secret' }]));
+    const legacy = await readLarkConfig(repo, 'cli_legacy_sync');
+    expect(legacy?.turnSync).toEqual({
+      enabled: true,
+      sources: { supervision: true, web: true, schedule: true, maintenance: false },
+      filterSilentSchedule: true
+    });
+    const { bots } = publicLarkConfigs([legacy!]);
+    expect(bots[0]?.turnSync).toEqual(legacy?.turnSync);
+  });
+
+  it('merges partial turnSync updates and preserves them across later unrelated saves', async () => {
+    const repo = repository();
+    await configured(repo, {
+      turnSync: {
+        sources: { maintenance: true, web: false },
+        filterSilentSchedule: false
+      }
+    });
+    expect((await readLarkConfig(repo, 'cli_test'))?.turnSync).toEqual({
+      enabled: true,
+      sources: { supervision: true, web: false, schedule: true, maintenance: true },
+      filterSilentSchedule: false
+    });
+
+    // 保存其他字段（如 preInjectPrompt）不应把 turnSync 冲回默认值。
+    await configured(repo, { originalAppId: 'cli_test', preInjectPrompt: 'hello' });
+    expect((await readLarkConfig(repo, 'cli_test'))?.turnSync).toEqual({
+      enabled: true,
+      sources: { supervision: true, web: false, schedule: true, maintenance: true },
+      filterSilentSchedule: false
+    });
+
+    // 关闭总开关时保留细粒度勾选记忆。
+    await configured(repo, { originalAppId: 'cli_test', turnSync: { enabled: false } });
+    expect((await readLarkConfig(repo, 'cli_test'))?.turnSync).toEqual({
+      enabled: false,
+      sources: { supervision: true, web: false, schedule: true, maintenance: true },
+      filterSilentSchedule: false
+    });
+  });
+});

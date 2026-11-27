@@ -66,6 +66,18 @@ export interface RuntimeTurnEvent {
   timestamp: string;
 }
 
+/** 轮次正式开始执行时发出的轻量领域事件，供飞书绑定群全轮次实时同步等旁路订阅者挂载流式监听。 */
+export interface RuntimeTurnStartedEvent {
+  sessionId: string;
+  taskId: string;
+  prompt: string;
+  agentId: string;
+  sessionSource?: string;
+  sessionSourceId?: string;
+  taskOrigin?: string;
+  timestamp: string;
+}
+
 export const agentConfigSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),

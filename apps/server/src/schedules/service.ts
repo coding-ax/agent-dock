@@ -6,7 +6,7 @@ export interface ScheduleRuntime {
   getSession(id: string): Promise<Session | undefined>;
   getTasks(sessionId: string): Promise<TaskRecord[]>;
   start(input: StartSessionInput): Promise<Session>;
-  dispatch(id: string, prompt: string, mode?: 'queue' | 'interrupt'): Promise<{ id: string; status: string }>;
+  dispatch(id: string, prompt: string, mode?: 'queue' | 'interrupt', agentPrompt?: string, riskPolicy?: unknown, origin?: string): Promise<{ id: string; status: string }>;
   archive(id: string): Promise<unknown>;
 }
 
@@ -372,7 +372,7 @@ export class ScheduleService {
     if (schedule.delivery === 'append') {
       if (!source) return { status: 'failed', reason: '追加模式没有绑定会话', sessionId: null, taskId: null };
       if (busySessionStates.has(source.state)) return { status: 'skipped', reason: `目标会话正忙（${source.state}）`, sessionId: source.id, taskId: null };
-      const task = await this.runtime.dispatch(source.id, prompt);
+      const task = await this.runtime.dispatch(source.id, prompt, 'queue', prompt, undefined, 'schedule');
       return { status: 'delivered', reason: null, sessionId: source.id, taskId: task.id };
     }
     const parentSessionId = source?.id ?? null;
@@ -384,7 +384,7 @@ export class ScheduleService {
       systemPrompt: buildScheduleSessionSeed({ ...schedule, sessionId: parentSessionId }),
       ...(parentSessionId ? { source: scheduleSessionSource, sourceId: parentSessionId } : {})
     });
-    const task = await this.runtime.dispatch(created.id, prompt);
+    const task = await this.runtime.dispatch(created.id, prompt, 'queue', prompt, undefined, 'schedule');
     return { status: 'delivered', reason: null, sessionId: created.id, taskId: task.id };
   }
 

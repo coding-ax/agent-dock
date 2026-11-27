@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, RuntimeActivityEvent, RuntimeTurnEvent, Session, SessionInterruptIntent, SessionUsageDetail, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy, TurnEventKind, TurnUsageRecord, UsageBreakdown, UsageBreakdownGroup, UsageQueryFilter, UsageSummary } from '@agent-dock/agent-dock-shared';
+import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, RuntimeActivityEvent, RuntimeTurnEvent, RuntimeTurnStartedEvent, Session, SessionInterruptIntent, SessionUsageDetail, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy, TurnEventKind, TurnUsageRecord, UsageBreakdown, UsageBreakdownGroup, UsageQueryFilter, UsageSummary } from '@agent-dock/agent-dock-shared';
 import { basename } from 'node:path';
 import { resolveProjectPath } from './project-path.js';
 import { ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, agentConfigSchema, BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, isAgentAuthErrorText, isDeferredAsyncWaitText, makeId, mergeSessionOutputPluginsPatch, normalizeSessionOutputPlugins, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
@@ -812,6 +812,31 @@ export class AgentDockRuntime {
   }
 
   /**
+   * 订阅所有会话的轮次开始事件（task 进入 running 后立即触发），
+   * 供飞书绑定群全轮次实时同步挂载流式卡片更新，无需轮询。
+   */
+  onTurnStart(listener: (event: RuntimeTurnStartedEvent) => void) {
+    const name = 'turn_start';
+    this.emitter.on(name, listener);
+    return () => this.emitter.off(name, listener);
+  }
+
+  private emitTurnStart(session: Session, task: TaskRecord) {
+    if (this.emitter.listenerCount('turn_start') <= 0) return;
+    const event: RuntimeTurnStartedEvent = {
+      sessionId: session.id,
+      taskId: task.id,
+      prompt: task.prompt,
+      agentId: session.agentId,
+      ...(session.source ? { sessionSource: session.source } : {}),
+      ...(session.sourceId ? { sessionSourceId: session.sourceId } : {}),
+      ...(task.origin ? { taskOrigin: task.origin } : {}),
+      timestamp: now()
+    };
+    this.emitter.emit('turn_start', event);
+  }
+
+  /**
    * 订阅所有会话的轻量实时活动摘要（工具步 / 权限请求 / 思考 / 文本片段），
    * 供 BoardLiveHub 节流投影至全局单连接看板 SSE，避免为每张卡片各自建立会话流。
    */
@@ -1167,6 +1192,7 @@ export class AgentDockRuntime {
         const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' || task.origin === 'maintenance' || task.origin === 'handoff' ? { detail: agentPrompt } : {}) });
         if (!anchor) throw new RuntimeError('EVENT_NOT_PERSISTED', '轮次锚点未能落库', 500);
         this.turnAnchors.set(task.id, anchor.sequence);
+        this.emitTurnStart(session, task);
         // 用户这一轮提问就是一次对话事件，蹭下面的 saveState 一起落盘，不额外多写一次库。
         session.lastMessageAt = now();
         await this.saveState(session, 'thinking');

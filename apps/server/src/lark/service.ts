@@ -15,10 +15,19 @@ export type LarkCardActionButton = {
   elementId?: string;
 };
 
+export type LarkCardSourceBadgeColor = 'purple' | 'blue' | 'orange' | 'neutral' | 'wathet' | 'green' | 'yellow' | 'red' | 'grey';
+
+export interface LarkCardSourceBadge {
+  label: string;
+  color?: LarkCardSourceBadgeColor;
+}
+
 export interface LarkCardInput {
   agentName?: string;
   state?: LarkCardState;
   taskName?: string;
+  /** 可选轻巧来源徽标（如「🐾 小猫督办」「💻 网页同步」「⏰ 定时任务」），用于绑定群同步卡片顶部标注。 */
+  sourceBadge?: LarkCardSourceBadge;
   taskId?: string;
   sessionId?: string;
   webBaseUrl?: string;
@@ -111,7 +120,11 @@ export interface LarkChatMessagesInput {
 }
 export interface LarkChatMessagesResult { items: LarkChatMessage[]; hasMore: boolean; pageToken?: string }
 export interface LarkTextMessageInput { text: string; idempotencyKey?: string }
-export interface LarkSendTextInput extends LarkTextMessageInput { chatId: string }
+export interface LarkSendTextInput extends LarkTextMessageInput {
+  chatId?: string;
+  receiveId?: string;
+  receiveIdType?: LarkReceiveIdType;
+}
 export interface LarkReplyTextInput extends LarkTextMessageInput { messageId: string; replyInThread?: boolean }
 
 export interface LarkBotConfig {
@@ -383,11 +396,25 @@ export function buildLarkCard(input: LarkCardInput = {}) {
       },
       elements: traceElements
     }] : [];
+    const escapeInline = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     const compactTaskName = taskName.replace(/\s+/g, ' ').trim();
-    const taskSummary = taskName === 'AgentDock' ? [] : [{
-      tag: 'div', width: 'fill', margin: '0px 0px 4px 0px',
-      text: { tag: 'plain_text', content: compactTaskName, text_size: 'notation', text_color: 'grey', lines: 1 }
-    }];
+    const badgeLabel = input.sourceBadge?.label?.trim();
+    const badgeTag = badgeLabel ? `<text_tag color='${input.sourceBadge?.color ?? 'blue'}'>${escapeInline(badgeLabel)}</text_tag>` : '';
+    const taskSummary = badgeTag
+      ? [{
+          tag: 'div', element_id: 'task_source_badge', width: 'fill', margin: '0px 0px 4px 0px',
+          text: {
+            tag: 'lark_md',
+            content: compactTaskName && compactTaskName !== 'AgentDock'
+              ? `${badgeTag}　<font color='grey'>${escapeInline(compactTaskName)}</font>`
+              : badgeTag,
+            text_size: 'notation'
+          }
+        }]
+      : taskName === 'AgentDock' ? [] : [{
+          tag: 'div', width: 'fill', margin: '0px 0px 4px 0px',
+          text: { tag: 'plain_text', content: compactTaskName, text_size: 'notation', text_color: 'grey', lines: 1 }
+        }];
     const finals = finalElements.map(element => ({ ...element, margin: traceElements.length || otherElements.length ? '10px 0px 0px 0px' : '8px 0px 0px 0px' }));
     const primaryStatus = traceElements.length ? traceOverview[0] : statusElement;
     const actionSummary = taskSummary[0] ? { ...taskSummary[0], margin: '0px' } : {
@@ -405,11 +432,12 @@ export function buildLarkCard(input: LarkCardInput = {}) {
   };
   // 终态摘要优先取 final_output 元素文本；没有时（如纯状态卡片）回落到 markdown 正文。
   const finalRaw = input.elements?.find(element => element.element_id === 'final_output')?.content;
+  const summaryBadge = input.sourceBadge?.label?.trim() ? `[${input.sourceBadge.label.trim()}] ` : '';
   const summaryContent = state === 'running' || state === 'queued'
-    ? `${taskName} · ${liveTitle}`
+    ? `${summaryBadge}${taskName} · ${liveTitle}`
     : (() => {
         const snippet = markdownToPlainPreview(typeof finalRaw === 'string' ? finalRaw : content);
-        return snippet ? `${taskName} · ${liveTitle}：${snippet}` : `${taskName} · ${liveTitle}`;
+        return snippet ? `${summaryBadge}${taskName} · ${liveTitle}：${snippet}` : `${summaryBadge}${taskName} · ${liveTitle}`;
       })();
   const assemble = (mainElements: Array<Record<string, unknown>>) => ({
     schema: '2.0',
@@ -1088,10 +1116,13 @@ export class LarkCardService {
   }
 
   async sendText(input: LarkSendTextInput): Promise<LarkMessageResult> {
-    const chatId = required(input.chatId, 'chatId');
-    if (!chatId.startsWith('oc_')) throw new LarkServiceError('INVALID_CHAT_ID', 'chatId must start with oc_', 400);
-    const payload = await this.request('/open-apis/im/v1/messages?receive_id_type=chat_id', {
-      body: { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text: required(input.text, 'text') }), ...(input.idempotencyKey ? { uuid: input.idempotencyKey } : {}) }
+    if (input.chatId && input.receiveId) throw new LarkServiceError('CONFLICTING_RECIPIENTS', 'chatId and receiveId cannot be used together', 400);
+    const chatId = input.chatId?.trim();
+    if (chatId && !chatId.startsWith('oc_')) throw new LarkServiceError('INVALID_CHAT_ID', 'chatId must start with oc_', 400);
+    const receiveId = required(chatId ?? input.receiveId, 'chatId or receiveId');
+    const resolvedType = receiveIdType(chatId ? 'chat_id' : input.receiveIdType ?? 'open_id');
+    const payload = await this.request(`/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(resolvedType)}`, {
+      body: { receive_id: receiveId, msg_type: 'text', content: JSON.stringify({ text: required(input.text, 'text') }), ...(input.idempotencyKey ? { uuid: input.idempotencyKey } : {}) }
     });
     const messageId = payload.data?.message_id;
     if (!messageId) throw new LarkServiceError('INVALID_LARK_RESPONSE', 'Lark send response did not include message_id', 502);

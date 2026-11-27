@@ -1,5 +1,5 @@
 import { ExitGate } from './ExitGate';
-import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Puzzle, Search, StickyNote, Sunset, Archive, X, RefreshCw, RotateCcw, ScrollText, MoreHorizontal } from 'lucide-react';
+import { PanelRight, AlarmClock, ArrowDown, BookOpen, Bot, ExternalLink, Menu, MessageSquare, Puzzle, Search, SlidersHorizontal, StickyNote, Sunset, Archive, X, RefreshCw, RotateCcw, ScrollText, MoreHorizontal } from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDebounce } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -1063,6 +1063,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 已经托管给机器人后，托管群就是唯一的飞书入口：隐藏原来的飞书来源链接，避免看起来有两个通道。
   const handover = useQuery({ queryKey: ['session-handover', session.id], queryFn: () => api.sessionHandover(session.id), staleTime: 30_000 });
   const handoverInfo = handover.data?.handover ?? undefined;
+  const larkBinding = handover.data?.larkBinding ?? undefined;
+  const larkTurnSyncEnabled = larkBinding?.effectiveTurnSync?.enabled ?? handoverInfo?.effectiveTurnSync?.enabled;
 
   // 导入会话从外部 Agent 同步新轮次：用户在 Codex 等原客户端里续聊后，一键把 AgentDock 还没有的轮次补进来。
   // 其他会话的本地同步由 SSE + 聚焦自愈重拉兼顾，不再放按钮。
@@ -1141,6 +1143,15 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const enabledPluginsCount = enabledOutputPluginIds.size;
   const totalPluginsCount = composerOutputPlugins.length;
   const hasPluginOverrides = composerOutputPlugins.some(item => item.override !== null);
+  const larkSyncStatusBadge = typeof larkTurnSyncEnabled === 'boolean' ? (
+    <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[11px] font-medium ${
+      larkTurnSyncEnabled
+        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+        : 'border-zinc-200 bg-zinc-100 text-zinc-500'
+    }`}>
+      {larkTurnSyncEnabled ? '已开启' : '已关闭'}
+    </span>
+  ) : undefined;
   const regularMenuGroups: SessionMenuGroup[] = [
     { items: [
       ...(!session.archivedAt && totalPluginsCount > 0 ? [{
@@ -1173,9 +1184,13 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       ...(secondary && onOpenRawLog ? [{ id: 'raw-log', label: '原始日志', icon: <ScrollText size={16}/>, onSelect: () => onOpenRawLog(session.id) } satisfies SessionMenuItem] : [])
     ] },
     { items: [
-      ...(handoverInfo ? [{ id: 'handover-open', label: `已托管：${handoverInfo.name}`, icon: <Bot size={16} className="text-emerald-600"/>, onSelect: () => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem] : []),
+      ...(handoverInfo ? [
+        { id: 'handover-open', label: `已托管：${handoverInfo.name}`, icon: <Bot size={16} className="text-emerald-600"/>, onSelect: () => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem,
+        { id: 'handover-settings', label: '飞书同步设置', icon: <SlidersHorizontal size={16}/>, ...(larkSyncStatusBadge ? { trailing: larkSyncStatusBadge } : {}), onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem
+      ] : []),
       ...(!session.archivedAt && !handoverInfo && session.source !== 'lark' ? [{ id: 'handover', label: '托管到飞书机器人', icon: <Bot size={16}/>, onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
       ...(!handoverInfo && larkLink ? [{ id: 'lark-open', label: larkLink.exact ? '在飞书中打开' : '在飞书中打开该话题', icon: <ExternalLink size={16}/>, onSelect: () => window.open(larkLink.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem] : []),
+      ...(!handoverInfo && larkBinding ? [{ id: 'lark-sync-settings', label: '飞书同步设置', icon: <SlidersHorizontal size={16}/>, ...(larkSyncStatusBadge ? { trailing: larkSyncStatusBadge } : {}), onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
       ...(!session.archivedAt && session.source === 'import' ? [{ id: 'sync', label: syncExternal.isPending ? `正在从 ${externalName} 同步…` : `从 ${externalName} 同步新消息`, icon: <RefreshCw size={16}/>, disabled: syncExternal.isPending || busyStates.has(session.state), onSelect: () => syncExternal.mutate() } satisfies SessionMenuItem] : [])
     ] }
   ];
@@ -1187,12 +1202,20 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     onSelect: () => { archive.reset(); if (isMain) setMainArchiveBlocked(true); else setArchiveConfirm(true); }
   } satisfies SessionMenuItem] }] : [];
   const menuGroups: SessionMenuGroup[] = [...regularMenuGroups, ...dangerMenuGroups];
-  const baseMenuIndicator: MenuIndicatorTone | undefined = handoverInfo ? 'active' : activeSchedules > 0 ? 'active' : undefined;
+  const baseMenuIndicator: MenuIndicatorTone | undefined = handoverInfo
+    ? 'active'
+    : larkBinding && larkTurnSyncEnabled
+      ? 'active'
+      : activeSchedules > 0
+        ? 'active'
+        : undefined;
   const baseMenuTooltip = handoverInfo
     ? `更多操作（已托管：${handoverInfo.name}）`
-    : activeSchedules > 0
-      ? `更多操作（${activeSchedules} 个定时任务启用中）`
-      : '更多操作';
+    : larkBinding
+      ? `更多操作（已绑定${larkBinding.chatType === 'p2p' ? '飞书私聊' : '飞书群聊'}${larkTurnSyncEnabled ? ' · 同步已开启' : ''}）`
+      : activeSchedules > 0
+        ? `更多操作（${activeSchedules} 个定时任务启用中）`
+        : '更多操作';
 
   const agentUsageTrigger = (
     <SessionAgentUsagePopover
