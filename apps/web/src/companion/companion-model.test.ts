@@ -111,33 +111,48 @@ describe('mood and status', () => {
 
   it('reacts to the main session and its notes', () => {
     expect(deriveMood({ ...base })).toBe('curious');
-    expect(deriveMood({ ...base, mainState: 'thinking' })).toBe('busy');
-    expect(deriveMood({ ...base, mainState: 'waiting_for_permission' })).toBe('alert');
-    expect(deriveMood({ ...base, mainState: 'idle', tasks: [task({ id: 'n', state: 'needs_user' })] })).toBe('alert');
-    // 计划卡只是等你点头，不该让小猫紧张。
-    expect(deriveMood({ ...base, mainState: 'idle', tasks: [task({ id: 'p', state: 'review', plan: true })] })).toBe('idle');
-    expect(deriveMood({ ...base, mainState: 'idle', recent: { kind: 'accepted', at: 500 } })).toBe('happy');
+    expect(deriveMood({ ...base, mainState: 'thinking' })).toBe('thinking');
+    expect(deriveMood({ ...base, mainState: 'running_tool' })).toBe('busy');
+    expect(deriveMood({ ...base, mainState: 'waiting_for_permission' })).toBe('waiting');
+    expect(deriveMood({ ...base, mainState: 'idle', tasks: [task({ id: 'n', state: 'needs_user' })] })).toBe('waiting');
+    expect(deriveMood({ ...base, mainState: 'idle', tasks: [task({ id: 'nf', state: 'needs_user', lastStopReason: 'failed' })] })).toBe('error');
+    // 计划卡只是等你点头：温柔招手等待（不报红），不触发错误态。
+    expect(deriveMood({ ...base, mainState: 'idle', tasks: [task({ id: 'p', state: 'review', plan: true })] })).toBe('waiting');
+    expect(deriveMood({ ...base, mainState: 'idle', tasks: [task({ id: 'rv', state: 'review' })] })).toBe('reviewing');
+    expect(deriveMood({ ...base, mainState: 'idle', tasks: [task({ id: 'r1' }), task({ id: 'r2' })] })).toBe('delegating');
+    expect(deriveMood({ ...base, mainState: 'idle', recent: { kind: 'accepted', at: 500 } })).toBe('celebrating');
     expect(deriveMood({ ...base, mainState: 'idle', recent: { kind: 'accepted', at: -10_000 } })).toBe('idle');
     expect(deriveMood({ ...base, mainState: 'idle', recent: { kind: 'cheer', at: 500 } })).toBe('happy');
-    expect(deriveMood({ ...base, mainState: 'failed' })).toBe('sad');
+    expect(deriveMood({ ...base, mainState: 'failed' })).toBe('error');
+    expect(deriveMood({ ...base, mainState: 'idle', mainError: 'ACP disconnected' })).toBe('error');
+    expect(deriveMood({ ...base, mainState: 'stopped', archived: true })).toBe('sad');
+    expect(deriveMood({ ...base, mainState: 'idle', maintenanceRunning: true })).toBe('tidying');
     expect(deriveMood({ ...base, mainState: 'idle', now: 10 * 60_000 })).toBe('sleepy');
     expect(deriveMood({ ...base, mainState: 'idle', now: 10 * 60_000, tasks: [task({ id: 'r' })] })).toBe('idle');
+    expect(deriveMood({ ...base, mainState: 'idle', localHour: 2 })).toBe('night');
   });
 
   it('describes what the kitten is doing', () => {
     const counts = countNotes([task({ id: 'r' }), task({ id: 'v', state: 'review' })]);
-    expect(companionStatus({ mainState: 'thinking', counts, mood: 'busy' })).toBe('正在思考…');
-    expect(companionStatus({ mainState: 'idle', counts, mood: 'idle' })).toBe('1 张便签待验收');
+    expect(companionStatus({ mainState: 'thinking', counts, mood: 'thinking' })).toBe('正在思考…');
+    expect(companionStatus({ mainState: 'idle', counts, mood: 'reviewing' })).toBe('1 张便签待验收');
     expect(companionStatus({ mainState: 'idle', counts: countNotes([task({ id: 'r' })]), mood: 'idle' })).toBe('在盯着 1 张便签');
-    expect(companionStatus({ mainState: 'idle', counts: countNotes([task({ id: 'n', state: 'needs_user' })]), mood: 'alert' })).toBe('1 件事等你拍板');
-    expect(companionStatus({ mainState: 'idle', counts: countNotes([task({ id: 'p', state: 'review', plan: true })]), mood: 'idle' })).toBe('1 张计划等你点头');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([task({ id: 'r1' }), task({ id: 'r2' })]), mood: 'delegating' })).toBe('并行盯着 2 张便签');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([task({ id: 'n', state: 'needs_user' })]), mood: 'waiting' })).toBe('1 件事等你拍板');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([task({ id: 'n', state: 'needs_user', lastStopReason: 'failed' })]), hasFailedNeedsUser: true, mood: 'error' })).toBe('1 件事出错待排查');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([task({ id: 'p', state: 'review', plan: true })]), mood: 'waiting' })).toBe('1 张计划等你点头');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([]), pendingDrafts: 2, mood: 'waiting' })).toBe('2 份草稿等你确认');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([]), maintenanceRunning: true, mood: 'tidying' })).toBe('在收拾便签和记忆');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([]), mood: 'night' })).toBe('深夜陪你待命');
     expect(companionStatus({ mainState: 'idle', counts: countNotes([]), mood: 'sleepy' })).toBe('打盹中');
     // 旧版本误归档主会话：不能再显示成普通打盹，要明说需要恢复。
-    expect(companionStatus({ mainState: 'stopped', archived: true, counts: countNotes([task({ id: 'r' })]), mood: 'sleepy' })).toBe('被归档了，需要恢复');
+    expect(companionStatus({ mainState: 'stopped', archived: true, counts: countNotes([task({ id: 'r' })]), mood: 'sad' })).toBe('被归档了，需要恢复');
     expect(companionStatus({ counts: countNotes([]), mood: 'curious' })).toBe('等你来认领');
     // 刚认领、刚改名的开心不是验收通过。
     expect(companionStatus({ mainState: 'idle', counts: countNotes([]), mood: 'happy', recent: 'cheer' })).toBe('开心地摇尾巴');
-    expect(companionStatus({ mainState: 'idle', counts: countNotes([]), mood: 'happy', recent: 'accepted' })).toBe('验收通过啦');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([]), mood: 'celebrating', recent: 'accepted' })).toBe('验收通过啦');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([]), mood: 'celebrating', recent: 'maintenance_finished' })).toBe('便签和记忆收拾好啦');
+    expect(companionStatus({ mainState: 'idle', counts: countNotes([]), mood: 'celebrating', recent: 'handoff_done' })).toBe('交接完成啦');
   });
 
   it('greets by local hour', () => {

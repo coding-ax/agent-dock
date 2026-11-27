@@ -26,13 +26,15 @@ describe('移动端主会话顶栏与响应式隐藏守卫', () => {
     expect(lifecycleCss).not.toMatch(/^\.ui-handoff-flag\s*\{[^}]*\bdisplay\s*:/m);
   });
 
-  it('主会话顶栏在窄屏下隐藏状态胶囊与次要徽章，且标题容器裁切防溢出', () => {
+  it('主会话顶栏精简瘦身：移除重复便签条与退休按钮，窄屏隐藏次要徽章且裁切防溢出', () => {
     const header = read('CompanionHeader.tsx');
 
-    expect(header).toContain('className="ui-status-chip max-md:hidden"');
+    expect(header).not.toContain('CompanionHeaderNotes');
+    expect(header).not.toContain('RetireButton');
+    expect(header).not.toContain('ui-status-chip');
     expect(header).toContain('<div className="min-w-0 flex-1 overflow-hidden">');
-    expect(header).toContain('max-sm:hidden">主会话</span>');
-    expect(header).toContain('max-sm:hidden"><StageChip lifecycle={info.lifecycle}/></span>');
+    expect(header).toContain('className="inline-flex shrink-0 max-sm:hidden"');
+    expect(header).toContain('agentSlot');
   });
 
   it('普通会话顶栏标题容器同样具备 overflow-hidden 防窄屏溢出', () => {

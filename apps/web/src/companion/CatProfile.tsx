@@ -92,7 +92,7 @@ export function CatProfile({ onOpenSession, onOpenCeremony }: { onOpenSession(id
       <h3 className="flex items-center gap-1.5 text-[14px] text-zinc-900"><Hourglass size={14}/>小猫档案</h3>
       {cat && <span className="ui-stage-chip" data-stage={cat.lifeStage}>{generationLabel(cat.generation)} · {stageLabel[cat.lifeStage]}</span>}
       <span className={`text-[12px] ${levelClass[overview.level]}`}>{overview.level === 'ok' ? '指标都正常' : `${levelLabel[overview.level]}：${overview.reasons.filter(reason => reason.level === overview.level).map(formatReason).join('、')}`}</span>
-      <div className="ml-auto flex items-center gap-1.5">
+      <div className="ml-auto flex flex-wrap items-center gap-1.5">
         {lineage.length > 1 && <button type="button" disabled={syncBot.isPending} onClick={() => syncBot.mutate()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 px-2.5 text-[12px] text-zinc-700 hover:bg-zinc-50 disabled:opacity-40">
           <RefreshCw size={13} className={syncBot.isPending ? 'animate-spin' : ''}/>{syncBot.isPending ? '同步中…' : '同步飞书机器人'}
         </button>}
@@ -118,27 +118,35 @@ export function CatProfile({ onOpenSession, onOpenCeremony }: { onOpenSession(id
       </p>
     </div>}
 
-    <div className="mt-3 overflow-x-auto">
-      <table className="w-full min-w-[440px] text-left text-[12px]">
-        <thead className="text-[11px] text-zinc-400">
-          <tr><th className="py-1 font-normal">指标</th><th className="py-1 font-normal">现在</th><th className="py-1 font-normal">整理档</th><th className="py-1 font-normal">交接档</th><th className="py-1 font-normal">状态</th></tr>
-        </thead>
-        <tbody>
-          {METRIC_KEYS.map(metric => {
-            const level = overview.levels?.[metric] ?? 'ok';
-            return <tr key={metric} className="border-t border-zinc-100" data-level={level}>
-              <td className="py-1.5 text-zinc-700">{metricLabel[metric]}</td>
-              <td className="py-1.5 tabular-nums text-zinc-900">{formatMetricValue(metric, overview.metrics?.[metric])}</td>
-              {(['tidy', 'handoff'] as const).map(levelKey => <td key={levelKey} className="py-1">
-                <input inputMode="decimal" value={drafts[`${metric}.${levelKey}`] ?? ''} placeholder="关" aria-label={`${metricLabel[metric]}的${levelKey === 'tidy' ? '整理' : '交接'}阈值`}
-                  onChange={event => { const value = event.target.value; setNotice(undefined); setDrafts(current => ({ ...current, [`${metric}.${levelKey}`]: value })); }}
-                  className="ui-field h-7 w-16 rounded-md border border-zinc-200 bg-white px-1.5 text-[12px] tabular-nums text-zinc-800 outline-none placeholder:text-zinc-300"/>
-              </td>)}
-              <td className={`py-1.5 ${levelClass[level]}`}>{levelLabel[level]}</td>
-            </tr>;
-          })}
-        </tbody>
-      </table>
+    <div className="mt-3 overflow-hidden rounded-xl border border-zinc-200 bg-white">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[440px] border-collapse text-left text-[12px]">
+          <thead>
+            <tr className="border-b border-zinc-200/80 bg-zinc-50/80 text-[11px] font-medium text-zinc-500">
+              <th className="whitespace-nowrap px-3 py-2 font-medium">指标</th>
+              <th className="whitespace-nowrap px-3 py-2 text-right font-medium">现在</th>
+              <th className="whitespace-nowrap px-3 py-2 text-right font-medium">整理档</th>
+              <th className="whitespace-nowrap px-3 py-2 text-right font-medium">交接档</th>
+              <th className="whitespace-nowrap px-3 py-2 text-right font-medium">状态</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-100">
+            {METRIC_KEYS.map(metric => {
+              const level = overview.levels?.[metric] ?? 'ok';
+              return <tr key={metric} className="transition-colors hover:bg-zinc-50/70" data-level={level}>
+                <td className="whitespace-nowrap px-3 py-2 align-middle font-medium text-zinc-700">{metricLabel[metric]}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-right align-middle tabular-nums text-zinc-900">{formatMetricValue(metric, overview.metrics?.[metric])}</td>
+                {(['tidy', 'handoff'] as const).map(levelKey => <td key={levelKey} className="whitespace-nowrap px-3 py-1.5 text-right align-middle">
+                  <input inputMode="decimal" value={drafts[`${metric}.${levelKey}`] ?? ''} placeholder="关" aria-label={`${metricLabel[metric]}的${levelKey === 'tidy' ? '整理' : '交接'}阈值`}
+                    onChange={event => { const value = event.target.value; setNotice(undefined); setDrafts(current => ({ ...current, [`${metric}.${levelKey}`]: value })); }}
+                    className="ui-field h-7 w-16 rounded-md border border-zinc-200 bg-white px-2 text-right text-[12px] tabular-nums text-zinc-800 outline-none placeholder:text-zinc-300"/>
+                </td>)}
+                <td className={`whitespace-nowrap px-3 py-2 text-right align-middle text-[11.5px] font-medium ${levelClass[level]}`}>{levelLabel[level]}</td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
     <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-zinc-600">
       <label className="flex items-center gap-1.5"><input type="checkbox" checked={config.autoMaintenance} disabled={save.isPending} onChange={event => save.mutate({ autoMaintenance: event.target.checked })} className="h-3.5 w-3.5 accent-zinc-900"/>到整理档自动开整理轮次</label>

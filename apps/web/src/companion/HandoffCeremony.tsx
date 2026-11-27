@@ -227,7 +227,7 @@ function CeremonyStage({ phase, oldStage, oldName, newName, generation }: { phas
       {NOTE_COLORS.map((color, index) => <span key={color} className="ui-ceremony-note" data-flying="" style={{ background: color, animationDelay: `${index * 0.45}s` }}/>)}
     </div>}
     <div ref={kittenRef} className="ui-ceremony-cat" data-hidden={born ? undefined : ''} data-act={newAct}>
-      <Kitten size={62} stage="kitten" mood={phase === 'done' ? 'happy' : 'curious'} collar={phase === 'done'} drawCollar={phase === 'done'} interactive={false}/>
+      <Kitten size={62} stage="kitten" mood={phase === 'done' ? 'celebrating' : 'curious'} collar={phase === 'done'} drawCollar={phase === 'done'} interactive={false}/>
       <span className="ui-ceremony-tag">{generationLabel(generation + 1)} · {newName}</span>
     </div>
   </div>;

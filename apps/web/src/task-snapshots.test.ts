@@ -68,4 +68,11 @@ describe('task snapshot reconciliation', () => {
     ]);
     expect(after.map(item => [item.id, item.status])).toEqual([['t1', 'completed'], ['t2', 'running']]);
   });
+
+  it('preserves a newly queued task received via SSE when an older in-flight poll omits it', () => {
+    const running = task('t1', 'running', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z');
+    const newlyQueued = task('t2', 'queued', '2026-01-01T00:00:02.000Z', '2026-01-01T00:00:02.000Z');
+    const merged = mergeTaskSnapshots([running, newlyQueued], [running]);
+    expect(merged.map(item => [item.id, item.status])).toEqual([['t1', 'running'], ['t2', 'queued']]);
+  });
 });

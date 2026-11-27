@@ -5,10 +5,10 @@
  */
 
 @media (prefers-reduced-motion: no-preference) {
-  /* 呼吸节奏随年纪放慢；犯困时仍以犯困为准。 */
-  .ui-kitten[data-stage="kitten"]:not([data-mood="sleepy"]) .ui-cat-sprite-box { --cat-breath-duration: 3s; }
-  .ui-kitten[data-stage="senior"]:not([data-mood="sleepy"]) .ui-cat-sprite-box { --cat-breath-duration: 4.6s; }
-  .ui-kitten[data-stage="elder"]:not([data-mood="sleepy"]) .ui-cat-sprite-box { --cat-breath-duration: 5.6s; }
+  /* 呼吸节奏随年纪放慢；犯困、深夜陪伴、庆祝等显式情绪节奏优先。 */
+  .ui-kitten[data-stage="kitten"]:not([data-mood="sleepy"]):not([data-mood="night"]):not([data-mood="celebrating"]) .ui-cat-sprite-box { --cat-breath-duration: 3s; }
+  .ui-kitten[data-stage="senior"]:not([data-mood="sleepy"]):not([data-mood="night"]):not([data-mood="celebrating"]) .ui-cat-sprite-box { --cat-breath-duration: 4.6s; }
+  .ui-kitten[data-stage="elder"]:not([data-mood="sleepy"]):not([data-mood="night"]):not([data-mood="celebrating"]) .ui-cat-sprite-box { --cat-breath-duration: 5.6s; }
 }
 
 /* ---------- 阶段徽标（侧栏卡片、主会话标题栏） ---------- */

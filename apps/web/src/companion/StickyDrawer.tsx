@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import { useEventListener, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LoaderCircle, PawPrint, Send, Settings2, Trash2, X } from 'lucide-react';
+import { ArrowUpRight, Columns3, LoaderCircle, PawPrint, Send, Settings2, Trash2, X } from 'lucide-react';
 import { api, type AssistantDraft } from '../api';
 import { ArchiveShelf } from './ArchiveShelf';
 import { Kitten } from './Kitten';
@@ -228,6 +228,15 @@ export function StickyDrawer() {
           <h2 className="truncate text-[15px] font-semibold tracking-[-.01em] text-zinc-900">{info.adopted ? `${info.name}的便签` : '便签'}</h2>
           <p className="truncate text-[12px] text-zinc-500">{summary}</p>
         </div>
+        <button
+          type="button"
+          onClick={() => { close(); nav.openBoard(); }}
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2 text-[11.5px] font-medium text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900"
+        >
+          <Columns3 size={12}/>
+          <span>看板</span>
+          <ArrowUpRight size={11} className="text-zinc-400"/>
+        </button>
         <button ref={closeRef} type="button" onClick={close} aria-label="收起便签" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-200/60 hover:text-zinc-900"><X size={16}/></button>
       </div>
       {info.adopted && <div key={`filter-${nonce}`} ref={filterRef} className="ui-filter" role="toolbar" aria-label="按状态筛选便签">

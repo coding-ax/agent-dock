@@ -1,0 +1,302 @@
+/*
+ * AgentDock 自由拖拽看板模式样式系统
+ *
+ * 设计原则：
+ * - 三阶通透层级：画布 (--board-canvas) < 列槽 (--board-lane) < 卡片 (--board-card)，亮暗双色对称校准；
+ * - 拖拽物理感：轻度浮起倾斜、柔光落位反馈、FLIP 弹簧重排；
+ * - 主小猫 Dock：底部毛玻璃悬浮胶囊，拖卡靠近时张开暖色磁性光环与探头期待动效；
+ * - 严格兼容 prefers-reduced-motion 与移动端 100dvh 安全区布局。
+ */
+
+:root {
+  --board-canvas: #f6f7f9;
+  --board-lane: #eef0f4;
+  --board-lane-hover: #e7ebf2;
+  --board-card: #ffffff;
+  --board-card-border: rgba(24, 24, 27, 0.08);
+  --board-card-shadow: 0 1px 2px rgba(15, 23, 42, 0.045), 0 0 0 1px rgba(15, 23, 42, 0.03);
+  --board-card-hover-shadow: 0 6px 18px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.05);
+  --board-overlay-shadow: 0 18px 40px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.08);
+  --board-dock-bg: rgba(255, 255, 255, 0.86);
+  --board-dock-border: rgba(24, 24, 27, 0.1);
+  --board-dock-shadow: 0 16px 40px rgba(15, 23, 42, 0.12), 0 2px 8px rgba(15, 23, 42, 0.06);
+  --board-kitten-note-bg: rgba(254, 243, 199, 0.52);
+  --board-kitten-note-border: rgba(217, 119, 6, 0.22);
+}
+
+html[data-theme="dark"] {
+  --board-canvas: #19191b;
+  --board-lane: #202023;
+  --board-lane-hover: #26262b;
+  --board-card: #2a2a2e;
+  --board-card-border: rgba(255, 255, 255, 0.07);
+  --board-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --board-card-hover-shadow: 0 10px 24px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --board-overlay-shadow: 0 22px 48px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  --board-dock-bg: rgba(34, 34, 38, 0.88);
+  --board-dock-border: rgba(255, 255, 255, 0.11);
+  --board-dock-shadow: 0 18px 46px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --board-kitten-note-bg: rgba(120, 82, 20, 0.24);
+  --board-kitten-note-border: rgba(245, 158, 11, 0.26);
+}
+
+.ui-board-canvas {
+  background: var(--board-canvas);
+}
+
+.ui-board-lane {
+  background: var(--board-lane);
+  transition: background-color var(--dur-base, 180ms) var(--ease-swift, ease), box-shadow var(--dur-base, 180ms) var(--ease-swift, ease);
+}
+
+.ui-board-lane[data-drop-over="true"] {
+  background: var(--board-lane-hover);
+  box-shadow: inset 0 0 0 1.5px rgba(59, 130, 246, 0.42);
+}
+
+.ui-board-card {
+  position: relative;
+  contain: style;
+  background: var(--board-card);
+  border: 1px solid var(--board-card-border);
+  box-shadow: var(--board-card-shadow);
+  transition:
+    transform var(--dur-base, 180ms) var(--ease-out-expo, cubic-bezier(.16, 1, .3, 1)),
+    box-shadow var(--dur-base, 180ms) var(--ease-swift, ease),
+    border-color var(--dur-fast, 120ms) var(--ease-swift, ease),
+    opacity var(--dur-fast, 120ms) ease;
+}
+
+.ui-board-card:hover {
+  box-shadow: var(--board-card-hover-shadow);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ui-board-card:not([data-dragging="true"]):hover {
+    transform: translateY(-1.5px);
+  }
+}
+
+.ui-board-card[data-selected="true"] {
+  border-color: rgba(59, 130, 246, 0.58);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18), var(--board-card-shadow);
+}
+
+.ui-board-card[data-active-drawer="true"] {
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.16), var(--board-card-hover-shadow);
+}
+
+.ui-board-card[data-dragging="true"] {
+  opacity: 0.36;
+  transform: scale(0.985);
+}
+
+.ui-board-card-overlay {
+  background: var(--board-card);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  box-shadow: var(--board-overlay-shadow);
+  transform: rotate(1.35deg) scale(1.024);
+  cursor: grabbing;
+}
+
+.ui-board-card[data-landed="true"] {
+  animation: ui-board-land-flash 760ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.ui-board-kitten-note {
+  background: var(--board-kitten-note-bg);
+  border: 1px solid var(--board-kitten-note-border);
+}
+
+/* 左侧 3px 语义状态脉冲 */
+.ui-board-bar-pulse {
+  animation: ui-board-bar-pulse 1.9s ease-in-out infinite;
+}
+
+.ui-board-bar-breathe {
+  animation: ui-board-bar-breathe 1.6s ease-in-out infinite;
+}
+
+.ui-board-dot-pulse {
+  animation: ui-board-dot-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes ui-board-bar-pulse {
+  0%, 100% { opacity: 0.62; }
+  50% { opacity: 1; }
+}
+
+/* 纯 opacity 呼吸，杜绝 filter 引起的长列表每帧重绘 */
+@keyframes ui-board-bar-breathe {
+  0%, 100% { opacity: 0.48; }
+  50% { opacity: 1; }
+}
+
+@keyframes ui-board-dot-pulse {
+  0%, 100% { transform: scale(0.86); opacity: 0.65; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+
+@keyframes ui-board-land-flash {
+  0% {
+    opacity: 0.86;
+    transform: translateY(-3px) scale(1.012);
+  }
+  55% {
+    opacity: 1;
+    transform: translateY(0) scale(0.996);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ---------- 主小猫底部悬浮毛玻璃指令 Dock ---------- */
+
+.ui-kitten-dock {
+  background: var(--board-dock-bg);
+  border: 1px solid var(--board-dock-border);
+  box-shadow: var(--board-dock-shadow);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  transition:
+    transform var(--dur-spring, 320ms) var(--ease-spring, cubic-bezier(.22, 1.24, .36, 1)),
+    box-shadow var(--dur-panel, 240ms) var(--ease-out-expo, ease),
+    border-color var(--dur-base, 180ms) var(--ease-swift, ease),
+    background-color var(--dur-base, 180ms) var(--ease-swift, ease);
+}
+
+/* 任意卡片被拖起时：小猫 Dock 轻轻上浮发出柔和邀请 */
+.ui-kitten-dock[data-drag-active="true"] {
+  transform: translateY(-4px);
+  border-color: rgba(245, 158, 11, 0.45);
+  box-shadow:
+    0 0 0 3px rgba(245, 158, 11, 0.12),
+    0 18px 42px rgba(245, 158, 11, 0.14),
+    var(--board-dock-shadow);
+}
+
+/* 卡片拖到小猫 Dock 上方：张开暖色磁性光环 + 小猫放大探头 */
+.ui-kitten-dock[data-drop-over="true"] {
+  transform: translateY(-8px) scale(1.028);
+  border-color: rgba(245, 158, 11, 0.82);
+  box-shadow:
+    0 0 0 5px rgba(245, 158, 11, 0.2),
+    0 0 34px rgba(245, 158, 11, 0.32),
+    var(--board-dock-shadow);
+}
+
+.ui-kitten-dock-avatar {
+  position: relative;
+  transition: transform var(--dur-spring, 320ms) var(--ease-spring, cubic-bezier(.22, 1.32, .36, 1));
+}
+
+.ui-kitten-dock[data-drop-over="true"] .ui-kitten-dock-avatar {
+  transform: scale(1.16) translateY(-2px);
+}
+
+.ui-kitten-dock-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  pointer-events: none;
+  border: 1.5px solid transparent;
+  transition: border-color var(--dur-base, 180ms) ease, box-shadow var(--dur-panel, 240ms) ease, opacity var(--dur-base, 180ms) ease;
+}
+
+.ui-kitten-dock[data-drag-active="true"] .ui-kitten-dock-ring {
+  border-color: rgba(245, 158, 11, 0.45);
+  animation: ui-kitten-halo 1.4s ease-in-out infinite;
+}
+
+.ui-kitten-dock[data-drop-over="true"] .ui-kitten-dock-ring {
+  border-color: rgba(245, 158, 11, 0.92);
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.48);
+  animation: ui-kitten-halo-magnet 1.05s var(--ease-out-expo, ease-out) infinite;
+}
+
+@keyframes ui-kitten-halo {
+  0%, 100% { transform: scale(0.96); opacity: 0.6; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+@keyframes ui-kitten-halo-magnet {
+  0% { transform: scale(0.98); opacity: 0.95; }
+  60% { transform: scale(1.18); opacity: 0.4; }
+  100% { transform: scale(0.98); opacity: 0.95; }
+}
+
+@keyframes ui-chip-pop-in {
+  0% { opacity: 0; transform: scale(0.76) translateY(4px); }
+  65% { opacity: 1; transform: scale(1.04) translateY(-1px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.ui-board-chip-pop {
+  animation: ui-chip-pop-in var(--dur-spring, 320ms) var(--ease-spring-snappy, cubic-bezier(.34, 1.38, .64, 1));
+}
+
+@keyframes ui-tidy-banner-in {
+  0% { opacity: 0; transform: translate(-50%, -8px) scale(0.96); }
+  100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+.ui-board-tidy-banner {
+  animation: ui-tidy-banner-in var(--dur-panel, 240ms) var(--ease-out-expo, cubic-bezier(.16, 1, .3, 1));
+}
+
+/* 看板详情侧滑抽屉进退场（配合 ExitGate 实现丝滑阻尼滑入滑出） */
+@keyframes ui-board-drawer-in {
+  from { opacity: 0; transform: translateX(28px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes ui-board-drawer-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(28px); }
+}
+@keyframes ui-board-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ui-board-scrim-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.ui-board-drawer {
+  animation: ui-board-drawer-in var(--dur-panel, 240ms) var(--ease-out-expo, cubic-bezier(.16, 1, .3, 1)) backwards;
+}
+[data-closing] .ui-board-drawer {
+  animation: ui-board-drawer-out var(--dur-base, 180ms) var(--ease-swift, cubic-bezier(.2, 0, 0, 1)) forwards;
+}
+.ui-board-drawer-scrim {
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: ui-board-scrim-in var(--dur-panel, 240ms) var(--ease-out-expo, ease-out) backwards;
+}
+[data-closing] .ui-board-drawer-scrim {
+  animation: ui-board-scrim-out var(--dur-base, 180ms) var(--ease-swift, ease-in) forwards;
+}
+
+/* 减少动态效果的无障碍兜底 */
+@media (prefers-reduced-motion: reduce) {
+  .ui-board-bar-pulse,
+  .ui-board-bar-breathe,
+  .ui-board-dot-pulse,
+  .ui-board-card[data-landed="true"],
+  .ui-kitten-dock[data-drag-active="true"] .ui-kitten-dock-ring,
+  .ui-kitten-dock[data-drop-over="true"] .ui-kitten-dock-ring,
+  .ui-board-chip-pop,
+  .ui-board-tidy-banner,
+  .ui-board-drawer,
+  .ui-board-drawer-scrim {
+    animation: none !important;
+  }
+  .ui-board-card:hover,
+  .ui-board-card-overlay,
+  .ui-kitten-dock[data-drop-over="true"] {
+    transform: none;
+  }
+}

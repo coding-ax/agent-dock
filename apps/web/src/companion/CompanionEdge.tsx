@@ -6,7 +6,7 @@ import { anchorElement, nudge, prefersReducedMotion, useAnchor } from './effects
 import { useCompanion, useCompanionNav } from './useCompanion';
 import { useCompanionStore, type BubbleAction, type CompanionBubble } from './companion-store';
 
-export type CompanionView = 'home' | 'main' | 'session';
+export type CompanionView = 'home' | 'main' | 'session' | 'board';
 
 const POSITION_KEY = 'agentdock:companion-edge-y';
 const BUBBLE_MS = 4_600;
@@ -150,7 +150,7 @@ export function CompanionEdge({ view }: { view: CompanionView }) {
     if (current.pull < -PULL_OPEN) useCompanionStore.getState().openDrawer();
   };
 
-  if (!info.loaded) return null;
+  if (!info.loaded || view === 'board') return null;
 
   if (!info.adopted) {
     if (inviteDismissed || view === 'home') return null;

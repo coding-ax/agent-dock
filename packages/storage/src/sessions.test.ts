@@ -43,4 +43,26 @@ describe('session last_message_at', () => {
       });
     } finally { repos.close(); rmSync(dir, { recursive: true, force: true }); }
   });
+
+  it('save 显式清空 error 与 interruptIntent（不再被 drizzle undefined 跳过）', async () => {
+    const repos = createRepositories(':memory:');
+    try {
+      await repos.sessions.save(session({
+        state: 'interrupted',
+        error: 'AgentDock 守护进程重启，正在进行的任务已中断',
+        interruptIntent: 'daemon_restart'
+      }));
+      expect(await repos.sessions.get('ses_1')).toMatchObject({
+        state: 'interrupted',
+        error: 'AgentDock 守护进程重启，正在进行的任务已中断',
+        interruptIntent: 'daemon_restart'
+      });
+
+      await repos.sessions.save(session({ state: 'completed', error: undefined, interruptIntent: undefined }));
+      const recovered = await repos.sessions.get('ses_1');
+      expect(recovered?.state).toBe('completed');
+      expect(recovered?.error ?? null).toBeNull();
+      expect(recovered?.interruptIntent ?? null).toBeNull();
+    } finally { repos.close(); }
+  });
 });

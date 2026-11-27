@@ -136,6 +136,10 @@ export interface AssistantServiceOptions {
   postGithubComment?: (input: { owner: string; repo: string; number: number; body: string }) => Promise<void>;
   /** 主会话交接切换完成、即将归档旧主会话前的回调（如迁移存量定时任务）。 */
   onMainSessionHandoff?: (fromSessionId: string, toSessionId: string) => Promise<void> | void;
+  /** 看板摘要提供者：注入主会话 <agentdock-context>，让小猫看见当前活跃看板结构。 */
+  boardSnapshot?: () => Promise<string>;
+  /** 事项状态变化回调：实时通知看板 SSE 刷新卡片。 */
+  onTaskMutated?: (task: AssistantTask) => void;
 }
 
 export interface StartTaskInput {
@@ -163,6 +167,8 @@ export class AssistantService {
   private readonly notifyChannel?: AssistantServiceOptions['notify'];
   private readonly sendLarkReplyChannel?: AssistantServiceOptions['sendLarkReply'];
   private readonly postGithubComment: NonNullable<AssistantServiceOptions['postGithubComment']>;
+  private readonly boardSnapshotProvider?: AssistantServiceOptions['boardSnapshot'];
+  private readonly onTaskMutated?: AssistantServiceOptions['onTaskMutated'];
   private unsubscribe?: () => void;
   private timer?: NodeJS.Timeout;
   private flushTimer?: NodeJS.Timeout;
@@ -180,6 +186,8 @@ export class AssistantService {
     this.notifyChannel = options.notify;
     this.sendLarkReplyChannel = options.sendLarkReply;
     this.postGithubComment = options.postGithubComment ?? defaultPostGithubComment;
+    this.boardSnapshotProvider = options.boardSnapshot;
+    this.onTaskMutated = options.onTaskMutated;
     this.store = new AssistantStore(options.databaseUrl === ':memory:' ? ':memory:' : `${options.databaseUrl}.assistant.db`);
     this.lifecycle = new AssistantLifecycle({
       store: this.store, runtime: this.runtime, repos: this.repos, log: this.log,
@@ -489,10 +497,28 @@ export class AssistantService {
       const failed = activeWatches.find(watch => watch.failCount >= 3);
       sections.watches = `watch：进行中 ${activeWatches.length} 条${failed ? `；最近失败：${failed.name}` : ''}。`;
     }
+    if (this.boardSnapshotProvider) {
+      const boardLine = await this.boardSnapshotProvider().catch(() => '');
+      if (boardLine) sections.board = boardLine;
+    }
     return sections;
   }
 
-  async handleStatus(event: { sessionId: string; state: Session['state']; error?: string; interruptIntent?: SessionInterruptIntent }) {
+  /** 判断会话是否仍有排队或运行中的任务（如 Steer 切任务、task append --mode queue 续跑间隙）。 */
+  private async sessionHasPendingWork(sessionId: string, eventQueued?: boolean): Promise<boolean> {
+    if (eventQueued === true) return true;
+    const runtimeWithQueue = this.runtime as { hasQueuedTasks?: (id: string) => boolean };
+    if (typeof runtimeWithQueue.hasQueuedTasks === 'function' && runtimeWithQueue.hasQueuedTasks(sessionId)) {
+      return true;
+    }
+    if (typeof this.runtime.getTasks === 'function') {
+      const tasks = await this.runtime.getTasks(sessionId).catch(() => []);
+      if (tasks.some(item => item.status === 'queued' || item.status === 'running')) return true;
+    }
+    return false;
+  }
+
+  async handleStatus(event: { sessionId: string; state: Session['state']; error?: string; interruptIntent?: SessionInterruptIntent; queued?: boolean }) {
     if (this.stopped) return;
     const task = this.store.findOpenTaskBySession(event.sessionId);
     if (!task) return;
@@ -501,6 +527,11 @@ export class AssistantService {
       return;
     }
     if (event.state === 'failed' || event.state === 'interrupted') {
+      // Steer（「立即发送」）或 --mode interrupt 会先中断当前轮次再立刻执行队首任务；
+      // 队列里仍有待跑任务说明会话正在切换轮次，不是「用户停止了整个事项」。
+      if (event.state === 'interrupted' && await this.sessionHasPendingWork(event.sessionId, event.queued)) {
+        return;
+      }
       if (task.state !== 'needs_user') {
         task.state = 'needs_user';
         finishTaskRun(task);
@@ -523,6 +554,9 @@ export class AssistantService {
     }
     if (event.state === 'idle' || event.state === 'completed') {
       if (task.state === 'running') {
+        if (!event.error && await this.sessionHasPendingWork(event.sessionId, event.queued)) {
+          return;
+        }
         // runtime 对「轮次内失败」的会话会回收成 idle 并带上 error，好让同一会话继续接活；
         // 这不是正常完成，仍要按失败督办，否则真实崩溃会被误报成待验收。
         task.state = event.error ? 'needs_user' : 'review';
@@ -643,6 +677,9 @@ export class AssistantService {
         continue;
       }
       if (session.state === 'failed' || session.state === 'interrupted') {
+        if (session.state === 'interrupted' && await this.sessionHasPendingWork(task.sessionId)) {
+          continue;
+        }
         if (task.state !== 'needs_user') {
           task.state = 'needs_user';
           finishTaskRun(task);
@@ -664,6 +701,9 @@ export class AssistantService {
         continue;
       }
       if ((session.state === 'idle' || session.state === 'completed') && task.state === 'running') {
+        if (!session.error && await this.sessionHasPendingWork(task.sessionId)) {
+          continue;
+        }
         task.state = session.error ? 'needs_user' : 'review';
         if (session.error) {
           const reason = isTimeoutMessage(session.error) ? 'timeout' : 'failed';
@@ -692,6 +732,11 @@ export class AssistantService {
   listTasks() { return this.store.listTasks(); }
 
   getTask(id: string) { return this.store.getTask(id); }
+
+  /** 判断某会话是否为主会话派出的事项便签子会话（与用户手动打开的 /btw 侧边聊天区分）。 */
+  isTaskSession(sessionId: string): boolean {
+    return this.store.listTasks().some(task => task.sessionId === sessionId);
+  }
 
   listReviews(taskId: string) { return this.store.listReviews(taskId); }
 
@@ -748,15 +793,17 @@ export class AssistantService {
       task.state = 'needs_user';
       finishTaskRun(task);
       this.store.saveTask(task);
+      this.onTaskMutated?.(task);
       throw error;
     }
+    this.onTaskMutated?.(task);
     return task;
   }
 
   planTask(input: PlanTaskInput): AssistantTask {
     this.requireMain();
     const cwd = validateCwd(input.cwd);
-    return this.store.createTask({
+    const task = this.store.createTask({
       title: input.title,
       ...(input.notes ? { notes: input.notes } : {}),
       doneWhen: input.doneWhen,
@@ -768,6 +815,8 @@ export class AssistantService {
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       plan: true
     });
+    this.onTaskMutated?.(task);
+    return task;
   }
 
   async startPlannedTask(
@@ -808,6 +857,7 @@ export class AssistantService {
     this.store.saveTask(task);
     await this.nameSession(session.id, task.title);
     await this.runtime.dispatch(session.id, buildTaskPrompt(task));
+    this.onTaskMutated?.(task);
     return task;
   }
 
@@ -833,6 +883,7 @@ export class AssistantService {
       task.state = 'closed'; task.outcome = 'accepted'; task.closedAt = now();
       finishTaskRun(task);
       this.store.saveTask(task);
+      this.onTaskMutated?.(task);
       return task;
     }
     if (verdict === 'cancelled') {
@@ -840,12 +891,14 @@ export class AssistantService {
       finishTaskRun(task);
       this.store.saveTask(task);
       if (task.sessionId) await this.runtime.stop(task.sessionId).catch(() => undefined);
+      this.onTaskMutated?.(task);
       return task;
     }
     if (verdict === 'needs_user') {
       task.state = 'needs_user';
       finishTaskRun(task);
       this.store.saveTask(task);
+      this.onTaskMutated?.(task);
       return task;
     }
     // rework：最多 2 轮，第 3 次自动转 needs_user
@@ -853,6 +906,7 @@ export class AssistantService {
       task.state = 'needs_user';
       finishTaskRun(task);
       this.store.saveTask(task);
+      this.onTaskMutated?.(task);
       return task;
     }
     if (!task.sessionId) throw new Error('事项没有关联的侧边会话，无法返工');
@@ -860,6 +914,7 @@ export class AssistantService {
     task.state = 'running';
     beginTaskRun(task);
     this.store.saveTask(task);
+    this.onTaskMutated?.(task);
     const gaps = checks.filter(check => !check.met).map(check => `- ${check.criterion}${check.evidence ? `：${check.evidence}` : ''}`).join('\n');
     await this.runtime.dispatch(task.sessionId, [
       `返工第 ${task.round} 轮。以下验收标准还没通过：`,
@@ -927,6 +982,14 @@ export class AssistantService {
     }
     this.store.saveTask(task);
     try {
+      // 原侧边会话落到 stopped/failed 时直接 dispatch 会 409 INVALID_STATE；
+      // 先重启恢复为 idle 再派发，确保 task append --mode queue 可平滑续做。
+      if (session.state === 'stopped' || session.state === 'failed') {
+        const restartable = this.runtime as { restart?: (id: string) => Promise<Session> };
+        if (typeof restartable.restart === 'function') {
+          session = await restartable.restart(session.id);
+        }
+      }
       await this.runtime.dispatch(session.id, message, mode);
       if (isUserStopped(task)) {
         task.lastResumedAt = now();
@@ -951,6 +1014,7 @@ export class AssistantService {
         task.state = 'review';
         finishTaskRun(task);
         this.store.saveTask(task);
+        this.onTaskMutated?.(task);
       }
       this.signal('review', task.title, detail || '侧边会话报告完成', task.id, fromSessionId);
     } else {
@@ -967,6 +1031,7 @@ export class AssistantService {
     if (reason) task.notes = `${task.notes}\n取消原因：${reason}`.trim();
     this.store.saveTask(task);
     if (task.sessionId) await this.runtime.stop(task.sessionId).catch(() => undefined);
+    this.onTaskMutated?.(task);
     return task;
   }
 
@@ -1159,14 +1224,16 @@ export class AssistantService {
   async notify(input: NotifyInput) {
     const text = input.text.trim();
     if (!text) throw new Error('通知内容不能为空');
-    const sent = await this.sendNotification(text, input.ask === true);
-    const id = this.store.addNotification(text, input.ask === true, input.urgent === true, sent ? 'sent' : 'failed');
+    const ask = input.ask === true;
+    const urgent = input.urgent === true;
+    const sent = await this.sendNotification(text, ask, urgent);
+    const id = this.store.addNotification(text, ask, urgent, sent ? 'sent' : 'failed');
     return { id, sent };
   }
 
-  private async sendNotification(text: string, ask: boolean): Promise<boolean> {
+  private async sendNotification(text: string, ask: boolean, urgent: boolean): Promise<boolean> {
     if (!this.notifyChannel) return false;
-    try { return await this.notifyChannel({ text, ask, urgent: false, ...(this.mainSessionIdValue ? { sessionId: this.mainSessionIdValue } : {}) }); }
+    try { return await this.notifyChannel({ text, ask, urgent, ...(this.mainSessionIdValue ? { sessionId: this.mainSessionIdValue } : {}) }); }
     catch (error) {
       this.log.warn(`通知推送失败：${error instanceof Error ? error.message : String(error)}`);
       return false;
@@ -1209,6 +1276,7 @@ export function buildMainSystemPrompt(): string {
     '- 派活：`agent-dock task start --title "..." --notes "背景/范围/禁止事项" --done-when "可验证证据"`；需要换 Agent、工作区、模型、思考深度时加 `--agent`、`--cwd`、`--model`、`--reasoning-effort`。',
     '- 计划：`agent-dock task plan --title "..." --notes "..." --done-when "..."`；只登记计划卡，等用户确认后再用 `agent-dock task start <计划ID>` 开工。',
     '- 看板：`agent-dock task list` 看所有事项；`agent-dock task show <任务ID>` 看单个事项的 done-when、证据和验收记录。',
+    '- 看板编排：`agent-dock board show` 看看板；`agent-dock board column add/move` 建列/调列序；`agent-dock board card add/move/update --pin --kitten-note "..."` 编排卡片并写批注（整理看板属于编排职责，可直接执行，无需派侧边会话）。',
     '- 验收：`agent-dock task review <任务ID> --verdict accepted|rework|needs_user|cancelled --check "验收标准=met:证据" --note "..."`；rework 必须写清缺哪条证据。',
     '- 续做：`agent-dock task append <任务ID> --text "用户补充要求"`；已验收/已关闭的便签也能重开并派回原侧边会话。',
     '- 取消：`agent-dock task cancel <任务ID> --reason "..."`；只在事项确实不该继续时用。',

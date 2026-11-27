@@ -5,6 +5,7 @@ import { mkdirSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { openDatabase, type NativeBindingFallback } from './native.js';
 import { createUsageRepository } from './usage.js';
+import { createBoardRepository } from './boards.js';
 import type { AgentConfig, AgentEvent, ProjectRecord, RepositoryBundle, ScheduleRecord, ScheduleRunRecord, Session, TaskRecord } from '@agent-dock/agent-dock-shared';
 import { agentConfigs, channelMappings, configs, errors, events, machines, permissionRequests, projects, scheduleRuns, schedules, sessions, tasks, toolCalls } from './schema.js';
 export * from './native.js';
@@ -161,8 +162,17 @@ export function createRepositories(filename: string, options: { nativeFallback?:
        */
       async save(s) {
         // 会话名与置顶都只走各自的窄写入口：这里的 s 可能是过期内存快照。
+        // error / interruptIntent / archivedAt 是显式可清空的状态列：drizzle 的 upsert 会跳过
+        // undefined，不显式写成 null 会导致旧的报错或中断意图永远留在库里（例如 daemon 重启或
+        // 上一轮打断之后，新一轮正常完成仍带着旧 error/interruptIntent）。
         const { customTitle: _customTitle, agentTitle: _agentTitle, pinnedAt: _pinnedAt, ...row } = s;
-        db.insert(sessions).values(row).onConflictDoUpdate({ target: sessions.id, set: row }).run();
+        const persisted = {
+          ...row,
+          error: row.error ?? null,
+          interruptIntent: row.interruptIntent ?? null,
+          archivedAt: row.archivedAt ?? null
+        };
+        db.insert(sessions).values(persisted).onConflictDoUpdate({ target: sessions.id, set: persisted }).run();
       },
       /**
        * 会话名的唯一写入口，按列定向更新，不受整行 save 的快照新鲜度影响。
@@ -397,6 +407,7 @@ export function createRepositories(filename: string, options: { nativeFallback?:
       async setPinned(id, pinnedAt) { db.update(projects).set({ pinnedAt, updatedAt: new Date().toISOString() }).where(eq(projects.id, id)).run(); }
     },
     usage: createUsageRepository(sqlite),
+    boards: createBoardRepository(sqlite),
     close() { sqlite.close(); }
   };
 }

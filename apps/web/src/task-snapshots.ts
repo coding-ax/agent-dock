@@ -32,10 +32,11 @@ export function upsertTask(previous: Task[] | undefined, task: Task): Task[] {
   return copy;
 }
 
-/** 全量快照（tasks 轮询）按 id 合并：旧快照不能把已经前进的状态写回去。 */
+/** 全量快照（tasks 轮询）按 id 合并：旧快照不能把已经前进的状态写回去，也不能抹掉飞行期间刚到达的新任务。 */
 export function mergeTaskSnapshots(previous: Task[] | undefined, incoming: Task[]): Task[] {
   if (!previous?.length) return incoming;
   const byId = new Map(previous.map(task => [task.id, task]));
+  const incomingIds = new Set(incoming.map(task => task.id));
   let changed = false;
   const merged = incoming.map(task => {
     const existing = byId.get(task.id);
@@ -44,6 +45,14 @@ export function mergeTaskSnapshots(previous: Task[] | undefined, incoming: Task[
     if (next !== task) changed = true;
     return next;
   });
+  // 任务行在服务端只增不删：如果缓存里已有通过 send 响应或 SSE 刚写入的任务，
+  // 而更早发出的 tasks 轮询响应还没包含它，保留该任务避免队列面板短暂闪丢。
+  const missingFromIncoming = previous.filter(task => !incomingIds.has(task.id));
+  if (missingFromIncoming.length) {
+    changed = true;
+    merged.push(...missingFromIncoming);
+    merged.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  }
   return changed ? merged : incoming;
 }
 

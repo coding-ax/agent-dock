@@ -4,6 +4,9 @@ import safeRegex from 'safe-regex2';
 export * from './turn-outcome.js';
 export * from './chat-name.js';
 export * from './lark-reaction-emoji.js';
+export * from './fractional-index.js';
+export * from './boards.js';
+import type { BoardRepository } from './boards.js';
 
 export const highRiskPatternMaxLength = 4_096;
 export type RegexPatternValidation = { valid: true } | { valid: false; error: string };
@@ -32,6 +35,33 @@ export const sessionInterruptIntents = ['user', 'agent_cancelled', 'daemon_resta
 export type SessionInterruptIntent = (typeof sessionInterruptIntents)[number];
 export const eventTypes = ['text', 'thinking', 'tool_call', 'tool_result', 'permission_request', 'status', 'error', 'completed', 'task', 'raw_terminal'] as const;
 export type EventType = (typeof eventTypes)[number];
+
+/**
+ * 轮次级领域事件：给通知中心等高层订阅者使用，避免从底层 status 状态机逆向猜测。
+ * - `completed`: 本轮正常产生最终输出结束
+ * - `failed`: 本轮失败、重连失败、超限截断或驱动异常退出
+ * - `waiting_approval`: Agent 发出待确认的权限请求
+ * - `interrupted`: 轮次被打断（通过 `interruptIntent` 明确区分 `user` / `agent_cancelled` / `daemon_restart`）
+ */
+export const turnEventKinds = ['completed', 'failed', 'waiting_approval', 'interrupted'] as const;
+export type TurnEventKind = (typeof turnEventKinds)[number];
+
+export interface RuntimeTurnEvent {
+  id: string;
+  kind: TurnEventKind;
+  sessionId: string;
+  taskId?: string;
+  agentId: string;
+  sessionTitle?: string;
+  sessionSource?: string;
+  sessionSourceId?: string;
+  taskOrigin?: string;
+  interruptIntent?: SessionInterruptIntent;
+  durationMs?: number;
+  summary?: string;
+  error?: string;
+  timestamp: string;
+}
 
 export const agentConfigSchema = z.object({
   id: z.string().min(1),
@@ -522,6 +552,7 @@ export interface RepositoryBundle {
   artifacts: ArtifactRepository;
   projects: ProjectRepository;
   usage: UsageRepository;
+  boards: BoardRepository;
   close(): void;
 }
 

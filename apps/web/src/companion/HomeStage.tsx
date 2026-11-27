@@ -39,11 +39,16 @@ function PawWalk() {
 
 function stageLine(info: CompanionInfo) {
   const hello = greeting();
+  if (info.mood === 'error') return `${hello}～遇到点小状况，点我进来一起排查吧`;
   if (info.counts.needsUser) return `${hello}～有 ${info.counts.needsUser} 件事等你拍板，右边的便签里看看吧`;
   if (info.counts.planned) return `${hello}～有 ${info.counts.planned} 张计划等你点头，右边的便签里看看`;
+  if (info.pendingDrafts) return `${hello}～有 ${info.pendingDrafts} 份草稿等你确认发送`;
+  if (info.mood === 'tidying') return `${hello}～我正在收拾便签和记忆，马上整理好`;
   if (info.busy) return `${hello}～我正在忙，有新想法也可以先丢给我`;
-  if (info.counts.running) return `${hello}～我在盯着 ${info.counts.running} 张便签，有进展会叫你`;
   if (info.counts.review) return `${hello}～${info.counts.review} 张便签做完了，我在验收`;
+  if (info.counts.running >= 2) return `${hello}～我正并行盯着 ${info.counts.running} 张便签，有进展会叫你`;
+  if (info.counts.running) return `${hello}～我在盯着 ${info.counts.running} 张便签，有进展会叫你`;
+  if (info.mood === 'night') return `${hello}～我是${info.name}，点着小月光陪你慢慢来`;
   return `${hello}～我是${info.name}，有事交给我，我派人去办`;
 }
 
@@ -205,7 +210,7 @@ export function HomeStage({ agents, sessions, editorRef, onCreated }: {
   const companionMode = adopted && homeTarget === 'companion' && Boolean(info.mainId);
   const showInvite = !info.adopted && info.loaded && (phase === 'invite' || (phase === 'idle' && !inviteDismissed));
   const adopting = phase === 'form' || phase === 'adopting' || phase === 'celebrate';
-  const mood: KittenMood = moodOverride ?? (phase === 'celebrate' ? 'happy' : phase === 'adopting' ? 'busy' : adopted ? (info.mood === 'curious' ? 'idle' : info.mood) : 'curious');
+  const mood: KittenMood = moodOverride ?? (phase === 'celebrate' ? 'celebrating' : phase === 'adopting' ? 'busy' : adopted ? (info.mood === 'curious' ? 'idle' : info.mood) : 'curious');
 
   const kitten = <div ref={anchor} className="ui-stage-kitten">
     <Kitten size={phase === 'form' || phase === 'adopting' ? 76 : 88} mood={mood} stage={adopted ? info.stage : undefined} collar={adopted || phase === 'celebrate'} drawCollar={phase === 'celebrate'} track typingAware celebrateKey={celebrateNonce} viewTransitionName={KITTEN_TRANSITION_NAME}

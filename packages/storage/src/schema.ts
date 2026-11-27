@@ -35,3 +35,57 @@ export const turnUsage = sqliteTable('turn_usage', {
   source: text('source').notNull().default('acp'),
   createdAt: text('created_at').notNull()
 });
+
+export const boards = sqliteTable('boards', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  icon: text('icon'),
+  isDefault: integer('is_default').notNull().default(0),
+  viewMode: text('view_mode').notNull().default('lanes'),
+  density: text('density').notNull().default('compact'),
+  filterJson: text('filter_json').notNull().default('{}'),
+  revision: integer('revision').notNull().default(1),
+  archivedAt: text('archived_at'),
+  ...timestamps
+});
+
+export const boardColumns = sqliteTable('board_columns', {
+  id: text('id').primaryKey(),
+  boardId: text('board_id').notNull(),
+  name: text('name').notNull(),
+  color: text('color').notNull().default('zinc'),
+  position: text('position').notNull(),
+  collapsed: integer('collapsed').notNull().default(0),
+  wipLimit: integer('wip_limit'),
+  ruleJson: text('rule_json'),
+  onDropAction: text('on_drop_action').notNull().default('none'),
+  ...timestamps
+});
+
+export const boardItems = sqliteTable('board_items', {
+  id: text('id').primaryKey(),
+  boardId: text('board_id').notNull(),
+  columnId: text('column_id').notNull(),
+  entityKind: text('entity_kind').notNull(),
+  entityId: text('entity_id').notNull(),
+  position: text('position').notNull(),
+  pinned: integer('pinned').notNull().default(0),
+  manualOverride: integer('manual_override').notNull().default(0),
+  tagsJson: text('tags_json').notNull().default('[]'),
+  userNote: text('user_note'),
+  kittenNote: text('kitten_note'),
+  kittenNoteAt: text('kitten_note_at'),
+  addedBy: text('added_by').notNull().default('user'),
+  ...timestamps
+});
+
+export const boardEvents = sqliteTable('board_events', {
+  seq: integer('seq').primaryKey({ autoIncrement: true }),
+  boardId: text('board_id').notNull(),
+  eventType: text('event_type').notNull(),
+  actor: text('actor').notNull(),
+  clientMutationId: text('client_mutation_id'),
+  payloadJson: text('payload_json').notNull(),
+  createdAt: text('created_at').notNull()
+});

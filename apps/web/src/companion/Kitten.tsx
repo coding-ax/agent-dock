@@ -1,6 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { burst, prefersReducedMotion } from './effects';
-import type { KittenMood } from './companion-model';
+import {
+  FALLBACK_KITTEN_SPRITE,
+  kittenSpriteKey,
+  kittenSpritePng,
+  kittenSpriteWebp,
+  type KittenMood,
+} from './kitten-moods';
 import type { LifeStage } from '../api';
 import './companion.css';
 import './lifecycle.css';
@@ -9,12 +15,15 @@ import './lifecycle.css';
  * 小猫：首页、主会话头像、侧栏卡片、右缘把手共用的一只。
  *
  * 形象来自设计稿：奶白长毛、蓝金异色瞳、额头戴 >_ 屏幕护目镜、耳机和深色围巾的像素猫。
- * 每种心情是一张透明底的像素立绘（public/companion/），不做逐部件动画；「活」的部分仍是 class / CSS 变量驱动，
- * pointermove 只经 requestAnimationFrame 写 --mx/--my，不触发 React 重渲染：
- * - mood → 立绘：idle 待命、busy 敲电脑、curious 拿放大镜、alert 头顶问号、sleepy 趴着睡、happy 眯眼笑；
+ * 每种心情是一张透明底的像素立绘（public/companion/，15 套状态与精灵映射见 kitten-moods.ts），
+ * 「活」的部分由动效 .webp + CSS 变量驱动，pointermove 只经 requestAnimationFrame 写 --mx/--my，不触发 React 重渲染：
+ * - mood → 立绘：idle 待命、curious 歪头、thinking 托腮思考、busy 敲电脑、delegating 派便签、
+ *   reviewing 放大镜验收、waiting/alert 招手等你拍板、happy 眯眼笑、celebrating 举爪庆祝、
+ *   error 排查小紧张、sad 耷拉耳朵、tidying 整理记忆、night 深夜月光陪伴、sleepy 趴着睡；
  * - track：整只猫轻轻朝光标方向倾斜；typingAware：输入框聚焦时低头、按键时轻轻抖一下；
  * - celebrateKey 变化：原地蹦一下、换成闪亮立绘并冒爱心；点它：抖一下、偶尔冒一颗心；
- * - 呼吸：所有循环动画只动 transform，prefers-reduced-motion 下不注册任何监听，保持静态。
+ * - 呼吸与状态切换：所有循环动画只动 transform / opacity，prefers-reduced-motion 下回退静态 PNG 并停住动效；
+ * - 资源降级兜底：任意状态立绘加载失败时静默回退到 cat-idle.png，不出现破图。
  *
  * stage / retired 仍保留在 data-* 上（徽章等外部 UI 在用），立绘本身不再画道具。
  * variant='face' 只露出头部，给 24–40px 的头像位用。
@@ -42,12 +51,6 @@ export type KittenProps = {
   onClick?: (event: MouseEvent<HTMLElement>) => void;
 };
 
-/** 每种心情对应参考图里的一张像素立绘（透明底 PNG）。 */
-const SPRITES = Object.fromEntries((['idle', 'happy', 'curious', 'sparkle', 'busy', 'search', 'sleepy'] as const).map(name => [name, `/companion/cat-${name}.png`])) as Record<'idle' | 'happy' | 'curious' | 'sparkle' | 'busy' | 'search' | 'sleepy', string>;
-const MOOD_SPRITE: Record<KittenMood, keyof typeof SPRITES> = {
-  idle: 'idle', happy: 'happy', curious: 'search', busy: 'busy', alert: 'curious', sleepy: 'sleepy', sad: 'idle',
-};
-
 export type KittenHandle = { element: HTMLDivElement | null; hop(): void; twitch(): void };
 
 const isEditable = (target: EventTarget | null) =>
@@ -61,6 +64,7 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
 }, ref) {
   const root = useRef<HTMLDivElement>(null);
   const [sparkling, setSparkling] = useState(false);
+  const [fallbackFor, setFallbackFor] = useState<string | null>(null);
   const toggles = useRef({ twitch: false, hop: false });
 
   const twitch = () => {
@@ -172,17 +176,29 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
   };
 
   const face = variant === 'face';
-  const sprite = sparkling ? SPRITES.sparkle : SPRITES[MOOD_SPRITE[mood] ?? 'idle'];
-  const artwork = <span className="ui-cat-sprite-box">
+  const spriteKey = kittenSpriteKey(mood, sparkling);
+  const spritePng = kittenSpritePng(mood, sparkling);
+  const spriteWebp = kittenSpriteWebp(mood, sparkling);
+  const useFallback = fallbackFor === spritePng;
+  const artwork = <span key={spriteKey} className="ui-cat-sprite-box ui-cat-sprite-swap">
     <picture>
-      <source media="(prefers-reduced-motion: no-preference)" type="image/webp" srcSet={sprite.replace(/\.png$/, '.webp')}/>
-      <img className="ui-cat-sprite" src={sprite} alt="" draggable={false} decoding="async"/>
+      {!useFallback && <source media="(prefers-reduced-motion: no-preference)" type="image/webp" srcSet={spriteWebp}/>}
+      <img
+        className="ui-cat-sprite"
+        src={useFallback ? FALLBACK_KITTEN_SPRITE : spritePng}
+        alt=""
+        draggable={false}
+        decoding="async"
+        onError={() => {
+          if (!useFallback && spritePng !== FALLBACK_KITTEN_SPRITE) setFallbackFor(spritePng);
+        }}
+      />
     </picture>
   </span>;
 
   const classes = `ui-cat ui-kitten ${face ? 'ui-kitten-face' : 'ui-kitten-full'} ${className}`;
   const rootStyle: CSSProperties = { width: size, height: size, ...(viewTransitionName ? { viewTransitionName } as CSSProperties : {}), ...style };
-  return <div ref={root} className={classes} data-mood={mood} data-stage={stage} data-retired={retired || undefined} style={rootStyle}>
+  return <div ref={root} className={classes} data-mood={mood} data-sprite={spriteKey} data-stage={stage} data-retired={retired || undefined} style={rootStyle}>
     {interactive
       ? <button type="button" tabIndex={onClick ? 0 : -1} aria-label={label ?? '小猫'} onClick={handleClick} className="ui-cat-stage" style={{ width: size, height: size }}>{artwork}</button>
       : <span className="ui-cat-stage" role={label ? 'img' : undefined} aria-label={label} style={{ width: size, height: size }}>{artwork}</span>}

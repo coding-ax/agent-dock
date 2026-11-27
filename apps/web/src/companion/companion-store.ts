@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { BubbleTone, CompanionEventKind, NoteFilter, RecentKind } from './companion-model';
+import type { BubbleTone, NoteFilter, RecentKind } from './companion-model';
 
 /** 气泡被点时去哪：打开某张便签、回到主会话，或者打开交接仪式。 */
 export type BubbleAction = { kind: 'note'; taskId: string } | { kind: 'main' } | { kind: 'handoff'; handoffId?: string };
@@ -57,7 +57,7 @@ type CompanionUiStore = {
   setFilter(filter: NoteFilter): void;
   say(text: string, tone?: BubbleTone, action?: BubbleAction): void;
   nextBubble(): void;
-  markRecent(kind: CompanionEventKind): void;
+  markRecent(kind: RecentKind): void;
   touch(): void;
   draftForMain(text: string): void;
   consumeMainDraft(): void;

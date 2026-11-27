@@ -1,11 +1,48 @@
 import type { AssistantTask } from '../api';
+import {
+  deriveKittenMood,
+  hasFailedNeedsUserTask,
+  type KittenMood,
+  type KittenMoodInput,
+  type KittenRecentKind,
+} from './kitten-moods';
 
 /**
  * 主会话小猫的纯逻辑：心情、状态文案、便签分组、任务变化 → 小猫的反应。
- * 全部是纯函数，组件只负责把结果画出来；单测见 companion-model.test.ts。
+ * 全部是纯函数，组件只负责把结果画出来；单测见 companion-model.test.ts 与 kitten-moods.test.ts。
  */
 
-export type KittenMood = 'idle' | 'curious' | 'sleepy' | 'busy' | 'alert' | 'happy' | 'sad';
+export {
+  DEFAULT_SLEEPY_AFTER_MS,
+  FALLBACK_KITTEN_SPRITE,
+  KITTEN_MOODS,
+  KITTEN_MOOD_META,
+  KITTEN_SPRITE_KEYS,
+  KITTEN_SPRITE_PNG,
+  KITTEN_SPRITE_WEBP,
+  LATE_NIGHT_END_HOUR,
+  LATE_NIGHT_START_HOUR,
+  MIN_MOOD_HOLD_MS,
+  RECENT_WINDOW_MS,
+  deriveKittenMood,
+  hasFailedNeedsUserTask,
+  isLateNightHour,
+  kittenMoodMeta,
+  kittenSpriteKey,
+  kittenSpritePng,
+  kittenSpriteWebp,
+  sleepyThresholdMs,
+  stabilizeKittenMood,
+  type KittenMood,
+  type KittenMoodInput,
+  type KittenMoodMeta,
+  type KittenMoodTier,
+  type KittenMoodTone,
+  type KittenRecentKind,
+  type KittenSpriteKey,
+  type MoodStabilizeResult,
+  type MoodStabilizerState,
+} from './kitten-moods';
 export type NoteFilter = 'all' | 'needs_user' | 'review' | 'running' | 'closed';
 /** planned 不是独立筛选项：计划卡在服务端是 review，但用户要点头才开工，和「需要你」放同一栏。 */
 export type NoteSectionKey = Exclude<NoteFilter, 'all'> | 'planned';
@@ -143,58 +180,56 @@ export function companionBubble(event: CompanionEvent): { text: string; tone: Bu
 
 /* ---------- 心情与状态 ---------- */
 
-/** 小猫最近一次值得表态的事：便签上的变化，或者 cheer（刚被认领、刚换了名字，单纯开心）。 */
-export type RecentKind = CompanionEventKind | 'cheer';
-
-export type MoodInput = {
-  /** 主会话自己的运行状态；没有主会话时为空。 */
-  mainState?: string;
-  tasks: AssistantTask[];
-  /** 最近一次值得表态的事件（例如刚验收通过），几秒内影响心情。 */
-  recent?: { kind: RecentKind; at: number };
-  /** 最后一次有动静的时间（主会话或任务变化、用户互动）。 */
-  lastActiveAt: number;
-  now: number;
-};
-
-const RECENT_WINDOW_MS = 6_000;
-const SLEEPY_AFTER_MS = 3 * 60_000;
+/** 小猫最近一次值得表态的事：便签上的变化、生命周期里程碑，或者 cheer（刚被认领、刚换了名字，单纯开心）。 */
+export type RecentKind = KittenRecentKind;
+export type MoodInput = KittenMoodInput;
 
 export function deriveMood(input: MoodInput): KittenMood {
-  const { mainState, tasks, recent, lastActiveAt, now } = input;
-  if (!mainState) return 'curious';
-  if (mainState === 'waiting_for_permission' || tasks.some(task => task.state === 'needs_user')) return 'alert';
-  if (recent && now - recent.at < RECENT_WINDOW_MS) {
-    if (recent.kind === 'accepted' || recent.kind === 'cheer') return 'happy';
-    if (recent.kind === 'dispatched' || recent.kind === 'started') return 'busy';
-  }
-  if (BUSY_MAIN_STATES.has(mainState)) return 'busy';
-  if (mainState === 'failed') return 'sad';
-  // 还有便签在跑：醒着盯进度，不打盹。
-  if (tasks.some(task => task.state === 'running' || task.state === 'review')) return 'idle';
-  if (now - lastActiveAt > SLEEPY_AFTER_MS) return 'sleepy';
-  return 'idle';
+  return deriveKittenMood(input);
 }
 
-export function companionStatus(input: { mainState?: string; archived?: boolean; counts: NoteCounts; mood: KittenMood; recent?: RecentKind }): string {
-  const { mainState, archived, counts, mood, recent } = input;
+export function companionStatus(input: {
+  mainState?: string;
+  mainError?: string | null;
+  archived?: boolean;
+  counts: NoteCounts;
+  pendingDrafts?: number;
+  maintenanceRunning?: boolean;
+  hasFailedNeedsUser?: boolean;
+  mood: KittenMood;
+  recent?: RecentKind;
+}): string {
+  const { mainState, mainError, archived, counts, pendingDrafts = 0, maintenanceRunning = false, hasFailedNeedsUser = false, mood, recent } = input;
   if (!mainState) return '等你来认领';
   // 旧版本允许直接归档主会话：这里必须先说清楚主会话已冻结，否则只显示「打盹中」会误导。
   if (archived) return '被归档了，需要恢复';
   if (mainState === 'starting') return '醒来中…';
   if (mainState === 'waiting_for_permission') return '在等你授权';
-  if (counts.needsUser > 0) return `${counts.needsUser} 件事等你拍板`;
+  if (mainState === 'failed' || (mainState === 'idle' && Boolean(mainError))) return '出了点状况';
+  if (counts.needsUser > 0) return hasFailedNeedsUser ? `${counts.needsUser} 件事出错待排查` : `${counts.needsUser} 件事等你拍板`;
   if (counts.planned > 0) return `${counts.planned} 张计划等你点头`;
+  if (pendingDrafts > 0) return `${pendingDrafts} 份草稿等你确认`;
   if (mainState === 'thinking') return '正在思考…';
   if (mainState === 'running_tool') return '正在忙活…';
   if (mainState === 'interrupting') return '停下手头的事…';
+  if (maintenanceRunning || mood === 'tidying') return '在收拾便签和记忆';
+  if (mood === 'celebrating') {
+    if (recent === 'maintenance_finished') return '便签和记忆收拾好啦';
+    if (recent === 'handoff_done') return '交接完成啦';
+    return '验收通过啦';
+  }
   if (mood === 'happy') return recent === 'cheer' ? '开心地摇尾巴' : '验收通过啦';
   if (counts.review > 0) return `${counts.review} 张便签待验收`;
+  if (counts.running >= 2) return `并行盯着 ${counts.running} 张便签`;
   if (counts.running > 0) return `在盯着 ${counts.running} 张便签`;
-  if (mainState === 'failed') return '出了点状况';
+  if (mood === 'delegating') return '刚派出新便签';
+  if (mood === 'error') return '出了点状况';
+  if (mood === 'night') return '深夜陪你待命';
   if (mood === 'sleepy') return '打盹中';
   return '随时待命';
 }
+
+export { hasFailedNeedsUserTask as isFailedNeedsUserList };
 
 export const isMainBusy = (state?: string) => Boolean(state && BUSY_MAIN_STATES.has(state));
 

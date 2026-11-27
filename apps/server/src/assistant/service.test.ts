@@ -770,6 +770,11 @@ describe('AssistantService', () => {
     const result = await service.notify({ text: '普通通知' });
     expect(result).toMatchObject({ sent: true });
     expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenLastCalledWith(expect.objectContaining({ text: '普通通知', ask: false, urgent: false }));
+
+    const urgentResult = await service.notify({ text: '线上告警', ask: true, urgent: true });
+    expect(urgentResult).toMatchObject({ sent: true });
+    expect(notify).toHaveBeenLastCalledWith(expect.objectContaining({ text: '线上告警', ask: true, urgent: true }));
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain('assistant.quietHours');
     expect(warn.mock.calls[0]?.[0]).toContain('assistant.silentEmoji');
@@ -870,5 +875,65 @@ describe('AssistantService', () => {
       at: [at]
     });
     expect(service.getDraft(draft.id)?.payload).toEqual({ chat, replyTo, inThread: true, at: [at] });
+  });
+
+  it('does not mark a task user_stopped or review while queued tasks are still draining (e.g. steer / append)', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: 'Steer 不误判为停止', doneWhen: ['完成'], agentId: 'claude' });
+    const dispatchesBefore = runtime.dispatch.mock.calls.length;
+
+    // 模拟用户在队列面板点「立即发送 (steer)」：旧轮次发 interrupted(user)，但 queued=true。
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'interrupted', interruptIntent: 'user', queued: true });
+    await service.flushNow();
+    expect(service.getTask(task.id)?.state).toBe('running');
+    expect(service.getTask(task.id)?.lastStopReason).toBeUndefined();
+    expect(runtime.dispatch.mock.calls.length).toBe(dispatchesBefore);
+
+    // 模拟上一轮刚 completed，队列里紧接着还有下一轮待跑：不应提前转 review。
+    await service.handleStatus({ sessionId: task.sessionId!, state: 'completed', queued: true });
+    await service.flushNow();
+    expect(service.getTask(task.id)?.state).toBe('running');
+    expect(runtime.dispatch.mock.calls.length).toBe(dispatchesBefore);
+
+    // scan() 看到会话暂处 interrupted，但 tasks 表仍有 queued/running 时同样不能误判。
+    await repos.sessions.save({
+      id: task.sessionId!, agentId: 'claude', state: 'interrupted', interruptIntent: 'user',
+      cwd: '/tmp', runId: 'run_side', createdAt: now(), updatedAt: now()
+    });
+    runtime.getTasks.mockResolvedValueOnce([{
+      id: 'task_q_next', sessionId: task.sessionId!, prompt: 'next', status: 'queued', createdAt: now(), updatedAt: now()
+    }] as never);
+    await service.scan();
+    await service.flushNow();
+    expect(service.getTask(task.id)?.state).toBe('running');
+    expect(runtime.dispatch.mock.calls.length).toBe(dispatchesBefore);
+  });
+
+  it('restarts a stopped or failed side session before dispatching appendTask', async () => {
+    const { repos, service, runtime } = harness();
+    const restart = vi.fn(async (id: string) => ({
+      id, agentId: 'claude', state: 'idle' as const, cwd: '/tmp', runId: 'run_restarted',
+      createdAt: now(), updatedAt: now()
+    }));
+    (runtime as any).restart = restart;
+
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '失败会话续做', doneWhen: ['完成'], agentId: 'claude' });
+    await repos.sessions.save({
+      id: task.sessionId!, agentId: 'claude', state: 'failed', error: 'Agent exited with code 1',
+      cwd: '/tmp', runId: 'run_side', createdAt: now(), updatedAt: now()
+    });
+
+    const appended = await service.appendTask(task.id, '重新继续推进', 'queue');
+    expect(restart).toHaveBeenCalledWith(task.sessionId);
+    expect(runtime.dispatch).toHaveBeenLastCalledWith(task.sessionId, expect.stringContaining('重新继续推进'), 'queue');
+    expect(appended.state).toBe('running');
   });
 });

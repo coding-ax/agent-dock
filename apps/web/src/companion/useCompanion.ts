@@ -1,7 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type AssistantCompanion, type AssistantLifecycle, type AssistantLifecycleLight, type AssistantState, type AssistantTask, type LifeStage, type Session } from '../api';
-import { companionStatus, countNotes, deriveMood, isMainBusy, type KittenMood, type NoteCounts } from './companion-model';
+import {
+  LATE_NIGHT_END_HOUR, LATE_NIGHT_START_HOUR, RECENT_WINDOW_MS, companionStatus, countNotes, deriveMood,
+  hasFailedNeedsUserTask, isMainBusy, kittenMoodMeta, sleepyThresholdMs, stabilizeKittenMood,
+  type KittenMood, type KittenMoodMeta, type MoodStabilizerState, type NoteCounts
+} from './companion-model';
 import { useCompanionStore } from './companion-store';
 
 /** 与服务端 DEFAULT_COMPANION_NAME 一致：旧服务端没有 companion 字段时的兜底。 */
@@ -48,20 +52,72 @@ export function useAssistantState(enabled = true) {
   });
 }
 
+/** 计算下一次昼夜切换边界（23:00 进入深夜陪伴，05:00 回到日间）。 */
+function nextNightBoundary(current: number): number {
+  const date = new Date(current);
+  const hour = date.getHours();
+  const target = new Date(current);
+  target.setMinutes(0, 0, 0);
+  if (hour >= LATE_NIGHT_START_HOUR) {
+    target.setDate(target.getDate() + 1);
+    target.setHours(LATE_NIGHT_END_HOUR);
+  } else if (hour < LATE_NIGHT_END_HOUR) {
+    target.setHours(LATE_NIGHT_END_HOUR);
+  } else {
+    target.setHours(LATE_NIGHT_START_HOUR);
+  }
+  return target.getTime();
+}
+
 /**
- * 心情里有两个时间窗（刚发生的事 6 秒、没动静 3 分钟犯困）。不用每秒 tick：
- * 只在下一个窗口边界到来时刷新一次「现在」。
+ * 心情里有三个时间窗（刚发生的事 6 秒、按年纪缩放的犯困阈值、23:00/05:00 昼夜边界）。
+ * 不用每秒 tick：只在下一个窗口边界到来时刷新一次「现在」。
  */
-function useMoodClock(recentAt: number | undefined, lastActiveAt: number) {
+function useMoodClock(recentAt: number | undefined, lastActiveAt: number, stage?: LifeStage) {
   const [now, setNow] = useState(() => Date.now());
+  const sleepyMs = sleepyThresholdMs(stage);
   useEffect(() => {
     const current = Date.now();
-    const boundaries = [recentAt === undefined ? 0 : recentAt + 6_000, lastActiveAt + 3 * 60_000].filter(boundary => boundary > current);
+    const boundaries = [
+      recentAt === undefined ? 0 : recentAt + RECENT_WINDOW_MS,
+      lastActiveAt + sleepyMs,
+      nextNightBoundary(current),
+    ].filter(boundary => boundary > current);
     if (!boundaries.length) return;
     const timer = window.setTimeout(() => setNow(Date.now()), Math.min(...boundaries) - current + 60);
     return () => window.clearTimeout(timer);
-  }, [recentAt, lastActiveAt, now]);
-  return now;
+  }, [recentAt, lastActiveAt, sleepyMs, now]);
+  return Math.max(now, recentAt ?? 0, lastActiveAt);
+}
+
+/**
+ * 防抖平滑：紧急/高优态立即响应，同级工作态（thinking ↔ busy）或回落态至少停留 MIN_MOOD_HOLD_MS，
+ * 防止 2 秒轮询与流式事件交替导致小猫头像高频闪烁。
+ */
+function useStableMood(rawMood: KittenMood): KittenMood {
+  const [shown, setShown] = useState<MoodStabilizerState>(() => ({ mood: rawMood, changedAt: Date.now() }));
+  const pendingTimer = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    window.clearTimeout(pendingTimer.current);
+    pendingTimer.current = undefined;
+    const decision = stabilizeKittenMood(shown, rawMood, Date.now());
+    if (decision.mood !== shown.mood) {
+      setShown({ mood: decision.mood, changedAt: decision.changedAt });
+      return;
+    }
+    if (decision.pendingDelayMs && decision.pendingDelayMs > 0) {
+      pendingTimer.current = window.setTimeout(() => {
+        setShown({ mood: rawMood, changedAt: Date.now() });
+      }, decision.pendingDelayMs + 20);
+    }
+    return () => {
+      window.clearTimeout(pendingTimer.current);
+      pendingTimer.current = undefined;
+    };
+  }, [rawMood, shown]);
+
+  return shown.mood;
 }
 
 export type CompanionInfo = {
@@ -76,6 +132,7 @@ export type CompanionInfo = {
   /** 等用户确认发送的草稿（GitHub 评论、飞书回复）。 */
   pendingDrafts: number;
   mood: KittenMood;
+  moodMeta: KittenMoodMeta;
   status: string;
   busy: boolean;
   /** 已折叠进归档区的便签：不上墙、不计数，归档区里只读可取出。 */
@@ -100,16 +157,39 @@ export function useCompanion(): CompanionInfo {
   const tasks = useMemo(() => allTasks.some(task => task.archivedAt) ? allTasks.filter(task => !task.archivedAt) : allTasks, [allTasks]);
   const archivedTasks = useMemo(() => allTasks.some(task => task.archivedAt) ? allTasks.filter(task => task.archivedAt) : EMPTY_TASKS, [allTasks]);
   const lifecycle = data?.lifecycle ?? undefined;
+  const stage = lifecycle?.cat?.lifeStage;
   const recent = useCompanionStore(store => store.recent);
   const lastActiveAt = useCompanionStore(store => store.lastActiveAt);
-  const now = useMoodClock(recent?.at, lastActiveAt);
+  const now = useMoodClock(recent?.at, lastActiveAt, stage);
   const companion = data?.companion ?? undefined;
   const drafts = data?.drafts;
+  const pendingDrafts = useMemo(() => (drafts ?? []).filter(draft => draft.state === 'pending').length, [drafts]);
+  const maintenanceRunning = Boolean(lifecycle?.maintenance);
+  const mainState = mainSession?.state;
+  const mainError = mainSession?.error;
+  const archived = Boolean(mainSession?.archivedAt);
+
+  const rawMood = useMemo(() => deriveMood({
+    mainState,
+    mainError,
+    archived,
+    tasks,
+    pendingDrafts,
+    maintenanceRunning,
+    stage,
+    recent,
+    lastActiveAt,
+    now,
+    localHour: new Date(now).getHours(),
+  }), [mainState, mainError, archived, tasks, pendingDrafts, maintenanceRunning, stage, recent, lastActiveAt, now]);
+
+  const mood = useStableMood(rawMood);
+
   return useMemo(() => {
     const counts = countNotes(tasks);
-    const mainState = mainSession?.state;
-    const mood = deriveMood({ mainState, tasks, recent, lastActiveAt, now });
+    const hasFailedNeedsUser = hasFailedNeedsUserTask(tasks);
     const name = companion?.name ?? (mainSession?.customTitle?.trim() || DEFAULT_KITTEN_NAME);
+    const moodMeta = kittenMoodMeta(mood);
     return {
       loaded: state.isSuccess,
       adopted: Boolean(mainId),
@@ -119,15 +199,26 @@ export function useCompanion(): CompanionInfo {
       name,
       tasks,
       counts,
-      pendingDrafts: (drafts ?? []).filter(draft => draft.state === 'pending').length,
+      pendingDrafts,
       mood,
-      status: lifecycle?.maintenance && !isMainBusy(mainState) ? '在收拾便签和记忆' : companionStatus({ mainState, archived: Boolean(mainSession?.archivedAt), counts, mood, ...(recent ? { recent: recent.kind } : {}) }),
-      busy: isMainBusy(mainState),
+      moodMeta,
+      status: companionStatus({
+        mainState,
+        mainError,
+        archived,
+        counts,
+        pendingDrafts,
+        maintenanceRunning: Boolean(lifecycle?.maintenance) && !isMainBusy(mainState),
+        hasFailedNeedsUser,
+        mood,
+        ...(recent ? { recent: recent.kind } : {}),
+      }),
+      busy: isMainBusy(mainState) || maintenanceRunning,
       archivedTasks,
       ...(lifecycle ? { lifecycle } : {}),
       ...(lifecycle?.cat ? { stage: lifecycle.cat.lifeStage, generation: lifecycle.cat.generation } : {})
     };
-  }, [state.isSuccess, mainId, mainSession, companion, tasks, archivedTasks, lifecycle, drafts, recent, lastActiveAt, now]);
+  }, [state.isSuccess, mainId, mainSession, companion, tasks, archivedTasks, lifecycle, pendingDrafts, maintenanceRunning, mainState, mainError, archived, mood, recent]);
 }
 
 /* ---------- 导航：小猫的各处入口都要能「去主会话 / 打开便签对应的会话 / 去认领」 ---------- */
@@ -142,10 +233,12 @@ export type CompanionNav = {
   openSettings(): void;
   /** 打开任意会话（例如已退休小猫的只读旧会话）。 */
   openSession(sessionId: string): void;
+  /** 切到自由拖拽看板视图。 */
+  openBoard(boardId?: string): void;
 };
 
 const noop = () => undefined;
-const fallbackNav: CompanionNav = { openMain: noop, openTask: noop, goAdopt: noop, openSettings: noop, openSession: noop };
+const fallbackNav: CompanionNav = { openMain: noop, openTask: noop, goAdopt: noop, openSettings: noop, openSession: noop, openBoard: noop };
 const CompanionNavContext = createContext<CompanionNav>(fallbackNav);
 export const CompanionNavProvider = CompanionNavContext.Provider;
 export const useCompanionNav = () => useContext(CompanionNavContext);

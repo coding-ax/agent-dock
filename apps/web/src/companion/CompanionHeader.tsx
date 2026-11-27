@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Dices, PencilLine, StickyNote, Sunset } from 'lucide-react';
+import { Dices, PencilLine } from 'lucide-react';
 import { api, type AssistantState } from '../api';
 import { AgentIcon } from '../AgentIcon';
+import { HoverTooltip } from '../HoverTooltip';
 import { Kitten } from './Kitten';
-import { greeting, pickKittenName, type NoteFilter } from './companion-model';
+import { greeting, pickKittenName } from './companion-model';
 import { KITTEN_TRANSITION_NAME, useAnchor } from './effects';
 import { useCompanion } from './useCompanion';
 import { useCompanionStore } from './companion-store';
-import { HandoffFlag, StageChip } from './LifecycleBadges';
-import { openRetireCeremony, retireEntry } from './lifecycle-model';
+import { StageChip } from './LifecycleBadges';
 
 const selectMainId = (state: AssistantState) => state.mainSessionId;
 
@@ -21,18 +21,11 @@ export function useMainSessionId(): string | undefined {
   return useQuery({ queryKey: ['assistant-state'], queryFn: api.assistantState, retry: false, staleTime: 5_000, select: selectMainId }).data ?? undefined;
 }
 
-function StatChip({ filter, swatch, label, count }: { filter: NoteFilter; swatch: string; label: string; count: number }) {
-  if (!count) return null;
-  return <button type="button" onClick={() => useCompanionStore.getState().openDrawer({ filter })} className="ui-status-chip max-md:hidden">
-    <span className={`ui-note-swatch ${swatch}`}/>{count} {label}
-  </button>;
-}
-
 /**
- * 主会话的标题栏左半边：小猫头像（首页的大猫会形变到这里）、可以直接改的名字、此刻在忙什么。
- * 右边的便签计数由 CompanionHeaderNotes 放进标题栏的操作区。
+ * 主会话的精简标题栏左半边：小猫头像、可直接改的名字、单枚克制徽章，以及 Agent（含 Token/额度聚合入口）与此刻状态。
+ * 便签统一归侧栏与便签抽屉承载，退休/交接等低频主会话操作收纳进「更多」菜单，不再在顶栏重复占空。
  */
-export function CompanionHeader({ agentId, agentName }: { agentId: string; agentName?: string }) {
+export function CompanionHeader({ agentId, agentName, agentSlot }: { agentId: string; agentName?: string; agentSlot?: ReactNode }) {
   const info = useCompanion();
   const qc = useQueryClient();
   const anchor = useAnchor<HTMLSpanElement>('kitten-header');
@@ -56,65 +49,42 @@ export function CompanionHeader({ agentId, agentName }: { agentId: string; agent
   const celebrateNonce = useCompanionStore(store => store.celebrateNonce);
 
   return <div className="flex min-w-0 flex-1 items-center gap-2.5">
-    <span ref={anchor} className="shrink-0">
-      <Kitten variant="face" size={36} mood={info.mood} stage={info.stage} collar track celebrateKey={celebrateNonce} viewTransitionName={KITTEN_TRANSITION_NAME} label={`${info.name}：${info.status}`}/>
-    </span>
+    <HoverTooltip content={`${info.name} · ${info.moodMeta.label}：${info.moodMeta.hint}`} hoverOnly>
+      <span ref={anchor} className="shrink-0">
+        <Kitten variant="face" size={32} mood={info.mood} stage={info.stage} collar track celebrateKey={celebrateNonce} viewTransitionName={KITTEN_TRANSITION_NAME} label={`${info.name}：${info.status}`}/>
+      </span>
+    </HoverTooltip>
     <div className="min-w-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 items-center gap-1.5">
         {editing
           ? <span className="flex items-center gap-1">
             <input ref={input} value={draft} maxLength={16} onChange={event => setDraft(event.target.value)} onBlur={commit} onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === 'Enter') { event.preventDefault(); commit(); } if (event.key === 'Escape') { event.preventDefault(); setEditing(false); } }} aria-label="小猫的名字" className="h-7 w-32 rounded-md border border-zinc-300 bg-white px-2 text-[14px] font-semibold text-zinc-900 outline-none focus:border-zinc-500"/>
-            <button type="button" onPointerDown={event => event.preventDefault()} onClick={() => setDraft(current => pickKittenName(current.trim() || info.name))} aria-label="换一个名字" title="随机换一个名字" className="ui-dice grid h-7 w-7 place-items-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"><Dices size={14}/></button>
+            <HoverTooltip content="随机换一个名字">
+              <button type="button" onPointerDown={event => event.preventDefault()} onClick={() => setDraft(current => pickKittenName(current.trim() || info.name))} aria-label="换一个名字" className="ui-dice grid h-7 w-7 place-items-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"><Dices size={14}/></button>
+            </HoverTooltip>
           </span>
-          : <button type="button" onClick={() => { setDraft(info.name); setEditing(true); }} title="给它改个名字" className="ui-companion-head-name group/name flex min-w-0 items-center gap-1 text-[14px] font-semibold text-zinc-900">
-            <span className="truncate">{rename.isPending ? rename.variables : info.name}</span>
-            <PencilLine size={12} className="shrink-0 text-zinc-400 opacity-0 transition-opacity group-hover/name:opacity-100 max-sm:hidden"/>
-          </button>}
-        <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 text-[10.5px] font-medium leading-[17px] text-zinc-500 max-sm:hidden">主会话</span>
-        <span className="inline-flex shrink-0 max-sm:hidden"><StageChip lifecycle={info.lifecycle}/></span>
-        <HandoffFlag lifecycle={info.lifecycle} name={info.name}/>
+          : <HoverTooltip content="点击给它改个名字" hoverOnly>
+            <button type="button" onClick={() => { setDraft(info.name); setEditing(true); }} aria-label={`给 ${info.name} 改名`} className="ui-companion-head-name group/name flex min-w-0 items-center gap-1 text-[14px] font-semibold leading-tight text-zinc-900">
+              <span className="truncate">{rename.isPending ? rename.variables : info.name}</span>
+              <PencilLine size={12} className="shrink-0 text-zinc-400 opacity-0 transition-opacity group-hover/name:opacity-100 max-sm:hidden"/>
+            </button>
+          </HoverTooltip>}
+        <span className="inline-flex shrink-0 max-sm:hidden">
+          {info.lifecycle?.cat
+            ? <StageChip lifecycle={info.lifecycle} role="主会话" compact/>
+            : <span className="rounded-full bg-zinc-100 px-1.5 text-[10.5px] font-medium leading-[17px] text-zinc-500">主会话</span>}
+        </span>
       </div>
-      <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500">
-        <span className={`min-w-0 truncate ${info.busy ? 'ui-shimmer-text' : ''}`}>{info.status}</span>
+      <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] leading-4 text-zinc-500">
+        {agentSlot ?? <>
+          <AgentIcon agentId={agentId} agentName={agentName} size={13}/>
+          <span className="min-w-0 truncate max-sm:hidden">{agentName ?? agentId}</span>
+        </>}
         <span className="shrink-0 text-zinc-300">·</span>
-        <AgentIcon agentId={agentId} agentName={agentName} size={12}/>
-        <span className="min-w-0 truncate max-sm:hidden">{agentName ?? agentId}</span>
+        <span className={`min-w-0 truncate ${info.busy ? 'ui-shimmer-text' : ''}`}>{info.status}</span>
       </div>
       {rename.error && <div className="text-[11px] text-red-600">{rename.error.message}</div>}
     </div>
-  </div>;
-}
-
-/**
- * 主会话标题栏的小「退休」入口：图标 + 小字，不抢眼；只在主会话渲染。
- * 没有进行中的交接时打开仪式邀请（里面仍要二次确认并选接班配置）。
- */
-export function RetireButton() {
-  const info = useCompanion();
-  const entry = retireEntry({ isMain: true, handoff: info.lifecycle?.handoff });
-  if (!entry.visible) return null;
-  const label = entry.progress ? '查看交接进度' : '提前退休并交接';
-  return <button type="button" onClick={() => openRetireCeremony(entry, id => useCompanionStore.getState().openCeremony(id))}
-    aria-label={label} title={label}
-    className="relative flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg px-2 text-[12px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 max-sm:w-8 max-sm:px-0">
-    <Sunset size={14}/>
-    <span className="max-sm:hidden">{entry.label}</span>
-    {entry.progress && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-500"/>}
-  </button>;
-}
-
-/** 主会话标题栏右侧：各状态的便签数（点了按状态打开抽屉）+ 便签按钮。 */
-export function CompanionHeaderNotes() {
-  const info = useCompanion();
-  const open = info.counts.open;
-  return <div className="mr-1 flex shrink-0 items-center gap-1">
-    <StatChip filter="needs_user" swatch="ui-note-paper-needs" label="需要你" count={info.counts.needsUser + info.counts.planned}/>
-    <StatChip filter="review" swatch="ui-note-paper-review" label="待验收" count={info.counts.review}/>
-    <StatChip filter="running" swatch="ui-note-paper-running" label="进行中" count={info.counts.running}/>
-    <button type="button" onClick={() => useCompanionStore.getState().toggleDrawer()} aria-label={`${info.name}的便签`} title={`${info.name}的便签`} className="relative flex h-8 items-center gap-1.5 rounded-lg px-2 text-[12.5px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900">
-      <StickyNote size={15}/><span className="max-sm:hidden">便签</span>
-      {open > 0 && <span className="min-w-[16px] rounded-full bg-zinc-900 px-1 text-center text-[10px] font-semibold leading-4 text-white tabular-nums">{open}</span>}
-    </button>
   </div>;
 }
 
@@ -127,7 +97,7 @@ export function CompanionWelcome({ onPick }: { onPick(text: string): void }) {
     <div className="ui-speech">{greeting()}～我是<b className="font-semibold">{info.name}</b>，你的主会话。</div>
     <Kitten size={84} mood={info.mood === 'sleepy' ? 'idle' : info.mood} stage={info.stage} collar track typingAware label={info.name}/>
     <h2 className="mt-4 text-[18px] font-semibold tracking-tight text-zinc-800">说说今天要做什么</h2>
-    <p className="mt-2 max-w-sm text-[13px] leading-6 text-zinc-500">我来拆成一张张便签派给侧边会话去做，做完帮你验收；进度随时在右边的便签里看。</p>
+    <p className="mt-2 max-w-sm text-[13px] leading-6 text-zinc-500">我来拆成一张张便签派给侧边会话去做，做完帮你验收；进度随时在侧栏便签里看。</p>
     <div className="mt-6 flex max-w-md flex-wrap justify-center gap-2">
       {SUGGESTIONS.map(text => <button key={text} type="button" onClick={() => onPick(text)} className="ui-companion-welcome-tip">{text}</button>)}
     </div>

@@ -50,7 +50,9 @@ function useCompanionReactions(view: CompanionView) {
   }, [info.loaded, info.adopted, info.tasks]);
 
   // 主会话从忙变闲：用户此刻不在看主会话，就冒个气泡说回完了。
+  // 注意：runtime 正常完成切到 state='completed'，轮次级失败才回收成 state='idle' 并挂 error。
   const state = info.mainSession?.state;
+  const mainError = info.mainSession?.error;
   useEffect(() => {
     const before = mainState.current;
     mainState.current = state;
@@ -59,9 +61,9 @@ function useCompanionReactions(view: CompanionView) {
     store.touch();
     if (view === 'main') return;
     if (state === 'waiting_for_permission') store.say(`${info.name}需要你授权一下`, 'alert', { kind: 'main' });
-    else if (state === 'failed') store.say(`${info.name}好像遇到了点麻烦`, 'alert', { kind: 'main' });
-    else if (isMainBusy(before) && state === 'idle') store.say(`${info.name}回复你啦，喵～`, 'info', { kind: 'main' });
-  }, [state, view, info.name]);
+    else if (state === 'failed' || (isMainBusy(before) && state === 'idle' && Boolean(mainError))) store.say(`${info.name}好像遇到了点麻烦`, 'alert', { kind: 'main' });
+    else if (isMainBusy(before) && (state === 'completed' || (state === 'idle' && !mainError))) store.say(`${info.name}回复你啦，喵～`, 'info', { kind: 'main' });
+  }, [state, mainError, view, info.name]);
 }
 
 /**
@@ -83,6 +85,7 @@ function useLifecycleReactions() {
     const store = useCompanionStore.getState();
     for (const event of events) {
       if (event.kind === 'maintenance_finished' || event.kind === 'handoff_done' || event.kind === 'handoff_rolled_back') {
+        store.markRecent(event.kind);
         void qc.invalidateQueries({ queryKey: ['assistant-lifecycle'] });
         void qc.invalidateQueries({ queryKey: ['assistant-notes-archive'] });
       }
