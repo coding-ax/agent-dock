@@ -11,7 +11,7 @@ import { parseLarkMessageContent, type LarkMessageResource } from './message-con
 import { boundLarkCardElements, createLarkCardService, larkIdentityPermissionHelp, LarkServiceError, type LarkCardActionButton, type LarkCardService } from './service.js';
 import { clearSessionReplyMode, getSessionReplyMode, type AgentReplyMode } from './agent-tools.js';
 import { larkHandoverChannel } from './handover-binding.js';
-import type { LarkTurnTracker } from './turn-tracker.js';
+import { LarkTurnTracker } from './turn-tracker.js';
 import { buildSideSessionSeed, matchSideChatTrigger, readSideChatConfig, type SideChatConfig } from '../side-chat-config.js';
 import { readAskUserQuestionConfig, type AskUserQuestionService } from '../ask-user-question.js';
 import { readOutputPluginsGlobalConfig, type OutputPluginService } from '../output-plugins/service.js';
@@ -20,7 +20,9 @@ import {
   type PersistedLarkAskCard
 } from './ask-user-question-card.js';
 import {
+  cardChannelForOutputPlugin,
   defaultLarkOutputPluginAdapterRegistry,
+  dispatchLarkOutputPluginCard,
   LARK_OUTPUT_PLUGIN_CARD_CHANNEL,
   type LarkOutputPluginAdapterRegistry,
   type PersistedLarkOutputPluginCard
@@ -1173,6 +1175,8 @@ export class LarkMessageCoordinator {
   private readonly chatUserCountFetches = new Map<string, Promise<number | undefined>>();
   /** 纯 XML 交互插件飞书卡片内存镜像（同时双写 cardMappings，兼容重启与无库单测）。 */
   private readonly pluginCards = new Map<string, PersistedLarkOutputPluginCard>();
+  /** 未注入共享 turnTracker 时的本地插件卡片强幂等占坑表。 */
+  private readonly localCardTracker = new LarkTurnTracker();
   /** 无 OutputPluginService 注入时的本地兜底幂等记录。 */
   private readonly localAnsweredPlugins = new Map<string, unknown>();
 
@@ -1200,9 +1204,7 @@ export class LarkMessageCoordinator {
   }
 
   private cardChannelForPlugin(pluginId: string): string {
-    return normalizeOutputPluginId(pluginId) === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID
-      ? LARK_ASK_CARD_CHANNEL
-      : LARK_OUTPUT_PLUGIN_CARD_CHANNEL;
+    return cardChannelForOutputPlugin(pluginId);
   }
 
   private async resolveEnabledOutputPluginIds(sessionId?: string): Promise<Set<string>> {
@@ -1253,25 +1255,6 @@ export class LarkMessageCoordinator {
     };
   }
 
-  private async hasSentPluginCardFor(sessionId: string, pluginId: string, instanceId: string): Promise<boolean> {
-    const canonicalId = normalizeOutputPluginId(pluginId);
-    for (const record of this.pluginCards.values()) {
-      if (record.sessionId === sessionId && record.pluginId === canonicalId && record.instanceId === instanceId) return true;
-    }
-    if (this.cardMappings) {
-      const channel = this.cardChannelForPlugin(canonicalId);
-      const persisted = await this.cardMappings.list(channel).catch(() => []);
-      for (const mapping of persisted) {
-        if (mapping.sessionId !== sessionId || !mapping.extra) continue;
-        try {
-          const parsed = this.normalizePersistedCard(JSON.parse(mapping.extra) as Record<string, unknown>);
-          if (parsed && parsed.pluginId === canonicalId && parsed.instanceId === instanceId) return true;
-        } catch { /* ignore malformed */ }
-      }
-    }
-    return false;
-  }
-
   private async lookupPluginCard(cardId: string, preferredPluginId?: string): Promise<PersistedLarkOutputPluginCard | undefined> {
     const cached = this.pluginCards.get(cardId);
     if (cached) return cached;
@@ -1296,7 +1279,7 @@ export class LarkMessageCoordinator {
     return undefined;
   }
 
-  /** 向对应飞书群/私聊发送任意已注册纯 XML 插件的 Schema 2.0 卡片，并持久化映射以支持回调与跨重启响应。 */
+  /** 向对应飞书群/私聊发送任意已注册纯 XML 插件的 Schema 2.0 卡片，并经统一强幂等派发器持久化映射以杜绝并发双发。 */
   async pushOutputPluginCard(input: {
     config: StoredLarkConfig;
     sessionId: string;
@@ -1311,77 +1294,43 @@ export class LarkMessageCoordinator {
     pluginId: string;
     spec: unknown;
   }): Promise<PersistedLarkOutputPluginCard | undefined> {
-    const canonicalId = normalizeOutputPluginId(input.pluginId);
-    const plugin = this.resolvedPluginRegistry.get(canonicalId);
-    if (!plugin) return undefined;
-    const adapter = this.larkPluginAdapters.resolve(plugin);
-    if (!adapter) return undefined;
-    const instanceId = plugin.getInstanceId(input.spec);
-    if (!instanceId) return undefined;
-    if (await this.hasSentPluginCardFor(input.sessionId, canonicalId, instanceId)) return undefined;
-
-    const isAsk = canonicalId === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
-    const cardId = `${isAsk ? 'askc' : 'outpc'}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-    const card = adapter.buildCard({
-      cardId,
-      plugin,
-      spec: input.spec,
-      sessionId: input.sessionId,
-      webBaseUrl: input.config.webBaseUrl
-    });
-    const canReply = !input.forceMainThread
-      && Boolean(input.replyToMessageId?.trim())
-      && !input.replyToMessageId!.startsWith('askq-reply-')
-      && !input.replyToMessageId!.startsWith('outp-reply-');
-    const idempotencyKey = `${isAsk ? 'askq' : 'outp'}-${cardId}`;
-    const sent = canReply
-      ? await this.service.replyInteractiveCard({
-          messageId: input.replyToMessageId!,
-          card,
-          replyInThread: Boolean(input.replyInThread),
-          idempotencyKey
-        })
-      : await this.service.sendInteractiveCard({
-          chatId: input.chatId,
-          card,
-          idempotencyKey
-        });
-    const record: PersistedLarkOutputPluginCard = {
-      cardId,
-      pluginId: canonicalId,
+    return dispatchLarkOutputPluginCard({
+      pluginRegistry: this.resolvedPluginRegistry,
+      larkPluginAdapters: this.larkPluginAdapters,
+      service: this.service,
+      turnTracker: this.turnTracker,
+      fallbackTracker: this.localCardTracker,
+      cardMappings: this.cardMappings,
+      hasLocalSent: key => {
+        for (const record of this.pluginCards.values()) {
+          if (record.sessionId !== key.sessionId) continue;
+          if (record.pluginId !== key.pluginId || record.instanceId !== key.widgetId) continue;
+          const recChatIds = [record.chatId?.trim(), record.receiveId?.trim()].filter((v): v is string => Boolean(v));
+          if (recChatIds.length === 0 || recChatIds.includes(key.chatId)) return true;
+        }
+        return false;
+      },
+      onDispatched: record => {
+        this.pluginCards.set(record.cardId, record);
+        if (this.pluginCards.size > 2_000) {
+          const oldest = this.pluginCards.keys().next().value;
+          if (oldest) this.pluginCards.delete(oldest);
+        }
+      },
       appId: input.config.appId,
+      sessionId: input.sessionId,
+      taskId: input.taskId,
       chatId: input.chatId,
       chatType: input.chatType,
-      messageId: sent.messageId,
-      ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
-      ...(input.replyInThread ? { replyInThread: true } : {}),
-      ...(input.threadId ? { threadId: input.threadId } : {}),
-      ...(input.rootId ? { rootId: input.rootId } : {}),
-      sessionId: input.sessionId,
-      ...(input.taskId ? { taskId: input.taskId } : {}),
-      instanceId,
-      ...(isAsk ? { questionId: instanceId } : {}),
-      spec: input.spec,
-      ...(input.config.webBaseUrl ? { webBaseUrl: input.config.webBaseUrl } : {}),
-      createdAt: now()
-    };
-    this.pluginCards.set(cardId, record);
-    if (this.pluginCards.size > 2_000) {
-      const oldest = this.pluginCards.keys().next().value;
-      if (oldest) this.pluginCards.delete(oldest);
-    }
-    if (this.cardMappings) {
-      const channel = this.cardChannelForPlugin(canonicalId);
-      await this.cardMappings.save({
-        id: `${channel}:${cardId}`,
-        channel,
-        externalId: cardId,
-        sessionId: input.sessionId,
-        extra: JSON.stringify(record),
-        createdAt: record.createdAt
-      });
-    }
-    return record;
+      replyToMessageId: input.replyToMessageId,
+      replyInThread: input.replyInThread,
+      forceMainThread: input.forceMainThread,
+      threadId: input.threadId,
+      rootId: input.rootId,
+      webBaseUrl: input.config.webBaseUrl,
+      pluginId: input.pluginId,
+      spec: input.spec
+    });
   }
 
   /** 向后兼容包装：推送内置 AskUserQuestion 飞书交互卡片。 */
@@ -2675,6 +2624,7 @@ export class LarkMessageCoordinator {
     this.tasks.clear();
     this.handledMessages.clear();
     this.pluginCards.clear();
+    this.localCardTracker.clear();
     this.localAnsweredPlugins.clear();
   }
 
@@ -3394,19 +3344,15 @@ export class LarkMessageCoordinator {
       }
       scheduleHeartbeat();
     });
+    const releaseLarkSend = this.turnTracker?.beginLarkSend(session.id);
     try {
       heartbeatActive = true;
       scheduleHeartbeat();
       await this.runtime.setRiskPolicy?.(session.id, riskPolicy);
       // 本轮开始前的最大 sequence：重载时用它裁掉更早轮次的事件（此路径没有 runtimeTaskId 可用）。
       const turnStartSequence = task.events.reduce((max, item) => Math.max(max, item.sequence), 0);
-      const releaseLarkSend = this.turnTracker?.beginLarkSend(session.id);
-      try {
-        if (agentPrompt === prompt) await this.runtime.send(session.id, prompt);
-        else await this.runtime.send(session.id, prompt, agentPrompt);
-      } finally {
-        releaseLarkSend?.();
-      }
+      if (agentPrompt === prompt) await this.runtime.send(session.id, prompt);
+      else await this.runtime.send(session.id, prompt, agentPrompt);
       // 若轮次已变（用户在 send 期间点击了重试），本轮不得覆盖新状态。
       if (task.turn !== currentTurn) return;
       if (task.interruptRequested) {
@@ -3440,6 +3386,7 @@ export class LarkMessageCoordinator {
         task.state = 'failed';
       }
     } finally {
+      releaseLarkSend?.();
       heartbeatActive = false;
       if (timer) clearTimeout(timer);
       unsubscribe();

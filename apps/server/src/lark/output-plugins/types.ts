@@ -6,6 +6,8 @@ export interface PersistedLarkOutputPluginCard<TSpec = unknown> {
   pluginId: string;
   appId: string;
   chatId: string;
+  /** 若原始投递目标为 `open_id` 私聊（`ou_...`），保留该接收 ID 供跨重启幂等匹配。 */
+  receiveId?: string;
   chatType: string;
   messageId: string;
   replyToMessageId?: string;

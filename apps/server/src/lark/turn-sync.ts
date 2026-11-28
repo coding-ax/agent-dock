@@ -1,9 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import {
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   defaultOutputPluginRegistry,
-  normalizeOutputPluginId,
-  now,
   pickFinalAssistantText,
   resolveOutputPluginEnabled,
   type AgentEvent,
@@ -42,12 +39,10 @@ import {
   type LarkCardService,
   type LarkCardSourceBadgeColor
 } from './service.js';
-import { LARK_ASK_CARD_CHANNEL } from './ask-user-question-card.js';
 import {
   defaultLarkOutputPluginAdapterRegistry,
-  LARK_OUTPUT_PLUGIN_CARD_CHANNEL,
-  type LarkOutputPluginAdapterRegistry,
-  type PersistedLarkOutputPluginCard
+  dispatchLarkOutputPluginCard,
+  type LarkOutputPluginAdapterRegistry
 } from './output-plugins/index.js';
 import { readAskUserQuestionConfig } from '../ask-user-question.js';
 import { readOutputPluginsGlobalConfig, type OutputPluginService } from '../output-plugins/service.js';
@@ -381,6 +376,7 @@ const MAX_SYNCED_TERMINAL_TASKS = 5_000;
 export class LarkTurnSyncService {
   private readonly bindingLookup: ReturnType<typeof createLarkSessionBindingLookup>;
   private readonly activeTurns = new Map<string, ActiveSyncedTurn>();
+  private readonly settlingTerminalTasks = new Set<string>();
   private readonly syncedTerminalTasks = new Set<string>();
   private readonly inflightOperations = new Set<Promise<unknown>>();
   private readonly nowMs: () => number;
@@ -447,6 +443,7 @@ export class LarkTurnSyncService {
       this.cleanupTurn(turn);
     }
     this.activeTurns.clear();
+    this.settlingTerminalTasks.clear();
   }
 
   /** 供测试等待所有异步回调落定。 */
@@ -537,68 +534,23 @@ export class LarkTurnSyncService {
     pluginId: string;
     spec: unknown;
   }): Promise<string | undefined> {
-    if (typeof input.service.sendInteractiveCard !== 'function') return undefined;
-    const canonicalId = normalizeOutputPluginId(input.pluginId);
-    const plugin = this.pluginRegistry.get(canonicalId);
-    if (!plugin) return undefined;
-    const adapter = this.larkPluginAdapters.resolve(plugin);
-    if (!adapter) return undefined;
-    const instanceId = plugin.getInstanceId(input.spec);
-    if (!instanceId) return undefined;
-
-    const isAsk = canonicalId === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
-    const channel = isAsk ? LARK_ASK_CARD_CHANNEL : LARK_OUTPUT_PLUGIN_CARD_CHANNEL;
-    const existing = await this.options.cardMappings.list(channel).catch(() => []);
-    const alreadySent = existing.some(mapping => {
-      if (mapping.sessionId !== input.turn.sessionId || !mapping.extra) return false;
-      try {
-        const rec = JSON.parse(mapping.extra) as Partial<PersistedLarkOutputPluginCard>;
-        const recPluginId = rec.pluginId ? normalizeOutputPluginId(rec.pluginId) : BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
-        const recInstanceId = rec.instanceId || rec.questionId;
-        return recPluginId === canonicalId && recInstanceId === instanceId;
-      } catch {
-        return false;
-      }
-    });
-    if (alreadySent) return undefined;
-
-    const cardId = `${isAsk ? 'askc' : 'outpc'}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-    const sent = await input.service.sendInteractiveCard({
-      ...this.recipientFor(input.turn.target),
-      card: adapter.buildCard({
-        cardId,
-        plugin,
-        spec: input.spec,
-        sessionId: input.turn.sessionId,
-        webBaseUrl: input.turn.botConfig.webBaseUrl
-      }),
-      idempotencyKey: `${isAsk ? 'askq' : 'outp'}-${cardId}`
-    });
-    this.options.turnTracker.markOutboundMessage(sent.messageId);
-    const record: PersistedLarkOutputPluginCard = {
-      cardId,
-      pluginId: canonicalId,
+    const dispatched = await dispatchLarkOutputPluginCard({
+      pluginRegistry: this.pluginRegistry,
+      larkPluginAdapters: this.larkPluginAdapters,
+      service: input.service,
+      turnTracker: this.options.turnTracker,
+      cardMappings: this.options.cardMappings,
       appId: input.turn.target.appId,
-      chatId: sent.chatId ?? input.turn.target.chatId,
+      sessionId: input.turn.sessionId,
+      taskId: input.turn.taskId,
+      chatId: input.turn.target.chatId,
+      receiveIdType: input.turn.target.receiveIdType,
       chatType: input.turn.target.chatType,
-      messageId: sent.messageId,
-      sessionId: input.turn.sessionId,
-      ...(input.turn.taskId ? { taskId: input.turn.taskId } : {}),
-      instanceId,
-      ...(isAsk ? { questionId: instanceId } : {}),
-      spec: input.spec,
-      ...(input.turn.botConfig.webBaseUrl ? { webBaseUrl: input.turn.botConfig.webBaseUrl } : {}),
-      createdAt: now()
-    };
-    await this.options.cardMappings.save({
-      id: `${channel}:${cardId}`,
-      channel,
-      externalId: cardId,
-      sessionId: input.turn.sessionId,
-      extra: JSON.stringify(record),
-      createdAt: record.createdAt
+      webBaseUrl: input.turn.botConfig.webBaseUrl,
+      pluginId: input.pluginId,
+      spec: input.spec
     });
-    return sent.messageId;
+    return dispatched?.messageId;
   }
 
   private secretsFor(config: StoredLarkConfig): string[] {
@@ -917,10 +869,19 @@ export class LarkTurnSyncService {
     if (event.kind === 'waiting_approval') return { action: 'skipped', reason: 'waiting_approval' };
 
     const taskId = event.taskId;
-    if (taskId && this.syncedTerminalTasks.has(taskId)) {
+    if (taskId && (this.syncedTerminalTasks.has(taskId) || this.settlingTerminalTasks.has(taskId))) {
       return { action: 'skipped', reason: 'already_synced' };
     }
+    if (taskId) this.settlingTerminalTasks.add(taskId);
+    try {
+      return await this.processTurnEvent(event);
+    } finally {
+      if (taskId) this.settlingTerminalTasks.delete(taskId);
+    }
+  }
 
+  private async processTurnEvent(event: RuntimeTurnEvent): Promise<LarkTurnSyncOutcome> {
+    const taskId = event.taskId;
     await this.options.turnTracker.waitForPendingLarkDispatch(event.sessionId);
     if (this.options.turnTracker.isLarkOwnedTask(taskId) || this.options.turnTracker.isLarkSendActive(event.sessionId)) {
       const active = taskId ? this.activeTurns.get(taskId) : undefined;
@@ -1037,7 +998,25 @@ export class LarkTurnSyncService {
     const sentViaGroup = this.isGroupSentForTurn(turn);
     if (sentViaGroup) {
       this.options.turnTracker.consumeGroupSends(turn.sessionId, turn.target.chatId, this.nowMs());
+      const dedupEnabledOutputPluginIds = state === 'completed'
+        ? (turn.enabledOutputPluginIds ?? await this.resolveEnabledOutputPluginIds(turn.sessionId))
+        : undefined;
+      const dedupExtractedPlugin = state === 'completed' && dedupEnabledOutputPluginIds && dedupEnabledOutputPluginIds.size > 0
+        ? this.pluginRegistry.parseTrailingOutput(redactedFinalText, dedupEnabledOutputPluginIds)
+        : null;
       if (!turn.cardMessageId) {
+        // group send 仅能发文本/富文本，无法发 Schema 2.0 交互插件卡片；若本轮末尾携带已启用交互插件，仍须补推一次交互卡片。
+        if (dedupExtractedPlugin) {
+          const service = await this.options.resolveService(turn.target.appId);
+          await this.pushTrailingOutputPluginCard({
+            service,
+            turn,
+            pluginId: dedupExtractedPlugin.pluginId,
+            spec: dedupExtractedPlugin.spec
+          }).catch(error => {
+            this.options.log.warn({ error, sessionId: turn.sessionId, pluginId: dedupExtractedPlugin.pluginId }, 'group send 去重轮次附加推送飞书交互插件卡片失败');
+          });
+        }
         this.options.log.info(
           { sessionId: turn.sessionId, taskId: turn.taskId, chatId: turn.target.chatId, category: turn.source.category },
           '本轮已通过 group send 主动向绑定群发送消息，跳过重复同步'
@@ -1079,6 +1058,16 @@ export class LarkTurnSyncService {
         }
       };
       await this.flushCardUpdates(turn, service);
+      if (dedupExtractedPlugin) {
+        await this.pushTrailingOutputPluginCard({
+          service,
+          turn,
+          pluginId: dedupExtractedPlugin.pluginId,
+          spec: dedupExtractedPlugin.spec
+        }).catch(error => {
+          this.options.log.warn({ error, sessionId: turn.sessionId, pluginId: dedupExtractedPlugin.pluginId }, '去重收口轮次附加推送飞书交互插件卡片失败');
+        });
+      }
       const messageId = turn.cardMessageId;
       this.cleanupTurn(turn);
       this.markTerminalSynced(taskId);
