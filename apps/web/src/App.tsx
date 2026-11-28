@@ -2,29 +2,23 @@ import { DialogHost } from './DialogHost';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { closeAppDialog, openAppDialog } from './dialog-store';
 import { SettingsMenu } from './SettingsMenu';
+import { LarkQuickTriggerButton } from './LarkIcon';
+import { SettingsCenterDialog } from './settings/SettingsCenterDialog';
+import { QuickThemeToggleButton } from './ThemeToggle';
 import { SidebarPwaInstallButton } from './SidebarPwaInstallButton';
 import { triggerPwaInstall, usePwaInstall } from './pwa-install';
-import { LarkRegistrationDialog } from './LarkRegistrationDialog';
-import { LarkAvatarPanel } from './LarkAvatarPanel';
-import { LarkRegexTriggerDialog } from './LarkRegexTriggerDialog';
-import { AiFieldHeader, AiTextAssistControl, useAiFlash } from './AiTextAssist';
-import { SuggestedValueInput } from './SuggestedValueInput';
-import { WebBaseUrlInput } from './WebBaseUrlInput';
-import { KeyboardEvent, lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type HTMLAttributes } from 'react';
 import { useMount, useEventListener, useUpdateEffect, useLocalStorageState, useMemoizedFn } from 'ahooks';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlarmClock, AlertTriangle, Archive, BarChart3, Bell, Bot, Check, ChevronRight, Columns3, ExternalLink, Eye, EyeOff, Folder, FolderOpen, FolderPlus, GripVertical, Info, LoaderCircle, Menu, MonitorDown, Palette, PanelLeftOpen, Pin, Plus, Puzzle, RefreshCw, Regex, Search, RotateCcw, Settings2, Smartphone, Trash2, Wrench, X } from 'lucide-react';
-import { Input, InputNumber, Switch } from 'antd';
-import { defaultLarkTraceLimit, validateHighRiskPattern } from '@agent-dock/agent-dock-shared';
-import { api, WebAccessDeniedError, type Agent, type AssistantTask, type LarkTurnSyncConfig, type Project, type Session } from './api';
-import { DEFAULT_LARK_TURN_SYNC, DEFAULT_NEW_LARK_BOT_FORM, canSaveHardGate, canToggleHardGate, normalizeLarkTurnSyncForm, resolveReasoningEffort, withSavedOption } from './lark-config-form';
-import { LarkTurnSyncControls, summarizeLarkTurnSync } from './LarkTurnSyncControls';
+import { AlertTriangle, Archive, BarChart3, ChevronRight, Columns3, Folder, FolderPlus, GripVertical, LoaderCircle, Menu, MonitorDown, PanelLeftOpen, Pin, Plus, RefreshCw, RotateCcw, Search, Settings, Smartphone, X } from 'lucide-react';
+import { api, WebAccessDeniedError, type Agent, type AssistantTask, type Project, type Session } from './api';
 import { useDockStore, type PaneTabKind } from './store';
 import { PaneHost } from './PaneHost';
-import { AgentIcon, BotAvatar } from './AgentIcon';
+import { AgentIcon } from './AgentIcon';
 import { PaneTypeMenu } from './PaneTypeMenu';
 import { shortcutLabel, useShortcuts, type Shortcut } from './useShortcuts';
 import { useOutputPluginsCatalog } from './output-plugins/useOutputPlugins';
+import { SessionOutputPluginsDialog } from './output-plugins/SessionOutputPluginsDialog';
 import { DEFAULT_SIDE_CHAT_CONFIG, findReusableSideChatSession, resolveSideChatStartOptions } from './side-chat-config';
 import { createClientMessageId } from './client-message-id';
 import { sideChatParentId } from './side-chat-link';
@@ -34,11 +28,8 @@ import { ArchivedSessionsDialog } from './ArchivedSessionsDialog';
 import { boardUrl, parseBoardRoute, parseRightParam, sessionUrl } from './session-url';
 import { useVisualViewportShell } from './useVisualViewportShell';
 import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
-import { CompactSelect } from './CompactSelect';
 import { SessionFilterSelect } from './SessionFilterSelect';
 import { SessionTitleEditor } from './SessionTitleEditor';
-import { useSyncFormFromRemote } from './useSyncFormFromRemote';
-import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels } from './model-cache';
 import { resolveQuickCreateSessionOptions } from './last-used-prefs';
 import { groupSessions, groupSessionsByTime, relativeTimeLabel, sameSessionTree, sessionActivityTime, sessionLabel } from './session-groups';
 import { mergeProjectGroups } from './project-groups';
@@ -46,14 +37,9 @@ import { isProjectPinned, isSessionPinned, pinnedFirst, splitPinned } from './si
 import { sessionPaneTab } from './pane-tab';
 import { useDocumentTitle } from './useDocumentTitle';
 import { EMPTY_ITEM_ORDER, applyOrder, moveInList, normalizeItemOrder, type SidebarItemOrder } from './sidebar-order';
-import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { SessionSearchDialog } from './SessionSearchDialog';
 import { WebAccessDeniedPanel, shouldCancelOnAccessDenied } from './WebAccessDeniedPanel';
-import { AgentConfigDialog } from './AgentConfigDialog';
 import { UsageDashboardDialog } from './UsageDashboardDialog';
-import { AssistantSettingsDialog } from './AssistantSettingsDialog';
-import { NotificationSettingsDialog } from './NotificationSettingsDialog';
-import { TaskRecoverySettingsDialog } from './TaskRecoverySettingsDialog';
 import { useNotificationCenter } from './useNotificationCenter';
 import { useLocalNotificationPrefs, useUnreadNotificationsStore, type UnreadSessionNotification } from './notifications-local';
 import { HandoverDialog } from './HandoverDialog';
@@ -61,16 +47,14 @@ import { ImportSessionDialog } from './ImportSessionDialog';
 import { ImportProjectDialog } from './ImportProjectDialog';
 import { SystemPromptDialog } from './SystemPromptDialog';
 import { ShareAppDialog } from './ShareAppDialog';
-import { ThemeStudioDialog } from './ThemeStudioDialog';
 import { useThemeSync } from './themes';
-import { AutostartToggle } from './AutostartToggle';
-import { SelfUpdateNotice } from './SelfUpdateNotice';
+import { useBi, useLocale, useLocaleSync, useT } from './i18n';
 import { SessionPane } from './SessionPane';
 import { TerminalPanel } from './TerminalPanel';
 import { FileExplorerPanel } from './FileExplorerPanel';
 import { RawLogPanel } from './RawLogPanel';
 import { busyStates, sessionStateLabel, stateTextTone, stateTone } from './session-states';
-import { ConfirmDialog, IconButton, SettingRow, SlidingSegmented } from './ui-controls';
+import { ConfirmDialog, IconButton, SlidingSegmented } from './ui-controls';
 import { Disclosure } from './Disclosure';
 import { ExitGate } from './ExitGate';
 import { HoverTooltip, HoverTooltipText, TooltipProvider } from './HoverTooltip';
@@ -89,17 +73,14 @@ import { withViewTransition } from './companion/effects';
 import { BrandLogo } from './BrandLogo';
 import { BoardWorkspace } from './board/BoardWorkspace';
 
-const PromptEditor = lazy(() => import('./PromptEditor'));
-
-const parseMemberNames = (value: string) => [...new Set(value.split(/[\n,，]/).map(item => item.trim()).filter(Boolean))];
-
 /** 工作区行「+」弹出的 agent 快速选择菜单；fixed 定位避免被列表的 overflow 裁切。 */
 function AgentPickerMenu({ cwd, top, left, agents, creatingPair, onSelect, onClose }: { cwd: string; top: number; left: number; agents: Agent[]; creatingPair?: { agentId: string; cwd: string }; onSelect(agentId: string): void; onClose(): void }) {
+  const L = useBi();
   const root = useRef<HTMLDivElement>(null);
   useDismissOnOutsidePointer(root, true, onClose);
   return <div ref={root} className="ui-popover fixed z-50 max-h-64 w-52 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-1 shadow-[0_16px_40px_rgba(24,24,27,.16)]" style={{ top, left }}>
-    <div className="px-2 py-1 text-[12px] text-zinc-400">在此工作区新建会话</div>
-    {agents.length === 0 && <div className="px-2 py-2 text-[12px] text-zinc-400">暂无可用 Agent</div>}
+    <div className="px-2 py-1 text-[12px] text-zinc-400">{L('在此工作区新建会话', 'New session in workspace')}</div>
+    {agents.length === 0 && <div className="px-2 py-2 text-[12px] text-zinc-400">{L('暂无可用 Agent', 'No available agents')}</div>}
     {agents.map(agent => {
       const busy = creatingPair?.agentId === agent.id && creatingPair.cwd === cwd;
       return <button key={agent.id} type="button" disabled={Boolean(creatingPair)} onClick={() => onSelect(agent.id)} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[12px] text-zinc-700 hover:bg-zinc-100 disabled:opacity-50">
@@ -110,352 +91,25 @@ function AgentPickerMenu({ cwd, top, left, agents, creatingPair, onSelect, onClo
   </div>;
 }
 
-/** 设置行里的两三个互斥小选项（所有人 / 指定成员、按发送人隔离 / 全群共享等），
- * 使用统一滑动胶囊分段控件，移动端占满行宽，桌面端按内容紧凑右对齐并与 h-9 下拉等高。 */
-function RowSegmented({ options, value, onChange, ariaLabel }: { options: Array<{ value: string; label: string }>; value: string; onChange(value: string): void; ariaLabel?: string }) {
-  return <SlidingSegmented
-    ariaLabel={ariaLabel}
-    value={value}
-    onChange={onChange}
-    options={options}
-    size="md"
-    className="h-9 w-full shrink-0 min-[520px]:inline-grid min-[520px]:w-auto"
-  />;
-}
-
-function AgentSelect({ agents, value, disabled, size = 'default', popupWidth, onChange }: { agents: Agent[]; value: string; disabled?: boolean; size?: 'default' | 'sm'; popupWidth?: number | false; onChange(value: string): void }) {
-  return <CompactSelect size={size} popupWidth={popupWidth} options={agents.map(agent => ({ value: agent.id, label: agent.name, meta: agent.version, agentId: agent.id }))} value={value} placeholder="选择 Agent" disabledText="未扫描到可用 Agent" disabled={disabled} onChange={onChange}/>;
-}
-
-function MemberNameTagInput({ value, placeholder, onChange }: { value: string[]; placeholder: string; onChange(value: string[]): void }) {
-  const [draft, setDraft] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-  const commit = (raw = draft) => {
-    const additions = parseMemberNames(raw);
-    if (additions.length) onChange([...new Set([...value, ...additions])]);
-    setDraft('');
-  };
-  const remove = (name: string) => onChange(value.filter(item => item !== name));
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === 'Enter' || event.key === ',' || event.key === '，') { event.preventDefault(); commit(); }
-    else if (event.key === 'Backspace' && !draft && value.length) remove(value[value.length - 1]!);
-  };
-  return <div role="group" aria-label="成员真实姓名" onClick={() => inputRef.current?.focus()} className="mt-2 flex min-h-11 cursor-text flex-wrap items-center gap-x-2 gap-y-2 rounded-lg border border-zinc-300 bg-zinc-50/70 p-2 ui-field-within focus-within:bg-white">
-    {value.map(item => <span key={item} title={item} className="flex h-7 max-w-full items-center rounded-md border border-zinc-200 bg-white pl-2.5 pr-1 text-[12px] font-medium text-zinc-700 shadow-[0_1px_1px_rgba(24,24,27,.04)]">
-      <span className="min-w-0 truncate">{item}</span>
-      <button type="button" aria-label={`移除 ${item}`} onPointerDown={event => event.preventDefault()} onClick={() => remove(item)} className="ml-1.5 grid h-5 w-5 shrink-0 place-items-center rounded text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-300"><X size={11}/></button>
-    </span>)}
-    <input ref={inputRef} aria-label="输入成员真实姓名" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} onBlur={() => commit()} onPaste={event => { const text = event.clipboardData.getData('text'); if (/[\n,，]/.test(text)) { event.preventDefault(); commit(`${draft}\n${text}`); } }} placeholder={value.length ? '继续添加成员…' : placeholder} className="h-7 min-w-36 flex-[1_0_9rem] border-0 bg-transparent px-1 text-[12px] text-zinc-800 outline-none placeholder:text-zinc-400"/>
-  </div>;
-}
-
-function LarkConfigModal({ agents, onClose, onOpenRegexTriggers }: { agents: Agent[]; onClose(): void; onOpenRegexTriggers?(): void }) {
-  const [registrationOpen, setRegistrationOpen] = useState(false);
-  const qc = useQueryClient();
-  const config = useQuery({ queryKey: ['lark-config'], queryFn: api.larkConfig });
-  const capabilities = useQuery({ queryKey: ['system-capabilities'], queryFn: api.systemCapabilities });
-  const [confirmation, setConfirmation] = useState<'incomplete' | 'discard' | 'delete'>();
-  const hydratedSelection = useRef<string | null>(null);
-  const [selectedAppId, setSelectedAppId] = useState<string | null>(null); const [step, setStep] = useState<1 | 2>(1); const [name, setName] = useState(''); const [workspace, setWorkspace] = useState(''); const [webBaseUrl, setWebBaseUrl] = useState(''); const [appId, setAppId] = useState(''); const [appSecret, setAppSecret] = useState(''); const [restrictUsers, setRestrictUsers] = useState(false); const [allowedUserNames, setAllowedUserNames] = useState<string[]>([]); const [allowedBotNames, setAllowedBotNames] = useState<string[]>([]); const [peerBotsAllowed, setPeerBotsAllowed] = useState<boolean>(DEFAULT_NEW_LARK_BOT_FORM.peerBotsAllowed); const [defaultAgentId, setDefaultAgentId] = useState(''); const [defaultModel, setDefaultModel] = useState(''); const [defaultReasoningEffort, setDefaultReasoningEffort] = useState(''); const [preInjectPrompt, setPreInjectPrompt] = useState(''); const [groupToolsEnabled, setGroupToolsEnabled] = useState<boolean>(DEFAULT_NEW_LARK_BOT_FORM.groupToolsEnabled); const [groupToolsAllowSend, setGroupToolsAllowSend] = useState<boolean>(DEFAULT_NEW_LARK_BOT_FORM.groupToolsAllowSend); const [groupSessionScope, setGroupSessionScope] = useState<'user' | 'chat'>(DEFAULT_NEW_LARK_BOT_FORM.groupSessionScope); const [highRiskAllowedUserNames, setHighRiskAllowedUserNames] = useState<string[]>([]); const [highRiskPattern, setHighRiskPattern] = useState(''); const [gateEnabled, setGateEnabled] = useState<boolean>(DEFAULT_NEW_LARK_BOT_FORM.gateEnabled); const [hardGateEnabled, setHardGateEnabled] = useState(false); const [hookTrustConfirmed, setHookTrustConfirmed] = useState(false); const [showSecret, setShowSecret] = useState(false); const [listening, setListening] = useState<boolean>(DEFAULT_NEW_LARK_BOT_FORM.listening); const [pushIntervalMs, setPushIntervalMs] = useState<number>(DEFAULT_NEW_LARK_BOT_FORM.pushIntervalMs); const [traceLimit, setTraceLimit] = useState(String(defaultLarkTraceLimit)); const [quietReply, setQuietReply] = useState<boolean>(DEFAULT_NEW_LARK_BOT_FORM.quietReply); const [turnSync, setTurnSync] = useState<LarkTurnSyncConfig>(DEFAULT_LARK_TURN_SYNC);
-  const current = config.data?.bots.find(bot => bot.appId === selectedAppId);
-  const defaultWorkspace = agents.find(agent => agent.id === defaultAgentId)?.cwd || capabilities.data?.workingDirectory;
-  const agentSelectionSaved = Boolean(current?.setupComplete && current.defaultAgentId === defaultAgentId);
-  const defaultAgentLocked = Boolean(hardGateEnabled || current?.hardGateEnabled);
-  const highRiskPatternValidation = useMemo(() => validateHighRiskPattern(highRiskPattern), [highRiskPattern]);
-  const highRiskFlash = useAiFlash();
-  const hookStatus = useQuery({ queryKey: ['lark-hook-status', current?.appId, defaultAgentId], queryFn: () => api.larkHookStatus(current!.appId), enabled: Boolean(agentSelectionSaved && gateEnabled && step === 2) });
-  const agentOptions = useQuery({ queryKey: agentModelsQueryKey(defaultAgentId, defaultModel), queryFn: () => loadAgentModels(defaultAgentId, defaultModel || undefined), enabled: Boolean(defaultAgentId), initialData: () => readCachedAgentModels(defaultAgentId, defaultModel || undefined), initialDataUpdatedAt: 0, refetchOnMount: 'always', staleTime: 5 * 60_000 });
-  const refreshAgentOptions = useMutation({
-    mutationFn: (input: { agentId: string; model?: string }) => loadAgentModels(input.agentId, input.model, true),
-    onSuccess: (data, input) => qc.setQueryData(agentModelsQueryKey(input.agentId, input.model), data)
-  });
-  const hardGateFormState = { enabled: hardGateEnabled, persisted: Boolean(current?.hardGateEnabled), agentSelectionSaved, hookInstalled: Boolean(hookStatus.data?.installed) };
-  const hardGateReadyToSave = canSaveHardGate(hardGateFormState);
-  const hardGateCanToggle = canToggleHardGate(hardGateFormState);
-  const hardGateHookMissing = Boolean(hardGateEnabled && current?.hardGateEnabled && hookStatus.isSuccess && !hookStatus.data.installed);
-  const legacyHighRiskNeedsMigration = Boolean(gateEnabled && current?.highRiskAllowedEmails.length && !highRiskAllowedUserNames.length);
-  // 换 Agent / 换模型后，旧的推理强度可能已不在新列表里。这是可以在渲染期算出来的派生值，
-  // 不该用 Effect 去「事后纠正」state——那会多渲染一帧，并让 state 短暂处于非法值。
-  const effectiveDefaultReasoningEffort = resolveReasoningEffort(defaultReasoningEffort, agentOptions.data?.warning ? undefined : agentOptions.data, agentOptions.isFetching);
-  // AI 补全的上下文只放配置事实，不放密钥；生成结果仍由用户预览后再应用。
-  const promptAiContext = [
-    `机器人名称：${name.trim() || appId.trim() || '未命名'}`,
-    `Agent：${agents.find(agent => agent.id === defaultAgentId)?.name ?? (defaultAgentId || '未选择')}`,
-    `工作区：${workspace.trim() || '使用 Agent 默认工作目录'}`,
-    `群协作工具：${groupToolsEnabled ? (groupToolsAllowSend ? '已开启（可读写）' : '已开启（只读）') : '未开启'}`,
-    `回复模式：${quietReply ? '静默回复（最终答案由服务端自动发送）' : 'Trace 卡片'}`,
-    `非飞书轮次同步：${summarizeLarkTurnSync(turnSync)}`
-  ].join('\n');
-  // 配置拉回来后选中第一个机器人。用具名 hook 把「远端数据 → 本地表单」的
-  // 一次性灌入意图写清楚，而不是散落的裸 useEffect。
-  useSyncFormFromRemote(config.data, () => {
-    if (selectedAppId !== null) return;
-    const firstBot = config.data!.bots[0];
-    setSelectedAppId(firstBot?.appId ?? '');
-    setStep(firstBot && !firstBot.setupComplete ? 2 : 1);
-  });
-  // source 必须能区分「未初始化」和「新增机器人」：后者 selectedAppId 是空串，
-  // 用 config.data && selectedAppId 会得到 '' 而被 truthy 判定挡掉，
-  // 表单就不会切到新建态、残留上一个机器人的值。
-  useSyncFormFromRemote(config.data && selectedAppId !== null ? selectedAppId : null, () => {
-    if (selectedAppId === null) return;
-    if (hydratedSelection.current === selectedAppId) return;
-    hydratedSelection.current = selectedAppId;
-    const bot = config.data!.bots.find(item => item.appId === selectedAppId);
-    setName(bot?.name ?? ''); setWorkspace(bot?.workspace ?? ''); setWebBaseUrl(bot?.webBaseUrl ?? ''); setAppId(bot?.appId ?? ''); setAppSecret(''); setRestrictUsers(Boolean(bot?.allowedUsers.length || bot?.allowedEmails.length || bot?.allowedUserNames?.length)); setAllowedUserNames(bot?.allowedUserNames?.length ? bot.allowedUserNames : (bot?.allowedUsers ?? []).map(user => user.name)); setAllowedBotNames(bot?.allowedBotNames?.length ? bot.allowedBotNames : (bot?.allowedBots ?? []).map(b => b.name)); setPeerBotsAllowed(bot?.peerBotsAllowed !== false);
-    setDefaultAgentId(agents.some(agent => agent.id === bot?.defaultAgentId) ? bot?.defaultAgentId ?? '' : agents[0]?.id ?? '');
-    setDefaultModel(bot?.defaultModel ?? ''); setDefaultReasoningEffort(bot?.defaultReasoningEffort ?? ''); setListening(bot ? bot.listening : DEFAULT_NEW_LARK_BOT_FORM.listening); setPushIntervalMs(bot?.pushIntervalMs ?? DEFAULT_NEW_LARK_BOT_FORM.pushIntervalMs); setTraceLimit((bot?.traceLimit ?? defaultLarkTraceLimit).toString()); setQuietReply(bot ? bot.quietReply : DEFAULT_NEW_LARK_BOT_FORM.quietReply); setTurnSync(bot?.turnSync ? normalizeLarkTurnSyncForm(bot.turnSync) : DEFAULT_LARK_TURN_SYNC);
-    setPreInjectPrompt(bot?.preInjectPrompt ?? ''); setGroupToolsEnabled(bot ? bot.groupToolsEnabled : DEFAULT_NEW_LARK_BOT_FORM.groupToolsEnabled); setGroupToolsAllowSend(bot ? bot.groupToolsAllowSend : DEFAULT_NEW_LARK_BOT_FORM.groupToolsAllowSend); setGroupSessionScope(bot ? bot.groupSessionScope : DEFAULT_NEW_LARK_BOT_FORM.groupSessionScope); setHighRiskAllowedUserNames(bot?.highRiskAllowedUserNames?.length ? bot.highRiskAllowedUserNames : (bot?.highRiskAllowedUsers ?? []).map(user => user.name)); setHighRiskPattern(bot?.highRiskPattern ?? ''); setGateEnabled(bot ? bot.gateEnabled : DEFAULT_NEW_LARK_BOT_FORM.gateEnabled); setHardGateEnabled(bot?.hardGateEnabled ?? false); setHookTrustConfirmed(bot?.hookTrustConfirmed ?? false);
-  });
-  const inspect = useMutation({ mutationFn: () => api.inspectLarkBot({ appId: appId.trim(), appSecret: appSecret.trim() }), onSuccess: result => setName(result.appName) });
-  // 两个步骤是同一张表单：「下一步」只在本地切换，不落库；只有最终保存才依次提交凭证阶段和 Agent 阶段。
-  // 以前第一步的按钮就会直接保存并生效（含监听），看起来像「还没点完成就已经改好了」。
-  const save = useMutation({
-    mutationFn: async () => {
-      const larkSaved = await api.saveLarkConfig({ stage: 'lark', ...(current ? { originalAppId: current.appId } : {}), appId: appId.trim(), ...(appSecret.trim() ? { appSecret: appSecret.trim() } : {}), workspace: workspace.trim(), webBaseUrl: webBaseUrl.trim(), allowedUserNames: restrictUsers ? allowedUserNames : [], allowedEmails: [], allowedBotNames: peerBotsAllowed ? [] : allowedBotNames, peerBotsAllowed, listening, pushIntervalMs, traceLimit: Number(traceLimit), quietReply, turnSync });
-      qc.setQueryData(['lark-config'], larkSaved);
-      return api.saveLarkConfig({ stage: 'agent', originalAppId: appId.trim(), defaultAgentId, defaultModel, defaultReasoningEffort: effectiveDefaultReasoningEffort, preInjectPrompt, groupToolsEnabled, groupToolsAllowSend, groupSessionScope, highRiskAllowedUserNames, highRiskAllowedEmails: [], highRiskPattern, gateEnabled, softGateEnabled: gateEnabled, hardGateEnabled, hookTrustConfirmed });
-    },
-    onSuccess: data => { qc.setQueryData(['lark-config'], data); const savedId = appId.trim(); setSelectedAppId(savedId); setAppSecret(''); void qc.invalidateQueries({ queryKey: ['lark-hook-status', savedId] }); onClose(); }
-  });
-  const installHook = useMutation({
-    mutationFn: async () => {
-      const saved = await api.saveLarkConfig({ stage: 'agent', originalAppId: current!.appId, defaultAgentId, defaultModel, defaultReasoningEffort: effectiveDefaultReasoningEffort, preInjectPrompt, listening, groupToolsEnabled, groupToolsAllowSend, groupSessionScope, highRiskAllowedUserNames, highRiskAllowedEmails: [], highRiskPattern, gateEnabled: true, softGateEnabled: true, hardGateEnabled: false, hookTrustConfirmed: false });
-      qc.setQueryData(['lark-config'], saved);
-      return api.installLarkHook(current!.appId, highRiskPattern);
-    },
-    onSuccess: result => { qc.setQueryData(['lark-hook-status', current!.appId, defaultAgentId], result); setGateEnabled(true); setHardGateEnabled(false); setHookTrustConfirmed(true); void qc.invalidateQueries({ queryKey: ['lark-config'] }); }
-  });
-  const remove = useMutation({ mutationFn: () => api.deleteLarkConfig(current!.appId), onSuccess: data => { qc.setQueryData(['lark-config'], data); const firstBot = data.bots[0]; setSelectedAppId(firstBot?.appId ?? ''); setStep(firstBot && !firstBot.setupComplete ? 2 : 1); setConfirmation(undefined); } });
-  const pickWorkspace = useMutation({ mutationFn: api.selectDirectory, onSuccess: result => setWorkspace(result.path) });
-  const agentCapabilitiesPending = step === 2 && Boolean(defaultAgentId) && !agentOptions.data && (agentOptions.isLoading || agentOptions.isFetching);
-  const agentCapabilitiesReady = step !== 2 || Boolean(agentOptions.data);
-  const larkStageValid = Boolean(appId.trim() && (current || appSecret.trim()) && (!restrictUsers || allowedUserNames.length) && (peerBotsAllowed || allowedBotNames.length) && (quietReply || (Number.isInteger(pushIntervalMs) && pushIntervalMs >= 500 && pushIntervalMs <= 20000)));
-  const agentStageValid = Boolean(defaultAgentId && agentCapabilitiesReady && (!gateEnabled || highRiskPatternValidation.valid) && !legacyHighRiskNeedsMigration && hardGateReadyToSave);
-  // 首次配置（还没落库，或上次没配完）在第一步只是「下一步」；其余情况一次保存两个阶段。
-  const advancesToAgentStep = step === 1 && !current?.setupComplete;
-  const canSave = advancesToAgentStep ? larkStageValid : larkStageValid && agentStageValid;
-  const larkCredentialsReady = Boolean(current || (appId.trim() && appSecret.trim()));
-  const formError = refreshAgentOptions.error ?? save.error ?? remove.error ?? pickWorkspace.error ?? inspect.error ?? installHook.error ?? (agentOptions.data ? undefined : agentOptions.error) ?? config.error;
-  const permissionSettingsUrl = /^cli_[\w-]+$/.test(appId.trim()) ? `https://open.larkoffice.com/app/${encodeURIComponent(appId.trim())}/auth` : undefined;
-  const permissionRelatedError = Boolean(formError && /权限|permission|通讯录|邮箱|open[_ ]?id|资源点|visible range/i.test(formError.message));
-  const requestClose = () => {
-    const incompleteDraft = Boolean(current && !current.setupComplete);
-    const unsavedNewBot = !current && selectedAppId === '' && Boolean(appId.trim() || appSecret.trim() || workspace.trim());
-    if (incompleteDraft || unsavedNewBot) { setConfirmation(incompleteDraft ? 'incomplete' : 'discard'); return; }
-    onClose();
-  };
-  return <><ExitGate open={registrationOpen}><LarkRegistrationDialog onClose={() => { setRegistrationOpen(false); void qc.invalidateQueries({ queryKey: ['lark-config'] }); }} onComplete={result => {
-    qc.setQueryData(['lark-config'], result.config);
-    setSelectedAppId(result.appId);
-    setStep(1);
-    setRegistrationOpen(false);
-  }}/></ExitGate><div inert={registrationOpen} aria-hidden={registrationOpen || undefined} className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-zinc-950/25 p-0 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) requestClose(); }}>
-    <form onSubmit={event => { event.preventDefault(); if (!canSave) return; if (advancesToAgentStep) setStep(2); else save.mutate(); }} className="ui-dialog flex h-[100dvh] w-full max-w-none flex-col overflow-hidden rounded-none border-0 border-zinc-200 bg-white shadow-[0_20px_64px_rgba(24,24,27,.18)] sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:max-w-[640px] sm:rounded-[14px] sm:border">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-y-2 border-b border-zinc-100 px-3.5 py-2.5 sm:px-4 sm:py-3"><div className="min-w-0"><h2 className="text-[16px] font-semibold text-zinc-900">飞书机器人</h2><p className="mt-0.5 truncate text-[12px] text-zinc-500">每个机器人拥有独立工作区和会话</p></div><div className="col-span-2 row-start-2 flex min-w-0 flex-wrap items-center justify-start gap-1 sm:justify-end sm:gap-0.5">{onOpenRegexTriggers && <button type="button" onClick={onOpenRegexTriggers} className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-[12px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 sm:px-2.5"><Regex size={12}/>群聊正则唤起</button>}<a href="https://open.larkoffice.com/app" target="_blank" rel="noreferrer" className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-[12px] font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 sm:px-2.5">飞书开发者后台<ExternalLink size={12}/></a><a href="https://open.larkoffice.com/page/launcher?from=backend_oneclick" target="_blank" rel="noreferrer" className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-[12px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 sm:px-2.5">快速创建机器人<ExternalLink size={12}/></a><button type="button" onClick={() => setRegistrationOpen(true)} disabled={!config.data || save.isPending} className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-[12px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-40 sm:px-2.5">扫码创建机器人<Plus size={12}/></button></div><span className="col-start-2 row-start-1 ml-1"><IconButton label="关闭" onClick={requestClose}><X size={15}/></IconButton></span></div>
-      <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-zinc-100 bg-zinc-50/70 px-3 py-2">
-        {config.data?.bots.map(bot => <button key={bot.appId} type="button" onClick={() => { setSelectedAppId(bot.appId); setStep(bot.setupComplete ? 1 : 2); }} className={`flex h-8 max-w-[250px] shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium transition-colors ${selectedAppId === bot.appId ? 'bg-white text-zinc-900 shadow-sm ring-1 ring-zinc-200' : 'text-zinc-500 hover:bg-white/70 hover:text-zinc-800'}`}>{bot.avatarUrl ? <BotAvatar url={bot.avatarUrl} size={13} className="h-[13px] w-[13px] shrink-0 rounded-sm object-cover"/> : <Bot size={13} className="shrink-0"/>}<span title={bot.name} className="min-w-0 max-w-32 truncate">{bot.tabLabel}</span>{bot.setupComplete ? <span title="配置完成" className="flex shrink-0 items-center gap-0.5 rounded bg-emerald-50 px-1 py-0.5 text-[12px] font-medium text-emerald-700"><Check size={9}/>已配置</span> : <span className="shrink-0 rounded bg-amber-100 px-1 py-0.5 text-[12px] text-amber-700">待配置</span>}{bot.activeListening && <span title="长连接已连接" className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"/>}</button>)}
-        <button type="button" onClick={() => { setSelectedAppId(''); setStep(1); }} className={`flex h-8 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[12px] font-medium ${selectedAppId === '' ? 'bg-white text-zinc-900 shadow-sm ring-1 ring-zinc-200' : 'text-zinc-500 hover:bg-white/70 hover:text-zinc-800'}`}><Plus size={13}/>新增机器人</button>
-      </div>
-      <div className="space-y-3.5 overflow-y-auto px-4 py-4">
-        <DeferredMount placeholder={<div className="min-h-[420px]"><DeferredSkeleton/></div>}>
-        {config.isLoading ? <div className="space-y-2.5"><div className="h-9 ui-skeleton rounded-md bg-zinc-100"/><div className="h-9 ui-skeleton rounded-md bg-zinc-100"/><div className="h-9 ui-skeleton rounded-md bg-zinc-100"/></div> : <>
-          <SlidingSegmented
-            ariaLabel="飞书配置步骤"
-            value={String(step)}
-            onChange={next => setStep(next === '2' ? 2 : 1)}
-            size="md"
-            className="mb-1"
-            itemClassName="h-8 py-2"
-            options={[
-              {
-                value: '1',
-                label: <><span className={`inline-grid h-4 w-4 place-items-center rounded-full text-[11px] font-semibold transition-colors ${step === 1 ? 'bg-zinc-900 text-white' : 'bg-zinc-200 text-zinc-600'}`}>1</span>飞书与白名单</>
-              },
-              {
-                value: '2',
-                disabled: !current && !larkStageValid,
-                label: <><span className={`inline-grid h-4 w-4 place-items-center rounded-full text-[11px] font-semibold transition-colors ${step === 2 ? 'bg-zinc-900 text-white' : 'bg-zinc-200 text-zinc-600'}`}>2</span>Agent 与门禁</>
-              }
-            ]}
-          />
-          <p className="-mt-1 text-[12px] leading-4 text-zinc-400">{step === 1 ? '点「下一步」继续配置 Agent，最后点「保存」才会一次性生效；指定成员和机器人的姓名在实际使用时再校验。' : 'Agent 配置不影响长连接；收到消息时才会校验运行配置。'}</p>
-          {step === 1 ? <>
-          <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="text-[12px] font-medium text-zinc-700">机器人名称</span><Input size="large" value={name} readOnly variant="filled" placeholder="校验凭证后自动识别" className="mt-1.5 font-mono text-[12px]"/></label><label className="block"><span className="text-[12px] font-medium text-zinc-700">App ID</span><Input size="large" value={appId} onChange={event => { setAppId(event.target.value); setName(''); }} placeholder="cli_xxx" autoComplete="off" className="mt-1.5 font-mono text-[12px]"/></label></div>
-          <label className="block"><span className="flex items-center text-[12px] font-medium text-zinc-700">App Secret{current && <span className="ml-2 font-normal text-zinc-400">留空不修改</span>}</span><Input.Password size="large" value={appSecret} onChange={event => setAppSecret(event.target.value)} visibilityToggle={{ visible: showSecret, onVisibleChange: setShowSecret }} iconRender={visible => visible ? <EyeOff size={13}/> : <Eye size={13}/>} placeholder={current ? '已保存' : '输入 App Secret'} autoComplete="new-password" className="mt-1.5 font-mono text-[12px]"/></label>
-          <div><span className="text-[12px] font-medium text-zinc-700">工作区 <span className="font-normal text-zinc-400">可选</span></span><div className="flex items-start gap-2"><div className="min-w-0 flex-1"><SuggestedValueInput value={workspace} onChange={setWorkspace} label="工作区" placeholder="留空使用默认工作目录" suggestion={defaultWorkspace} suggestionLabel="使用默认工作目录"/></div><button type="button" disabled={!capabilities.data?.directoryPicker || pickWorkspace.isPending} onClick={() => pickWorkspace.mutate()} className="mt-1.5 flex h-10 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"><FolderOpen size={13}/>{capabilities.data?.directoryPicker ? '选择' : '仅支持 Mac'}</button></div><p className="mt-1 text-[12px] leading-4 text-zinc-400">留空时使用所选 Agent 的默认工作目录；路径位于 AgentDock 服务所在机器。</p></div>
-          <div className="block"><span className="text-[12px] font-medium text-zinc-700">Web 访问地址 <span className="font-normal text-zinc-400">可选</span></span><WebBaseUrlInput value={webBaseUrl} onChange={setWebBaseUrl}/><p className="mt-1 text-[12px] leading-4 text-zinc-400">配置后，飞书卡片底部会显示“查看详情”链接，指向该域名下的会话 Trace 页面。</p></div>
-          {!current && <button type="button" disabled={!appId.trim() || !appSecret.trim() || inspect.isPending} onClick={() => inspect.mutate()} className="flex h-9 w-full items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40">{inspect.isPending ? <RefreshCw size={12} className="animate-spin"/> : <Bot size={12}/>}校验凭证并识别机器人名称</button>}
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-            <SettingRow title="可使用机器人的成员" description="输入飞书真实姓名；收到消息时再解析为稳定的 open_id，不读取邮箱。">
-              <RowSegmented ariaLabel="可使用机器人的成员" value={restrictUsers ? 'restricted' : 'all'} onChange={value => setRestrictUsers(value === 'restricted')} options={[{ value: 'all', label: '所有人' }, { value: 'restricted', label: '指定成员' }]}/>
-            </SettingRow>
-            {restrictUsers && <div className="border-t border-zinc-100 px-4 pb-3.5 pt-3">
-              {Boolean(current?.allowedEmails.length && !current.allowedUsers.length) && <div className="mb-2 border-l-2 border-amber-400 bg-amber-50 px-2.5 py-2 text-[12px] leading-5 text-amber-800">检测到旧邮箱白名单。请重新填写真实姓名；保存后改用姓名白名单，使用时解析 open_id，停止查询通讯录。</div>}
-              <div><div className="text-[12px] font-medium text-zinc-500">成员真实姓名</div><MemberNameTagInput value={allowedUserNames} onChange={setAllowedUserNames} placeholder="输入姓名后按 Enter"/><p className="mt-1 text-[12px] leading-5 text-zinc-400">支持 Enter、逗号或粘贴多行生成标签。保存时不查询群成员；使用时精确匹配，找不到或重名时拒绝访问。</p></div>
-            </div>}
-          </div>
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-            <SettingRow title="可调用机器人的其他机器人" description="输入机器人名称；收到调用时再在群成员中解析 open_id。">
-              <RowSegmented ariaLabel="可调用机器人的其他机器人" value={peerBotsAllowed ? 'all' : 'restricted'} onChange={value => setPeerBotsAllowed(value === 'all')} options={[{ value: 'all', label: '所有机器人' }, { value: 'restricted', label: '指定机器人' }]}/>
-            </SettingRow>
-            {!peerBotsAllowed && <div className="border-t border-zinc-100 px-4 pb-3.5 pt-3">
-              <div><div className="text-[12px] font-medium text-zinc-500">机器人名称</div><MemberNameTagInput value={allowedBotNames} onChange={setAllowedBotNames} placeholder="输入机器人名称后按 Enter"/></div>
-            </div>}
-          </div>
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-            <div className="px-4 py-3">
-              <div className="text-[14px] font-medium text-zinc-900">Trace 卡片</div>
-              <div className="mt-0.5 text-[12px] leading-5 text-zinc-500">控制任务过程中推送的 trace 卡片如何渲染与刷新。</div>
-            </div>
-            <SettingRow inline title="静默回复（不显示 trace 卡片）" description="不发送 trace 卡片，任务结束时由服务自动把最终回复以文本发送到会话；Agent 会被提示如何在本模式下 @ 他人。">
-              <Switch size="small" checked={quietReply} onChange={() => setQuietReply(value => !value)}/>
-            </SettingRow>
-            {!quietReply && <>
-              <SettingRow title="飞书推送间隔" description="500-20000 ms；心跳消息的最短间隔。">
-                <InputNumber<number> size="middle" min={500} max={20000} step={100} value={pushIntervalMs} onChange={value => setPushIntervalMs(value ?? 1000)} suffix="ms" className="!w-full min-[520px]:!w-40 font-mono"/>
-              </SettingRow>
-              <SettingRow title="Trace 阶段上限" description={`默认 ${defaultLarkTraceLimit}；心跳渲染时最多保留最近 N 个执行阶段，超过飞书 24KB / 180 组件限制时仍会自动裁剪较早记录。`}>
-                <InputNumber size="middle" min={1} max={200} step={1} precision={0} value={traceLimit === '' ? null : Number(traceLimit)} onChange={value => setTraceLimit(value == null ? '' : String(value))} className="!w-full min-[520px]:!w-40 font-mono"/>
-              </SettingRow>
-            </>}
-          </div>
-          <LarkTurnSyncControls value={turnSync} onChange={setTurnSync} variant="settings"/>
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-            <SettingRow inline className={config.data?.listeningDisabled || !larkCredentialsReady ? 'opacity-50' : ''} title="监听飞书消息" description={config.data?.listeningDisabled ? '本次启动已通过 --no-lark-listen 禁用，保存值不受影响' : !larkCredentialsReady ? '请先填写飞书凭证' : current?.activeListening ? '长连接已连接' : !current?.setupComplete ? '可先监听；收到消息时再校验 Agent 运行配置' : '使用长连接接收机器人消息'}>
-              <Switch size="small" checked={listening && !config.data?.listeningDisabled} disabled={config.data?.listeningDisabled || !larkCredentialsReady} onChange={() => setListening(value => !value)}/>
-            </SettingRow>
-          </div>
-          </> : <>
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-            <SettingRow title="默认 Agent" description={defaultAgentLocked ? '硬门禁已开启，保存关闭后解锁。' : '飞书会话默认使用的 Agent。'}>
-              <div className="w-full min-[520px]:w-64"><AgentSelect size="sm" popupWidth={360} agents={agents} value={defaultAgentId} disabled={defaultAgentLocked} onChange={value => { setDefaultAgentId(value); setDefaultModel(''); setDefaultReasoningEffort(''); setHardGateEnabled(false); setHookTrustConfirmed(false); }}/></div>
-            </SettingRow>
-            <SettingRow title="默认模型" description={!agentOptions.isFetching && !agentOptions.data?.models.length ? '暂未取得可选模型，保留当前配置；可尝试重新读取。' : '由 Agent 提供，可覆盖 Agent 默认模型。'}>
-              <div className="w-full min-[520px]:w-64"><CompactSelect size="sm" popupWidth={380} options={[{ value: '', label: agentOptions.data?.defaultModel ? `Agent 默认 (${agentOptions.data.defaultModel})` : '使用 Agent 默认模型' }, ...withSavedOption(agentOptions.data?.models ?? [], defaultModel).map(item => ({ value: item.id, label: item.name, meta: item.name === item.id ? undefined : item.id }))]} value={defaultModel} placeholder="选择默认模型" disabled={!agentOptions.data?.models.length} disabledText="" onChange={value => { setDefaultModel(value); setDefaultReasoningEffort(''); }}/></div>
-            </SettingRow>
-            <SettingRow title="推理强度" description={!agentOptions.isFetching && !agentOptions.data?.reasoningEfforts.length ? '该 Agent / 模型暂未提供可选强度，保留当前配置。' : '由 Agent / 模型提供。'}>
-              <div className="w-full min-[520px]:w-64"><CompactSelect size="sm" popupWidth={300} options={[{ value: '', label: agentOptions.data?.defaultReasoningEffort ? `Agent 默认 (${agentOptions.data.defaultReasoningEffort})` : '使用 Agent 默认强度' }, ...withSavedOption(agentOptions.data?.reasoningEfforts ?? [], effectiveDefaultReasoningEffort).map(item => ({ value: item.id, label: item.name }))]} value={effectiveDefaultReasoningEffort} placeholder="选择推理强度" disabled={!agentOptions.data?.reasoningEfforts.length} disabledText="" onChange={setDefaultReasoningEffort}/></div>
-            </SettingRow>
-            <div className="flex items-center justify-between gap-2 border-t border-zinc-100 px-4 py-2 text-[12px] text-zinc-400">
-              <span>{agentOptions.isFetching || refreshAgentOptions.isPending ? '正在读取 Agent 配置…' : '模型与推理强度由 Agent 提供'}</span>
-              <button type="button" disabled={!defaultAgentId || agentOptions.isFetching || refreshAgentOptions.isPending} onClick={() => refreshAgentOptions.mutate({ agentId: defaultAgentId, model: defaultModel || undefined })} className="flex h-7 items-center gap-1 rounded px-1.5 text-[12px] text-zinc-500 hover:bg-zinc-100 disabled:opacity-40"><RefreshCw size={12}/>重新读取</button>
-            </div>
-            {(agentOptions.data?.warning || agentOptions.isError || refreshAgentOptions.isError) && <p role="status" className="mx-4 mb-3 border-l-2 border-amber-300 bg-amber-50 px-2 py-1.5 text-[12px] leading-5 text-amber-800">{agentOptions.data?.warning ?? 'Agent 配置请求失败，请检查服务连接后重新读取。'}</p>}
-          </div>
-          <div><span className="text-[12px] font-medium text-zinc-700">预注入 Prompt <span className="font-normal text-zinc-400">可选，Markdown</span></span><Suspense fallback={<div className="mt-1.5 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-[12px] text-zinc-400">正在加载编辑器…</div>}><PromptEditor value={preInjectPrompt} onChange={setPreInjectPrompt} aiContext={promptAiContext} resetKey={selectedAppId ?? ''}/></Suspense><p className="mt-1 text-[12px] leading-5 text-zinc-400">每轮飞书对话都会在用户请求前隐式注入，不会在 Agent 聊天记录中重复显示为用户消息。</p></div>
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-            <SettingRow title="群聊主流消息的会话范围" description={groupSessionScope === 'chat' ? '普通群主流消息全群共享同一上下文（默认）；话题内消息始终按话题隔离。' : '普通群主流消息按发送人各自隔离上下文；话题内消息始终按话题隔离。'}>
-              <RowSegmented ariaLabel="群聊主流消息的会话范围" value={groupSessionScope} onChange={v => setGroupSessionScope(v as 'user' | 'chat')} options={[{ value: 'chat', label: '全群共享' }, { value: 'user', label: '按人隔离' }]}/>
-            </SettingRow>
-            <SettingRow inline title="启用 Agent 群协作工具" description="允许 Agent 在当前飞书群发现其他已配置 Agent，并读取增量消息。">
-              <Switch size="small" checked={groupToolsEnabled} onChange={() => { const next = !groupToolsEnabled; setGroupToolsEnabled(next); if (!next) setGroupToolsAllowSend(false); }}/>
-            </SettingRow>
-            {groupToolsEnabled && <SettingRow inline title="允许 Agent 发消息与 @交接" description="关闭后仅保留 self、peers、messages 和 wait 只读能力。">
-              <Switch size="small" checked={groupToolsAllowSend} onChange={() => setGroupToolsAllowSend(value => !value)}/>
-            </SettingRow>}
-            <div className="flex items-start gap-1.5 border-t border-zinc-100 px-4 py-3 text-[12px] leading-5 text-zinc-500"><Info size={14} className="mt-0.5 shrink-0"/><span>缺少群成员、消息或发消息权限时，Agent 会停止对应操作并给出管理员授权链接；不会索要 App Secret。</span></div>
-          </div>
-          <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-            <SettingRow inline title="启用高危操作门禁" description="启用后强制开启软门禁，并可继续配置 Hook 硬门禁。">
-              <Switch size="small" checked={gateEnabled} onChange={() => { const next = !gateEnabled; setGateEnabled(next); if (!next) setHardGateEnabled(false); }}/>
-            </SettingRow>
-          </div>
-          {gateEnabled && <div className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-3">
-            <div className="px-1 text-[14px] font-medium text-zinc-900">高危操作门禁</div>
-            <p className="mt-1 px-1 text-[12px] leading-5 text-zinc-500">不在允许名单内的发送人会收到软门禁 Prompt；开启硬门禁后，再通过 ACP 权限层和 Agent 原生工具调用 Hook 拦截。</p>
-            <div className="mt-3"><div className="text-[12px] font-medium text-zinc-700">允许执行高危操作的成员 <span className="font-normal text-zinc-400">留空则继承普通成员名单</span></div><p className="mt-0.5 text-[12px] leading-5 text-zinc-500">输入真实姓名，保存时解析为 open_id。</p>
-              {legacyHighRiskNeedsMigration && <div className="mt-2 border-l-2 border-amber-400 bg-amber-50 px-2.5 py-2 text-[12px] leading-5 text-amber-800">检测到旧高危邮箱名单。请重新选择成员后再保存，避免意外扩大高危权限。</div>}
-              <MemberNameTagInput value={highRiskAllowedUserNames} onChange={setHighRiskAllowedUserNames} placeholder="输入姓名后按 Enter"/>
-            </div>
-            <div className="mt-3 block">
-              <AiFieldHeader
-                label="高危操作正则表达式"
-                htmlFor="lark-high-risk-pattern"
-                assist={
-                  <AiTextAssistControl
-                    mode="regex_generate"
-                    variant="pill"
-                    size="xs"
-                    popoverSide="top"
-                    popoverAlign="end"
-                    value={highRiskPattern}
-                    onChange={setHighRiskPattern}
-                    onFlash={highRiskFlash.triggerFlash}
-                    resetKey={selectedAppId ?? ''}
-                    context={() => ({
-                      field: '飞书机器人高危操作拦截正则',
-                      purpose: '匹配需要拦截或二次确认的高危命令/操作（例如 rm -rf、git push --force、DROP TABLE、生产发布等）',
-                      botContext: promptAiContext
-                    })}
-                    testId="lark-high-risk-regex-ai"
-                  />
-                }
-              />
-              <div className={`mt-1.5 rounded-lg ${highRiskFlash.flashClass}`}>
-                <Input.TextArea id="lark-high-risk-pattern" value={highRiskPattern} onChange={event => setHighRiskPattern(event.target.value)} autoSize={{ minRows: 4, maxRows: 10 }} status={highRiskPatternValidation.valid ? undefined : 'error'} className="font-mono text-[12px] leading-5"/>
-              </div>
-              {!highRiskPatternValidation.valid && <p className="mt-1.5 flex items-start gap-1 text-[12px] leading-5 text-red-600"><AlertTriangle size={12} className="mt-0.5 shrink-0"/>{highRiskPatternValidation.error}</p>}
-            </div>
-            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-white">
-              <SettingRow inline title="软门禁" description="门禁启用后固定开启，隐式注入禁止绕过的安全 Prompt。">
-                <Switch size="small" checked disabled/>
-              </SettingRow>
-              <SettingRow inline className={!hookStatus.data?.installed && !hardGateEnabled ? 'opacity-60' : ''} title="硬门禁" description={hookStatus.data?.installed ? 'Hook 已配置，可以开启硬门禁。' : agentSelectionSaved ? hookStatus.data?.reason ?? '请先检测并配置 Hook。' : '点击下方按钮会先保存当前默认 Agent，再检测并配置 Hook。'}>
-                <Switch size="small" checked={hardGateEnabled} disabled={!hardGateCanToggle} onChange={() => setHardGateEnabled(value => !value)}/>
-              </SettingRow>
-            </div>
-            {hardGateHookMissing && <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[12px] leading-5 text-amber-800">已保存的硬门禁 Hook 当前未检测到。其他设置仍可保存；如需恢复硬门禁，请先关闭上方开关，再重新检测并配置 Hook。</div>}
-            <button type="button" disabled={!current || hardGateEnabled || installHook.isPending || legacyHighRiskNeedsMigration || !workspace.trim() || !highRiskPatternValidation.valid || hookStatus.data?.supported === false} onClick={() => installHook.mutate()} className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"><Wrench size={13}/>{installHook.isPending ? '正在检测并配置 Hook' : hookStatus.data?.installed ? '重新检测并配置 Hook' : '检测并配置 Hook'}</button>
-            {hookStatus.data?.supported === false && <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[12px] leading-5 text-amber-800">{hookStatus.data.reason}</div>}
-            {hookStatus.data?.trustInstructions && <div className="mt-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-[12px] leading-5 text-zinc-500">{hookStatus.data.trustInstructions}</div>}
-          </div>}
-          </>}
-        </>}
-        </DeferredMount>
-        {formError && <div className="rounded-md border border-red-100 bg-red-50 px-2.5 py-2 text-[12px] leading-4 text-red-700"><div>{formError.message}</div>{permissionRelatedError && permissionSettingsUrl && <a href={permissionSettingsUrl} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 font-medium text-red-800 underline decoration-red-300 underline-offset-2 hover:text-red-950">打开当前机器人的权限配置<ExternalLink size={11}/></a>}</div>}
-      </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-zinc-100 px-3.5 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:flex-nowrap sm:px-4 sm:py-3">{current ? <button type="button" onClick={() => { remove.reset(); setConfirmation('delete'); }} className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] font-medium text-red-600 hover:bg-red-50"><Trash2 size={13}/>删除配置</button> : <span className="hidden text-[12px] text-zinc-400 sm:inline">App ID 将作为唯一主键，不能重复配置</span>}<div className="ml-auto flex items-center gap-1.5">{step === 2 && <button type="button" onClick={() => setStep(1)} className="rounded-md px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-100">上一步</button>}<button type="button" onClick={requestClose} className="rounded-md px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-100">{step === 2 && current && !current.setupComplete ? '稍后完成' : '取消'}</button><button type="submit" disabled={!canSave || save.isPending} className="min-w-20 rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-35">{save.isPending ? '保存中' : agentCapabilitiesPending ? '读取模型中' : advancesToAgentStep ? '下一步' : '保存'}</button></div></div>
-    </form>
-  </div><ConfirmDialog
-    open={Boolean(confirmation)}
-    tone={confirmation === 'delete' ? 'danger' : 'warning'}
-    title={confirmation === 'delete' ? '删除机器人配置？' : confirmation === 'incomplete' ? '稍后再完成配置？' : '放弃未保存的配置？'}
-    description={confirmation === 'delete' ? `将删除“${current?.name ?? '当前机器人'}”的凭证、监听和门禁配置。已有会话记录不会删除。` : confirmation === 'incomplete' ? 'Agent 配置尚未完成。若已开启监听，机器人仍会接收消息，并提示发送人补充运行配置。' : '当前填写的机器人信息尚未保存，关闭后需要重新填写。'}
-    confirmLabel={confirmation === 'delete' ? '确认删除' : confirmation === 'incomplete' ? '稍后完成' : '放弃修改'}
-    busy={confirmation === 'delete' && remove.isPending}
-    error={confirmation === 'delete' && remove.error ? remove.error.message : undefined}
-    onCancel={() => { if (!remove.isPending) setConfirmation(undefined); }}
-    onConfirm={() => { if (confirmation === 'delete') remove.mutate(); else { setConfirmation(undefined); onClose(); } }}
-  /></>;
-}
-
-function LarkAvatarDialog({ onClose }: { onClose(): void }) {
-  return <div className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-0 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}><div role="dialog" aria-modal="true" aria-label="AI 飞书替身" className="ui-dialog flex h-[100dvh] w-full max-w-none flex-col overflow-hidden rounded-none border-0 border-zinc-200 bg-white shadow-xl sm:h-[min(860px,calc(100dvh-2rem))] sm:max-w-[1120px] sm:rounded-[14px] sm:border"><div className="flex shrink-0 items-center justify-between border-b border-zinc-100 px-3.5 py-2.5 sm:px-4 sm:py-3"><h2 className="text-[16px] font-semibold text-zinc-900">AI 飞书替身</h2><button type="button" aria-label="关闭 AI 飞书替身" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 sm:h-8 sm:w-8"><X size={16}/></button></div><div className="min-h-0 flex-1 overflow-hidden"><LarkAvatarPanel /></div></div></div>;
-}
-
 type ItemDrag = { dragging: boolean; over: boolean; props: HTMLAttributes<HTMLDivElement> & { draggable?: boolean } };
 
 /** 会话状态指示：忙碌中转圈（对齐 Codex 的运行态），其余用静态点。尺寸交给调用方定，
  * 这样完整行的行首点和「最近」行尾点可以共用同一套语义与配色。 */
 function SessionStateIndicator({ session, size = 12 }: { session: Session; size?: number }) {
+  const locale = useLocale();
   // 「等待授权」是卡在等人，不是在推进：给静态橙点，转圈会让人以为它在自己跑。
   if (busyStates.has(session.state) && session.state !== 'waiting_for_permission') {
-    return <LoaderCircle size={size} aria-label={sessionStateLabel(session.state, session.interruptIntent)} className={`shrink-0 animate-spin ${stateTextTone[session.state] ?? 'text-zinc-400'}`}/>;
+    return <LoaderCircle size={size} aria-label={sessionStateLabel(session.state, session.interruptIntent, locale)} className={`shrink-0 animate-spin ${stateTextTone[session.state] ?? 'text-zinc-400'}`}/>;
   }
-  return <span aria-label={sessionStateLabel(session.state, session.interruptIntent)} className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>;
+  return <span aria-label={sessionStateLabel(session.state, session.interruptIntent, locale)} className={`h-1.5 w-1.5 shrink-0 rounded-full ${stateTone[session.state] ?? 'bg-zinc-400'}`}/>;
 }
 
 const SessionRow = memo(function SessionRow({ session, agent, botName, parentLabel, active, unread, drag, noteOf, showAgentIcon = true, renameRequest, onSelect, onOpenContextMenu }: { session: Session; agent?: Agent; botName?: string; /** 侧边会话的父会话显示名，供 hover 卡片点出来处。 */ parentLabel?: string; active: boolean; /** 有未查看的新完成/待审批通知时展示柔和轻提示点，点击会话后自动清除。 */ unread?: UnreadSessionNotification; /** 传入即表示这一行可拖拽：项目树里用于排序，时间列表里只用于拖到副屏。 */ drag?: ItemDrag; /** 小猫（主会话）派出的侧边会话：行首叠放便签微角标，悬停提示是谁派的。 */ noteOf?: string; /** 是否在行首展示 Agent 图标（时间视图展示，项目视图同组会话由分组头承载）。 */ showAgentIcon?: boolean; /** 右键菜单发起改名的请求号。 */ renameRequest?: number; onSelect(sessionId: string): void; onOpenContextMenu(sessionId: string, point: { x: number; y: number }, anchor: HTMLElement): void }) {
+  const locale = useLocale();
+  const L = useBi();
   const agentName = agent?.name ?? session.agentId;
   const primary = sessionLabel(session, agent?.name);
-  // 整行一个 hover 目标：一行只该有一个提示。信息卡里已经含完整 cwd，所以副标题那个
-  // 单独的 cwd tooltip 一并撤掉——同一行挂两个不同内容的提示，用户不知道该信哪个。
   const hoverCard = <SessionHoverCard session={session} agentName={agentName} botName={botName} parentLabel={parentLabel} now={new Date()}/>;
-  // 右侧只在需要关注时常显：运行中转圈、等待授权橙点、失败红点、以及刚完成尚未查看的柔和圆点。
-  // 一屏几十条里每行都挂一个灰点/绿点，等于没有信息；普通行显示相对时间。
-  // 时间不给固定宽度：固定 48px 会在标题右侧留出一整条空白。
   const attention = busyStates.has(session.state) || session.state === 'failed';
   const unreadDotTone = unread?.kind === 'waiting_approval'
     ? 'bg-orange-500 ui-live-dot'
@@ -464,15 +118,19 @@ const SessionRow = memo(function SessionRow({ session, agent, botName, parentLab
       : unread?.kind === 'notify'
         ? 'bg-blue-500'
         : 'bg-emerald-500';
-  const unreadLabel = unread?.kind === 'waiting_approval' ? '等待处理' : unread?.kind === 'failed' ? '运行失败' : '有新完成回复';
+  const unreadLabel = unread?.kind === 'waiting_approval'
+    ? L('等待处理', 'Needs attention')
+    : unread?.kind === 'failed'
+      ? L('运行失败', 'Run failed')
+      : L('有新完成回复', 'New completed reply');
   const trailing = attention
     ? <SessionStateIndicator session={session} size={12}/>
     : unread
       ? <span className="flex items-center gap-1.5">
-          <span className="text-[12px] tabular-nums text-zinc-400 max-md:hidden">{relativeTimeLabel(sessionActivityTime(session))}</span>
+          <span className="text-[12px] tabular-nums text-zinc-400 max-md:hidden">{relativeTimeLabel(sessionActivityTime(session), Date.now(), locale)}</span>
           <span aria-label={unreadLabel} className={`h-2 w-2 shrink-0 rounded-full ${unreadDotTone}`}/>
         </span>
-      : <span className="text-[12px] tabular-nums text-zinc-400 max-md:hidden">{relativeTimeLabel(sessionActivityTime(session))}</span>;
+      : <span className="text-[12px] tabular-nums text-zinc-400 max-md:hidden">{relativeTimeLabel(sessionActivityTime(session), Date.now(), locale)}</span>;
   const rowRef = useRef<HTMLDivElement>(null);
   const longPress = useRef<{ timer?: ReturnType<typeof setTimeout>; start?: { x: number; y: number } }>({});
   const longPressed = useRef(false);
@@ -531,7 +189,7 @@ const SessionRow = memo(function SessionRow({ session, agent, botName, parentLab
     <SessionRowLeadingIcons session={session} agent={agent} noteOf={noteOf} showAgentIcon={showAgentIcon} active={active}/>
     {/* 行内不再放任何操作图标：重命名和归档都收进右键/长按菜单，避免 hover 时堆一排按钮。 */}
     <SessionTitleEditor session={session} label={primary} nameClassName="min-w-0 flex-1 truncate text-[14px]" editRequest={renameRequest}/>
-    {session.pinnedAt && <Pin key="pinned" size={11} aria-label="已置顶" className="ui-icon-pop shrink-0 fill-current text-amber-500"/>}
+    {session.pinnedAt && <Pin key="pinned" size={11} aria-label={L('已置顶', 'Pinned')} className="ui-icon-pop shrink-0 fill-current text-amber-500"/>}
     <span className="flex shrink-0 items-center justify-end">{trailing}</span>
   </div>;
   // 信息卡一律往右弹：锚点是**整行**（宽度铺满侧栏），而卡片有 320px 宽、十来行高，
@@ -554,6 +212,9 @@ const SessionRow = memo(function SessionRow({ session, agent, botName, parentLab
 );
 
 export default function App() {
+  const locale = useLocale();
+  const t = useT();
+  const L = useBi();
   const qc = useQueryClient(); const { primarySessionId, setSession, openTab, closeTab, activateTab, renameTab, restoreFromUrl, togglePane } = useDockStore();
   const mountedTabs = useDockStore(state => state.tabs);
   const tabs = useMemo(() => mountedTabs.filter(tab => tab.ownerSessionId === primarySessionId), [mountedTabs, primarySessionId]);
@@ -598,7 +259,7 @@ export default function App() {
     const right = parseRightParam(window.location.search, primary);
     if (!right || !primary) { restoreFromUrl(primary); return; }
     if (right.kind === 'session') { if (right.sessionId) restoreFromUrl(primary, sessionPaneTab(primary, right.sessionId, right.sessionId)); return; }
-    restoreFromUrl(primary, { id: `${right.kind}:${primary}`, kind: right.kind, anchorSessionId: primary, title: right.kind === 'terminal' ? '终端' : right.kind === 'files' ? '文件' : '原始日志' });
+    restoreFromUrl(primary, { id: `${right.kind}:${primary}`, kind: right.kind, anchorSessionId: primary, title: right.kind === 'terminal' ? L('终端', 'Terminal') : right.kind === 'files' ? L('文件', 'Files') : L('原始日志', 'Raw Logs') });
   };
   useMount(applyUrlToStore);
   useEventListener('popstate', applyUrlToStore);
@@ -729,6 +390,7 @@ export default function App() {
     onNavigateSession: id => selectSession(id)
   });
   useThemeSync({ enabled: !webDenied });
+  useLocaleSync({ enabled: !webDenied });
   /**
    * 把一个**已有**会话放进副屏。此前副屏只有「新建侧边聊天」一条创建路径（sideChat），
    * 标签一关就再也回不来——会话还在，但没有任何入口能把它放回右栏。
@@ -754,7 +416,7 @@ export default function App() {
   // ---- 右栏面板 ----
   const openRawLog = useMemoizedFn((sessionId: string) => {
     if (!primarySessionId) return;
-    openTab({ id: `raw:${sessionId}`, kind: 'raw', anchorSessionId: sessionId, title: sessionId === primarySessionId ? '原始日志' : '侧边日志' }, primarySessionId);
+    openTab({ id: `raw:${sessionId}`, kind: 'raw', anchorSessionId: sessionId, title: sessionId === primarySessionId ? L('原始日志', 'Raw Logs') : L('侧边日志', 'Side Logs') }, primarySessionId);
   });
   // 终端与文件依附主会话；原始日志依附当前选中的会话标签。
   const openPaneKind = useMemoizedFn((kind: PaneTabKind) => {
@@ -766,7 +428,7 @@ export default function App() {
       return;
     }
     if (kind === 'terminal' || kind === 'files') {
-      openTab({ id: `${kind}:${primarySessionId}`, kind, anchorSessionId: primarySessionId, title: kind === 'terminal' ? '终端' : '文件' });
+      openTab({ id: `${kind}:${primarySessionId}`, kind, anchorSessionId: primarySessionId, title: kind === 'terminal' ? L('终端', 'Terminal') : L('文件', 'Files') });
       return;
     }
     // 侧边聊天要在右栏新开一个会话，由 mutation 完成（建会话需要请求）。
@@ -807,7 +469,7 @@ export default function App() {
         const anchorId = primarySessionId ?? source.id;
         const title = reused
           ? sessionLabel(target, agents.data?.find(agent => agent.id === target.agentId)?.name)
-          : '侧边聊天';
+          : L('侧边聊天', 'Side Chat');
         openTab({ id: `side-chat:${target.id}`, kind: 'side-chat', sessionId: target.id, title }, anchorId);
       }
       if (initialPrompt?.trim()) {
@@ -827,9 +489,9 @@ export default function App() {
   });
 
   const shortcuts: Shortcut[] = [
-    { key: 't', label: shortcutLabel('t'), description: '终端', run: () => openPaneKind('terminal') },
-    { key: 's', shift: true, label: shortcutLabel('s', true), description: '侧边聊天', run: () => openPaneKind('side-chat') },
-    { key: 'p', label: shortcutLabel('p'), description: '文件', run: () => openPaneKind('files') }
+    { key: 't', label: shortcutLabel('t'), description: L('终端', 'Terminal'), run: () => openPaneKind('terminal') },
+    { key: 's', shift: true, label: shortcutLabel('s', true), description: L('侧边聊天', 'Side Chat'), run: () => openPaneKind('side-chat') },
+    { key: 'p', label: shortcutLabel('p'), description: L('文件', 'Files'), run: () => openPaneKind('files') }
   ];
   useShortcuts(shortcuts);
 
@@ -895,7 +557,7 @@ export default function App() {
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) => api.setSessionPinned(id, pinned),
     onSuccess: (updated, vars) => {
       qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === updated.id ? { ...item, ...updated } : item));
-      copyToast.show(vars.pinned ? '已置顶会话' : '已取消置顶', 'success');
+      copyToast.show(vars.pinned ? L('已置顶会话', 'Session pinned') : L('已取消置顶', 'Session unpinned'), 'success');
     },
     onError: error => setActionError(error instanceof Error ? error.message : String(error))
   });
@@ -903,7 +565,7 @@ export default function App() {
     mutationFn: ({ cwd, pinned }: { cwd: string; pinned: boolean }) => api.setProjectPinned(cwd, pinned),
     onSuccess: (updated, vars) => {
       qc.setQueryData<Project[]>(['projects'], current => current?.map(item => item.cwd === updated.cwd ? { ...item, ...updated } : item));
-      copyToast.show(vars.pinned ? '已置顶项目' : '已取消项目置顶', 'success');
+      copyToast.show(vars.pinned ? L('已置顶项目', 'Project pinned') : L('已取消项目置顶', 'Project unpinned'), 'success');
     },
     onError: error => setActionError(error instanceof Error ? error.message : String(error))
   });
@@ -1002,14 +664,14 @@ export default function App() {
     // 父会话被归档或不在当前筛选里就查不到，卡片会降级成不带出处。
     const parent = session.sourceId ? sortedSessions.find(item => item.id === session.sourceId) : undefined;
     // 交接后，前几代小猫派出的侧边会话仍是这只猫家的便签。
-    const noteOf = mainSessionId && isLineageSource(session.sourceId, mainSessionId, assistantState.data?.lifecycle?.ancestorSessionIds) && sideChatParentId(session) ? assistantState.data?.companion?.name ?? '小猫' : undefined;
+    const noteOf = mainSessionId && isLineageSource(session.sourceId, mainSessionId, assistantState.data?.lifecycle?.ancestorSessionIds) && sideChatParentId(session) ? assistantState.data?.companion?.name ?? L('小猫', 'Kitten') : undefined;
     return <SessionRow key={session.id} session={session} drag={drag} noteOf={noteOf} showAgentIcon={options?.showAgentIcon ?? true} agent={agents.data?.find(item => item.id === session.agentId)} botName={larkConfig.data?.bots.find(bot => session.sourceId?.startsWith(`${bot.appId}:`))?.name} parentLabel={parent ? sessionLabel(parent, agents.data?.find(item => item.id === parent.agentId)?.name) : undefined} active={primarySessionId === session.id || tabs.some(tab => (tab.kind === 'session' || tab.kind === 'side-chat') && tab.sessionId === session.id)} unread={localNotifyPrefs.sidebarUnreadDot ? unreadBySession[session.id] : undefined} renameRequest={renameRequest?.sessionId === session.id ? renameRequest.nonce : undefined} onSelect={selectSession} onOpenContextMenu={handleSessionContextMenu}/>;
   };
   // TooltipProvider 必须挂在根部：Radix 用它统一管理「同一时刻只显示一个提示」与交错延迟。
   return <TooltipProvider><CompanionNavProvider value={companionNav}><div ref={shellRef} className="ui-shell relative flex h-full overflow-hidden bg-canvas font-sans text-zinc-900">
     <button
       type="button"
-      aria-label="关闭会话列表"
+      aria-label={L('关闭会话列表', 'Close sidebar')}
       aria-hidden={!sidebarOpen}
       tabIndex={sidebarOpen ? 0 : -1}
       data-open={sidebarOpen ? 'true' : 'false'}
@@ -1017,29 +679,31 @@ export default function App() {
       className={`ui-mobile-scrim fixed inset-0 z-40 bg-zinc-950/25 md:hidden ${sidebarOpen ? 'visible opacity-100 pointer-events-auto' : 'invisible opacity-0 pointer-events-none'}`}
     />
     <aside style={{ ['--sb-w' as string]: `${clampedSidebarWidth}px` }} className={`ui-sidebar-safe fixed inset-y-0 left-0 z-50 flex shrink-0 flex-col overflow-hidden border-r border-zinc-200 bg-rail shadow-[12px_0_36px_rgba(24,24,27,.08)] transition-transform duration-[260ms] ease-[cubic-bezier(.16,1,.3,1)] w-[286px] md:static md:z-20 md:translate-x-0 md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} ${sidebarCollapsed ? 'md:w-11' : 'md:w-[var(--sb-w)]'}`}>
-      {!sidebarCollapsed && <div onPointerDown={event => { event.preventDefault(); resizeStart.current = { x: event.clientX, width: clampedSidebarWidth }; setResizingSidebar(true); }} title="拖拽调整宽度，拖到最窄可收起" className="absolute inset-y-0 right-0 z-20 hidden w-1.5 cursor-col-resize touch-none bg-transparent hover:bg-blue-400/30 md:block"/>}
-      <div className={`flex h-full flex-col ${sidebarCollapsed ? 'md:hidden' : ''}`}>
+      {!sidebarCollapsed && <div onPointerDown={event => { event.preventDefault(); resizeStart.current = { x: event.clientX, width: clampedSidebarWidth }; setResizingSidebar(true); }} title={L('拖拽调整宽度，拖到最窄可收起', 'Drag to resize; drag narrowest to collapse')} className="absolute inset-y-0 right-0 z-20 hidden w-1.5 cursor-col-resize touch-none bg-transparent hover:bg-blue-400/30 md:block"/>}
+      <div className={`flex h-full w-full min-w-0 flex-col ${sidebarCollapsed ? 'md:hidden' : ''}`}>
       <div className="flex h-14 w-full min-w-[200px] items-center gap-1 pl-2 pr-2.5">
-        <button type="button" onClick={() => { setBoardRoute({ active: false }); setSession(undefined); setSidebarOpen(false); setPaneMenuAnchor(undefined); }} title="回到首页" aria-label="回到首页" className="ui-press flex h-10 min-w-0 flex-1 items-center rounded-lg px-2 text-left hover:bg-zinc-100/70 active:bg-zinc-200/60"><BrandLogo iconSize={28} wordmarkHeight={14}/></button>
+        <HoverTooltip content={L('回到首页', 'Back to Home')} side="bottom" align="start" hoverOnly>
+          <button type="button" onClick={() => { setBoardRoute({ active: false }); setSession(undefined); setSidebarOpen(false); setPaneMenuAnchor(undefined); }} aria-label={L('回到首页', 'Back to Home')} className="ui-press flex h-10 min-w-0 flex-1 items-center rounded-lg px-2 text-left hover:bg-zinc-100/70 active:bg-zinc-200/60"><BrandLogo iconSize={28} wordmarkHeight={14}/></button>
+        </HoverTooltip>
         <SidebarPwaInstallButton pwa={pwa}/>
       </div>
-      <div className="flex min-w-[268px] flex-col gap-1 px-2.5">
-        <button onClick={startNewConversation} aria-label="新建对话" className="ui-press flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200/60"><Plus size={16}/>新建对话</button>
+      <div className="flex min-w-0 flex-col gap-1 px-2.5">
+        <button onClick={startNewConversation} aria-label={L('新建对话', 'New Chat')} className="ui-press flex h-9 w-full min-w-0 items-center gap-2 whitespace-nowrap rounded-lg px-2.5 text-[14px] font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200/60"><Plus size={16} className="shrink-0"/><span className="truncate">{L('新建对话', 'New Chat')}</span></button>
         <button
           type="button"
           onClick={() => openBoard()}
           aria-current={boardRoute.active ? 'page' : undefined}
-          aria-label="任务看板（⌘⇧B）"
-          className={`ui-press flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium ${
+          aria-label={L('任务看板（⌘⇧B）', 'Task Board (⌘⇧B)')}
+          className={`ui-press flex h-9 w-full min-w-0 items-center gap-2 whitespace-nowrap rounded-lg px-2.5 text-[14px] font-medium ${
             boardRoute.active
               ? 'bg-accent text-accent-fg shadow-sm'
               : 'text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200/60'
           }`}
         >
           <Columns3 size={16} className="shrink-0"/>
-          <span>任务看板</span>
+          <span className="truncate">{L('任务看板', 'Board')}</span>
           {boardRunningCount > 0 && (
-            <span className={`ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10.5px] font-semibold tabular-nums ${boardRoute.active ? 'bg-blue-500 text-white' : 'bg-blue-100 text-blue-700'}`}>
+            <span className={`ml-1 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-[10.5px] font-semibold tabular-nums ${boardRoute.active ? 'bg-blue-500 text-white' : 'bg-blue-100 text-blue-700'}`}>
               {boardRunningCount}
             </span>
           )}
@@ -1047,35 +711,39 @@ export default function App() {
             ⌘⇧B
           </span>
         </button>
-        <div className="flex items-center gap-1.5">
-          <button type="button" onClick={openSearch} aria-label="搜索会话（⌘K）" className="ui-press flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 text-[13px] text-zinc-500 hover:border-zinc-300 hover:text-zinc-700"><Search size={14} className="shrink-0"/>搜索会话<span className="ml-auto shrink-0 rounded border border-zinc-200 bg-zinc-50 px-1 py-0.5 font-sans text-[12px] leading-none text-zinc-400">⌘K</span></button>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <button type="button" onClick={openSearch} aria-label={L('搜索会话（⌘K）', 'Search Sessions (⌘K)')} className="ui-press flex h-9 min-w-0 flex-1 items-center gap-2 whitespace-nowrap rounded-lg border border-zinc-200 bg-white px-2.5 text-[13px] text-zinc-500 hover:border-zinc-300 hover:text-zinc-700"><Search size={14} className="shrink-0"/><span className="truncate">{L('搜索会话', 'Search')}</span><span className="ml-auto shrink-0 rounded border border-zinc-200 bg-zinc-50 px-1 py-0.5 font-sans text-[12px] leading-none text-zinc-400">⌘K</span></button>
           <SessionFilterSelect compact value={sessionFilter} bots={larkConfig.data?.bots ?? []} agents={agents.data ?? []} onChange={setSessionFilter}/>
         </div>
       </div>
       {/* 小猫（主会话）常驻在会话列表上方：点它进主会话，右边的按钮划出便签。 */}
-      <div className="mt-3 min-w-[268px] px-2"><CompanionCard active={Boolean(mainSessionId) && primarySessionId === mainSessionId}/></div>
-      <div className="mt-3 flex min-w-[268px] items-center justify-between pl-3.5 pr-2">
-        <span className="text-[12px] font-medium text-zinc-500">会话列表</span>
-        <div className="flex items-center gap-1">
-          {sidebarGroupingMode === 'project' && manualOrder && <button type="button" title="恢复默认排序（按最近对话时间）" onClick={() => setItemOrder(EMPTY_ITEM_ORDER)} className="ui-press grid h-6 w-6 place-items-center rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"><RotateCcw size={12}/></button>}
+      <div className="mt-3 min-w-0 px-2"><CompanionCard active={Boolean(mainSessionId) && primarySessionId === mainSessionId}/></div>
+      <div className="mt-3 flex min-w-0 items-center justify-between gap-1.5 pl-3.5 pr-2">
+        <span className="truncate whitespace-nowrap text-[12px] font-medium text-zinc-500">{L('会话列表', 'Sessions')}</span>
+        <div className="flex shrink-0 items-center gap-1">
+          {sidebarGroupingMode === 'project' && manualOrder && (
+            <HoverTooltip content={L('恢复默认排序（按最近对话时间）', 'Reset to default order (recent activity)')} side="top">
+              <button type="button" aria-label={L('恢复默认排序', 'Reset default order')} onClick={() => setItemOrder(EMPTY_ITEM_ORDER)} className="ui-press grid h-6 w-6 place-items-center rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"><RotateCcw size={12}/></button>
+            </HoverTooltip>
+          )}
           <SlidingSegmented
-            ariaLabel="会话分组视图"
+            ariaLabel={L('会话分组视图', 'Session grouping view')}
             size="xs"
             value={sidebarGroupingMode}
             onChange={mode => setSidebarGrouping(mode)}
             options={[
-              { value: 'time', label: '时间' },
-              { value: 'project', label: '项目' }
+              { value: 'time', label: L('时间', 'Time') },
+              { value: 'project', label: L('项目', 'Project') }
             ]}
           />
         </div>
       </div>
-      {sidebarGroupingMode === 'project' && <div className="ui-view-fade mt-1 min-w-[268px] px-2">
-        <button type="button" onClick={() => openAppDialog('project-import')} className="ui-press flex h-7 w-full items-center gap-1.5 rounded-md border border-dashed border-zinc-300 px-2 text-[12px] font-medium text-zinc-600 hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><FolderPlus size={12}/>导入项目</button>
+      {sidebarGroupingMode === 'project' && <div className="ui-view-fade mt-1 min-w-0 px-2">
+        <button type="button" onClick={() => openAppDialog('project-import')} className="ui-press flex h-7 w-full items-center gap-1.5 whitespace-nowrap rounded-md border border-dashed border-zinc-300 px-2 text-[12px] font-medium text-zinc-600 hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><FolderPlus size={12} className="shrink-0"/><span className="truncate">{L('导入项目', 'Import Project')}</span></button>
       </div>}
       {/* 来源筛选从一张大卡片收成搜索框右侧的图标 + 一行「来源：… ✕」标签；不选时不占地方。 */}
-      {sessionFilter !== 'all' && <div className="ui-status-banner-in mt-1 flex min-w-[268px] items-center gap-1.5 px-3.5"><div className="flex h-6 min-w-0 flex-1 items-center gap-1 rounded-md bg-zinc-100 px-2 text-[12px] text-zinc-600"><span className="min-w-0 flex-1 truncate">来源：{sessionFilter === 'local' ? '本地' : `飞书 · ${larkConfig.data?.bots.find(bot => bot.appId === sessionFilter)?.name ?? '机器人'}`}</span><button type="button" aria-label="清除来源筛选" onClick={() => setSessionFilter('all')} className="ui-press grid h-4 w-4 shrink-0 place-items-center rounded text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"><X size={12}/></button></div></div>}
-      <div className="mt-1 flex min-h-0 min-w-[268px] flex-1 flex-col px-2">
+      {sessionFilter !== 'all' && <div className="ui-status-banner-in mt-1 flex min-w-0 items-center gap-1.5 px-3.5"><div className="flex h-6 min-w-0 flex-1 items-center gap-1 rounded-md bg-zinc-100 px-2 text-[12px] text-zinc-600"><span className="min-w-0 flex-1 truncate">{L('来源：', 'Source: ')}{sessionFilter === 'local' ? L('本地', 'Local') : `${L('飞书', 'Lark')} · ${larkConfig.data?.bots.find(bot => bot.appId === sessionFilter)?.name ?? L('机器人', 'Bot')}`}</span><HoverTooltip content={L('清除来源筛选', 'Clear source filter')} side="top"><button type="button" aria-label={L('清除来源筛选', 'Clear source filter')} onClick={() => setSessionFilter('all')} className="ui-press grid h-4 w-4 shrink-0 place-items-center rounded text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"><X size={12}/></button></HoverTooltip></div></div>}
+      <div className="mt-1 flex min-h-0 min-w-0 flex-1 flex-col px-2">
         {sessions.isLoading
           ? <div className="space-y-1 px-2 pt-1"><div className="h-[34px] ui-skeleton rounded-lg bg-zinc-200/70"/><div className="h-[34px] ui-skeleton rounded-lg bg-zinc-200/50"/><div className="h-[34px] ui-skeleton rounded-lg bg-zinc-200/40"/></div>
           : (sidebarGroupingMode === 'project' ? orderedProjectGroups.length > 0 : visibleSessions.length > 0)
@@ -1083,10 +751,10 @@ export default function App() {
               {sidebarGroupingMode === 'time'
                 ? <>
                     {pinnedSessions.length > 0 && <section className="mb-2">
-                      <div className="flex h-7 items-center gap-1 px-2 text-[12px] font-medium text-amber-600"><Pin size={11} className="fill-current"/>置顶</div>
+                      <div className="flex h-7 items-center gap-1 px-2 text-[12px] font-medium text-amber-600"><Pin size={11} className="fill-current"/>{L('置顶', 'Pinned')}</div>
                       {pinnedSessions.map(session => renderSessionRow(session, sessionDrag(session.id)))}
                     </section>}
-                    {groupSessionsByTime(unpinnedSessions).map(group => <section key={group.key} className="mb-2">
+                    {groupSessionsByTime(unpinnedSessions, new Date(), locale).map(group => <section key={group.key} className="mb-2">
                       <div className="flex h-7 items-center px-2 text-[12px] font-medium text-zinc-400">{group.label}</div>
                       {group.sessions.map(session => renderSessionRow(session, sessionDrag(session.id)))}
                     </section>)}
@@ -1096,14 +764,18 @@ export default function App() {
                   const workspaceDrag = itemDrag('workspaces', workspace.cwd, reorderWorkspaces);
                   const busyCount = workspace.agents.reduce((count, group) => count + group.sessions.filter(session => busyStates.has(session.state)).length, 0);
                   return <div key={workspace.cwd} className="mb-0.5">
-                    <div role="button" tabIndex={0} {...workspaceDrag.props} onClick={() => toggleWorkspace(workspace.cwd)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleWorkspace(workspace.cwd); } }} title={`${workspace.cwd}（拖拽可换位）`} className={`group sticky top-0 z-[1] flex h-7 w-full cursor-pointer items-center gap-1.5 rounded-lg bg-rail pl-2 pr-1 text-left transition-[background-color,opacity] duration-150 hover:bg-zinc-100/70 ${workspaceDrag.dragging ? 'opacity-40' : ''} ${workspaceDrag.over ? 'ring-1 ring-zinc-300' : ''}`}>
+                    <div role="button" tabIndex={0} {...workspaceDrag.props} onClick={() => toggleWorkspace(workspace.cwd)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleWorkspace(workspace.cwd); } }} title={L(`${workspace.cwd}（拖拽可换位）`, `${workspace.cwd} (Drag to reorder)`)} className={`group sticky top-0 z-[1] flex h-7 w-full cursor-pointer items-center gap-1.5 rounded-lg bg-rail pl-2 pr-1 text-left transition-[background-color,opacity] duration-150 hover:bg-zinc-100/70 ${workspaceDrag.dragging ? 'opacity-40' : ''} ${workspaceDrag.over ? 'ring-1 ring-zinc-300' : ''}`}>
                       <ChevronRight size={12} className={`shrink-0 text-zinc-400 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${collapsed ? '' : 'rotate-90'}`}/>
                       <Folder size={12} className="shrink-0 text-zinc-400"/>
                       <HoverTooltipText content={workspace.cwd} className="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-600">{workspace.label}</HoverTooltipText>
-                      {workspace.missing && <span title="路径不可用（可能已被删除或移动）" aria-label="项目路径不可用"><AlertTriangle size={11} className="shrink-0 text-amber-500"/></span>}
-                      <button type="button" title={workspace.pinnedAt ? '取消置顶项目' : '置顶项目'} aria-label={workspace.pinnedAt ? '取消置顶项目' : '置顶项目'} aria-pressed={Boolean(workspace.pinnedAt)} onClick={event => { event.stopPropagation(); toggleProjectPin.mutate({ cwd: workspace.cwd, pinned: !workspace.pinnedAt }); }} className={`ui-press grid h-5 w-5 shrink-0 place-items-center rounded hover:bg-zinc-200 hover:text-zinc-800 focus:opacity-100 max-md:opacity-100 ${workspace.pinnedAt ? 'text-amber-500 opacity-100' : 'text-zinc-400 opacity-0 group-hover:opacity-100'}`}><Pin key={workspace.pinnedAt ? 'pinned' : 'unpinned'} size={11} className={workspace.pinnedAt ? 'ui-icon-pop fill-current' : ''}/></button>
+                      {workspace.missing && <HoverTooltip content={L('路径不可用（可能已被删除或移动）', 'Path unavailable (may have been moved or deleted)')} side="top"><span aria-label={L('项目路径不可用', 'Project path unavailable')} className="inline-flex shrink-0"><AlertTriangle size={11} className="shrink-0 text-amber-500"/></span></HoverTooltip>}
+                      <HoverTooltip content={workspace.pinnedAt ? L('取消置顶项目', 'Unpin project') : L('置顶项目', 'Pin project')} side="top">
+                        <button type="button" aria-label={workspace.pinnedAt ? L('取消置顶项目', 'Unpin project') : L('置顶项目', 'Pin project')} aria-pressed={Boolean(workspace.pinnedAt)} onClick={event => { event.stopPropagation(); toggleProjectPin.mutate({ cwd: workspace.cwd, pinned: !workspace.pinnedAt }); }} className={`ui-press grid h-5 w-5 shrink-0 place-items-center rounded hover:bg-zinc-200 hover:text-zinc-800 focus:opacity-100 max-md:opacity-100 ${workspace.pinnedAt ? 'text-amber-500 opacity-100' : 'text-zinc-400 opacity-0 group-hover:opacity-100'}`}><Pin key={workspace.pinnedAt ? 'pinned' : 'unpinned'} size={11} className={workspace.pinnedAt ? 'ui-icon-pop fill-current' : ''}/></button>
+                      </HoverTooltip>
                       {busyCount > 0 && <span className="ui-status-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"/>}
-                      <span role="button" tabIndex={-1} onClick={event => { event.stopPropagation(); const rect = (event.currentTarget as HTMLElement).getBoundingClientRect(); setAgentPicker({ cwd: workspace.cwd, top: rect.bottom + 4, left: Math.min(rect.left, window.innerWidth - 224) }); }} className="ui-press grid h-5 w-5 shrink-0 place-items-center rounded text-zinc-400 opacity-0 hover:bg-zinc-200 hover:text-zinc-800 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100"><Plus size={12}/></span>
+                      <HoverTooltip content={L('在此工作区新建会话', 'New session in workspace')} side="top">
+                        <span role="button" tabIndex={-1} aria-label={L('在此工作区新建会话', 'New session in workspace')} onClick={event => { event.stopPropagation(); const rect = (event.currentTarget as HTMLElement).getBoundingClientRect(); setAgentPicker({ cwd: workspace.cwd, top: rect.bottom + 4, left: Math.min(rect.left, window.innerWidth - 224) }); }} className="ui-press grid h-5 w-5 shrink-0 place-items-center rounded text-zinc-400 opacity-0 hover:bg-zinc-200 hover:text-zinc-800 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100"><Plus size={12}/></span>
+                      </HoverTooltip>
                       <GripVertical size={11} className="shrink-0 cursor-grab text-zinc-300 opacity-0 transition-opacity group-hover:opacity-100"/>
                       <span className="shrink-0 text-[12px] tabular-nums text-zinc-400">{workspace.agents.reduce((count, group) => count + group.sessions.length, 0)}</span>
                     </div>
@@ -1113,12 +785,14 @@ export default function App() {
                       const agentDrag = itemDrag(`agents:${workspace.cwd}`, group.agentId, (from, to) => reorderAgents(workspace.cwd, from, to));
                       const agentBusy = group.sessions.some(session => busyStates.has(session.state));
                       return <div key={`${workspace.cwd}:${group.agentId}`} className="group/agent">
-                        <div role="button" tabIndex={0} {...agentDrag.props} onClick={() => toggleAgentGroup(groupKey)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleAgentGroup(groupKey); } }} title={agentCollapsed ? `展开 ${group.agentName}（拖拽可换位）` : `收起 ${group.agentName}（拖拽可换位）`} className={`flex h-7 w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 text-left text-[12px] text-zinc-500 transition-[background-color,color,opacity] duration-150 hover:bg-zinc-100/70 hover:text-zinc-700 ${agentDrag.dragging ? 'opacity-40' : ''} ${agentDrag.over ? 'ring-1 ring-zinc-300' : ''}`}>
+                        <div role="button" tabIndex={0} {...agentDrag.props} onClick={() => toggleAgentGroup(groupKey)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleAgentGroup(groupKey); } }} title={agentCollapsed ? L(`展开 ${group.agentName}（拖拽可换位）`, `Expand ${group.agentName} (Drag to reorder)`) : L(`收起 ${group.agentName}（拖拽可换位）`, `Collapse ${group.agentName} (Drag to reorder)`)} className={`flex h-7 w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 text-left text-[12px] text-zinc-500 transition-[background-color,color,opacity] duration-150 hover:bg-zinc-100/70 hover:text-zinc-700 ${agentDrag.dragging ? 'opacity-40' : ''} ${agentDrag.over ? 'ring-1 ring-zinc-300' : ''}`}>
                           <ChevronRight size={11} className={`shrink-0 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${agentCollapsed ? '' : 'rotate-90'}`}/>
                           <AgentIcon agentId={group.agentId} agentName={group.agentName} size={14}/>
                           <span className="min-w-0 flex-1 truncate">{group.agentName}</span>
                           {agentBusy && !agentCollapsed && <span className="ui-status-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500"/>}
-                          <button type="button" title={`用 ${group.agentName} 在此工作区新建会话`} disabled={Boolean(creatingPair)} onClick={event => { event.stopPropagation(); quickCreate.mutate({ agentId: group.agentId, cwd: workspace.cwd }); }} className="ui-press grid h-4 w-4 shrink-0 place-items-center rounded opacity-0 hover:bg-zinc-200 hover:text-zinc-800 focus:opacity-100 group-hover/agent:opacity-100 max-md:opacity-100 disabled:opacity-50">{creatingPair?.agentId === group.agentId && creatingPair.cwd === workspace.cwd ? <RefreshCw size={10} className="animate-spin"/> : <Plus size={10}/>}</button>
+                          <HoverTooltip content={L(`用 ${group.agentName} 在此工作区新建会话`, `New ${group.agentName} session in workspace`)} side="top">
+                            <button type="button" aria-label={L(`用 ${group.agentName} 在此工作区新建会话`, `New ${group.agentName} session in workspace`)} disabled={Boolean(creatingPair)} onClick={event => { event.stopPropagation(); quickCreate.mutate({ agentId: group.agentId, cwd: workspace.cwd }); }} className="ui-press grid h-4 w-4 shrink-0 place-items-center rounded opacity-0 hover:bg-zinc-200 hover:text-zinc-800 focus:opacity-100 group-hover/agent:opacity-100 max-md:opacity-100 disabled:opacity-50">{creatingPair?.agentId === group.agentId && creatingPair.cwd === workspace.cwd ? <RefreshCw size={10} className="animate-spin"/> : <Plus size={10}/>}</button>
+                          </HoverTooltip>
                           <GripVertical size={10} className="shrink-0 cursor-grab text-zinc-300 opacity-0 transition-opacity group-hover/agent:opacity-100"/>
                           <span className="shrink-0 tabular-nums">{group.sessions.length}</span>
                         </div>
@@ -1128,38 +802,41 @@ export default function App() {
                           {(group.sideChats.get(session.id) ?? []).map(child => renderSessionRow(child, sessionDrag(child.id), { showAgentIcon: shouldShowSessionRowAgentIcon('project', child.agentId, group.agentId) }))}
                         </div>)}</div></Disclosure>
                       </div>;
-                    }) : <div className="px-2 py-1.5 text-[12px] text-zinc-400">还没有会话，点上面的 + 新建</div>}</div></Disclosure>
+                    }) : <div className="px-2 py-1.5 text-[12px] text-zinc-400">{L('还没有会话，点上面的 + 新建', 'No sessions yet — click + above to create one')}</div>}</div></Disclosure>
                   </div>;
                 })}
             </div>
             : <div className="px-3 py-6 text-xs leading-5 text-zinc-500">
                 {sidebarGroupingMode === 'project'
-                  ? <div className="space-y-2"><p>还没有导入项目。</p><button type="button" onClick={() => openAppDialog('project-import')} className="inline-flex h-7 items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2.5 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50"><FolderPlus size={12}/>导入项目</button></div>
-                  : '当前分类暂无会话。'}
+                  ? <div className="space-y-2"><p>{L('还没有导入项目。', 'No imported projects yet.')}</p><button type="button" onClick={() => openAppDialog('project-import')} className="inline-flex h-7 items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2.5 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50"><FolderPlus size={12}/>{L('导入项目', 'Import Project')}</button></div>
+                  : L('当前分类暂无会话。', 'No sessions in this view.')}
               </div>}
       </div>
-      {/* 两个入口都开弹窗：归档列表早先挂在会话树最底部，点了要滚到底才看得见，看起来像点不开。 */}
-      <SettingsMenu webDenied={Boolean(webDenied)} archivedCount={archivedSessions.length} outputPluginsEnabledCount={outputPluginsCatalog.enabledCount} outputPluginsTotalCount={outputPluginsCatalog.totalCount} taskRecoveryMode={taskRecoveryConfigQuery.data?.config.mode} onUsage={() => { setSidebarOpen(false); openAppDialog('usage'); }} onSchedule={() => { setSidebarOpen(false); openAppDialog('schedule'); }} onArchived={() => { setSidebarOpen(false); openAppDialog('archived'); }} onImport={() => { setSidebarOpen(false); openAppDialog('import'); }} onAgentConfig={() => { setSidebarOpen(false); openAppDialog('agent'); }} onSideChatConfig={() => { setSidebarOpen(false); openAppDialog('side-chat'); }} onOutputPlugins={() => { setSidebarOpen(false); openAppDialog('output-plugins'); }} onTaskRecovery={() => { setSidebarOpen(false); openAppDialog('task-recovery'); }} onAssistant={openAssistantSettings} onNotifications={() => { setSidebarOpen(false); openAppDialog('notifications'); }} onLark={() => { setSidebarOpen(false); openAppDialog('lark'); }} onLarkRegexTriggers={() => { setSidebarOpen(false); openAppDialog('lark-regex'); }} onLarkAvatar={() => { setSidebarOpen(false); openAppDialog('lark-avatar'); }} onThemeStudio={() => { setSidebarOpen(false); openAppDialog('theme-studio'); }} onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}/>
+      {/* 底部极简入口：直达统一设置中心 + 飞书与协同直达 + 浅/暗一键切换 + 手机扫码 */}
+      <SettingsMenu
+        webDenied={Boolean(webDenied)}
+        larkConfig={larkConfig.data}
+        onOpenSettings={() => { setSidebarOpen(false); openAppDialog('settings'); }}
+        onOpenLark={() => { setSidebarOpen(false); openAppDialog('lark'); }}
+        onShare={() => { setSidebarOpen(false); openAppDialog('share'); }}
+      />
       </div>
-      {/* 收起态细条（仅桌面）：展开 + 快捷新建 + 两个设置入口 */}
-      <div className={`hidden h-full w-full flex-col items-center gap-1 py-3 ${sidebarCollapsed ? 'md:flex' : ''}`}>
-        <HoverTooltip content="展开会话列表"><button type="button" onClick={() => setSidebarCollapsed(false)} aria-label="展开会话列表" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-600 hover:bg-white hover:text-zinc-900"><PanelLeftOpen size={16}/></button></HoverTooltip>
-        <HoverTooltip content="新建对话"><button type="button" onClick={startNewConversation} aria-label="新建对话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-600 hover:bg-white hover:text-zinc-900"><Plus size={16}/></button></HoverTooltip>
-        <HoverTooltip content="任务看板（⌘⇧B）"><button type="button" onClick={() => openBoard()} aria-label="任务看板" aria-current={boardRoute.active ? 'page' : undefined} className={`grid h-8 w-8 place-items-center rounded-lg transition-colors ${boardRoute.active ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-white hover:text-zinc-900'}`}><Columns3 size={16}/></button></HoverTooltip>
-        <HoverTooltip content="搜索会话（⌘K）"><button type="button" onClick={openSearch} aria-label="搜索会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-600 hover:bg-white hover:text-zinc-900"><Search size={16}/></button></HoverTooltip>
+      {/* 收起态细条（仅桌面）：展开 + 快捷新建 + 精简设置与飞书/工具入口 */}
+      <div data-testid="collapsed-sidebar-strip" className={`hidden h-full w-full flex-col items-center gap-1 py-3 ${sidebarCollapsed ? 'md:flex' : ''}`}>
+        <HoverTooltip content={L('展开会话列表', 'Expand sidebar')} side="right"><button type="button" onClick={() => setSidebarCollapsed(false)} aria-label={L('展开会话列表', 'Expand sidebar')} className="ui-press grid h-8 w-8 place-items-center rounded-lg text-zinc-600 hover:bg-white hover:text-zinc-900"><PanelLeftOpen size={16}/></button></HoverTooltip>
+        <HoverTooltip content={L('新建对话', 'New Chat')} side="right"><button type="button" onClick={startNewConversation} aria-label={L('新建对话', 'New Chat')} className="ui-press grid h-8 w-8 place-items-center rounded-lg text-zinc-600 hover:bg-white hover:text-zinc-900"><Plus size={16}/></button></HoverTooltip>
+        <HoverTooltip content={L('任务看板（⌘⇧B）', 'Task Board (⌘⇧B)')} side="right"><button type="button" onClick={() => openBoard()} aria-label={L('任务看板', 'Task Board')} aria-current={boardRoute.active ? 'page' : undefined} className={`ui-press grid h-8 w-8 place-items-center rounded-lg transition-colors ${boardRoute.active ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-white hover:text-zinc-900'}`}><Columns3 size={16}/></button></HoverTooltip>
+        <HoverTooltip content={L('搜索会话（⌘K）', 'Search Sessions (⌘K)')} side="right"><button type="button" onClick={openSearch} aria-label={L('搜索会话', 'Search Sessions')} className="ui-press grid h-8 w-8 place-items-center rounded-lg text-zinc-600 hover:bg-white hover:text-zinc-900"><Search size={16}/></button></HoverTooltip>
         <CompanionStripButton/>
 
         <span className="mt-auto flex flex-col items-center gap-1">
-          <HoverTooltip content="消耗看板"><button type="button" onClick={() => openAppDialog('usage')} aria-label="消耗看板" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><BarChart3 size={15}/></button></HoverTooltip>
-          <HoverTooltip content="定时任务"><button type="button" onClick={() => openAppDialog('schedule')} aria-label="定时任务" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><AlarmClock size={15}/></button></HoverTooltip><HoverTooltip content="归档会话"><button type="button" onClick={() => openAppDialog('archived')} aria-label="归档会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Archive size={15}/></button></HoverTooltip>
-          <HoverTooltip content="导入外部会话"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('import'); }} aria-label="导入外部会话" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><FolderOpen size={15}/></button></HoverTooltip><HoverTooltip content="Agent 设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('agent'); }} aria-label="Agent 设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Bot size={15}/></button></HoverTooltip>
-          <HoverTooltip content="交互插件中心"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('output-plugins'); }} aria-label="交互插件中心" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Puzzle size={15}/></button></HoverTooltip>
-          <HoverTooltip content="中断自动恢复"><button type="button" onClick={() => openAppDialog('task-recovery')} aria-label="中断自动恢复" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><RotateCcw size={15}/></button></HoverTooltip>
-          <HoverTooltip content="通知设置"><button type="button" onClick={() => openAppDialog('notifications')} aria-label="通知设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Bell size={15}/></button></HoverTooltip>
-          <HoverTooltip content="飞书设置"><button type="button" onClick={() => { setSidebarCollapsed(false); openAppDialog('lark'); }} aria-label="飞书设置" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Settings2 size={15}/></button></HoverTooltip>
-          {pwa.visible && pwa.canPrompt && <HoverTooltip content="安装为桌面应用"><button type="button" disabled={pwa.installing} onClick={() => void triggerPwaInstall()} aria-label="安装为桌面应用" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900 disabled:opacity-50"><MonitorDown size={15}/></button></HoverTooltip>}
-          <HoverTooltip content="主题工坊"><button type="button" onClick={() => openAppDialog('theme-studio')} aria-label="主题工坊" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Palette size={15}/></button></HoverTooltip>
-          <HoverTooltip content="在手机上打开"><button type="button" onClick={() => openAppDialog('share')} aria-label="在手机上打开" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Smartphone size={15}/></button></HoverTooltip>
+          <HoverTooltip content={t('settings.center.footer.usageTooltip')} side="right"><button type="button" onClick={() => openAppDialog('usage')} aria-label={t('settings.center.footer.usage')} className="ui-press grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><BarChart3 size={15}/></button></HoverTooltip>
+          <HoverTooltip content={archivedSessions.length > 0 ? t('settings.center.footer.archivedTooltip', { count: archivedSessions.length }) : L('归档会话（查看或恢复历史对话）', 'Archived Sessions (Browse or restore archived chats)')} side="right"><button type="button" onClick={() => openAppDialog('archived')} aria-label={L('归档会话', 'Archived Sessions')} className="ui-press grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Archive size={15}/></button></HoverTooltip>
+          <LarkQuickTriggerButton compact side="right" larkConfig={larkConfig.data} onClick={() => openAppDialog('lark')} testId="collapsed-lark-trigger"/>
+          <QuickThemeToggleButton compact side="right"/>
+          <HoverTooltip content={t('settings.menu.tooltipDefault')} side="right"><button type="button" data-testid="collapsed-settings-trigger" aria-haspopup="dialog" onClick={() => openAppDialog('settings')} aria-label={L('打开设置中心', 'Open Settings Center')} className="ui-press grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Settings size={15}/></button></HoverTooltip>
+          {pwa.visible && pwa.canPrompt && <HoverTooltip content={pwa.installing ? L('等待确认安装…', 'Waiting for install confirmation…') : L('安装为桌面应用（独立窗口运行 PWA）', 'Install as Desktop App (Standalone PWA window)')} side="right"><button type="button" disabled={pwa.installing} onClick={() => void triggerPwaInstall()} aria-label={L('安装为桌面应用', 'Install as Desktop App')} className="ui-press grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900 disabled:opacity-50"><MonitorDown size={15}/></button></HoverTooltip>}
+          <HoverTooltip content={t('settings.menu.shareTooltip')} side="right"><button type="button" onClick={() => openAppDialog('share')} aria-label={t('settings.menu.shareAria')} className="ui-press grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-white hover:text-zinc-900"><Smartphone size={15}/></button></HoverTooltip>
         </span>
       </div>
     </aside>
@@ -1186,17 +863,17 @@ export default function App() {
             // 终端与文件锚定主会话；会话类标签用自己的 sessionId。三者都是廉价组件
             // （终端/文件只读会话的 cwd，不启进程），所以可以全部常驻挂载。
             tab.kind === 'terminal' ? <TerminalPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} sshHost={(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost}/>
-            : tab.kind === 'files' ? <FileExplorerPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} cwd={sortedSessions.find(item => item.id === tab.anchorSessionId)?.cwd ?? primarySession.cwd} initialPath={tab.filePath} targetLine={tab.fileLine} targetEndLine={tab.fileEndLine} previewNonce={tab.filePreviewNonce} onClose={() => { setPaneMenuAnchor(undefined); togglePane(); }} disabledReason={(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost ? `SSH 远端会话（${(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost}）暂不支持文件浏览；终端面板可以直接连到远端。` : undefined}/>
+            : tab.kind === 'files' ? <FileExplorerPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} cwd={sortedSessions.find(item => item.id === tab.anchorSessionId)?.cwd ?? primarySession.cwd} initialPath={tab.filePath} targetLine={tab.fileLine} targetEndLine={tab.fileEndLine} previewNonce={tab.filePreviewNonce} onClose={() => { setPaneMenuAnchor(undefined); togglePane(); }} disabledReason={(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost ? L(`SSH 远端会话（${(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost}）暂不支持文件浏览；终端面板可以直接连到远端。`, `File explorer is not yet supported for SSH remote sessions (${(sortedSessions.find(item => item.id === tab.anchorSessionId) ?? primarySession).sshHost}); use the Terminal panel to connect directly.`) : undefined}/>
             : tab.kind === 'raw' ? <RawLogPanel key={tab.id} sessionId={tab.anchorSessionId ?? primarySession.id} active={paneOpen && tab.id === activeTabId}/>
-            : (() => { const session = sortedSessions.find(item => item.id === tab.sessionId); return session ? <SessionPane key={tab.id} session={session} agent={agents.data?.find(agent => agent.id === session.agentId)} pane="secondary" onOpenSidebar={() => setSidebarOpen(true)} onOpenRawLog={openRawLog} btwEnabled={sideChatConfig.btwEnabled} btwTriggerPrefix={sideChatConfig.triggerPrefix} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginItems={outputPluginsCatalog.plugins} outputPluginsGlobalConfig={outputPluginsCatalog.globalConfig} outputPluginRegistry={outputPluginsCatalog.registry} onSideChat={handleSessionSideChat}/> : <div className="grid h-full place-items-center text-[12px] text-zinc-400">会话已不存在。</div>; })()
+            : (() => { const session = sortedSessions.find(item => item.id === tab.sessionId); return session ? <SessionPane key={tab.id} session={session} agent={agents.data?.find(agent => agent.id === session.agentId)} pane="secondary" onOpenSidebar={() => setSidebarOpen(true)} onOpenRawLog={openRawLog} btwEnabled={sideChatConfig.btwEnabled} btwTriggerPrefix={sideChatConfig.triggerPrefix} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginItems={outputPluginsCatalog.plugins} outputPluginsGlobalConfig={outputPluginsCatalog.globalConfig} outputPluginRegistry={outputPluginsCatalog.registry} onSideChat={handleSessionSideChat}/> : <div className="grid h-full place-items-center text-[12px] text-zinc-400">{L('会话已不存在。', 'Session no longer exists.')}</div>; })()
           ]))}
         </PaneHost>}
         {/* 副屏整个收起时它带着 hidden、收不到 dragover，所以拖拽期间单独在右缘补一个落点。
             只在拖拽进行中出现，不提前改 paneOpen，避免拖到一半放弃却把副屏留开。 */}
         {dragItem?.sessionId && !paneOpen && <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const dropped = dragItem?.sessionId; setDragItem(undefined); setDragOverItem(undefined); if (dropped) openSessionInPane(dropped); }} className="fixed inset-y-0 right-0 z-40 flex w-20 items-center justify-center border-l-2 border-dashed border-zinc-400 bg-zinc-900/5">
-          <span className="text-[12px] font-medium text-zinc-600 [writing-mode:vertical-rl]">放到这里，在副屏打开</span>
+          <span className="text-[12px] font-medium text-zinc-600 [writing-mode:vertical-rl]">{L('放到这里，在副屏打开', 'Drop here to open in side pane')}</span>
         </div>}
-      </> : <div className="ui-page relative flex flex-1 justify-center overflow-y-auto px-4 sm:px-8"><span className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] md:hidden"><IconButton label="打开会话列表" onClick={() => setSidebarOpen(true)}><Menu size={17}/></IconButton></span><HomeStage editorRef={draftTextareaRef} agents={agents.data ?? []} sessions={sessions.data ?? []} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginItems={outputPluginsCatalog.plugins} outputPluginsGlobalConfig={outputPluginsCatalog.globalConfig} onCreated={session => selectSession(session.id)}/></div>}
+      </> : <div className="ui-page relative flex flex-1 justify-center overflow-y-auto px-4 pt-[calc(3.25rem+env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-8 md:py-6"><span className="absolute left-[max(0.75rem,env(safe-area-inset-left))] top-[max(0.75rem,env(safe-area-inset-top))] z-10 md:hidden"><IconButton label={L('打开会话列表', 'Open sidebar')} onClick={() => setSidebarOpen(true)}><Menu size={17}/></IconButton></span><HomeStage editorRef={draftTextareaRef} agents={agents.data ?? []} sessions={sessions.data ?? []} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginItems={outputPluginsCatalog.plugins} outputPluginsGlobalConfig={outputPluginsCatalog.globalConfig} onCreated={session => selectSession(session.id)}/></div>}
     </main>
     <ExitGate open={Boolean(paneMenuAnchor)} ms={150}>{paneMenuAnchor && <PaneTypeMenu anchor={paneMenuAnchor} shortcuts={shortcuts} onPick={openPaneKind} onClose={() => setPaneMenuAnchor(undefined)}/>}</ExitGate>
     {sessionMenu && (() => {
@@ -1216,51 +893,82 @@ export default function App() {
       />;
     })()}
     {copyToast.toast}
-    {actionError && <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2 text-[12px] text-red-700 shadow-[0_12px_32px_rgba(24,24,27,.12)]"><button type="button" onClick={() => setActionError(undefined)} className="mr-2 font-medium underline">关闭</button>{actionError}</div>}
+    {actionError && <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2 text-[12px] text-red-700 shadow-[0_12px_32px_rgba(24,24,27,.12)]"><button type="button" onClick={() => setActionError(undefined)} className="mr-2 font-medium underline">{t('common.close')}</button>{actionError}</div>}
     {/* 弹窗开关在 dialog-store 里：打开它们不会重渲染整棵会话树。 */}
-    <DialogHost dialogs={{
-      lark: <LarkConfigModal agents={agents.data ?? []} onClose={closeAppDialog} onOpenRegexTriggers={() => openAppDialog('lark-regex')}/>,
-      'lark-regex': <LarkRegexTriggerDialog onClose={closeAppDialog} onOpenSession={id => { closeAppDialog(); selectSession(id); }} onOpenLarkSettings={() => openAppDialog('lark')} onOpenLlmSettings={() => openAppDialog('agent')}/>,
-      'lark-avatar': <LarkAvatarDialog onClose={closeAppDialog}/>,
-      agent: <AgentConfigDialog onClose={closeAppDialog}/>,
-      usage: <UsageDashboardDialog agents={agents.data ?? []} onClose={closeAppDialog} onOpenSession={selectSession}/>,
-      'side-chat': <AgentConfigDialog initialTab="side-chat" onClose={closeAppDialog}/>,
-      'output-plugins': <AgentConfigDialog initialTab="output-plugins" onClose={closeAppDialog}/>,
-      'task-recovery': <TaskRecoverySettingsDialog onClose={closeAppDialog} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
-      assistant: <AssistantSettingsDialog onClose={closeAppDialog} onOpenMain={() => { closeAppDialog(); openMain(); }} onAdopt={() => { closeAppDialog(); goAdopt(); }} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
-      notifications: <NotificationSettingsDialog onClose={closeAppDialog} onOpenLarkSettings={() => openAppDialog('lark')}/>,
-      schedule: sessionId => <ScheduleDialog {...(sessionId ? { session: sortedSessions.find(item => item.id === sessionId) } : {})} sessions={sortedSessions} {...(mainSessionId ? { mainSessionId } : {})} onClose={closeAppDialog} onOpenSession={selectSession}/>,
-      handover: sessionId => {
-        const session = sessionId ? sortedSessions.find(item => item.id === sessionId) : undefined;
-        return session ? <HandoverDialog session={session} agent={agents.data?.find(item => item.id === session.agentId)} onClose={closeAppDialog}/> : null;
-      },
-      'system-prompt': sessionId => {
-        const session = sessionId ? sortedSessions.find(item => item.id === sessionId) : undefined;
-        return session?.systemPrompt ? <SystemPromptDialog session={session} onClose={closeAppDialog}/> : null;
-      },
-      share: <ShareAppDialog onClose={closeAppDialog}/>,
-      'theme-studio': <ThemeStudioDialog onClose={closeAppDialog} onOpenLlmSettings={() => openAppDialog('agent')}/>,
-      archived: <ArchivedSessionsDialog sessions={archivedSessions} agents={agents.data ?? []} mainSessionId={mainSessionId} onClose={closeAppDialog} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
-      import: <ImportSessionDialog agents={agents.data ?? []} onClose={closeAppDialog} onImported={session => selectSession(session.id)}/>,
-      'project-import': <ImportProjectDialog onClose={closeAppDialog} onImported={(project, duplicate) => {
-        closeAppDialog();
-        setSidebarGrouping('project');
-        setSidebarCollapsed(false);
-        setSidebarOpen(false);
-        // 重复导入不造第二条记录，用全局 toast 明确告诉用户点的是哪一个。
-        if (duplicate) copyToast.show(`项目已存在：${project.cwd}`, 'info');
-      }}/>,
-      search: <SessionSearchDialog agents={agents.data ?? []} sessions={sessions.data ?? []} onClose={closeAppDialog} onOpen={session => { closeAppDialog(); selectSession(session.id); }}/>
-    }}/>
+    <DialogHost
+      settingsCenter={target => (
+        <SettingsCenterDialog
+          initialCategory={target.category}
+          initialSubTab={target.subTab}
+          webDenied={Boolean(webDenied)}
+          agents={agents.data ?? []}
+          sessions={sortedSessions}
+          {...(mainSessionId ? { mainSessionId } : {})}
+          archivedCount={archivedSessions.length}
+          outputPluginsEnabledCount={outputPluginsCatalog.enabledCount}
+          outputPluginsTotalCount={outputPluginsCatalog.totalCount}
+          taskRecoveryMode={taskRecoveryConfigQuery.data?.config.mode}
+          onClose={closeAppDialog}
+          onOpenSession={id => { closeAppDialog(); selectSession(id); }}
+          onOpenMain={() => { closeAppDialog(); openMain(); }}
+          onAdopt={() => { closeAppDialog(); goAdopt(); }}
+          onOpenUsage={() => openAppDialog('usage')}
+          onOpenArchived={() => openAppDialog('archived')}
+          onOpenImport={() => openAppDialog('import')}
+          onOpenShare={() => openAppDialog('share')}
+        />
+      )}
+      dialogs={{
+        usage: <UsageDashboardDialog agents={agents.data ?? []} onClose={closeAppDialog} onOpenSession={selectSession}/>,
+        'session-output-plugins': sessionId => {
+          const session = sessionId ? sortedSessions.find(item => item.id === sessionId) : undefined;
+          return session ? (
+            <SessionOutputPluginsDialog
+              session={session}
+              agent={agents.data?.find(item => item.id === session.agentId)}
+              outputPluginItems={outputPluginsCatalog.plugins}
+              outputPluginsGlobalConfig={outputPluginsCatalog.globalConfig}
+              askUserQuestionXmlEnabled={askUserQuestionXmlEnabled}
+              onClose={closeAppDialog}
+              onOpenGlobalCenter={() => openAppDialog('output-plugins')}
+            />
+          ) : null;
+        },
+        schedule: sessionId => <ScheduleDialog {...(sessionId ? { session: sortedSessions.find(item => item.id === sessionId) } : {})} sessions={sortedSessions} {...(mainSessionId ? { mainSessionId } : {})} onClose={closeAppDialog} onOpenSession={selectSession}/>,
+        handover: sessionId => {
+          const session = sessionId ? sortedSessions.find(item => item.id === sessionId) : undefined;
+          return session ? <HandoverDialog session={session} agent={agents.data?.find(item => item.id === session.agentId)} onClose={closeAppDialog}/> : null;
+        },
+        'system-prompt': sessionId => {
+          const session = sessionId ? sortedSessions.find(item => item.id === sessionId) : undefined;
+          return session?.systemPrompt ? <SystemPromptDialog session={session} onClose={closeAppDialog}/> : null;
+        },
+        share: <ShareAppDialog onClose={closeAppDialog}/>,
+        archived: <ArchivedSessionsDialog sessions={archivedSessions} agents={agents.data ?? []} mainSessionId={mainSessionId} onClose={closeAppDialog} onOpenSession={id => { closeAppDialog(); selectSession(id); }}/>,
+        import: <ImportSessionDialog agents={agents.data ?? []} onClose={closeAppDialog} onImported={session => selectSession(session.id)}/>,
+        'project-import': <ImportProjectDialog onClose={closeAppDialog} onImported={(project, duplicate) => {
+          closeAppDialog();
+          setSidebarGrouping('project');
+          setSidebarCollapsed(false);
+          setSidebarOpen(false);
+          // 重复导入不造第二条记录，用全局 toast 明确告诉用户点的是哪一个。
+          if (duplicate) copyToast.show(L(`项目已存在：${project.cwd}`, `Project already exists: ${project.cwd}`), 'info');
+        }}/>,
+        search: <SessionSearchDialog agents={agents.data ?? []} sessions={sessions.data ?? []} onClose={closeAppDialog} onOpen={session => { closeAppDialog(); selectSession(session.id); }}/>
+      }}
+    />
     {(() => {
       const target = quickArchive.status === 'closed' ? undefined : sortedSessions.find(session => session.id === quickArchive.sessionId);
-      const targetName = target ? sessionLabel(target, agents.data?.find(agent => agent.id === target.agentId)?.name) : '该会话';
+      const targetName = target ? sessionLabel(target, agents.data?.find(agent => agent.id === target.agentId)?.name) : L('该会话', 'this session');
       return <ConfirmDialog
         open={quickArchive.status !== 'closed'}
         tone="warning"
-        title={`归档「${targetName}」？`}
-        description="归档后，该会话会从会话列表移入「归档会话」，历史消息和执行记录都会保留，不会被删除。正在运行的会话会先停止。之后可在侧栏设置里的「归档会话」中找回并查看。"
-        confirmLabel="确认归档"
+        title={L(`归档「${targetName}」？`, `Archive "${targetName}"?`)}
+        description={L(
+          '归档后，该会话会从会话列表移入「归档会话」，历史消息和执行记录都会保留，不会被删除。正在运行的会话会先停止。之后可在侧栏设置里的「归档会话」中找回并查看。',
+          'Archiving moves this session into Archived Sessions without deleting its message history or logs. Any running task will be stopped first. You can restore it anytime from Settings → Archived Sessions.'
+        )}
+        confirmLabel={L('确认归档', 'Archive')}
         busy={quickArchive.status === 'archiving'}
         error={quickArchive.status === 'error' ? quickArchive.message : undefined}
         onCancel={() => quickArchiveController.cancel()}

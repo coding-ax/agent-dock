@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Switch } from 'antd';
 import { api } from './api';
 import { HoverTooltip } from './HoverTooltip';
+import { useT } from './i18n';
 import { useToast } from './Toast';
 
 /**
@@ -11,6 +12,7 @@ import { useToast } from './Toast';
  * 避免出现一个永远点不动的开关。
  */
 export function AutostartToggle({ enabled }: { enabled: boolean }) {
+  const t = useT();
   const toast = useToast(8_000);
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ['autostart'], queryFn: api.autostartStatus, enabled, retry: false, refetchOnWindowFocus: false });
@@ -22,10 +24,11 @@ export function AutostartToggle({ enabled }: { enabled: boolean }) {
   const data = status.data;
   if (!data?.supported) return null;
   const checked = toggle.isPending ? Boolean(toggle.variables) : data.enabled;
-  return <div className="flex h-[34px] items-center gap-1 text-[12px]">
-    <HoverTooltip content={data.enabled ? `登录时自动运行 agent-dock start（${data.plistPath}）` : '登录 macOS 后自动在后台启动 AgentDock'}>
-      <span className="min-w-0 flex-1 truncate">开机自启</span>
+  const label = t('power.autostart.label');
+  return <div className="flex h-[34px] items-center gap-2 text-[12px]">
+    <HoverTooltip content={data.enabled ? t('power.autostart.tooltipOn', { path: data.plistPath ?? '' }) : t('power.autostart.tooltipOff')}>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
     </HoverTooltip>
-    <Switch size="small" className="!ml-auto shrink-0" aria-label="开机自启" checked={checked} loading={toggle.isPending} onChange={value => toggle.mutate(value)}/>
+    <Switch size="small" className="!ml-auto shrink-0" aria-label={label} checked={checked} loading={toggle.isPending} onChange={value => toggle.mutate(value)}/>
   </div>;
 }

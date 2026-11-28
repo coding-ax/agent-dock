@@ -215,24 +215,36 @@ describe('AiTextAssistControl 渲染：未配置置灰 + 已配置交互 + 撤�
 
 describe('全站输入框接入覆盖守卫', () => {
   const here = dirname(fileURLToPath(import.meta.url));
-  const files = [
+  const editableFiles = [
     'Composer.tsx',
     'SessionPane.tsx',
-    'SystemPromptDialog.tsx',
     'PromptTemplates.tsx',
     'ScheduleDialog.tsx',
     'PromptEditor.tsx',
-    'App.tsx',
+    'LarkConfigPanel.tsx',
+    'LarkRegexTriggerDialog.tsx',
     'LarkAvatarPanel.tsx',
     'board/KittenBoardDock.tsx',
     'board/BoardModals.tsx',
     'board/BoardDetailDrawer.tsx'
   ];
+  const readonlyFiles = [
+    'SystemPromptDialog.tsx',
+    'RequestTrajectory.tsx'
+  ];
 
-  it('所有核心用户输入场景均已接入统一 AiTextAssistControl', () => {
-    for (const file of files) {
+  it('所有可编辑且可保存/可发送的核心用户输入场景均已接入统一 AiTextAssistControl', () => {
+    for (const file of editableFiles) {
       const source = readFileSync(join(here, file), 'utf8');
       expect(source, `${file} 缺少 AiTextAssistControl 接入`).toContain('AiTextAssistControl');
+    }
+  });
+
+  it('只读快照/历史查看器绝不误挂 AiTextAssistControl', () => {
+    for (const file of readonlyFiles) {
+      const source = readFileSync(join(here, file), 'utf8');
+      expect(source, `${file} 是只读视图，不应挂载 AiTextAssistControl`).not.toContain('AiTextAssistControl');
+      expect(source, `${file} 是只读视图，不应挂载 AiTextAssistButton`).not.toContain('AiTextAssistButton');
     }
   });
 });

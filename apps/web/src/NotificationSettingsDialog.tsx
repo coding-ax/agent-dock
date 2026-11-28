@@ -56,21 +56,22 @@ import {
   useLocalNotificationPrefs,
   type NotificationSoundTheme
 } from './notifications-local';
+import { bi, useBi } from './i18n';
 
 type DialogTab = 'rules' | 'local' | 'lark' | 'extensions';
 
 const DURATION_PRESETS = [
-  { value: 0, label: '不限' },
-  { value: 5, label: '5 秒' },
-  { value: 10, label: '10 秒' },
-  { value: 30, label: '30 秒' },
-  { value: 60, label: '60 秒' }
+  { value: 0, get label() { return bi("不限", "No min"); } },
+  { value: 5, get label() { return bi("5 秒", "5s"); } },
+  { value: 10, get label() { return bi("10 秒", "10s"); } },
+  { value: 30, get label() { return bi("30 秒", "30s"); } },
+  { value: 60, get label() { return bi("60 秒", "60s"); } }
 ] as const;
 
 const SOUND_THEMES: Array<{ value: NotificationSoundTheme; label: string; hint: string }> = [
-  { value: 'chime', label: '清脆双音', hint: '明快干净的轻叮声' },
-  { value: 'soft', label: '温润木琴', hint: '柔和低频、不打断思路' },
-  { value: 'crystal', label: '通透铃音', hint: '轻盈高频泛音' }
+  { value: 'chime', get label() { return bi("清脆双音", "Crisp Chime"); }, get hint() { return bi("明快干净的轻叮声", "Clean, bright double chime"); } },
+  { value: 'soft', get label() { return bi("温润木琴", "Warm Marimba"); }, get hint() { return bi("柔和低频、不打断思路", "Gentle low tone, non-intrusive"); } },
+  { value: 'crystal', get label() { return bi("通透铃音", "Crystal Bell"); }, get hint() { return bi("轻盈高频泛音", "Light high-frequency shimmer"); } }
 ];
 
 const WEBHOOK_PRESET_ORDER: WebhookPreset[] = [
@@ -85,15 +86,15 @@ const WEBHOOK_PRESET_ORDER: WebhookPreset[] = [
 ];
 
 const SHELL_HOOK_ENV_VARS = [
-  { name: 'AGENTDOCK_NOTIFY_EVENT', desc: '事件类型：completed / failed / waiting_approval / notify' },
-  { name: 'AGENTDOCK_SESSION_ID', desc: '触发通知的会话 ID' },
-  { name: 'AGENTDOCK_SESSION_TITLE', desc: '会话标题（用于弹窗或消息抬头）' },
-  { name: 'AGENTDOCK_AGENT_ID', desc: '执行的 Agent ID（如 claude / codex）' },
-  { name: 'AGENTDOCK_STATUS', desc: '当前状态标识' },
-  { name: 'AGENTDOCK_DURATION_MS', desc: '本轮运行耗时（毫秒）' },
-  { name: 'AGENTDOCK_SUMMARY', desc: '最终回答摘要（纯文本）' },
-  { name: 'AGENTDOCK_ERROR', desc: '失败原因（仅失败时有值）' },
-  { name: 'AGENTDOCK_SESSION_URL', desc: '会话直达链接（已配公网/Web 基址时有值）' }
+  { name: 'AGENTDOCK_NOTIFY_EVENT', get desc() { return bi("事件类型：completed / failed / waiting_approval / notify", "Event kind: completed / failed / waiting_approval / notify"); } },
+  { name: 'AGENTDOCK_SESSION_ID', get desc() { return bi("触发通知的会话 ID", "Session ID that triggered the alert"); } },
+  { name: 'AGENTDOCK_SESSION_TITLE', get desc() { return bi("会话标题（用于弹窗或消息抬头）", "Session title (used in notification headers)"); } },
+  { name: 'AGENTDOCK_AGENT_ID', get desc() { return bi("执行的 Agent ID（如 claude / codex）", "Agent ID (e.g., claude / codex)"); } },
+  { name: 'AGENTDOCK_STATUS', get desc() { return bi("当前状态标识", "Current status code"); } },
+  { name: 'AGENTDOCK_DURATION_MS', get desc() { return bi("本轮运行耗时（毫秒）", "Turn duration in milliseconds"); } },
+  { name: 'AGENTDOCK_SUMMARY', get desc() { return bi("最终回答摘要（纯文本）", "Plain-text summary of final reply"); } },
+  { name: 'AGENTDOCK_ERROR', get desc() { return bi("失败原因（仅失败时有值）", "Error message (present only on failure)"); } },
+  { name: 'AGENTDOCK_SESSION_URL', get desc() { return bi("会话直达链接（已配公网/Web 基址时有值）", "Direct session URL (when Web Base URL is configured)"); } }
 ] as const;
 
 function StatusPill({ tone, children }: { tone: 'emerald' | 'amber' | 'red' | 'zinc' | 'blue'; children: ReactNode }) {
@@ -112,6 +113,7 @@ function StatusPill({ tone, children }: { tone: 'emerald' | 'amber' | 'red' | 'z
 }
 
 function InlineTestFeedback({ result }: { result?: NotificationTestResult | { ok: boolean; durationMs?: number; detail?: string; error?: string; consoleUrl?: string } }) {
+  const L = useBi();
   if (!result) return null;
   return (
     <div
@@ -127,7 +129,7 @@ function InlineTestFeedback({ result }: { result?: NotificationTestResult | { ok
         : <XCircle size={14} className="mt-0.5 shrink-0 text-red-500"/>}
       <div className="min-w-0 flex-1 break-words">
         <div className="font-medium">
-          {result.ok ? '测试通知已送达' : '测试通知发送失败'}
+          {result.ok ? L("测试通知已送达", "Test notification delivered") : L("测试通知发送失败", "Test notification failed")}
           {typeof result.durationMs === 'number' && result.durationMs >= 0 && (
             <span className="ml-1.5 font-mono text-[11px] font-normal opacity-80">{result.durationMs}ms</span>
           )}
@@ -142,7 +144,8 @@ function InlineTestFeedback({ result }: { result?: NotificationTestResult | { ok
             rel="noreferrer"
             className="mt-1 inline-flex items-center gap-1 font-medium underline underline-offset-2"
           >
-            前往飞书开放平台开通权限
+            
+            {L("前往飞书开放平台开通权限", "Enable permission in Lark Open Platform")}
             <ExternalLink size={11}/>
           </a>
         )}
@@ -262,7 +265,7 @@ function SectionCard({
 function createEmptyWebhook(): NotificationWebhookConfig {
   return {
     id: `wh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
-    name: '自定义 Webhook',
+    name: bi("自定义 Webhook", "Custom Webhook"),
     enabled: true,
     preset: 'generic',
     url: '',
@@ -285,20 +288,23 @@ function serializeDraftForSave(draft: NotificationServerConfig): NotificationSer
 function formatRecentDeliveryLabel(status?: NotificationChannelDeliveryStatus): string | undefined {
   if (!status) return undefined;
   return status.ok
-    ? `上次成功 · ${status.durationMs}ms`
-    : `上次失败 · ${status.error ? status.error.slice(0, 28) : '出错'}`;
+    ? bi(`上次成功 · ${status.durationMs}ms`, `Last OK · ${status.durationMs}ms`)
+    : bi(`上次失败 · ${status.error ? status.error.slice(0, 28) : '出错'}`, `Last failed · ${status.error ? status.error.slice(0, 28) : 'Error'}`);
 }
 
 export function NotificationSettingsDialog({
   onClose,
-  onOpenLarkSettings
+  onOpenLarkSettings,
+  embedded = false
 }: {
   onClose(): void;
   onOpenLarkSettings(): void;
+  embedded?: boolean;
 }) {
+  const L = useBi();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  useModalFocusTrap({ panel: panelRef, initial: closeRef, dismissible: true, onDismiss: onClose });
+  useModalFocusTrap({ panel: panelRef, initial: closeRef, dismissible: true, onDismiss: onClose, enabled: !embedded });
   const queryClient = useQueryClient();
 
   const [tab, setTab] = useState<DialogTab>('rules');
@@ -384,7 +390,7 @@ export function NotificationSettingsDialog({
       setDraft(result.config);
       setDirty(false);
       queryClient.setQueryData(['notifications-config'], result);
-      setSaveNotice({ ok: true, text: '通知设置已保存并立即生效' });
+      setSaveNotice({ ok: true, text: L("通知设置已保存并立即生效", "Notification settings saved and active") });
     },
     onError: error => {
       setSaveNotice({ ok: false, text: error instanceof Error ? error.message : String(error) });
@@ -425,12 +431,12 @@ export function NotificationSettingsDialog({
     setEnvState(nextEnv);
     if (permission === 'granted') {
       patchLocalPrefs({ systemPopup: true });
-      setLocalTestResult({ ok: true, detail: '浏览器通知权限已开启，现在可以测试弹窗提醒。' });
+      setLocalTestResult({ ok: true, detail: L("浏览器通知权限已开启，现在可以测试弹窗提醒。", "Browser notifications granted — click Test to preview.") });
     } else if (permission === 'denied') {
       patchLocalPrefs({ systemPopup: false });
-      setLocalTestResult({ ok: false, error: '浏览器拒绝了通知权限，请在地址栏左侧站点设置中手动允许。' });
+      setLocalTestResult({ ok: false, error: L("浏览器拒绝了通知权限，请在地址栏左侧站点设置中手动允许。", "Browser blocked notifications. Enable them in site settings next to the address bar.") });
     } else {
-      setLocalTestResult({ ok: false, error: '当前页面未授予通知权限。' });
+      setLocalTestResult({ ok: false, error: L("当前页面未授予通知权限。", "Notification permission not granted for this page.") });
     }
   };
 
@@ -440,8 +446,8 @@ export function NotificationSettingsDialog({
     if (desktop) {
       const result = await desktop.show({
         id: `test-${Date.now()}`,
-        title: 'AgentDock · 测试通知',
-        body: '桌面客户端原生通知已就绪，点击通知可直接拉起并定位会话。',
+        title: L("AgentDock · 测试通知", "AgentDock · Test Notification"),
+        body: L("桌面客户端原生通知已就绪，点击通知可直接拉起并定位会话。", "Native desktop notifications ready — clicking opens the session directly."),
         urgency: 'normal',
         silent: localPrefs.soundEnabled,
         bounce: localPrefs.desktopBounceAndBadge
@@ -450,8 +456,8 @@ export function NotificationSettingsDialog({
         void playNotificationSound(localPrefs.soundTheme, 'completed', localPrefs.soundVolume);
       }
       setLocalTestResult(result.shown
-        ? { ok: true, durationMs: Date.now() - startedAt, detail: '已发送系统原生通知（若未弹出请检查系统专注模式 / 勿扰设置）。' }
-        : { ok: false, durationMs: Date.now() - startedAt, error: result.reason || '系统未能展示通知' });
+        ? { ok: true, durationMs: Date.now() - startedAt, detail: L("已发送系统原生通知（若未弹出请检查系统专注模式 / 勿扰设置）。", "Sent system notification (check OS Focus / Do Not Disturb if unseen).") }
+        : { ok: false, durationMs: Date.now() - startedAt, error: result.reason || L("系统未能展示通知", "System could not display notification") });
       return;
     }
 
@@ -464,7 +470,7 @@ export function NotificationSettingsDialog({
       setLocalTestResult({
         ok: false,
         durationMs: Date.now() - startedAt,
-        error: '当前为非 HTTPS 局域网地址，浏览器禁止系统弹窗；已改用提示音反馈。'
+        error: L("当前为非 HTTPS 局域网地址，浏览器禁止系统弹窗；已改用提示音反馈。", "Browser blocks system popups on non-HTTPS LAN URLs; played sound alert instead.")
       });
       return;
     }
@@ -472,7 +478,7 @@ export function NotificationSettingsDialog({
       const permission = await requestBrowserNotificationPermission();
       setEnvState(detectBrowserNotificationEnv());
       if (permission !== 'granted') {
-        setLocalTestResult({ ok: false, error: '请先在浏览器提示中点击「允许通知」后再测试。' });
+        setLocalTestResult({ ok: false, error: L("请先在浏览器提示中点击「允许通知」后再测试。", "Click \"Allow\" in the browser permission prompt first.") });
         return;
       }
       patchLocalPrefs({ systemPopup: true });
@@ -480,8 +486,8 @@ export function NotificationSettingsDialog({
       setLocalTestResult({
         ok: false,
         error: currentEnv.status === 'denied'
-          ? '浏览器已禁用本站通知权限，请点击地址栏左侧图标重新允许。'
-          : '当前浏览器环境不支持 Web Notification API。'
+          ? L("浏览器已禁用本站通知权限，请点击地址栏左侧图标重新允许。", "Notifications are blocked for this site. Re-enable them in the address bar icon.")
+          : L("当前浏览器环境不支持 Web Notification API。", "This browser does not support the Web Notification API.")
       });
       return;
     }
@@ -490,13 +496,13 @@ export function NotificationSettingsDialog({
       if (localPrefs.soundEnabled) {
         void playNotificationSound(localPrefs.soundTheme, 'completed', localPrefs.soundVolume);
       }
-      const notification = new window.Notification('AgentDock · 测试通知', {
-        body: '浏览器通知已就绪，Agent 完成长任务或需要审批时将立即提醒你。',
+      const notification = new window.Notification(L("AgentDock · 测试通知", "AgentDock · Test Notification"), {
+        body: L("浏览器通知已就绪，Agent 完成长任务或需要审批时将立即提醒你。", "Browser notifications ready — you'll be alerted on completions or approvals."),
         icon: '/pwa-192.png',
         silent: localPrefs.soundEnabled
       });
       notification.onclick = () => { window.focus(); notification.close(); };
-      setLocalTestResult({ ok: true, durationMs: Date.now() - startedAt, detail: '已弹出浏览器系统通知并播放提示音。' });
+      setLocalTestResult({ ok: true, durationMs: Date.now() - startedAt, detail: L("已弹出浏览器系统通知并播放提示音。", "Displayed browser notification and played chime.") });
     } catch (error) {
       setLocalTestResult({ ok: false, durationMs: Date.now() - startedAt, error: error instanceof Error ? error.message : String(error) });
     }
@@ -506,7 +512,7 @@ export function NotificationSettingsDialog({
     setSoundTesting(kind);
     const played = await playNotificationSound(localPrefs.soundTheme, kind, localPrefs.soundVolume);
     if (!played) {
-      setLocalTestResult({ ok: false, error: '当前浏览器未能初始化 Web Audio 音频上下文。' });
+      setLocalTestResult({ ok: false, error: L("当前浏览器未能初始化 Web Audio 音频上下文。", "Could not initialize Web Audio context in this browser.") });
     }
     window.setTimeout(() => setSoundTesting(current => (current === kind ? null : current)), 480);
   };
@@ -519,21 +525,21 @@ export function NotificationSettingsDialog({
 
   const envBadge = useMemo(() => {
     if (envState.status === 'desktop') {
-      return <StatusPill tone="emerald"><Laptop size={11}/>桌面原生</StatusPill>;
+      return <StatusPill tone="emerald"><Laptop size={11}/>{L("桌面原生", "Desktop Native")}</StatusPill>;
     }
     if (envState.status === 'granted') {
-      return <StatusPill tone="emerald"><Check size={11}/>浏览器已授权</StatusPill>;
+      return <StatusPill tone="emerald"><Check size={11}/>{L("浏览器已授权", "Browser Allowed")}</StatusPill>;
     }
     if (envState.status === 'insecure_http') {
-      return <StatusPill tone="amber"><AlertTriangle size={11}/>局域网降级</StatusPill>;
+      return <StatusPill tone="amber"><AlertTriangle size={11}/>{L("局域网降级", "LAN Fallback")}</StatusPill>;
     }
     if (envState.status === 'denied') {
-      return <StatusPill tone="red"><BellOff size={11}/>浏览器已禁用</StatusPill>;
+      return <StatusPill tone="red"><BellOff size={11}/>{L("浏览器已禁用", "Browser Blocked")}</StatusPill>;
     }
     if (envState.status === 'default') {
-      return <StatusPill tone="zinc"><Bell size={11}/>未授权弹窗</StatusPill>;
+      return <StatusPill tone="zinc"><Bell size={11}/>{L("未授权弹窗", "Permission Needed")}</StatusPill>;
     }
-    return <StatusPill tone="zinc"><BellOff size={11}/>不支持弹窗</StatusPill>;
+    return <StatusPill tone="zinc"><BellOff size={11}/>{L("不支持弹窗", "Unsupported")}</StatusPill>;
   }, [envState.status]);
 
   const lastDelivery = configQuery.data?.lastDelivery ?? {};
@@ -542,15 +548,15 @@ export function NotificationSettingsDialog({
   const tabItems: Array<{ id: DialogTab; label: string; mobileLabel: string; icon: ReactNode; dot?: 'emerald' | 'amber' }> = [
     {
       id: 'rules',
-      label: '触发与降噪',
-      mobileLabel: '触发降噪',
+      label: L("触发与降噪", "Triggers & Noise"),
+      mobileLabel: L("触发降噪", "Triggers"),
       icon: <SlidersHorizontal size={13}/>,
       dot: draft.enabled ? 'emerald' : undefined
     },
     {
       id: 'local',
-      label: '本机提醒',
-      mobileLabel: '本机提醒',
+      label: L("本机提醒", "Local Alerts"),
+      mobileLabel: L("本机提醒", "Local Alerts"),
       icon: <BellRing size={13}/>,
       dot: envState.status === 'insecure_http' || envState.status === 'denied'
         ? 'amber'
@@ -558,15 +564,15 @@ export function NotificationSettingsDialog({
     },
     {
       id: 'lark',
-      label: '飞书推送',
-      mobileLabel: '飞书推送',
+      label: L("飞书推送", "Lark Push"),
+      mobileLabel: L("飞书推送", "Lark Push"),
       icon: <Send size={13}/>,
       dot: draft.lark.enabled ? 'emerald' : undefined
     },
     {
       id: 'extensions',
-      label: activeExtensionCount > 0 ? `Webhook 与 Hook (${activeExtensionCount})` : 'Webhook 与 Hook',
-      mobileLabel: activeExtensionCount > 0 ? `扩展(${activeExtensionCount})` : '扩展',
+      label: activeExtensionCount > 0 ? L(`Webhook 与 Hook (${activeExtensionCount})`, `Webhooks & Hooks (${activeExtensionCount})`) : L("Webhook 与 Hook", "Webhooks & Hooks"),
+      mobileLabel: activeExtensionCount > 0 ? L(`扩展(${activeExtensionCount})`, `Ext (${activeExtensionCount})`) : L("扩展", "Extensions"),
       icon: <Webhook size={13}/>,
       dot: activeExtensionCount > 0 ? 'emerald' : undefined
     }
@@ -590,64 +596,67 @@ export function NotificationSettingsDialog({
     if (expandedWebhookId === id) setExpandedWebhookId(null);
   };
 
-  return (
-    <div
-      className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-black/40 p-0 sm:p-4"
-      onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}
-    >
+  const content = (
       <div
         ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="通知设置"
-        className="ui-dialog flex h-[100dvh] w-full max-w-none flex-col overflow-hidden rounded-none border-0 border-zinc-200 bg-white shadow-[0_24px_80px_rgba(0,0,0,.28)] sm:h-[min(740px,calc(100dvh-2.5rem))] sm:max-w-[760px] sm:rounded-[14px] sm:border"
+        role={embedded ? undefined : 'dialog'}
+        aria-modal={embedded ? undefined : 'true'}
+        aria-label={embedded ? undefined : L("通知设置", "Notification Settings")}
+        className={embedded
+          ? 'flex min-h-0 flex-1 flex-col overflow-hidden bg-white'
+          : 'ui-dialog flex h-[100dvh] w-full max-w-none flex-col overflow-hidden rounded-none border-0 border-zinc-200 bg-white shadow-[0_24px_80px_rgba(0,0,0,.28)] sm:h-[min(740px,calc(100dvh-2.5rem))] sm:max-w-[760px] sm:rounded-[14px] sm:border'}
       >
         {/* 顶栏 */}
-        <div className="flex shrink-0 items-center justify-between gap-2.5 border-b border-zinc-100 px-3.5 py-3 sm:px-5">
+        <div className={`flex shrink-0 items-center justify-between gap-2.5 border-b border-zinc-100 ${embedded ? 'px-4 py-2.5 sm:px-5' : 'px-3.5 py-3 sm:px-5'}`}>
           <div className="flex min-w-0 flex-1 items-center gap-3">
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-zinc-200 bg-zinc-50 text-zinc-800">
-              <Bell size={17} strokeWidth={1.9}/>
-            </span>
+            {!embedded && (
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-zinc-200 bg-zinc-50 text-zinc-800">
+                <Bell size={17} strokeWidth={1.9}/>
+              </span>
+            )}
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-[16px] font-semibold tracking-[-.01em] text-zinc-900">通知设置</h2>
+                <h2 className={`${embedded ? 'text-[14px]' : 'text-[16px]'} font-semibold tracking-[-.01em] text-zinc-900`}>{L("通知渠道与规则", "Notification Channels & Rules")}</h2>
                 {envBadge}
               </div>
-              <p className="mt-0.5 hidden truncate text-[12px] text-zinc-500 sm:block">
-                Agent 完成、失败或等待审批时，通过本机、飞书或 Webhook 及时反馈
+              <p className="mt-0.5 hidden text-[12px] leading-[1.45] text-zinc-500 sm:block">
+                {L("Agent 完成、失败或等待审批时，通过本机、飞书或 Webhook 及时反馈", "Alerts via desktop, Lark, or Webhooks on completion, failure, or approval")}
               </p>
               <p className="mt-0.5 truncate text-[11.5px] text-zinc-500 sm:hidden">
-                完成、失败或等待审批时及时提醒
+                
+                {L("完成、失败或等待审批时及时提醒", "Alerts on completion, failure, or approval")}
               </p>
             </div>
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
             <label className="flex cursor-pointer items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50/80 px-2.5 py-1 text-[12px] font-medium text-zinc-700">
-              <span className="max-sm:hidden">{draft.enabled ? '通知已开启' : '通知已暂停'}</span>
+              <span className="max-sm:hidden">{draft.enabled ? L("通知已开启", "Notifications On") : L("通知已暂停", "Notifications Paused")}</span>
               <Switch
                 size="small"
-                aria-label="通知总开关"
+                aria-label={L("通知总开关", "Master notification toggle")}
                 checked={draft.enabled}
                 onChange={checked => patchDraft(current => ({ ...current, enabled: checked }))}
               />
             </label>
-            <button
-              ref={closeRef}
-              type="button"
-              onClick={onClose}
-              aria-label="关闭通知设置"
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-800"
-            >
-              <X size={16}/>
-            </button>
+            {!embedded && (
+              <button
+                ref={closeRef}
+                type="button"
+                onClick={onClose}
+                aria-label={L("关闭通知设置", "Close notification settings")}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-800"
+              >
+                <X size={16}/>
+              </button>
+            )}
           </div>
         </div>
 
         {/* 导航分区栏 */}
         <div
           role="tablist"
-          aria-label="通知设置分区"
+          aria-label={L("通知设置分区", "Notification sections")}
           className="grid shrink-0 grid-cols-4 gap-1 border-b border-zinc-100 bg-zinc-50/70 px-2.5 py-2 sm:flex sm:items-center sm:gap-1 sm:px-5"
         >
           {tabItems.map(item => {
@@ -685,14 +694,14 @@ export function NotificationSettingsDialog({
           <div className="min-h-0 flex-1 overflow-y-auto bg-zinc-50/40 px-3.5 py-4 sm:px-5">
             {configQuery.isLoading ? (
               <div className="flex items-center justify-center gap-2 py-12 text-[13px] text-zinc-400">
-                <Spinner size={14}/>正在加载通知设置…
+                <Spinner size={14}/>{L("正在加载通知设置…", "Loading notification settings…")}
               </div>
             ) : (
               <div className="space-y-4">
                 {!draft.enabled && (
                   <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-[12px] leading-5 text-amber-800">
                     <PauseCircle size={15} className="mt-0.5 shrink-0 text-amber-600"/>
-                    <div>全局通知总开关已暂停，Agent 轮次结束将不再推送任何通道提醒；点击右上角开关可随时恢复。</div>
+                    <div>{L("全局通知总开关已暂停，Agent 轮次结束将不再推送任何通道提醒；点击右上角开关可随时恢复。", "Global notifications are paused. Toggle the master switch above to resume alerts.")}</div>
                   </div>
                 )}
 
@@ -700,8 +709,8 @@ export function NotificationSettingsDialog({
                 {tab === 'rules' && (
                   <>
                     <SectionCard
-                      title="触发事件"
-                      description="选择哪些运行状态变化需要通知；用户手动点击「停止 / 中断」永远不会触发打扰。"
+                      title={L("触发事件", "Trigger Events")}
+                      description={L("选择哪些运行状态变化需要通知；用户手动点击「停止 / 中断」永远不会触发打扰。", "Choose which state changes notify you; manual stops never trigger alerts.")}
                       icon={<Bell size={14}/>}
                       muted={!draft.enabled}
                     >
@@ -710,24 +719,24 @@ export function NotificationSettingsDialog({
                           {
                             key: 'completed' as const,
                             checked: draft.events.completed,
-                            title: '正常完成',
-                            desc: 'Agent 产出最终结果并结束本轮',
+                            title: L("正常完成", "Completed"),
+                            desc: L("Agent 产出最终结果并结束本轮", "Agent produced final output and finished the turn"),
                             dot: 'bg-emerald-500',
                             onToggle: (v: boolean) => patchDraft(c => ({ ...c, events: { ...c.events, completed: v } }))
                           },
                           {
                             key: 'failed' as const,
                             checked: draft.events.failed,
-                            title: '失败报错',
-                            desc: '运行出错、超时或异常退出（无视时长阈值）',
+                            title: L("失败报错", "Failed / Error"),
+                            desc: L("运行出错、超时或异常退出（无视时长阈值）", "Errors, timeouts, or crashes (always alerts immediately)"),
                             dot: 'bg-red-500',
                             onToggle: (v: boolean) => patchDraft(c => ({ ...c, events: { ...c.events, failed: v } }))
                           },
                           {
                             key: 'waitingApproval' as const,
                             checked: draft.events.waitingApproval,
-                            title: '等待审批 / 拍板',
-                            desc: '高危工具请求授权，或小猫主动请你拍板',
+                            title: L("等待审批 / 拍板", "Approval / Input Needed"),
+                            desc: L("高危工具请求授权，或小猫主动请你拍板", "High-risk permission request or companion needs your decision"),
                             dot: 'bg-orange-500',
                             onToggle: (v: boolean) => patchDraft(c => ({ ...c, events: { ...c.events, waitingApproval: v } }))
                           }
@@ -764,19 +773,19 @@ export function NotificationSettingsDialog({
                       </div>
                       <div className="flex items-center gap-1.5 border-t border-zinc-100 bg-zinc-50/60 px-4 py-2 text-[11.5px] text-zinc-500">
                         <Info size={13} className="shrink-0 text-zinc-400"/>
-                        <span>已内置硬保护：你亲手点击「停止 / 中断」或归档会话时，绝不发送通知。</span>
+                        <span>{L("已内置硬保护：你亲手点击「停止 / 中断」或归档会话时，绝不发送通知。", "Built-in safeguard: manually stopping or archiving a session never sends alerts.")}</span>
                       </div>
                     </SectionCard>
 
                     <SectionCard
-                      title="防刷屏与降噪"
-                      description="过滤 2 秒快问快答与密集批处理，只把真正值得关注的时刻送达给你。"
+                      title={L("防刷屏与降噪", "Anti-Spam & Quiet Rules")}
+                      description={L("过滤 2 秒快问快答与密集批处理，只把真正值得关注的时刻送达给你。", "Filter quick 2-second exchanges and noisy bursts.")}
                       icon={<Clock size={14}/>}
                       muted={!draft.enabled}
                     >
                       <SettingRow
-                        title="最短运行时长阈值"
-                        description="仅运行超过该时长的「正常完成」才通知；失败报错与等待审批始终立即提醒。"
+                        title={L("最短运行时长阈值", "Minimum Duration Threshold")}
+                        description={L("仅运行超过该时长的「正常完成」才通知；失败报错与等待审批始终立即提醒。", "Only notify on completions longer than this duration; failures and approvals always alert.")}
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <SegmentedPills
@@ -790,7 +799,7 @@ export function NotificationSettingsDialog({
                             max={3600}
                             value={draft.antiSpam.minDurationSec}
                             suffix="s"
-                            aria-label="自定义最短运行秒数"
+                            aria-label={L("自定义最短运行秒数", "Custom minimum seconds")}
                             className="!w-20 font-mono"
                             onChange={value => patchDraft(c => ({
                               ...c,
@@ -801,23 +810,23 @@ export function NotificationSettingsDialog({
                       </SettingRow>
 
                       <SettingRow
-                        title="短窗口合并节流"
-                        description="远程通道（飞书 / Webhook / Hook）在短窗口内收到多条同类完成事件时合并为一条摘要。"
+                        title={L("短窗口合并节流", "Short-Window Coalescing")}
+                        description={L("远程通道（飞书 / Webhook / Hook）在短窗口内收到多条同类完成事件时合并为一条摘要。", "Combines multiple remote alerts within a short window into one digest.")}
                       >
                         <SegmentedPills
                           value={draft.antiSpam.coalesceWindowMs}
                           options={[
-                            { value: 0, label: '不合并' },
-                            { value: 3000, label: '3 秒' },
-                            { value: 8000, label: '8 秒' }
+                            { value: 0, label: L("不合并", "Off") },
+                            { value: 3000, label: L("3 秒", "3s") },
+                            { value: 8000, label: L("8 秒", "8s") }
                           ]}
                           onChange={val => patchDraft(c => ({ ...c, antiSpam: { ...c.antiSpam, coalesceWindowMs: val } }))}
                         />
                       </SettingRow>
 
                       <CompactSwitchRow
-                        title="仅离开电脑时推送远程通道"
-                        description="开启后，只要桌面客户端或网页前台活跃，飞书 / Webhook / Hook 自动静默，避免在电脑前震动手机。"
+                        title={L("仅离开电脑时推送远程通道", "Remote Push Only When Away")}
+                        description={L("开启后，只要桌面客户端或网页前台活跃，飞书 / Webhook / Hook 自动静默，避免在电脑前震动手机。", "Mutes Lark, Webhooks, and Hooks while AgentDock is active on your screen.")}
                       >
                         <div className="flex items-center gap-2">
                           {draft.antiSpam.remoteOnlyWhenAway && (
@@ -827,7 +836,7 @@ export function NotificationSettingsDialog({
                               max={3600}
                               value={draft.antiSpam.awayAfterSec}
                               suffix="s"
-                              aria-label="离机判定秒数"
+                              aria-label={L("离机判定秒数", "Idle away threshold (seconds)")}
                               className="!w-[72px] font-mono"
                               onChange={value => patchDraft(c => ({
                                 ...c,
@@ -837,7 +846,7 @@ export function NotificationSettingsDialog({
                           )}
                           <Switch
                             size="small"
-                            aria-label="仅离开电脑时推送远程通道"
+                            aria-label={L("仅离开电脑时推送远程通道", "Remote Push Only When Away")}
                             checked={draft.antiSpam.remoteOnlyWhenAway}
                             onChange={checked => patchDraft(c => ({ ...c, antiSpam: { ...c.antiSpam, remoteOnlyWhenAway: checked } }))}
                           />
@@ -846,18 +855,18 @@ export function NotificationSettingsDialog({
                     </SectionCard>
 
                     <SectionCard
-                      title="会话范围"
-                      description="按会话来源细粒度控制，避免后台批处理或便签并发派活时消息刷屏。"
+                      title={L("会话范围", "Session Scopes")}
+                      description={L("按会话来源细粒度控制，避免后台批处理或便签并发派活时消息刷屏。", "Control alerts per session source to prevent background noise.")}
                       icon={<SlidersHorizontal size={14}/>}
                       muted={!draft.enabled}
                     >
                       <CompactSwitchRow
-                        title="普通会话与主会话"
-                        description="包括本地新建会话、外部导入会话、小猫主会话及手动打开的 /btw 侧边聊天。"
+                        title={L("普通会话与主会话", "Regular & Main Sessions")}
+                        description={L("包括本地新建会话、外部导入会话、小猫主会话及手动打开的 /btw 侧边聊天。", "Local sessions, imported sessions, companion main session, and manual /btw side chats.")}
                       >
                         <Switch
                           size="small"
-                          aria-label="通知普通会话与主会话"
+                          aria-label={L("通知普通会话与主会话", "Notify for regular & main sessions")}
                           checked={draft.scopes.normalSessions}
                           onChange={checked => patchDraft(c => ({ ...c, scopes: { ...c.scopes, normalSessions: checked } }))}
                         />
@@ -865,29 +874,29 @@ export function NotificationSettingsDialog({
                       <CompactSwitchRow
                         title={
                           <span className="flex flex-wrap items-center gap-1.5">
-                            <span>小猫派出的便签子会话</span>
-                            <StatusPill tone="zinc">默认静音</StatusPill>
+                            <span>{L("小猫派出的便签子会话", "Companion Delegated Side Sessions")}</span>
+                            <StatusPill tone="zinc">{L("默认静音", "Muted by default")}</StatusPill>
                           </span>
                         }
-                        description="小猫同时派多个侧边任务时，默认静默子会话、只由主会话统一验收汇报；如需逐个提醒可手动开启。"
+                        description={L("小猫同时派多个侧边任务时，默认静默子会话、只由主会话统一验收汇报；如需逐个提醒可手动开启。", "Muted by default so only the main companion reports back; enable for per-subtask alerts.")}
                       >
                         <Switch
                           size="small"
-                          aria-label="通知小猫派出的便签子会话"
+                          aria-label={L("通知小猫派出的便签子会话", "Notify for companion subtasks")}
                           checked={draft.scopes.assistantSubtasks}
                           onChange={checked => patchDraft(c => ({ ...c, scopes: { ...c.scopes, assistantSubtasks: checked } }))}
                         />
                       </CompactSwitchRow>
                       <SettingRow
-                        title="定时任务会话"
-                        description="后台周期执行的定时任务；推荐设为「仅失败」，异常时第一时间知晓。"
+                        title={L("定时任务会话", "Scheduled Sessions")}
+                        description={L("后台周期执行的定时任务；推荐设为「仅失败」，异常时第一时间知晓。", "Background recurring tasks — \"Failures Only\" is recommended.")}
                       >
                         <SegmentedPills<ScheduledNotifyMode>
                           value={draft.scopes.scheduledSessions}
                           options={[
-                            { value: 'failed_only', label: '仅失败' },
-                            { value: 'all', label: '全部' },
-                            { value: 'off', label: '关闭' }
+                            { value: 'failed_only', label: L("仅失败", "Failures Only") },
+                            { value: 'all', label: L("全部", "All") },
+                            { value: 'off', label: L("关闭", "Off") }
                           ]}
                           onChange={val => patchDraft(c => ({ ...c, scopes: { ...c.scopes, scheduledSessions: val } }))}
                         />
@@ -904,10 +913,11 @@ export function NotificationSettingsDialog({
                       <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] leading-5 text-amber-800">
                         <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600"/>
                         <div className="min-w-0 flex-1">
-                          <div className="font-semibold">当前处于非 HTTPS 局域网地址，浏览器禁止系统弹窗</div>
+                          <div className="font-semibold">{L("当前处于非 HTTPS 局域网地址，浏览器禁止系统弹窗", "Browser blocks system popups on non-HTTPS LAN URLs")}</div>
                           <p className="mt-0.5">
-                            受浏览器安全策略限制，<code className="rounded bg-white/70 px-1 font-mono text-[11px]">{envState.origin || 'http://'}</code> 下无法调用 Web Notification API。
-                            <strong>提示音、页签标题闪烁与侧边栏未读圆点已自动降级接管</strong>；如需原生系统弹窗，可使用 AgentDock 桌面客户端、通过 HTTPS 访问，或在「飞书推送」中开启手机提醒。
+                            
+                            {L("受浏览器安全策略限制，", "Due to browser security rules, ")}<code className="rounded bg-white/70 px-1 font-mono text-[11px]">{envState.origin || 'http://'}</code>  {L("下无法调用 Web Notification API。", " cannot invoke Web Notification API.")}
+                            <strong>{L("提示音、页签标题闪烁与侧边栏未读圆点已自动降级接管", "Sound chimes, tab title flashes, and sidebar unread dots work automatically instead")}</strong>{L("；如需原生系统弹窗，可使用 AgentDock 桌面客户端、通过 HTTPS 访问，或在「飞书推送」中开启手机提醒。", "; for native popups, use the desktop app, HTTPS, or Lark Push.")}
                           </p>
                         </div>
                       </div>
@@ -917,18 +927,18 @@ export function NotificationSettingsDialog({
                       <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[12px] leading-5 text-red-700">
                         <BellOff size={15} className="mt-0.5 shrink-0 text-red-500"/>
                         <div className="min-w-0 flex-1">
-                          <div className="font-semibold">浏览器已拒绝本站的通知权限</div>
-                          <p className="mt-0.5">请点击浏览器地址栏左侧的站点信息图标，将「通知」改为「允许」，然后刷新或重试。</p>
+                          <div className="font-semibold">{L("浏览器已拒绝本站的通知权限", "Browser blocked notifications for this site")}</div>
+                          <p className="mt-0.5">{L("请点击浏览器地址栏左侧的站点信息图标，将「通知」改为「允许」，然后刷新或重试。", "Click the site info icon in the address bar, set Notifications to Allow, then reload.")}</p>
                         </div>
                       </div>
                     )}
 
                     <SectionCard
-                      title={envState.isDesktop ? '桌面客户端原生通知' : '浏览器系统通知'}
+                      title={envState.isDesktop ? L("桌面客户端原生通知", "Desktop Native Notifications") : L("浏览器系统通知", "Browser System Notifications")}
                       description={
                         envState.isDesktop
-                          ? `复用 Electron 系统原生通知（${desktopCaps?.platform === 'darwin' ? 'macOS 通知中心' : desktopCaps?.platform === 'win32' ? 'Windows 通知中心' : '系统桌面通知'}），不受局域网 HTTP 限制，点击通知可直接唤起窗口定位会话。`
-                          : '当页面在后台或切到其他会话时弹出桌面横幅；点击横幅立即切回对应会话。偏好仅保存在本设备。'
+                          ? L(`复用 Electron 系统原生通知（${desktopCaps?.platform === 'darwin' ? 'macOS 通知中心' : desktopCaps?.platform === 'win32' ? 'Windows 通知中心' : '系统桌面通知'}），不受局域网 HTTP 限制，点击通知可直接唤起窗口定位会话。`, `Uses native OS notifications (${desktopCaps?.platform === 'darwin' ? 'macOS Notification Center' : desktopCaps?.platform === 'win32' ? 'Windows Notification Center' : 'Desktop Notifications'}) without HTTP LAN restrictions.`)
+                          : L("当页面在后台或切到其他会话时弹出桌面横幅；点击横幅立即切回对应会话。偏好仅保存在本设备。", "Shows a desktop banner when in the background or another session; clicking jumps straight there. Saved per device.")
                       }
                       icon={envState.isDesktop ? <Laptop size={14}/> : <BellRing size={14}/>}
                       badge={envBadge}
@@ -941,7 +951,7 @@ export function NotificationSettingsDialog({
                               onClick={() => void handleRequestBrowserPermission()}
                               className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[12px] font-medium text-white transition-colors hover:bg-zinc-700"
                             >
-                              <Bell size={12}/>一键授权
+                              <Bell size={12}/>{L("一键授权", "Grant Access")}
                             </button>
                           )}
                           <button
@@ -949,22 +959,22 @@ export function NotificationSettingsDialog({
                             onClick={() => void handleTestLocalPopup()}
                             className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-[12px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
                           >
-                            <Send size={12}/>发送测试
+                            <Send size={12}/>{L("发送测试", "Send Test")}
                           </button>
                         </div>
                       }
                     >
                       <CompactSwitchRow
-                        title={envState.isDesktop ? '开启桌面系统弹窗' : '开启浏览器系统弹窗'}
+                        title={envState.isDesktop ? L("开启桌面系统弹窗", "Enable Desktop Popups") : L("开启浏览器系统弹窗", "Enable Browser Popups")}
                         description={
                           envState.status === 'insecure_http'
-                            ? '当前局域网 HTTP 环境已自动降级为提示音与页签角标'
-                            : '仅对当前设备生效；多个标签页同时打开时自动去重，不重复弹窗'
+                            ? L("当前局域网 HTTP 环境已自动降级为提示音与页签角标", "Auto-degraded to chimes & tab badges on HTTP LAN")
+                            : L("仅对当前设备生效；多个标签页同时打开时自动去重，不重复弹窗", "Per-device setting; deduplicated automatically across multiple open tabs")
                         }
                       >
                         <Switch
                           size="small"
-                          aria-label="开启系统弹窗通知"
+                          aria-label={L("开启系统弹窗通知", "Enable system popup notifications")}
                           disabled={envState.status === 'insecure_http' || envState.status === 'unsupported'}
                           checked={localPrefs.systemPopup && envState.status !== 'insecure_http' && envState.status !== 'denied'}
                           onChange={checked => {
@@ -978,14 +988,14 @@ export function NotificationSettingsDialog({
                       </CompactSwitchRow>
 
                       <SettingRow
-                        title="触发时机（前台智能抑制）"
-                        description="正在当前窗口查看该会话时永远静默；可选择切到别的会话时是否弹窗。"
+                        title={L("触发时机（前台智能抑制）", "When to Notify (Foreground Suppression)")}
+                        description={L("正在当前窗口查看该会话时永远静默；可选择切到别的会话时是否弹窗。", "Always muted for the session currently on screen.")}
                       >
                         <SegmentedPills
                           value={localPrefs.popupWhen}
                           options={[
-                            { value: 'inactive_session', label: '后台或看其他会话' },
-                            { value: 'background_only', label: '仅窗口在后台' }
+                            { value: 'inactive_session', label: L("后台或看其他会话", "Background or Other Session") },
+                            { value: 'background_only', label: L("仅窗口在后台", "Background Window Only") }
                           ]}
                           onChange={val => patchLocalPrefs({ popupWhen: val })}
                         />
@@ -993,12 +1003,12 @@ export function NotificationSettingsDialog({
 
                       {envState.isDesktop && (
                         <CompactSwitchRow
-                          title="Dock 弹跳与未读角标"
-                          description="窗口未聚焦时在 macOS Dock / Windows 任务栏轻跳提示并显示未读数量，回到窗口自动清除。"
+                          title={L("Dock 弹跳与未读角标", "Dock Bounce & Unread Badge")}
+                          description={L("窗口未聚焦时在 macOS Dock / Windows 任务栏轻跳提示并显示未读数量，回到窗口自动清除。", "Bounces the Dock / taskbar icon and shows unread count while unfocused.")}
                         >
                           <Switch
                             size="small"
-                            aria-label="开启 Dock 弹跳与角标"
+                            aria-label={L("开启 Dock 弹跳与角标", "Enable Dock bounce & badge")}
                             checked={localPrefs.desktopBounceAndBadge}
                             onChange={checked => patchLocalPrefs({ desktopBounceAndBadge: checked })}
                           />
@@ -1013,14 +1023,14 @@ export function NotificationSettingsDialog({
                     </SectionCard>
 
                     <SectionCard
-                      title="轻柔提示音"
-                      description="内置 Web Audio 实时合成，零外部音频加载延迟；自动区分完成、失败与等待审批音色。"
+                      title={L("轻柔提示音", "Subtle Notification Chime")}
+                      description={L("内置 Web Audio 实时合成，零外部音频加载延迟；自动区分完成、失败与等待审批音色。", "Zero-latency Web Audio synthesis with distinct tones for done, failed, and approval.")}
                       icon={localPrefs.soundEnabled ? <Volume2 size={14}/> : <VolumeX size={14}/>}
-                      badge={localPrefs.soundEnabled ? <StatusPill tone="emerald">已开启</StatusPill> : <StatusPill tone="zinc">已静音</StatusPill>}
+                      badge={localPrefs.soundEnabled ? <StatusPill tone="emerald">{L("已开启", "On")}</StatusPill> : <StatusPill tone="zinc">{L("已静音", "Muted")}</StatusPill>}
                       action={
                         <Switch
                           size="small"
-                          aria-label="开启提示音"
+                          aria-label={L("开启提示音", "Enable notification sound")}
                           checked={localPrefs.soundEnabled}
                           onChange={checked => patchLocalPrefs({ soundEnabled: checked })}
                         />
@@ -1053,13 +1063,13 @@ export function NotificationSettingsDialog({
 
                         <div className="flex flex-col gap-2.5 rounded-xl border border-zinc-200/80 bg-zinc-50/70 px-3.5 py-2.5 sm:flex-row sm:items-center sm:gap-3">
                           <div className="flex flex-1 items-center gap-3">
-                            <span className="shrink-0 text-[12px] font-medium text-zinc-600">音量</span>
+                            <span className="shrink-0 text-[12px] font-medium text-zinc-600">{L("音量", "Volume")}</span>
                             <input
                               type="range"
                               min={0.1}
                               max={1}
                               step={0.05}
-                              aria-label="提示音音量"
+                              aria-label={L("提示音音量", "Chime volume")}
                               value={localPrefs.soundVolume}
                               onChange={event => patchLocalPrefs({ soundVolume: Number(event.target.value) })}
                               className="h-1.5 min-w-[96px] flex-1 cursor-pointer accent-zinc-900"
@@ -1070,9 +1080,9 @@ export function NotificationSettingsDialog({
                           </div>
                           <div className="grid grid-cols-3 gap-1.5 sm:flex sm:shrink-0 sm:items-center">
                             {([
-                              { kind: 'completed' as const, label: '试听完成' },
-                              { kind: 'waiting_approval' as const, label: '审批' },
-                              { kind: 'failed' as const, label: '失败' }
+                              { kind: 'completed' as const, label: L("试听完成", "Test Done") },
+                              { kind: 'waiting_approval' as const, label: L("审批", "Approval") },
+                              { kind: 'failed' as const, label: L("失败", "Failed") }
                             ]).map(sample => (
                               <button
                                 key={sample.kind}
@@ -1094,28 +1104,28 @@ export function NotificationSettingsDialog({
                     </SectionCard>
 
                     <SectionCard
-                      title="页面角标与侧边栏轻提示"
-                      description="零权限依赖，在所有浏览器与局域网环境下均稳定生效。"
+                      title={L("页面角标与侧边栏轻提示", "Tab Badge & Sidebar Indicators")}
+                      description={L("零权限依赖，在所有浏览器与局域网环境下均稳定生效。", "Requires zero permissions and works in every browser and LAN setup.")}
                       icon={<Bell size={14}/>}
                     >
                       <CompactSwitchRow
-                        title="侧边栏未读完成点"
-                        description="其他会话完成或需要审批时，在侧边栏会话行右侧亮起柔和圆点，点进即消。"
+                        title={L("侧边栏未读完成点", "Sidebar Unread Dot")}
+                        description={L("其他会话完成或需要审批时，在侧边栏会话行右侧亮起柔和圆点，点进即消。", "Highlights inactive sessions with a subtle dot until opened.")}
                       >
                         <Switch
                           size="small"
-                          aria-label="开启侧边栏未读完成点"
+                          aria-label={L("开启侧边栏未读完成点", "Enable sidebar unread dot")}
                           checked={localPrefs.sidebarUnreadDot}
                           onChange={checked => patchLocalPrefs({ sidebarUnreadDot: checked })}
                         />
                       </CompactSwitchRow>
                       <CompactSwitchRow
-                        title="浏览器标签页标题提醒"
-                        description="标签页处于后台时显示 (N) 未读计数并温和交替提示，切回页面即恢复。"
+                        title={L("浏览器标签页标题提醒", "Browser Tab Title Alert")}
+                        description={L("标签页处于后台时显示 (N) 未读计数并温和交替提示，切回页面即恢复。", "Displays (N) unread count in the tab title while in the background.")}
                       >
                         <Switch
                           size="small"
-                          aria-label="开启标签页标题提醒"
+                          aria-label={L("开启标签页标题提醒", "Enable tab title alerts")}
                           checked={localPrefs.tabTitleBadge}
                           onChange={checked => patchLocalPrefs({ tabTitleBadge: checked })}
                         />
@@ -1127,16 +1137,16 @@ export function NotificationSettingsDialog({
                 {/* ==================== TAB 3: 飞书机器人推送 ==================== */}
                 {tab === 'lark' && (
                   <SectionCard
-                    title="飞书机器人主动推送"
-                    description="复用已绑定的飞书自建机器人，向本人私聊、指定群或当前托管群发送状态卡片与会话直达链接，离开电脑也能用手机掌握进度。"
+                    title={L("飞书机器人主动推送", "Lark Bot Push Notifications")}
+                    description={L("复用已绑定的飞书自建机器人，向本人私聊、指定群或当前托管群发送状态卡片与会话直达链接，离开电脑也能用手机掌握进度。", "Uses a configured Lark bot to push status cards and direct session links to your DM or group.")}
                     icon={<Send size={14}/>}
                     stackActionOnMobile
                     badge={
                       !larkBots.length
-                        ? <StatusPill tone="zinc">未绑定机器人</StatusPill>
+                        ? <StatusPill tone="zinc">{L("未绑定机器人", "No Bot Bound")}</StatusPill>
                         : draft.lark.enabled
-                          ? <StatusPill tone="emerald"><Check size={11}/>已启用</StatusPill>
-                          : <StatusPill tone="zinc">未开启</StatusPill>
+                          ? <StatusPill tone="emerald"><Check size={11}/>{L("已启用", "Enabled")}</StatusPill>
+                          : <StatusPill tone="zinc">{L("未开启", "Off")}</StatusPill>
                     }
                     action={
                       larkBots.length > 0 ? (
@@ -1148,11 +1158,12 @@ export function NotificationSettingsDialog({
                             className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-[12px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50"
                           >
                             {testingKey === 'lark' ? <Spinner size={12}/> : <Send size={12}/>}
-                            发送测试
+                            
+                            {L("发送测试", "Send Test")}
                           </button>
                           <Switch
                             size="small"
-                            aria-label="启用飞书机器人推送"
+                            aria-label={L("启用飞书机器人推送", "Enable Lark bot push")}
                             checked={draft.lark.enabled}
                             onChange={checked => patchDraft(c => ({
                               ...c,
@@ -1167,9 +1178,10 @@ export function NotificationSettingsDialog({
                       <div>
                         <div className="flex flex-col items-start gap-3.5 p-5 sm:flex-row sm:items-center sm:justify-between">
                           <div className="min-w-0">
-                            <div className="text-[13.5px] font-semibold text-zinc-900">尚未绑定飞书自建机器人</div>
+                            <div className="text-[13.5px] font-semibold text-zinc-900">{L("尚未绑定飞书自建机器人", "No Lark Bot Configured Yet")}</div>
                             <p className="mt-1 text-[12px] leading-5 text-zinc-500">
-                              绑定后即可自动向本人私聊或托管群推送状态卡片；如果你只需向飞书群发提醒，也可直接配置飞书自定义群机器人 Webhook。
+                              
+                              {L("绑定后即可自动向本人私聊或托管群推送状态卡片；如果你只需向飞书群发提醒，也可直接配置飞书自定义群机器人 Webhook。", "Configure a Lark bot to push status cards to DMs or hosted groups, or use a Lark Group Webhook instead.")}
                             </p>
                           </div>
                           <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
@@ -1178,7 +1190,8 @@ export function NotificationSettingsDialog({
                               onClick={onOpenLarkSettings}
                               className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 text-[12px] font-medium text-white transition-colors hover:bg-zinc-700"
                             >
-                              前往飞书设置
+                              
+                              {L("前往飞书设置", "Go to Lark Settings")}
                               <ExternalLink size={12}/>
                             </button>
                             <button
@@ -1187,7 +1200,8 @@ export function NotificationSettingsDialog({
                               className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-[12px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
                             >
                               <Webhook size={12}/>
-                              改用飞书群 Webhook
+                              
+                              {L("改用飞书群 Webhook", "Use Lark Webhook Instead")}
                             </button>
                           </div>
                         </div>
@@ -1195,16 +1209,16 @@ export function NotificationSettingsDialog({
                         <div className="grid gap-2.5 border-t border-zinc-100 bg-zinc-50/50 p-4 sm:grid-cols-3">
                           {[
                             {
-                              title: '智能跟随原群',
-                              desc: '已托管给飞书群的会话自动回推原群，未托管会话直达本人私聊或指定提醒群。'
+                              title: L("智能跟随原群", "Smart Group Routing"),
+                              desc: L("已托管给飞书群的会话自动回推原群，未托管会话直达本人私聊或指定提醒群。", "Routes hosted sessions back to their group; others go to your DM or fallback target.")
                             },
                             {
-                              title: '卡片摘要 + 直达按钮',
-                              desc: '包含状态、耗时、最终回答前 200 字纯文本摘要，并附自动签名的直达会话链接。'
+                              title: L("卡片摘要 + 直达按钮", "Summary Card + Direct Link"),
+                              desc: L("包含状态、耗时、最终回答前 200 字纯文本摘要，并附自动签名的直达会话链接。", "Includes status, duration, 200-char reply preview, and a signed session link.")
                             },
                             {
-                              title: '离机推送防打扰',
-                              desc: '配合「仅离开电脑时推送」在桌前自动静默，原群已有机器人回复时自动去重。'
+                              title: L("离机推送防打扰", "Away-Only Quiet Mode"),
+                              desc: L("配合「仅离开电脑时推送」在桌前自动静默，原群已有机器人回复时自动去重。", "Stays silent while you're active at the keyboard and avoids duplicate group cards.")
                             }
                           ].map(feature => (
                             <div
@@ -1220,8 +1234,8 @@ export function NotificationSettingsDialog({
                     ) : (
                       <>
                         <SettingRow
-                          title="发送机器人"
-                          description={formatRecentDeliveryLabel(lastDelivery.lark) ?? '选择用于主动发消息的飞书应用机器人'}
+                          title={L("发送机器人", "Sender Bot")}
+                          description={formatRecentDeliveryLabel(lastDelivery.lark) ?? L("选择用于主动发消息的飞书应用机器人", "Select the Lark bot used to deliver notifications")}
                         >
                           <Select
                             className="w-full min-[520px]:w-56"
@@ -1236,15 +1250,15 @@ export function NotificationSettingsDialog({
                         </SettingRow>
 
                         <SettingRow
-                          title="推送目标策略"
-                          description="推荐「智能跟随」：已托管给飞书群的会话发往原托管群，其余会话走兜底目标。"
+                          title={L("推送目标策略", "Delivery Target Policy")}
+                          description={L("推荐「智能跟随」：已托管给飞书群的会话发往原托管群，其余会话走兜底目标。", "Recommended: Smart Follow routes hosted sessions to their group and others to your fallback target.")}
                         >
                           <SegmentedPills<LarkNotifyTargetMode>
                             value={draft.lark.mode}
                             options={[
-                              { value: 'auto_handover_then_fallback', label: '智能跟随' },
-                              { value: 'direct_user', label: '私聊本人' },
-                              { value: 'chat', label: '指定群聊' }
+                              { value: 'auto_handover_then_fallback', label: L("智能跟随", "Smart Follow") },
+                              { value: 'direct_user', label: L("私聊本人", "DM Me") },
+                              { value: 'chat', label: L("指定群聊", "Specific Group") }
                             ]}
                             onChange={mode => patchDraft(c => ({
                               ...c,
@@ -1259,8 +1273,8 @@ export function NotificationSettingsDialog({
 
                         {draft.lark.mode === 'chat' ? (
                           <SettingRow
-                            title="目标飞书群"
-                            description="从机器人已加入的群聊中选择；也可直接粘贴 oc_ 开头的群 ID。"
+                            title={L("目标飞书群", "Target Lark Group")}
+                            description={L("从机器人已加入的群聊中选择；也可直接粘贴 oc_ 开头的群 ID。", "Pick from groups the bot joined or paste an oc_ chat ID.")}
                           >
                             <div className="flex w-full items-center gap-1.5 min-[520px]:w-72">
                               <Select
@@ -1269,7 +1283,7 @@ export function NotificationSettingsDialog({
                                 className="min-w-0 flex-1"
                                 size="middle"
                                 loading={larkChatsQuery.isFetching}
-                                placeholder="选择或搜索群聊"
+                                placeholder={L("选择或搜索群聊", "Select or search groups")}
                                 optionFilterProp="label"
                                 value={draft.lark.fallbackReceiveId?.startsWith('oc_') ? draft.lark.fallbackReceiveId : undefined}
                                 onChange={chatId => patchDraft(c => ({
@@ -1282,7 +1296,7 @@ export function NotificationSettingsDialog({
                                 }))}
                               />
                               <IconButton
-                                label="刷新群列表"
+                                label={L("刷新群列表", "Refresh groups")}
                                 disabled={larkChatsQuery.isFetching}
                                 onClick={() => void larkChatsQuery.refetch()}
                               >
@@ -1292,11 +1306,11 @@ export function NotificationSettingsDialog({
                           </SettingRow>
                         ) : (
                           <SettingRow
-                            title={draft.lark.mode === 'direct_user' ? '私聊接收人（open_id）' : '未托管会话的兜底目标'}
+                            title={draft.lark.mode === 'direct_user' ? L("私聊接收人（open_id）", "DM Recipient (open_id)") : L("未托管会话的兜底目标", "Fallback Target for Non-Hosted Sessions")}
                             description={
                               larkOwnerQuery.data?.owner
-                                ? `留空将自动私聊机器人创建者：${larkOwnerQuery.data.owner.name}（${larkOwnerQuery.data.owner.openId.slice(0, 12)}…）`
-                                : '留空将自动识别机器人创建者并发送私聊，也可手动填写 ou_（私聊）或 oc_（群聊）ID。'
+                                ? L(`留空将自动私聊机器人创建者：${larkOwnerQuery.data.owner.name}（${larkOwnerQuery.data.owner.openId.slice(0, 12)}…）`, `Leave blank to auto-DM bot creator: ${larkOwnerQuery.data.owner.name} (${larkOwnerQuery.data.owner.openId.slice(0, 12)}…)`)
+                                : L("留空将自动识别机器人创建者并发送私聊，也可手动填写 ou_（私聊）或 oc_（群聊）ID。", "Leave blank to auto-DM the bot creator, or paste an ou_ / oc_ ID.")
                             }
                           >
                             <div className="flex w-full items-center gap-1.5 min-[520px]:w-72">
@@ -1304,7 +1318,7 @@ export function NotificationSettingsDialog({
                                 size="middle"
                                 allowClear
                                 className="font-mono text-[12px]"
-                                placeholder={larkOwnerQuery.data?.owner ? `自动：${larkOwnerQuery.data.owner.name}` : 'ou_xxx 或 oc_xxx（可留空）'}
+                                placeholder={larkOwnerQuery.data?.owner ? L(`自动：${larkOwnerQuery.data.owner.name}`, `Auto: ${larkOwnerQuery.data.owner.name}`) : L("ou_xxx 或 oc_xxx（可留空）", "ou_xxx or oc_xxx (optional)")}
                                 value={draft.lark.fallbackReceiveId ?? ''}
                                 onChange={event => {
                                   const val = event.target.value.trim();
@@ -1331,7 +1345,8 @@ export function NotificationSettingsDialog({
                                   }))}
                                   className="h-8 shrink-0 rounded-md border border-zinc-200 bg-white px-2 text-[11.5px] font-medium text-zinc-600 hover:bg-zinc-50"
                                 >
-                                  填本人
+                                  
+                                  {L("填本人", "Use Me")}
                                 </button>
                               )}
                             </div>
@@ -1339,24 +1354,24 @@ export function NotificationSettingsDialog({
                         )}
 
                         <CompactSwitchRow
-                          title="附带任务摘要与会话直达链接"
-                          description="卡片内展示最终回复前 200 字纯文本摘要，并附带自动签名的「在 AgentDock 查看」按钮。"
+                          title={L("附带任务摘要与会话直达链接", "Include Summary & Direct Session Link")}
+                          description={L("卡片内展示最终回复前 200 字纯文本摘要，并附带自动签名的「在 AgentDock 查看」按钮。", "Includes a 200-char reply preview and signed \"Open in AgentDock\" button.")}
                         >
                           <Switch
                             size="small"
-                            aria-label="飞书卡片附带摘要"
+                            aria-label={L("飞书卡片附带摘要", "Include summary in Lark card")}
                             checked={draft.lark.includeSummary}
                             onChange={checked => patchDraft(c => ({ ...c, lark: { ...c.lark, includeSummary: checked } }))}
                           />
                         </CompactSwitchRow>
 
                         <CompactSwitchRow
-                          title="跳过飞书原群防重复"
-                          description="飞书群聊直接发起的会话原群已有卡片或回复，推送目标同为该群时自动跳过。"
+                          title={L("跳过飞书原群防重复", "Skip Original Lark Group (Dedupe)")}
+                          description={L("飞书群聊直接发起的会话原群已有卡片或回复，推送目标同为该群时自动跳过。", "Skips pushing if the turn already posted a card to that same Lark group.")}
                         >
                           <Switch
                             size="small"
-                            aria-label="跳过飞书原群防重复"
+                            aria-label={L("跳过飞书原群防重复", "Skip Original Lark Group (Dedupe)")}
                             checked={draft.lark.skipOriginalLarkChat}
                             onChange={checked => patchDraft(c => ({ ...c, lark: { ...c.lark, skipOriginalLarkChat: checked } }))}
                           />
@@ -1376,18 +1391,18 @@ export function NotificationSettingsDialog({
                 {tab === 'extensions' && (
                   <>
                     <SectionCard
-                      title="通用 Webhook"
-                      description="一键适配飞书群机器人、钉钉、企微、Bark、ntfy、Slack、Discord 或自建接口；所有密钥在后端加密/脱敏管理，绝不回显明文。"
+                      title={L("通用 Webhook", "Universal Webhooks")}
+                      description={L("一键适配飞书群机器人、钉钉、企微、Bark、ntfy、Slack、Discord 或自建接口；所有密钥在后端加密/脱敏管理，绝不回显明文。", "Presets for Lark, DingTalk, WeCom, Bark, ntfy, Slack, Discord, or custom JSON endpoints. Secrets stay masked server-side.")}
                       icon={<Webhook size={14}/>}
                       stackActionOnMobile
-                      badge={draft.webhooks.length > 0 ? <StatusPill tone="zinc">{draft.webhooks.length} 条</StatusPill> : undefined}
+                      badge={draft.webhooks.length > 0 ? <StatusPill tone="zinc">{draft.webhooks.length}  {L("条", "")}</StatusPill> : undefined}
                       action={
                         <button
                           type="button"
                           onClick={addWebhook}
                           className="inline-flex h-8 items-center gap-1 rounded-lg bg-zinc-900 px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-zinc-700"
                         >
-                          <Plus size={13}/>添加 Webhook
+                          <Plus size={13}/>{L("添加 Webhook", "Add Webhook")}
                         </button>
                       }
                     >
@@ -1396,9 +1411,10 @@ export function NotificationSettingsDialog({
                           <div className="mx-auto mb-2 grid h-10 w-10 place-items-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50 text-zinc-400">
                             <Webhook size={17}/>
                           </div>
-                          <div className="text-[13px] font-medium text-zinc-700">还没有配置 Webhook</div>
+                          <div className="text-[13px] font-medium text-zinc-700">{L("还没有配置 Webhook", "No Webhooks Configured")}</div>
                           <p className="mx-auto mt-1 max-w-md text-[12px] leading-5 text-zinc-500">
-                            支持钉钉、企业微信、Bark（iOS）、ntfy、Slack、飞书群自定义机器人及任意自定义 JSON 接收端。
+                            
+                            {L("支持钉钉、企业微信、Bark（iOS）、ntfy、Slack、飞书群自定义机器人及任意自定义 JSON 接收端。", "Supports DingTalk, WeCom, Bark, ntfy, Slack, Discord, Lark Group Bot, and custom JSON hooks.")}
                           </p>
                         </div>
                       ) : (
@@ -1409,7 +1425,7 @@ export function NotificationSettingsDialog({
                             const delivery = lastDelivery[`webhook:${hook.id}`];
                             const testResult = webhookTestResults[hook.id];
                             const hostLabel = (() => {
-                              try { return new URL(hook.url).host; } catch { return hook.url || '尚未填写 URL'; }
+                              try { return new URL(hook.url).host; } catch { return hook.url || L("尚未填写 URL", "URL not set"); }
                             })();
                             return (
                               <div key={hook.id} className="bg-white">
@@ -1424,11 +1440,11 @@ export function NotificationSettingsDialog({
                                       : <ChevronRight size={14} className="shrink-0 text-zinc-400"/>}
                                     <div className="min-w-0 flex-1">
                                       <div className="flex flex-wrap items-center gap-1.5">
-                                        <span className="truncate text-[13.5px] font-medium text-zinc-900">{hook.name || '未命名 Webhook'}</span>
+                                        <span className="truncate text-[13.5px] font-medium text-zinc-900">{hook.name || L("未命名 Webhook", "Untitled Webhook")}</span>
                                         <StatusPill tone="blue">{presetMeta.shortLabel}</StatusPill>
                                         {delivery && (
                                           <StatusPill tone={delivery.ok ? 'emerald' : 'red'}>
-                                            {delivery.ok ? `${delivery.durationMs}ms` : '上次失败'}
+                                            {delivery.ok ? `${delivery.durationMs}ms` : L("上次失败", "Last failed")}
                                           </StatusPill>
                                         )}
                                       </div>
@@ -1444,15 +1460,16 @@ export function NotificationSettingsDialog({
                                       className="inline-flex h-7 items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 text-[11.5px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40"
                                     >
                                       {testingKey === `webhook:${hook.id}` ? <Spinner size={11}/> : <Send size={11}/>}
-                                      测试
+                                      
+                                      {L("测试", "Test")}
                                     </button>
                                     <Switch
                                       size="small"
-                                      aria-label={`启用 ${hook.name}`}
+                                      aria-label={L(`启用 ${hook.name}`, `Enable ${hook.name}`)}
                                       checked={hook.enabled}
                                       onChange={checked => updateWebhook(hook.id, item => ({ ...item, enabled: checked }))}
                                     />
-                                    <IconButton label="删除 Webhook" onClick={() => removeWebhook(hook.id)}>
+                                    <IconButton label={L("删除 Webhook", "Delete Webhook")} onClick={() => removeWebhook(hook.id)}>
                                       <Trash2 size={13} className="text-zinc-400 hover:text-red-500"/>
                                     </IconButton>
                                   </div>
@@ -1461,7 +1478,7 @@ export function NotificationSettingsDialog({
                                 {expanded && (
                                   <div className="space-y-3 border-t border-zinc-100 bg-zinc-50/50 px-4 py-3.5">
                                     <div>
-                                      <div className="mb-1.5 text-[12px] font-medium text-zinc-700">快速预设模板</div>
+                                      <div className="mb-1.5 text-[12px] font-medium text-zinc-700">{L("快速预设模板", "Preset")}</div>
                                       <div className="flex flex-wrap gap-1.5">
                                         {WEBHOOK_PRESET_ORDER.map(preset => {
                                           const active = hook.preset === preset;
@@ -1472,7 +1489,7 @@ export function NotificationSettingsDialog({
                                               onClick={() => updateWebhook(hook.id, item => ({
                                                 ...item,
                                                 preset,
-                                                name: !item.name || item.name === '自定义 Webhook' || Object.values(WEBHOOK_PRESET_META).some(m => m.label === item.name)
+                                                name: !item.name || item.name === '自定义 Webhook' || item.name === 'Custom Webhook' || Object.values(WEBHOOK_PRESET_META).some(m => m.label === item.name)
                                                   ? WEBHOOK_PRESET_META[preset].label
                                                   : item.name
                                               }))}
@@ -1492,18 +1509,18 @@ export function NotificationSettingsDialog({
 
                                     <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px]">
                                       <label className="block">
-                                        <span className="text-[12px] font-medium text-zinc-700">名称</span>
+                                        <span className="text-[12px] font-medium text-zinc-700">{L("名称", "Name")}</span>
                                         <Input
                                           size="middle"
                                           className="mt-1"
                                           maxLength={80}
                                           value={hook.name}
-                                          placeholder="例如：个人 Bark 推送"
+                                          placeholder={L("例如：个人 Bark 推送", "e.g., Personal Bark Push")}
                                           onChange={event => updateWebhook(hook.id, item => ({ ...item, name: event.target.value }))}
                                         />
                                       </label>
                                       <label className="block">
-                                        <span className="text-[12px] font-medium text-zinc-700">超时（秒）</span>
+                                        <span className="text-[12px] font-medium text-zinc-700">{L("超时（秒）", "Timeout (s)")}</span>
                                         <InputNumber<number>
                                           size="middle"
                                           min={1}
@@ -1516,7 +1533,7 @@ export function NotificationSettingsDialog({
                                     </div>
 
                                     <label className="block">
-                                      <span className="text-[12px] font-medium text-zinc-700">Webhook 地址</span>
+                                      <span className="text-[12px] font-medium text-zinc-700">{L("Webhook 地址", "Webhook URL")}</span>
                                       <Input
                                         size="middle"
                                         className="mt-1 font-mono text-[12px]"
@@ -1529,9 +1546,10 @@ export function NotificationSettingsDialog({
                                     <label className="block">
                                       <span className="flex items-center justify-between text-[12px] font-medium text-zinc-700">
                                         <span>
-                                          签名密钥（可选 · HMAC-SHA256）
+                                          
+                                          {L("签名密钥（可选 · HMAC-SHA256）", "Signing Secret (Optional · HMAC-SHA256)")}
                                           {hook.hasSecret && hook.secret === undefined && (
-                                            <span className="ml-1.5 font-normal text-emerald-600">已安全保存，留空不修改</span>
+                                            <span className="ml-1.5 font-normal text-emerald-600">{L("已安全保存，留空不修改", "Saved securely — leave blank to keep")}</span>
                                           )}
                                         </span>
                                         {hook.hasSecret && hook.secret !== '' && (
@@ -1540,7 +1558,8 @@ export function NotificationSettingsDialog({
                                             onClick={() => updateWebhook(hook.id, item => ({ ...item, secret: '', hasSecret: false }))}
                                             className="text-[11px] font-normal text-zinc-400 hover:text-red-600"
                                           >
-                                            清除密钥
+                                            
+                                            {L("清除密钥", "Clear Secret")}
                                           </button>
                                         )}
                                       </span>
@@ -1549,14 +1568,14 @@ export function NotificationSettingsDialog({
                                         autoComplete="new-password"
                                         className="mt-1 font-mono text-[12px]"
                                         value={hook.secret ?? ''}
-                                        placeholder={hook.hasSecret ? '已保存（输入新密钥可覆盖）' : '可选，发送 X-AgentDock-Signature 请求头'}
+                                        placeholder={hook.hasSecret ? L("已保存（输入新密钥可覆盖）", "Saved (enter new secret to overwrite)") : L("可选，发送 X-AgentDock-Signature 请求头", "Optional; sends X-AgentDock-Signature header")}
                                         onChange={event => updateWebhook(hook.id, item => ({ ...item, secret: event.target.value }))}
                                       />
                                     </label>
 
                                     <div>
                                       <div className="mb-1.5 flex items-center justify-between">
-                                        <span className="text-[12px] font-medium text-zinc-700">自定义请求头（可选）</span>
+                                        <span className="text-[12px] font-medium text-zinc-700">{L("自定义请求头（可选）", "Custom Headers (Optional)")}</span>
                                         <button
                                           type="button"
                                           onClick={() => updateWebhook(hook.id, item => ({
@@ -1565,7 +1584,7 @@ export function NotificationSettingsDialog({
                                           }))}
                                           className="inline-flex items-center gap-1 text-[11.5px] font-medium text-zinc-600 hover:text-zinc-900"
                                         >
-                                          <Plus size={12}/>添加请求头
+                                          <Plus size={12}/>{L("添加请求头", "Add Header")}
                                         </button>
                                       </div>
                                       {hook.headers.length > 0 && (
@@ -1575,7 +1594,7 @@ export function NotificationSettingsDialog({
                                               <Input
                                                 size="small"
                                                 className="w-28 shrink-0 font-mono text-[11.5px] sm:w-44"
-                                                placeholder="Header 名"
+                                                placeholder={L("Header 名", "Header Name")}
                                                 value={header.key}
                                                 onChange={event => updateWebhook(hook.id, item => ({
                                                   ...item,
@@ -1585,7 +1604,7 @@ export function NotificationSettingsDialog({
                                               <Input
                                                 size="small"
                                                 className="min-w-0 flex-1 font-mono text-[11.5px]"
-                                                placeholder={header.masked ? '已脱敏（输入新值覆盖）' : 'Header 值'}
+                                                placeholder={header.masked ? L("已脱敏（输入新值覆盖）", "Masked (enter new value to overwrite)") : L("Header 值", "Header Value")}
                                                 value={header.value}
                                                 onChange={event => updateWebhook(hook.id, item => ({
                                                   ...item,
@@ -1593,7 +1612,7 @@ export function NotificationSettingsDialog({
                                                 }))}
                                               />
                                               <IconButton
-                                                label="移除请求头"
+                                                label={L("移除请求头", "Remove header")}
                                                 onClick={() => updateWebhook(hook.id, item => ({
                                                   ...item,
                                                   headers: item.headers.filter((_, i) => i !== idx)
@@ -1622,14 +1641,14 @@ export function NotificationSettingsDialog({
                     </SectionCard>
 
                     <SectionCard
-                      title="本地命令 Hook（Shell 回调）"
-                      description="通知触发时在本机异步执行自定义命令或脚本（如 osascript / terminal-notifier / say / 自动化脚本），超时自动清理进程组，不阻塞 Agent。"
+                      title={L("本地命令 Hook（Shell 回调）", "Local Command Hook (Shell Callback)")}
+                      description={L("通知触发时在本机异步执行自定义命令或脚本（如 osascript / terminal-notifier / say / 自动化脚本），超时自动清理进程组，不阻塞 Agent。", "Runs a local command or script asynchronously on alert (e.g., osascript, terminal-notifier, say) with automatic timeout cleanup.")}
                       icon={<Terminal size={14}/>}
                       stackActionOnMobile
                       badge={
                         draft.commandHook.enabled
-                          ? <StatusPill tone="emerald">已启用</StatusPill>
-                          : <StatusPill tone="zinc">默认关闭</StatusPill>
+                          ? <StatusPill tone="emerald">{L("已启用", "Enabled")}</StatusPill>
+                          : <StatusPill tone="zinc">{L("默认关闭", "Off by default")}</StatusPill>
                       }
                       action={
                         <div className="flex items-center gap-2">
@@ -1640,11 +1659,12 @@ export function NotificationSettingsDialog({
                             className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40"
                           >
                             {testingKey === 'command' ? <Spinner size={12}/> : <Play size={11}/>}
-                            发送测试
+                            
+                            {L("发送测试", "Send Test")}
                           </button>
                           <Switch
                             size="small"
-                            aria-label="启用本地命令 Hook"
+                            aria-label={L("启用本地命令 Hook", "Enable local command hook")}
                             disabled={!draft.commandHook.trustConfirmed}
                             checked={draft.commandHook.enabled && draft.commandHook.trustConfirmed}
                             onChange={checked => patchDraft(c => ({ ...c, commandHook: { ...c.commandHook, enabled: checked } }))}
@@ -1657,9 +1677,10 @@ export function NotificationSettingsDialog({
                           <div className="flex items-start gap-2">
                             <ShieldAlert size={15} className="mt-0.5 shrink-0 text-amber-600"/>
                             <div>
-                              <div className="font-semibold">本机命令执行安全提示</div>
+                              <div className="font-semibold">{L("本机命令执行安全提示", "Local Command Execution Security Notice")}</div>
                               <p className="mt-0.5">
-                                命令将以当前守护进程权限在本机 Shell 中执行。为防止命令注入，会话标题和摘要<strong>不会拼接到命令行</strong>，而是全部通过只读环境变量与标准输入 JSON 传入。
+                                
+                                {L("命令将以当前守护进程权限在本机 Shell 中执行。为防止命令注入，会话标题和摘要", "Runs with daemon shell permissions. To prevent injection, titles and summaries are ")}<strong>{L("不会拼接到命令行", "never interpolated into command arguments")}</strong>{L("，而是全部通过只读环境变量与标准输入 JSON 传入。", " — they are passed via read-only environment variables and stdin JSON.")}
                               </p>
                               <label className="mt-2 inline-flex cursor-pointer items-center gap-2 font-medium text-amber-900">
                                 <input
@@ -1678,7 +1699,8 @@ export function NotificationSettingsDialog({
                                   }}
                                   className="h-3.5 w-3.5 rounded border-amber-400 accent-zinc-900"
                                 />
-                                我了解风险，仅配置自己信任的本地命令或脚本
+                                
+                                {L("我了解风险，仅配置自己信任的本地命令或脚本", "I understand the risks and only run commands/scripts I trust")}
                               </label>
                             </div>
                           </div>
@@ -1686,18 +1708,18 @@ export function NotificationSettingsDialog({
 
                         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px]">
                           <label className="block">
-                            <span className="text-[12px] font-medium text-zinc-700">执行命令</span>
+                            <span className="text-[12px] font-medium text-zinc-700">{L("执行命令", "Command")}</span>
                             <Input
                               size="middle"
                               className="mt-1 font-mono text-[12px]"
                               disabled={!draft.commandHook.trustConfirmed}
                               value={draft.commandHook.command}
-                              placeholder='例如：say "$AGENTDOCK_SESSION_TITLE 完成" 或 ~/.agentdock/notify.sh'
+                              placeholder={L("例如：say \"$AGENTDOCK_SESSION_TITLE 完成\" 或 ~/.agentdock/notify.sh", "e.g., say \"$AGENTDOCK_SESSION_TITLE done\" or ~/.agentdock/notify.sh")}
                               onChange={event => patchDraft(c => ({ ...c, commandHook: { ...c.commandHook, command: event.target.value } }))}
                             />
                           </label>
                           <label className="block">
-                            <span className="text-[12px] font-medium text-zinc-700">超时（秒）</span>
+                            <span className="text-[12px] font-medium text-zinc-700">{L("超时（秒）", "Timeout (s)")}</span>
                             <InputNumber<number>
                               size="middle"
                               min={1}
@@ -1719,7 +1741,7 @@ export function NotificationSettingsDialog({
                             onClick={() => setEnvVarsOpen(open => !open)}
                             className="flex w-full items-center justify-between px-3 py-2 text-left text-[12px] font-medium text-zinc-600 hover:bg-zinc-100/60"
                           >
-                            <span>可用环境变量与 stdin JSON 速查</span>
+                            <span>{L("可用环境变量与 stdin JSON 速查", "Environment Variables & Stdin JSON Reference")}</span>
                             {envVarsOpen ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}
                           </button>
                           {envVarsOpen && (
@@ -1767,37 +1789,50 @@ export function NotificationSettingsDialog({
             {dirty ? (
               <>
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"/>
-                <span className="truncate">有未保存的服务端配置更改</span>
+                <span className="truncate">{L("有未保存的服务端配置更改", "Unsaved server configuration changes")}</span>
               </>
             ) : (
               <>
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"/>
-                <span className="truncate">本机偏好即时生效；飞书与扩展点击保存后全端同步</span>
+                <span className="truncate">{L("本机偏好即时生效；飞书与扩展点击保存后全端同步", "Local prefs apply immediately; click Save to sync Lark & extension settings")}</span>
               </>
             )}
           </div>
 
           <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
-            <HoverTooltip content="关闭弹窗">
-              <button
-                type="button"
-                onClick={onClose}
-                className="h-9 rounded-lg px-3.5 text-[12.5px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
-              >
-                关闭
-              </button>
-            </HoverTooltip>
+            {!embedded && (
+              <HoverTooltip content={L("关闭弹窗", "Close")}>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="h-9 rounded-lg px-3.5 text-[12.5px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+                >
+                  
+                  {L("关闭", "Off")}
+                </button>
+              </HoverTooltip>
+            )}
             <button
               type="button"
               disabled={!dirty || saveMutation.isPending}
               onClick={() => saveMutation.mutate()}
               className="inline-flex h-9 min-w-[92px] items-center justify-center gap-1.5 rounded-lg bg-zinc-900 px-4 text-[12.5px] font-medium text-white transition-colors hover:bg-zinc-700 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {saveMutation.isPending ? <><Spinner size={12} className="text-white"/>保存中</> : '保存设置'}
+              {saveMutation.isPending ? <><Spinner size={12} className="text-white"/>{L("保存中", "Saving")}</> : L("保存设置", "Save Settings")}
             </button>
           </div>
         </div>
       </div>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <div
+      className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-black/40 p-0 sm:p-4"
+      onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}
+    >
+      {content}
     </div>
   );
 }

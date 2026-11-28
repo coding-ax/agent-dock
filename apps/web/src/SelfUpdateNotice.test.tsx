@@ -41,7 +41,7 @@ vi.mock('./desktop-update', async importOriginal => ({
 vi.mock('./DesktopUpdateNotice', () => ({ DesktopUpdateNotice: () => null }));
 vi.mock('./AutostartToggle', () => ({ AutostartToggle: () => null }));
 vi.mock('./KeepAwakeToggle', () => ({ KeepAwakeToggle: () => null }));
-vi.mock('./ThemeToggle', () => ({ ThemeSegmented: () => null }));
+vi.mock('./ThemeToggle', () => ({ ThemeSegmented: () => null, QuickThemeToggleButton: () => null }));
 
 import { SelfUpdateNotice } from './SelfUpdateNotice';
 import { SettingsMenu } from './SettingsMenu';
@@ -95,16 +95,8 @@ describe('SelfUpdateNotice', () => {
 describe('SettingsMenu outer update badge sync', () => {
   const settingsProps = {
     webDenied: false,
-    archivedCount: 0,
-    onUsage: noop,
-    onSchedule: noop,
-    onArchived: noop,
-    onImport: noop,
-    onAgentConfig: noop,
-    onSideChatConfig: noop,
-    onAssistant: noop,
-    onLark: noop,
-    onLarkAvatar: noop,
+    onOpenSettings: noop,
+    onOpenLark: noop,
     onShare: noop
   };
 

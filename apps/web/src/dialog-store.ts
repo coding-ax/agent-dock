@@ -1,12 +1,15 @@
 import { useSyncExternalStore } from 'react';
 
 /** App 级弹窗。开关状态放在模块里，而不是 App 的 useState： */
-export type AppDialogKind = 'lark' | 'lark-regex' | 'lark-avatar' | 'agent' | 'side-chat' | 'output-plugins' | 'task-recovery' | 'assistant' | 'notifications' | 'schedule' | 'handover' | 'system-prompt' | 'archived' | 'import' | 'project-import' | 'search' | 'share' | 'usage' | 'theme-studio';
+export type AppDialogKind = 'settings' | 'lark' | 'lark-regex' | 'lark-avatar' | 'agent' | 'side-chat' | 'output-plugins' | 'session-output-plugins' | 'task-recovery' | 'assistant' | 'notifications' | 'schedule' | 'handover' | 'system-prompt' | 'archived' | 'import' | 'project-import' | 'search' | 'share' | 'usage' | 'theme-studio';
 
 export interface AppDialogState {
   kind: AppDialogKind;
   /** 定时任务可以从某个会话打开：带上会话 id，由 DialogHost 解析成具体 Session。 */
   sessionId?: string;
+  /** 统一设置中心目标主分类与子 Tab（用于跨入口深链跳转）。 */
+  settingsCategory?: string;
+  settingsSubTab?: string;
 }
 
 /**
@@ -28,10 +31,23 @@ const subscribe = (listener: () => void) => {
 };
 const getSnapshot = () => active;
 
-export function openAppDialog(kind: AppDialogKind, options?: { sessionId?: string }) {
-  if (active?.kind === kind && active.sessionId === options?.sessionId) return;
+export function openAppDialog(
+  kind: AppDialogKind,
+  options?: { sessionId?: string; settingsCategory?: string; settingsSubTab?: string }
+) {
+  if (
+    active?.kind === kind
+    && active.sessionId === options?.sessionId
+    && active.settingsCategory === options?.settingsCategory
+    && active.settingsSubTab === options?.settingsSubTab
+  ) return;
   // 每次打开都换新对象；订阅者用 useSyncExternalStore，引用变化即重渲染。
-  active = { kind, ...(options?.sessionId ? { sessionId: options.sessionId } : {}) };
+  active = {
+    kind,
+    ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options?.settingsCategory ? { settingsCategory: options.settingsCategory } : {}),
+    ...(options?.settingsSubTab ? { settingsSubTab: options.settingsSubTab } : {})
+  };
   for (const listener of listeners) listener();
 }
 

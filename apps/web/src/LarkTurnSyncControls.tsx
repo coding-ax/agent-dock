@@ -2,6 +2,7 @@ import { Switch } from 'antd';
 import { Info } from 'lucide-react';
 import type { LarkTurnSyncConfig, LarkTurnSyncSources } from './api';
 import { Disclosure } from './Disclosure';
+import { bi, useBi } from './i18n';
 
 interface LarkTurnSyncSourceOption {
   key: keyof LarkTurnSyncSources;
@@ -16,61 +17,61 @@ export type LarkTurnSyncTargetKind = 'settings' | 'handover' | 'lark-group' | 'l
 const SOURCE_OPTIONS: readonly LarkTurnSyncSourceOption[] = [
   {
     key: 'supervision',
-    title: '系统督办轮次',
-    badge: '小猫督办',
+    get title() { return bi("系统督办轮次", "Companion Supervision"); },
+    get badge() { return bi("小猫督办", "Companion"); },
     badgeClass: 'border-amber-200 bg-amber-50 text-amber-700',
-    description: '主会话的侧边会话完工验收、打回返工、计划待确认与卡死/失败预警。'
+    get description() { return bi("主会话的侧边会话完工验收、打回返工、计划待确认与卡死/失败预警。", "Side-session reviews, reworks, plan approvals, and stall/failure alerts."); }
   },
   {
     key: 'web',
-    title: 'Web 端对话轮次',
-    badge: '网页同步',
+    get title() { return bi("Web 端对话轮次", "Web Conversations"); },
+    get badge() { return bi("网页同步", "Web Sync"); },
     badgeClass: 'border-blue-200 bg-blue-50 text-blue-700',
-    description: '在网页或桌面端发出的对话及看板联动回复，实现双端同屏。'
+    get description() { return bi("在网页或桌面端发出的对话及看板联动回复，实现双端同屏。", "Messages sent from Web/Desktop and Board interactions synced live."); }
   },
   {
     key: 'schedule',
-    title: '定时任务轮次',
-    badge: '定时任务',
+    get title() { return bi("定时任务轮次", "Scheduled Runs"); },
+    get badge() { return bi("定时任务", "Schedules"); },
     badgeClass: 'border-orange-200 bg-orange-50 text-orange-700',
-    description: '追加到绑定会话的定时任务触发产出。'
+    get description() { return bi("追加到绑定会话的定时任务触发产出。", "Outputs from scheduled runs appended to bound sessions."); }
   },
   {
     key: 'maintenance',
-    title: '整理维护轮次',
-    badge: '整理维护',
+    get title() { return bi("整理维护轮次", "Maintenance & Handover"); },
+    get badge() { return bi("整理维护", "Maintenance"); },
     badgeClass: 'border-zinc-200 bg-zinc-100 text-zinc-600',
-    description: '自动整理归档便签与换代交接说明（默认关闭，避免长篇维护日志刷屏）。'
+    get description() { return bi("自动整理归档便签与换代交接说明（默认关闭，避免长篇维护日志刷屏）。", "Auto-tidy logs and handover briefs (off by default to reduce noise)."); }
   }
 ] as const;
 
 const TARGET_COPY: Record<LarkTurnSyncTargetKind, { title: string; description: string; footer: string }> = {
   settings: {
-    title: '同步非飞书触发轮次到飞书',
-    description: '实时将托管群、普通飞书群聊与飞书私聊绑定会话中的非飞书轮次同步回对应飞书（群聊直发主线程，私聊直发对话）；同轮已通过 group send 主动发过消息时自动跳过，避免双倍刷屏。',
-    footer: '复用机器人既有 Trace 卡片 / 静默回复策略；群聊始终直发主线程不建话题，私聊直发对话，并自动屏蔽机器人自激循环。'
+    get title() { return bi("同步非飞书触发轮次到飞书", "Sync Non-Lark Turns to Lark"); },
+    get description() { return bi("实时将托管群、普通飞书群聊与飞书私聊绑定会话中的非飞书轮次同步回对应飞书（群聊直发主线程，私聊直发对话）；同轮已通过 group send 主动发过消息时自动跳过，避免双倍刷屏。", "Mirrors non-Lark turns into bound Lark groups or DMs in real time, auto-deduplicating turns that already sent via group send."); },
+    get footer() { return bi("复用机器人既有 Trace 卡片 / 静默回复策略；群聊始终直发主线程不建话题，私聊直发对话，并自动屏蔽机器人自激循环。", "Reuses the bot's Trace card / Quiet Reply policy and prevents self-trigger loops."); }
   },
   handover: {
-    title: '同步非飞书触发轮次到当前托管群',
-    description: '实时将当前会话的非飞书轮次直发至托管群主线程；同轮已通过 group send 主动发过群消息时自动跳过，避免双倍刷屏。',
-    footer: '复用机器人既有 Trace 卡片 / 静默回复策略；始终直发群主线程不建话题，并自动屏蔽机器人自激循环。'
+    get title() { return bi("同步非飞书触发轮次到当前托管群", "Sync Non-Lark Turns to This Hosted Group"); },
+    get description() { return bi("实时将当前会话的非飞书轮次直发至托管群主线程；同轮已通过 group send 主动发过群消息时自动跳过，避免双倍刷屏。", "Mirrors non-Lark turns into this hosted group's main thread with automatic deduplication."); },
+    get footer() { return bi("复用机器人既有 Trace 卡片 / 静默回复策略；始终直发群主线程不建话题，并自动屏蔽机器人自激循环。", "Reuses the bot's Trace card / Quiet Reply settings and prevents self-trigger loops."); }
   },
   'lark-group': {
-    title: '同步非飞书触发轮次到当前飞书群',
-    description: '实时将网页对话、定时任务等非飞书轮次直发至原飞书群主线程；同轮已通过 group send 主动发过群消息时自动跳过，避免双倍刷屏。',
-    footer: '复用机器人既有 Trace 卡片 / 静默回复策略；始终直发群主线程不建话题，并自动屏蔽机器人自激循环。'
+    get title() { return bi("同步非飞书触发轮次到当前飞书群", "Sync Non-Lark Turns to This Lark Group"); },
+    get description() { return bi("实时将网页对话、定时任务等非飞书轮次直发至原飞书群主线程；同轮已通过 group send 主动发过群消息时自动跳过，避免双倍刷屏。", "Mirrors Web chats and schedules into this Lark group's main thread with deduplication."); },
+    get footer() { return bi("复用机器人既有 Trace 卡片 / 静默回复策略；始终直发群主线程不建话题，并自动屏蔽机器人自激循环。", "Reuses the bot's Trace card / Quiet Reply settings and prevents self-trigger loops."); }
   },
   'lark-p2p': {
-    title: '同步非飞书触发轮次到当前飞书私聊',
-    description: '实时将网页对话、定时任务等非飞书触发轮次直发至当前飞书私聊，实现 Web 与飞书双端同屏；自动去重并避免刷屏。',
-    footer: '复用机器人既有 Trace 卡片 / 静默回复策略；始终直发当前私聊并自动屏蔽机器人自激循环。'
+    get title() { return bi("同步非飞书触发轮次到当前飞书私聊", "Sync Non-Lark Turns to This Lark DM"); },
+    get description() { return bi("实时将网页对话、定时任务等非飞书触发轮次直发至当前飞书私聊，实现 Web 与飞书双端同屏；自动去重并避免刷屏。", "Mirrors Web chats and schedules into this Lark DM for seamless cross-device sync."); },
+    get footer() { return bi("复用机器人既有 Trace 卡片 / 静默回复策略；始终直发当前私聊并自动屏蔽机器人自激循环。", "Reuses the bot's Trace card / Quiet Reply policy with anti-loop guards."); }
   }
 };
 
 export function summarizeLarkTurnSync(config: LarkTurnSyncConfig): string {
-  if (!config.enabled) return '已关闭';
+  if (!config.enabled) return bi("已关闭", "Off");
   const labels = SOURCE_OPTIONS.filter(item => config.sources[item.key]).map(item => item.badge);
-  return labels.length ? `已开启（${labels.join(' / ')}）` : '已开启（未勾选来源）';
+  return labels.length ? bi(`已开启（${labels.join(' / ')}）`, `On (${labels.join(' / ')})`) : bi("已开启（未勾选来源）", "On (no sources selected)");
 }
 
 export function LarkTurnSyncControls({
@@ -86,6 +87,7 @@ export function LarkTurnSyncControls({
   targetKind?: LarkTurnSyncTargetKind;
   disabled?: boolean;
 }) {
+  const L = useBi();
   const compact = variant === 'compact';
   const padX = compact ? 'px-3' : 'px-4';
   const padY = compact ? 'py-2.5' : 'py-3';
@@ -160,15 +162,16 @@ export function LarkTurnSyncControls({
                 <Disclosure open={value.sources.schedule}>
                   <div className="mx-3 mb-2.5 flex items-start justify-between gap-3 rounded-lg border border-zinc-200/80 bg-white px-3 py-2">
                     <div className="min-w-0 flex-1">
-                      <div className="text-[12px] font-medium text-zinc-700">过滤静默/无动作定时轮次</div>
+                      <div className="text-[12px] font-medium text-zinc-700">{L("过滤静默/无动作定时轮次", "Filter Silent / No-op Scheduled Runs")}</div>
                       <p className="mt-0.5 text-[11.5px] leading-4 text-zinc-500">
-                        仅输出「无异常/无变化/HEARTBEAT_OK」等无动作结果时自动跳过，失败与实质汇报始终推送。
+                        
+                        {L("仅输出「无异常/无变化/HEARTBEAT_OK」等无动作结果时自动跳过，失败与实质汇报始终推送。", "Skips no-op outputs like HEARTBEAT_OK; failures and substantive updates are always synced.")}
                       </p>
                     </div>
                     <div className="shrink-0 pt-0.5">
                       <Switch
                         size="small"
-                        aria-label="过滤静默或无动作定时轮次"
+                        aria-label={L("过滤静默或无动作定时轮次", "Filter silent or no-op scheduled runs")}
                         checked={value.filterSilentSchedule}
                         disabled={disabled}
                         onChange={setFilterSilentSchedule}

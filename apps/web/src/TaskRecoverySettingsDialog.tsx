@@ -28,14 +28,15 @@ import { api } from './api';
 import { Spinner } from './Loaders';
 import { IconButton } from './ui-controls';
 import { useModalFocusTrap } from './useModalFocusTrap';
+import { bi, useBi } from './i18n';
 
 export function taskRecoveryModeShortLabel(mode?: TaskRecoveryMode): string {
   switch (mode) {
-    case 'confirm': return '确认卡';
-    case 'off': return '已关闭';
+    case 'confirm': return bi("确认卡", "Confirm Card");
+    case 'off': return bi("已关闭", "Disabled");
     case 'auto':
     default:
-      return '自动续跑';
+      return bi("自动续跑", "Auto-Resume");
   }
 }
 
@@ -47,64 +48,64 @@ const MODE_OPTIONS: ReadonlyArray<{
 }> = [
   {
     value: 'auto',
-    title: '自动安全断点续跑',
-    badge: '默认推荐',
-    description: '服务重启后对满足护栏的普通会话任务错峰自动拉起断点自检续跑，并实时同步到绑定飞书群/私聊。'
+    get title() { return bi("自动安全断点续跑", "Automatic Safe Checkpoint Resume"); },
+    get badge() { return bi("默认推荐", "Recommended"); },
+    get description() { return bi("服务重启后对满足护栏的普通会话任务错峰自动拉起断点自检续跑，并实时同步到绑定飞书群/私聊。", "Automatically resumes eligible interrupted tasks with staggered delays after restart and syncs to bound Lark chats."); }
   },
   {
     value: 'confirm',
-    title: '先发交互确认卡，点击后再续跑',
-    description: '不直接驱动 Agent，在 Web 时间线与绑定飞书群/私聊投放确认卡，任一端点击「继续执行」即双端锁定并续跑。'
+    get title() { return bi("先发交互确认卡，点击后再续跑", "Send Confirmation Card First"); },
+    get description() { return bi("不直接驱动 Agent，在 Web 时间线与绑定飞书群/私聊投放确认卡，任一端点击「继续执行」即双端锁定并续跑。", "Places a confirmation card in Web and bound Lark chats; clicking Resume on either side locks both and continues."); }
   },
   {
     value: 'off',
-    title: '关闭自动恢复',
-    description: '仅将受影响任务标记为「服务重启中断」，不自动续跑，也不发送确认卡。'
+    get title() { return bi("关闭自动恢复", "Disable Auto-Recovery"); },
+    get description() { return bi("仅将受影响任务标记为「服务重启中断」，不自动续跑，也不发送确认卡。", "Marks interrupted tasks without resuming or sending confirmation cards."); }
   }
 ];
 
 const WINDOW_PRESETS = [
-  { value: 5, label: '5 分钟' },
-  { value: 15, label: '15 分钟' },
-  { value: 30, label: '30 分钟' },
-  { value: 60, label: '60 分钟' }
+  { value: 5, get label() { return bi("5 分钟", "5 min"); } },
+  { value: 15, get label() { return bi("15 分钟", "15 min"); } },
+  { value: 30, get label() { return bi("30 分钟", "30 min"); } },
+  { value: 60, get label() { return bi("60 分钟", "60 min"); } }
 ] as const;
 
 const MAX_ATTEMPTS_OPTIONS = [
-  { value: 1, label: '1 次（推荐）' },
-  { value: 2, label: '2 次' },
-  { value: 3, label: '3 次' }
+  { value: 1, get label() { return bi("1 次（推荐）", "1x (Recommended)"); } },
+  { value: 2, get label() { return bi("2 次", "2x"); } },
+  { value: 3, get label() { return bi("3 次", "3x"); } }
 ] as const;
 
 const STAGGER_PRESETS = [
-  { value: 0, label: '不延迟' },
-  { value: 3, label: '3 秒' },
-  { value: 5, label: '5 秒' },
-  { value: 10, label: '10 秒' }
+  { value: 0, get label() { return bi("不延迟", "No delay"); } },
+  { value: 3, get label() { return bi("3 秒", "3s"); } },
+  { value: 5, get label() { return bi("5 秒", "5s"); } },
+  { value: 10, get label() { return bi("10 秒", "10s"); } }
 ] as const;
 
 function statusBadgeMeta(record: TaskRecoveryRecord): { label: string; cls: string } {
   switch (record.status) {
     case 'pending_confirm':
-      return { label: '待确认', cls: 'border-amber-200 bg-amber-50 text-amber-800 dark:text-amber-300' };
+      return { label: bi("待确认", "Pending"), cls: 'border-amber-200 bg-amber-50 text-amber-800 dark:text-amber-300' };
     case 'scheduled':
-      return { label: '排队续跑', cls: 'border-sky-200 bg-sky-50 text-sky-700 dark:text-sky-300' };
+      return { label: bi("排队续跑", "Queued"), cls: 'border-sky-200 bg-sky-50 text-sky-700 dark:text-sky-300' };
     case 'resumed':
-      return { label: '已续跑', cls: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300' };
+      return { label: bi("已续跑", "Resumed"), cls: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300' };
     case 'dismissed':
-      return { label: '已放弃', cls: 'border-zinc-200 bg-zinc-100 text-zinc-600' };
+      return { label: bi("已放弃", "Dismissed"), cls: 'border-zinc-200 bg-zinc-100 text-zinc-600' };
     case 'skipped':
     default: {
       const reasonMap: Record<string, string> = {
-        stale: '超时跳过',
-        max_attempts: '达上限跳过',
-        mode_off: '关闭跳过',
-        user_stopped: '用户停止',
-        assistant_managed: '小猫接管',
-        superseded: '已有新消息'
+        stale: bi("超时跳过", "Expired"),
+        max_attempts: bi("达上限跳过", "Max Reached"),
+        mode_off: bi("关闭跳过", "Disabled"),
+        user_stopped: bi("用户停止", "User Stopped"),
+        assistant_managed: bi("小猫接管", "Companion Managed"),
+        superseded: bi("已有新消息", "Newer Message")
       };
       return {
-        label: (record.skipReason && reasonMap[record.skipReason]) || '已跳过',
+        label: (record.skipReason && reasonMap[record.skipReason]) || bi("已跳过", "Skipped"),
         cls: 'border-zinc-200 bg-zinc-50 text-zinc-500'
       };
     }
@@ -120,18 +121,22 @@ function formatRecordTime(iso: string): string {
 
 export function TaskRecoverySettingsDialog({
   onClose,
-  onOpenSession
+  onOpenSession,
+  embedded = false
 }: {
   onClose(): void;
   onOpenSession?(sessionId: string): void;
+  embedded?: boolean;
 }) {
+  const L = useBi();
   const dialogRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   useModalFocusTrap({
     panel: dialogRef,
     initial: dialogRef,
     dismissible: true,
-    onDismiss: onClose
+    onDismiss: onClose,
+    enabled: !embedded
   });
 
   const configQuery = useQuery({
@@ -180,65 +185,72 @@ export function TaskRecoverySettingsDialog({
   const disabledGuardrails = config.mode === 'off';
   const records = recordsQuery.data?.items ?? [];
 
-  return (
+  const inner = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-[2px] sm:p-5"
-      onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}
+      ref={dialogRef}
+      tabIndex={embedded ? undefined : -1}
+      role={embedded ? undefined : 'dialog'}
+      aria-modal={embedded ? undefined : 'true'}
+      aria-labelledby={embedded ? undefined : 'task-recovery-dialog-title'}
+      data-testid="task-recovery-settings-dialog"
+      className={embedded
+        ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+        : 'flex max-h-[90dvh] w-full max-w-[580px] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-[rgb(var(--surface))] shadow-[0_24px_60px_rgba(12,13,16,.24)]'}
     >
-      <div
-        ref={dialogRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="task-recovery-dialog-title"
-        data-testid="task-recovery-settings-dialog"
-        className="flex max-h-[90dvh] w-full max-w-[580px] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-[rgb(var(--surface))] shadow-[0_24px_60px_rgba(12,13,16,.24)]"
-      >
-        <header className="flex items-start gap-3 border-b border-zinc-200 px-4 py-3.5 sm:px-5">
+      <header className={`flex items-start gap-3 border-b ${embedded ? 'border-zinc-100 px-4 py-3 sm:px-5' : 'border-zinc-200 px-4 py-3.5 sm:px-5'}`}>
+        {!embedded && (
           <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-sky-200 bg-sky-50 text-sky-700 dark:text-sky-300">
             <RotateCcw size={16}/>
           </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 id="task-recovery-dialog-title" className="text-[15px] font-semibold text-zinc-900">
-                普通会话中断自动恢复
-              </h2>
-              {saveMutation.isPending && (
-                <span className="inline-flex items-center gap-1 text-[11.5px] text-zinc-500">
-                  <Spinner size={11} label="正在保存" className="text-zinc-500"/>
-                  保存中…
-                </span>
-              )}
-              {justSaved && !saveMutation.isPending && (
-                <span data-testid="task-recovery-saved-badge" className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
-                  <CheckCircle2 size={11}/>
-                  已保存
-                </span>
-              )}
-            </div>
-            <p className="mt-0.5 text-[12px] leading-5 text-zinc-500">
-              覆盖 Web 端、飞书群聊/私聊、普通托管群及非小猫定时任务；守护进程重启导致被动中断时按护栏安全恢复。
-            </p>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 id={embedded ? undefined : 'task-recovery-dialog-title'} className={embedded ? 'text-[14px] font-semibold text-zinc-900' : 'text-[15px] font-semibold text-zinc-900'}>
+              
+              {L("普通会话中断自动恢复", "Interrupted Task Auto-Recovery")}
+            </h2>
+            {saveMutation.isPending && (
+              <span className="inline-flex items-center gap-1 text-[11.5px] text-zinc-500">
+                <Spinner size={11} label={L("正在保存", "Saving")} className="text-zinc-500"/>
+                
+                {L("保存中…", "Saving…")}
+              </span>
+            )}
+            {justSaved && !saveMutation.isPending && (
+              <span data-testid="task-recovery-saved-badge" className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                <CheckCircle2 size={11}/>
+                
+                {L("已保存", "Saved")}
+              </span>
+            )}
           </div>
-          <IconButton label="关闭中断恢复设置" onClick={onClose}>
+          <p className="mt-0.5 text-[12px] leading-5 text-zinc-500">
+            
+            {L("覆盖 Web 端、飞书群聊/私聊、普通托管群及非小猫定时任务；守护进程重启导致被动中断时按护栏安全恢复。", "Covers Web, Lark group/DM, hosted groups, and non-companion schedules when passively interrupted by daemon restarts.")}
+          </p>
+        </div>
+        {!embedded && (
+          <IconButton label={L("关闭中断恢复设置", "Close recovery settings")} onClick={onClose}>
             <X size={16}/>
           </IconButton>
-        </header>
+        )}
+      </header>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-5">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-5">
           {saveMutation.isError && (
             <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">
-              保存失败：{saveMutation.error instanceof Error ? saveMutation.error.message : '未知错误'}
+              
+              {L("保存失败：", "Save failed: ")}{saveMutation.error instanceof Error ? saveMutation.error.message : L("未知错误", "Unknown error")}
             </div>
           )}
 
           {/* 1. 三档恢复策略 */}
           <section className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-[13px] font-semibold text-zinc-900">恢复策略</h3>
-              <span className="text-[11.5px] text-zinc-400">修改立即生效，重启后生效于新检测到的中断任务</span>
+              <h3 className="text-[13px] font-semibold text-zinc-900">{L("恢复策略", "Recovery Policy")}</h3>
+              <span className="text-[11.5px] text-zinc-400">{L("修改立即生效，重启后生效于新检测到的中断任务", "Changes apply immediately to newly detected interrupted tasks")}</span>
             </div>
-            <div role="radiogroup" aria-label="中断恢复模式" className="space-y-2">
+            <div role="radiogroup" aria-label={L("中断恢复模式", "Recovery Mode")} className="space-y-2">
               {MODE_OPTIONS.map(option => {
                 const selected = config.mode === option.value;
                 const Icon = option.value === 'auto' ? RefreshCw : option.value === 'confirm' ? MessageSquare : PowerOff;
@@ -292,8 +304,8 @@ export function TaskRecoverySettingsDialog({
           <section className={`overflow-hidden rounded-xl border border-zinc-200 bg-white transition-opacity ${disabledGuardrails ? 'opacity-55' : ''}`}>
             <div className="flex items-center gap-2 border-b border-zinc-100 px-3.5 py-2.5">
               <ShieldCheck size={15} className="shrink-0 text-emerald-600 dark:text-emerald-400"/>
-              <h3 className="text-[13px] font-semibold text-zinc-900">安全护栏</h3>
-              <span className="ml-auto text-[11px] text-zinc-400">防重启风暴 · 防重复副作用</span>
+              <h3 className="text-[13px] font-semibold text-zinc-900">{L("安全护栏", "Safety Guardrails")}</h3>
+              <span className="ml-auto text-[11px] text-zinc-400">{L("防重启风暴 · 防重复副作用", "Anti-loop · Idempotency guard")}</span>
             </div>
 
             <div className="divide-y divide-zinc-100">
@@ -301,8 +313,8 @@ export function TaskRecoverySettingsDialog({
               <div className="space-y-2 px-3.5 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-zinc-900">有效时间窗口</div>
-                    <div className="text-[11.5px] text-zinc-500">仅恢复距离中断未超过该时长的任务，避免陈旧任务突然自启。</div>
+                    <div className="text-[13px] font-medium text-zinc-900">{L("有效时间窗口", "Valid Time Window")}</div>
+                    <div className="text-[11.5px] text-zinc-500">{L("仅恢复距离中断未超过该时长的任务，避免陈旧任务突然自启。", "Only recover tasks interrupted within this window to avoid stale restarts.")}</div>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -330,7 +342,7 @@ export function TaskRecoverySettingsDialog({
                       type="number"
                       min={TASK_RECOVERY_MIN_WINDOW_MINUTES}
                       max={TASK_RECOVERY_MAX_WINDOW_MINUTES}
-                      aria-label="自定义恢复时间窗口（分钟）"
+                      aria-label={L("自定义恢复时间窗口（分钟）", "Custom recovery window (minutes)")}
                       disabled={disabledGuardrails || saveMutation.isPending}
                       value={customWindowDraft}
                       onChange={event => setCustomWindowDraft(event.target.value)}
@@ -338,7 +350,7 @@ export function TaskRecoverySettingsDialog({
                       onKeyDown={event => { if (event.key === 'Enter') commitCustomWindow(); }}
                       className="ui-field h-7 w-16 rounded-lg border border-zinc-200 bg-white px-2 text-center text-[12px] tabular-nums text-zinc-900 disabled:opacity-50"
                     />
-                    <span className="text-[12px] text-zinc-500">分钟</span>
+                    <span className="text-[12px] text-zinc-500">{L("分钟", "min")}</span>
                   </div>
                 </div>
               </div>
@@ -346,8 +358,8 @@ export function TaskRecoverySettingsDialog({
               {/* 最大自动恢复次数 */}
               <div className="flex flex-col gap-2 px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-medium text-zinc-900">单任务最大自动恢复次数</div>
-                  <div className="text-[11.5px] text-zinc-500">默认 1 次，达到上限后强制暂停自动续跑，杜绝崩溃死循环。</div>
+                  <div className="text-[13px] font-medium text-zinc-900">{L("单任务最大自动恢复次数", "Max Auto-Recoveries per Task")}</div>
+                  <div className="text-[11.5px] text-zinc-500">{L("默认 1 次，达到上限后强制暂停自动续跑，杜绝崩溃死循环。", "Default 1; pauses auto-resume after reaching the limit to prevent crash loops.")}</div>
                 </div>
                 <div className="inline-flex shrink-0 flex-wrap items-center gap-1">
                   {MAX_ATTEMPTS_OPTIONS.map(opt => {
@@ -376,8 +388,8 @@ export function TaskRecoverySettingsDialog({
               {config.mode === 'auto' && (
                 <div className="flex flex-col gap-2 px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-zinc-900">多任务错峰启动间隔</div>
-                    <div className="text-[11.5px] text-zinc-500">同时中断多个普通会话时按间隔排队拉起，防止并发打爆。</div>
+                    <div className="text-[13px] font-medium text-zinc-900">{L("多任务错峰启动间隔", "Staggered Launch Interval")}</div>
+                    <div className="text-[11.5px] text-zinc-500">{L("同时中断多个普通会话时按间隔排队拉起，防止并发打爆。", "Launches multiple interrupted sessions with staggered delays to prevent concurrency spikes.")}</div>
                   </div>
                   <div className="inline-flex shrink-0 flex-wrap items-center gap-1">
                     {STAGGER_PRESETS.map(opt => {
@@ -408,12 +420,12 @@ export function TaskRecoverySettingsDialog({
           <section className="rounded-xl border border-zinc-200/85 bg-zinc-50/75 px-3.5 py-3">
             <div className="flex items-center gap-1.5 text-[12px] font-semibold text-zinc-800">
               <ShieldAlert size={13} className="shrink-0 text-amber-600 dark:text-amber-400"/>
-              <span>内置硬性排除与防重复副作用机制</span>
+              <span>{L("内置硬性排除与防重复副作用机制", "Built-in Exclusions & Side-Effect Guards")}</span>
             </div>
             <ul className="mt-1.5 space-y-1 text-[11.5px] leading-5 text-zinc-600">
-              <li>• 严格排除「用户手动停止」（user_stopped）与已完成任务，绝不擅自重启用户取消的工作。</li>
-              <li>• 严格排除主小猫自身及小猫督办（assistant_tasks）接管的侧边任务，避免双重恢复冲突。</li>
-              <li>• 续跑轮次自动注入断点自检 Prompt，要求先核对工作区状态，严禁重复发消息/发版/删除等外部副作用操作。</li>
+              <li>{L("• 严格排除「用户手动停止」（user_stopped）与已完成任务，绝不擅自重启用户取消的工作。", "• Strictly excludes user-stopped and completed tasks — never restarts cancelled work.")}</li>
+              <li>{L("• 严格排除主小猫自身及小猫督办（assistant_tasks）接管的侧边任务，避免双重恢复冲突。", "• Excludes the companion and companion-supervised side tasks to prevent double recovery.")}</li>
+              <li>{L("• 续跑轮次自动注入断点自检 Prompt，要求先核对工作区状态，严禁重复发消息/发版/删除等外部副作用操作。", "• Injects a checkpoint verification prompt so the Agent inspects workspace state and never repeats side-effect actions.")}</li>
             </ul>
           </section>
 
@@ -421,18 +433,19 @@ export function TaskRecoverySettingsDialog({
           <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
             <div className="flex items-center gap-2 border-b border-zinc-100 px-3.5 py-2.5">
               <Clock size={14} className="shrink-0 text-zinc-500"/>
-              <h3 className="text-[13px] font-semibold text-zinc-900">最近恢复审计记录</h3>
-              <span className="ml-auto text-[11px] tabular-nums text-zinc-400">{records.length} 条</span>
+              <h3 className="text-[13px] font-semibold text-zinc-900">{L("最近恢复审计记录", "Recent Recovery Audit Log")}</h3>
+              <span className="ml-auto text-[11px] tabular-nums text-zinc-400">{records.length}  {L("条", " entries")}</span>
             </div>
             {recordsQuery.isLoading ? (
               <div className="flex items-center justify-center gap-2 py-5 text-[12px] text-zinc-400">
-                <Spinner size={13} label="加载恢复记录" className="text-zinc-400"/>
-                加载中…
+                <Spinner size={13} label={L("加载恢复记录", "Loading recovery records")} className="text-zinc-400"/>
+                
+                {L("加载中…", "Loading…")}
               </div>
             ) : records.length === 0 ? (
               <div className="flex items-center gap-2 px-3.5 py-4 text-[12px] text-zinc-500">
                 <Sparkles size={13} className="shrink-0 text-zinc-400"/>
-                <span>暂无因服务重启触发的普通会话恢复记录。</span>
+                <span>{L("暂无因服务重启触发的普通会话恢复记录。", "No restart-triggered recovery records yet.")}</span>
               </div>
             ) : (
               <div className="divide-y divide-zinc-100">
@@ -449,9 +462,9 @@ export function TaskRecoverySettingsDialog({
                           <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-zinc-800">{title}</span>
                         </div>
                         <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] tabular-nums text-zinc-400">
-                          <span>中断于 {formatRecordTime(item.interruptedAt)}</span>
+                          <span>{L("中断于", "Interrupted at ")} {formatRecordTime(item.interruptedAt)}</span>
                           <span>·</span>
-                          <span>策略：{taskRecoveryModeShortLabel(item.mode)}</span>
+                          <span>{L("策略：", "Policy: ")}{taskRecoveryModeShortLabel(item.mode)}</span>
                         </div>
                       </div>
                       {onOpenSession && (
@@ -460,7 +473,7 @@ export function TaskRecoverySettingsDialog({
                           onClick={() => { onClose(); onOpenSession(item.sessionId); }}
                           className="ui-press inline-flex h-7 shrink-0 items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2 text-[11.5px] font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
                         >
-                          <span>查看</span>
+                          <span>{L("查看", "View")}</span>
                           <ExternalLink size={11}/>
                         </button>
                       )}
@@ -472,6 +485,16 @@ export function TaskRecoverySettingsDialog({
           </section>
         </div>
       </div>
+  );
+
+  if (embedded) return inner;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 backdrop-blur-[2px] sm:p-5"
+      onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}
+    >
+      {inner}
     </div>
   );
 }

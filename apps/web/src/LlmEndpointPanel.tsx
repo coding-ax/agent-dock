@@ -5,6 +5,7 @@ import { AlertTriangle, Check, RefreshCw, Trash2, Wand2 } from 'lucide-react';
 import { Input } from 'antd';
 import { api, WebAccessDeniedError, type LlmAuthType, type LlmFormat } from './api';
 import { CompactSelect } from './CompactSelect';
+import { useBi } from './i18n';
 
 // 与 Agent 表单同一套输入样式：原生 <select> 的高度/圆角/字体不受控，和旁边的输入框
 // 放一起会明显不齐，所以下拉一律用 CompactSelect。
@@ -32,6 +33,7 @@ const emptyDraft: EndpointDraft = { format: 'openai-chat', baseUrl: '', apiKey: 
  * 模型去冷启动一个完整 Agent 进程。格式的选项与 Base URL 示例由服务端下发，前端不抄一份。
  */
 export function LlmEndpointPanel() {
+  const L = useBi();
   const queryClient = useQueryClient();
   const state = useQuery({ queryKey: ['llm'], queryFn: api.llm, refetchOnWindowFocus: false });
   // 本机 Agent 配置探测：只读不写，用户点「使用」才应用。403 时不弹访问受限提示，
@@ -91,7 +93,7 @@ export function LlmEndpointPanel() {
       // 把 hydrated 置回 true，新值就再也进不来了。这里直接用写库结果填。
       setDraft({ format: result.format ?? 'openai-chat', baseUrl: result.baseUrl ?? '', apiKey: '', model: result.model ?? '', auth: result.auth ?? 'api-key' });
       setHydrated(true);
-      setFeedback({ ok: true, message: '已应用检测到的端点，密钥已保存在服务端；可以直接试跑或继续修改。' });
+      setFeedback({ ok: true, message: L("已应用检测到的端点，密钥已保存在服务端；可以直接试跑或继续修改。", "Applied detected endpoint with key saved on the server. Test it or edit below.") });
       void queryClient.invalidateQueries({ queryKey: ['llm'] });
     },
     onError: error => setFeedback({ ok: false, message: error instanceof Error ? error.message : String(error) })
@@ -117,7 +119,7 @@ export function LlmEndpointPanel() {
         setTesting(false);
         // 以 done 的完整文本为准：万一某个增量事件丢了，这里仍能拿到全文。
         setStreamed(result.text);
-        setFeedback({ ok: true, message: result.truncated ? '试跑通过，但回答因长度上限被截断。' : '试跑通过。' });
+        setFeedback({ ok: true, message: result.truncated ? L("试跑通过，但回答因长度上限被截断。", "Test passed (response truncated at token limit).") : L("试跑通过。", "Test passed.") });
       },
       onFailed: error => { setTesting(false); setStreamed(undefined); setFeedback({ ok: false, message: error.message }); }
     });
@@ -127,86 +129,87 @@ export function LlmEndpointPanel() {
 
   return <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-5">
     <div className="flex items-center gap-2">
-      <span className="text-[13px] font-semibold text-zinc-800">模型端点</span>
+      <span className="text-[13px] font-semibold text-zinc-800">{L("模型端点", "Model Endpoint")}</span>
       {saved?.configured
-        ? <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[12px] font-medium text-emerald-700">已配置</span>
-        : <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[12px] text-zinc-600">未配置</span>}
+        ? <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[12px] font-medium text-emerald-700">{L("已配置", "Configured")}</span>
+        : <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[12px] text-zinc-600">{L("未配置", "Not Configured")}</span>}
       {saved?.configured && <span className="ml-auto min-w-0 truncate font-mono text-[12px] text-zinc-400" title={saved.model}>{saved.model}</span>}
     </div>
     <p className="mt-1.5 text-[12px] leading-5 text-zinc-500">
-      平台要靠模型能力的功能（自动写描述、生成配置等）都走这里直连模型，一次 HTTP 往返。填好下面四项即可。
+      
+      {L("平台要靠模型能力的功能（自动写描述、生成配置等）都走这里直连模型，一次 HTTP 往返。填好下面四项即可。", "Built-in AI utilities (auto-titles, AI writing assist, AI Theme Studio) call this endpoint directly.")}
     </p>
 
     {candidates.length > 0 ? <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/70 p-3">
-      <div className="flex items-center gap-1.5 text-[12px] font-medium text-emerald-800"><Wand2 size={13}/>检测到本机已有的模型端点</div>
+      <div className="flex items-center gap-1.5 text-[12px] font-medium text-emerald-800"><Wand2 size={13}/>{L("检测到本机已有的模型端点", "Detected local model endpoints")}</div>
       <div className="mt-1.5 space-y-1.5">
         {candidates.map(candidate => <div key={candidate.id} className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             <div className="truncate text-[12px] font-medium text-emerald-900" title={`${candidate.label} · ${candidate.baseUrl} · ${candidate.model}`}>{candidate.label}</div>
             <div className="truncate font-mono text-[12px] text-emerald-700/80" title={`${candidate.baseUrl} · ${candidate.model}`}>{candidate.baseUrl} · {candidate.model}</div>
           </div>
-          <button type="button" disabled={applyDetected.isPending} onClick={() => applyDetected.mutate(candidate.id)} className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-emerald-300 bg-white px-2 text-[12px] font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-40">{applyDetected.isPending && <Spinner size={11}/>}使用</button>
+          <button type="button" disabled={applyDetected.isPending} onClick={() => applyDetected.mutate(candidate.id)} className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-emerald-300 bg-white px-2 text-[12px] font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-40">{applyDetected.isPending && <Spinner size={11}/>}{L("使用", "Use")}</button>
         </div>)}
       </div>
-      <p className="mt-1.5 text-[12px] leading-4 text-emerald-700/80">密钥只在服务端读取，不会下发浏览器；应用后仍可手动修改。</p>
+      <p className="mt-1.5 text-[12px] leading-4 text-emerald-700/80">{L("密钥只在服务端读取，不会下发浏览器；应用后仍可手动修改。", "API keys are read only on the server and never exposed to the browser.")}</p>
     </div> : detectFailed ? <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2">
       <AlertTriangle size={13} className="mt-0.5 shrink-0 text-amber-600"/>
       <div className="min-w-0 flex-1">
-        <div className="text-[12px] font-medium text-amber-800">自动识别暂不可用</div>
-        <p className="mt-0.5 break-words text-[12px] leading-4 text-amber-700/90">{detectRouteMissing ? '服务端还没有检测接口（版本较旧），升级 daemon 后可用；也可以直接在下面手动填写。' : detected.error.message}</p>
+        <div className="text-[12px] font-medium text-amber-800">{L("自动识别暂不可用", "Auto-detection unavailable")}</div>
+        <p className="mt-0.5 break-words text-[12px] leading-4 text-amber-700/90">{detectRouteMissing ? L("服务端还没有检测接口（版本较旧），升级 daemon 后可用；也可以直接在下面手动填写。", "Server does not expose auto-detection yet; enter settings manually below.") : detected.error.message}</p>
       </div>
-      <button type="button" onClick={() => void detected.refetch()} className="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[12px] font-medium text-amber-700 hover:bg-amber-100" aria-label="重新检测"><RefreshCw size={11}/>重试</button>
+      <button type="button" onClick={() => void detected.refetch()} className="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[12px] font-medium text-amber-700 hover:bg-amber-100" aria-label={L("重新检测", "Re-detect")}><RefreshCw size={11}/>{L("重试", "Retry")}</button>
     </div> : detected.isSuccess ? <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50/70 px-3 py-2">
       <div className="flex items-center gap-1.5 text-[12px] font-medium text-zinc-600">
-        <Wand2 size={13}/>自动识别
-        <span className="font-normal text-zinc-400">未发现本机已有的端点</span>
-        <button type="button" onClick={() => void detected.refetch()} className="ml-auto flex h-6 items-center gap-1 rounded px-1.5 text-[12px] text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" aria-label="重新检测"><RefreshCw size={11}/>重新检测</button>
+        <Wand2 size={13}/>{L("自动识别", "Auto-Detect")}
+        <span className="font-normal text-zinc-400">{L("未发现本机已有的端点", "No local endpoints detected")}</span>
+        <button type="button" onClick={() => void detected.refetch()} className="ml-auto flex h-6 items-center gap-1 rounded px-1.5 text-[12px] text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" aria-label={L("重新检测", "Re-detect")}><RefreshCw size={11}/>{L("重新检测", "Re-detect")}</button>
       </div>
-      <p className="mt-1 text-[12px] leading-4 text-zinc-400">会读取 Claude Code 的 ~/.claude/settings.json、Codex 的 ~/.codex/config.toml，以及 ANTHROPIC_* / OPENAI_* 环境变量。</p>
+      <p className="mt-1 text-[12px] leading-4 text-zinc-400">{L("会读取 Claude Code 的 ~/.claude/settings.json、Codex 的 ~/.codex/config.toml，以及 ANTHROPIC_* / OPENAI_* 环境变量。", "Scans ~/.claude/settings.json, ~/.codex/config.toml, and ANTHROPIC_* / OPENAI_* environment variables.")}</p>
     </div> : null}
 
     <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div>
-        <span className={labelClass}>格式</span>
-        <CompactSelect popupWidth={360} options={formats.map(option => ({ value: option.value, label: option.label, meta: option.value }))} value={draft.format} placeholder="选择格式" disabledText="读取中…" onChange={value => patch({ format: value as LlmFormat })}/>
+        <span className={labelClass}>{L("格式", "Format")}</span>
+        <CompactSelect popupWidth={360} options={formats.map(option => ({ value: option.value, label: option.label, meta: option.value }))} value={draft.format} placeholder={L("选择格式", "Select format")} disabledText={L("读取中…", "Loading…")} onChange={value => patch({ format: value as LlmFormat })}/>
       </div>
       <div>
-        <span className={labelClass}>模型</span>
-        <Input size="large" className="mt-1.5 font-mono text-[12px]" value={draft.model} placeholder="例如 gpt-5 或 claude-fable-5" onChange={event => patch({ model: event.target.value })}/>
-        <p className={hintClass}>填模型 id，不是显示名。</p>
+        <span className={labelClass}>{L("模型", "Model")}</span>
+        <Input size="large" className="mt-1.5 font-mono text-[12px]" value={draft.model} placeholder={L("例如 gpt-5 或 claude-fable-5", "e.g., gpt-5 or claude-sonnet-4")} onChange={event => patch({ model: event.target.value })}/>
+        <p className={hintClass}>{L("填模型 id，不是显示名。", "Enter the model ID, not display name.")}</p>
       </div>
     </div>
 
     {draft.format === 'anthropic-messages' && authTypes.length > 0 && <div className="mt-3">
-      <span className={labelClass}>鉴权头</span>
-      <CompactSelect popupWidth={420} options={authTypes.map(option => ({ value: option.value, label: option.label }))} value={draft.auth} placeholder="选择鉴权方式" disabledText="" onChange={value => patch({ auth: value as LlmAuthType })}/>
-      <p className={hintClass}>官方 API Key 用 x-api-key；Claude Code 的 ANTHROPIC_AUTH_TOKEN 等代理凭证用 Bearer。</p>
+      <span className={labelClass}>{L("鉴权头", "Auth Header")}</span>
+      <CompactSelect popupWidth={420} options={authTypes.map(option => ({ value: option.value, label: option.label }))} value={draft.auth} placeholder={L("选择鉴权方式", "Select auth header")} disabledText="" onChange={value => patch({ auth: value as LlmAuthType })}/>
+      <p className={hintClass}>{L("官方 API Key 用 x-api-key；Claude Code 的 ANTHROPIC_AUTH_TOKEN 等代理凭证用 Bearer。", "Use x-api-key for official Anthropic keys; use Bearer for OpenAI or proxy tokens.")}</p>
     </div>}
 
     <div className="mt-3">
       <span className={labelClass}>Base URL</span>
       <Input size="large" className="mt-1.5 font-mono text-[12px]" value={draft.baseUrl} placeholder={activeFormat?.baseUrlPlaceholder ?? 'https://api.openai.com/v1'} onChange={event => patch({ baseUrl: event.target.value })}/>
-      <p className={hintClass}>带不带 /v1 都可以，会自动补齐。</p>
+      <p className={hintClass}>{L("带不带 /v1 都可以，会自动补齐。", "Works with or without trailing /v1.")}</p>
     </div>
 
     <div className="mt-3">
       <span className={labelClass}>API Key</span>
-      <Input.Password size="large" className="mt-1.5 font-mono text-[12px]" value={draft.apiKey} placeholder={hasKey ? '已保存，留空不修改' : 'sk-…'} autoComplete="off" onChange={event => patch({ apiKey: event.target.value })}/>
-      <p className={hintClass}>明文存在本机数据库里，只在调用时发给你填的这个地址，不会下发给浏览器。</p>
+      <Input.Password size="large" className="mt-1.5 font-mono text-[12px]" value={draft.apiKey} placeholder={hasKey ? L("已保存，留空不修改", "Saved — leave blank to keep") : 'sk-…'} autoComplete="off" onChange={event => patch({ apiKey: event.target.value })}/>
+      <p className={hintClass}>{L("明文存在本机数据库里，只在调用时发给你填的这个地址，不会下发给浏览器。", "Stored locally in SQLite and sent only to your configured endpoint; never sent to the browser.")}</p>
     </div>
 
     <div className="mt-4 flex flex-wrap items-center gap-2">
-      <button type="button" disabled={!canSave || save.isPending} onClick={() => save.mutate()} className="ui-press flex h-9 items-center gap-1.5 rounded-md bg-zinc-900 px-4 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">{save.isPending && <Spinner size={13}/>}保存</button>
+      <button type="button" disabled={!canSave || save.isPending} onClick={() => save.mutate()} className="ui-press flex h-9 items-center gap-1.5 rounded-md bg-zinc-900 px-4 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">{save.isPending && <Spinner size={13}/>}{L("保存", "Save")}</button>
       {saved?.configured && <>
-        <button type="button" disabled={testing} onClick={runTest} className={buttonSecondary}>{testing ? <Spinner size={13}/> : <RefreshCw size={13}/>}{testing ? '试跑中…' : '试跑'}</button>
-        <button type="button" disabled={clear.isPending} onClick={() => clear.mutate()} className={`${buttonSecondary} ml-auto text-zinc-500`}><Trash2 size={13}/>清除</button>
+        <button type="button" disabled={testing} onClick={runTest} className={buttonSecondary}>{testing ? <Spinner size={13}/> : <RefreshCw size={13}/>}{testing ? L("试跑中…", "Testing…") : L("试跑", "Test")}</button>
+        <button type="button" disabled={clear.isPending} onClick={() => clear.mutate()} className={`${buttonSecondary} ml-auto text-zinc-500`}><Trash2 size={13}/>{L("清除", "Clear")}</button>
       </>}
     </div>
 
     {/* 流式试跑的实时输出。空串也占位，让用户看到「已经在出了」而不是没反应。 */}
     {streamed !== undefined && <div className="ui-status-banner-in mt-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
-      <div className="text-[12px] font-medium text-zinc-400">模型输出{testing ? '（生成中…）' : ''}</div>
-      <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-zinc-800">{streamed || (testing ? '…' : '（没有返回内容）')}</p>
+      <div className="text-[12px] font-medium text-zinc-400">{L("模型输出", "Model Output")}{testing ? L("（生成中…）", "(Generating…)") : ''}</div>
+      <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-zinc-800">{streamed || (testing ? '…' : L("（没有返回内容）", "(Empty response)"))}</p>
     </div>}
 
     {feedback && <div className={`ui-status-banner-in mt-3 flex items-start gap-2 rounded-md border px-3 py-2 text-[12px] leading-5 ${feedback.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>{feedback.ok ? <Check size={13} className="ui-icon-pop mt-0.5 shrink-0"/> : <AlertTriangle size={13} className="mt-0.5 shrink-0"/>}<span className="min-w-0 break-words">{feedback.message}</span></div>}

@@ -15,10 +15,11 @@ import { AgentIcon } from './AgentIcon';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { useToast } from './Toast';
 import { bindableSessions, canResume, defaultAppendTarget, deliveryHints, deliveryLabels, describeTrigger, emptyScheduleForm, formatScheduleTime, isMainSessionScheduleTarget, parseScheduleTemplate, recentWorkspaces, runStatusLabels, SCHEDULE_MAIN_SESSION_ID, scheduleFormToInput, scheduleFormToUpdate, scheduleState, scheduleToForm, type ScheduleFormState, describeCountdown, summarizeSchedules, type ScheduleSummary } from './schedule-view';
+import { bi, useBi } from './i18n';
 
 /** 全局列表里「在哪里跑」：跟随主会话显示动态提示，绑了会话显示会话标题，独立任务显示 Agent · 目录。 */
 function scheduleTarget(schedule: Schedule, titles: Map<string, string>, agents: Agent[]): string | undefined {
-  if (isMainSessionScheduleTarget(schedule.sessionId)) return '跟随当前主会话';
+  if (isMainSessionScheduleTarget(schedule.sessionId)) return bi("跟随当前主会话", "Follow Main Session");
   if (schedule.sessionId) return titles.get(schedule.sessionId);
   const template = parseScheduleTemplate(schedule.sessionTemplate);
   if (!template) return undefined;
@@ -42,7 +43,7 @@ function useScheduleActions() {
     onSuccess: result => {
       refresh();
       void qc.invalidateQueries({ queryKey: ['sessions'] });
-      toast.show(result.status === 'delivered' ? '已触发一次' : `本次${runStatusLabels[result.status]}：${result.reason ?? ''}`, result.status === 'delivered' ? 'info' : 'error');
+      toast.show(result.status === 'delivered' ? bi("已触发一次", "Triggered once") : bi(`本次${runStatusLabels[result.status]}：${result.reason ?? ''}`, `Run ${runStatusLabels[result.status]}: ${result.reason ?? ''}`), result.status === 'delivered' ? 'info' : 'error');
     },
     onError
   });
@@ -53,6 +54,7 @@ const runPill = { delivered: 'bg-emerald-50 text-emerald-700', skipped: 'bg-ambe
 
 /** 一条执行记录：状态徽标 + 任务名/时间 + 完整原因（可换行，不再被截成一行省略号）+ 打开会话。 */
 function RunItem({ run, title, now, onOpenSession }: { run: ScheduleRun; title?: string; now: Date; onOpenSession(id: string): void }) {
+  const L = useBi();
   return <div className="flex min-w-0 items-start gap-3 px-3 py-2.5">
     <span className={`mt-px shrink-0 rounded-md px-1.5 py-0.5 text-[12px] font-medium ${runPill[run.status]}`}>{runStatusLabels[run.status]}</span>
     <div className="min-w-0 flex-1">
@@ -62,23 +64,25 @@ function RunItem({ run, title, now, onOpenSession }: { run: ScheduleRun; title?:
       </div>
       {run.reason && <div className={`mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 ${run.status === 'failed' ? 'text-red-600' : 'text-zinc-500'}`}>{run.reason}</div>}
     </div>
-    {run.sessionId && run.status === 'delivered' && <Button size="small" icon={<ExternalLink size={12}/>} onClick={() => onOpenSession(run.sessionId!)} className="shrink-0 text-[12px]">查看会话</Button>}
+    {run.sessionId && run.status === 'delivered' && <Button size="small" icon={<ExternalLink size={12}/>} onClick={() => onOpenSession(run.sessionId!)} className="shrink-0 text-[12px]">{L("查看会话", "Open Session")}</Button>}
   </div>;
 }
 
 function ScheduleRuns({ schedule, now, onOpenSession }: { schedule: Schedule; now: Date; onOpenSession(id: string): void }) {
+  const L = useBi();
   const runs = useQuery({ queryKey: ['schedules', schedule.id, 'runs'], queryFn: () => api.scheduleRuns(schedule.id) });
   return <div className="border-t border-zinc-100 bg-zinc-50/60 px-4 py-3">
-    <div className="mb-1 text-[12px] font-medium text-zinc-400">发送内容</div>
+    <div className="mb-1 text-[12px] font-medium text-zinc-400">{L("发送内容", "Prompt")}</div>
     <div className="mb-3 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[12px] leading-5 text-zinc-700">{schedule.prompt}</div>
-    <div className="mb-1 text-[12px] font-medium text-zinc-400">最近执行</div>
-    {runs.isLoading && <div className="flex items-center gap-1.5 text-[12px] text-zinc-400"><Spinner size={11}/>读取中…</div>}
-    {runs.data?.length === 0 && <div className="text-[12px] text-zinc-400">还没有触发过</div>}
+    <div className="mb-1 text-[12px] font-medium text-zinc-400">{L("最近执行", "Recent Runs")}</div>
+    {runs.isLoading && <div className="flex items-center gap-1.5 text-[12px] text-zinc-400"><Spinner size={11}/>{L("读取中…", "Loading…")}</div>}
+    {runs.data?.length === 0 && <div className="text-[12px] text-zinc-400">{L("还没有触发过", "Not run yet")}</div>}
     {!!runs.data?.length && <div className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200 bg-white">{runs.data.map(run => <RunItem key={run.id} run={run} now={now} onOpenSession={onOpenSession}/>)}</div>}
   </div>;
 }
 
 function ScheduleRow({ schedule, sessionTitle, lastRun, now, actions, onOpenSession, onEdit }: { schedule: Schedule; sessionTitle?: string; lastRun?: ScheduleRun; now: Date; actions: ReturnType<typeof useScheduleActions>; onOpenSession(id: string): void; onEdit(schedule: Schedule): void }) {
+  const L = useBi();
   const [open, setOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const state = scheduleState(schedule);
@@ -95,13 +99,13 @@ function ScheduleRow({ schedule, sessionTitle, lastRun, now, actions, onOpenSess
           <div className="flex min-w-0 items-center gap-2">
             <span className="min-w-0 truncate text-[13px] font-medium text-zinc-900">{schedule.name}</span>
             <Tag bordered={false} color={stateColor[state.tone]} className="m-0 shrink-0 text-[12px]">{state.label}</Tag>
-            {isMainSessionScheduleTarget(schedule.sessionId) && <Tag bordered={false} color="blue" className="m-0 shrink-0 text-[12px]">跟随主会话</Tag>}
+            {isMainSessionScheduleTarget(schedule.sessionId) && <Tag bordered={false} color="blue" className="m-0 shrink-0 text-[12px]">{L("跟随主会话", "Follow Main")}</Tag>}
           </div>
           {schedule.prompt.trim() !== schedule.name.trim() && <div className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[12px] leading-5 text-zinc-500">{schedule.prompt}</div>}
           <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-zinc-500">
             <span className="inline-flex items-center gap-1 text-zinc-700"><Repeat size={11} className="text-zinc-400"/>{describeTrigger(schedule)}</span>
             <span className="inline-flex min-w-0 items-center gap-1"><MessageSquare size={11} className="shrink-0 text-zinc-400"/><span className="truncate">{deliveryLabels[schedule.delivery]}{sessionTitle ? ` · ${sessionTitle}` : ''}</span></span>
-            <span className="inline-flex items-center gap-1 tabular-nums"><History size={11} className="text-zinc-400"/>{lastRun ? <>上次 {describeRunTime(new Date(lastRun.fireAt), now)} <span className={runTone[lastRun.status]}>{runStatusLabels[lastRun.status]}</span></> : '还没触发过'}{schedule.runCount > 0 && <span className="text-zinc-400">（共 {schedule.runCount} 次）</span>}</span>
+            <span className="inline-flex items-center gap-1 tabular-nums"><History size={11} className="text-zinc-400"/>{lastRun ? <>{L("上次", "Last ")} {describeRunTime(new Date(lastRun.fireAt), now)} <span className={runTone[lastRun.status]}>{runStatusLabels[lastRun.status]}</span></> : L("还没触发过", "Never run")}{schedule.runCount > 0 && <span className="text-zinc-400">{L("（共", " (")} {schedule.runCount}  {L("次）", " runs)")}</span>}</span>
           </div>
         </div>
       </button>
@@ -110,19 +114,20 @@ function ScheduleRow({ schedule, sessionTitle, lastRun, now, actions, onOpenSess
         <div className="mt-0.5 text-[12px] tabular-nums text-zinc-400">{describeCountdown(nextAt, now)}</div>
       </div>}
       <div className="flex w-full shrink-0 items-center justify-end gap-1 pl-5 sm:w-auto sm:pl-0">
-        <Tooltip title="编辑"><Button type="text" size="small" aria-label="编辑" disabled={busy} icon={<Pencil size={14}/>} onClick={() => onEdit(schedule)} className="text-zinc-500"/></Tooltip>
-        <Tooltip title="立即执行一次"><Button type="text" size="small" aria-label="立即执行一次" disabled={busy} loading={actions.run.isPending && actions.run.variables === schedule.id} icon={<Zap size={14}/>} onClick={() => actions.run.mutate(schedule.id)} className="text-zinc-500"/></Tooltip>
-        <Tooltip title="删除"><Button type="text" size="small" danger aria-label="删除" disabled={busy} icon={<Trash2 size={14}/>} onClick={() => setConfirmDelete(true)} className="opacity-60 group-hover:opacity-100"/></Tooltip>
-        {switchable && <Tooltip title={schedule.enabled ? '暂停' : '恢复'}><Switch size="small" aria-label={schedule.enabled ? '暂停' : '恢复'} checked={schedule.enabled} loading={toggling} disabled={busy && !toggling} onChange={on => (on ? actions.resume : actions.pause).mutate(schedule.id)} className="ml-1"/></Tooltip>}
+        <Tooltip title={L("编辑", "Edit")}><Button type="text" size="small" aria-label={L("编辑", "Edit")} disabled={busy} icon={<Pencil size={14}/>} onClick={() => onEdit(schedule)} className="text-zinc-500"/></Tooltip>
+        <Tooltip title={L("立即执行一次", "Run Now")}><Button type="text" size="small" aria-label={L("立即执行一次", "Run Now")} disabled={busy} loading={actions.run.isPending && actions.run.variables === schedule.id} icon={<Zap size={14}/>} onClick={() => actions.run.mutate(schedule.id)} className="text-zinc-500"/></Tooltip>
+        <Tooltip title={L("删除", "Delete")}><Button type="text" size="small" danger aria-label={L("删除", "Delete")} disabled={busy} icon={<Trash2 size={14}/>} onClick={() => setConfirmDelete(true)} className="opacity-60 group-hover:opacity-100"/></Tooltip>
+        {switchable && <Tooltip title={schedule.enabled ? L("暂停", "Pause") : L("恢复", "Resume")}><Switch size="small" aria-label={schedule.enabled ? L("暂停", "Pause") : L("恢复", "Resume")} checked={schedule.enabled} loading={toggling} disabled={busy && !toggling} onChange={on => (on ? actions.resume : actions.pause).mutate(schedule.id)} className="ml-1"/></Tooltip>}
       </div>
     </div>
     {open && <ScheduleRuns schedule={schedule} now={now} onOpenSession={onOpenSession}/>}
-    <ConfirmDialog open={confirmDelete} tone="danger" title="删除这个定时任务？" description={`「${schedule.name}」不会再触发。已经产生的会话不受影响。`} confirmLabel="删除" busy={actions.remove.isPending} onCancel={() => setConfirmDelete(false)} onConfirm={() => actions.remove.mutate(schedule.id, { onSuccess: () => setConfirmDelete(false) })}/>
+    <ConfirmDialog open={confirmDelete} tone="danger" title={L("删除这个定时任务？", "Delete this schedule?")} description={L(`「${schedule.name}」不会再触发。已经产生的会话不受影响。`, `"${schedule.name}" will stop running. Existing sessions remain intact.`)} confirmLabel={L("删除", "Delete")} busy={actions.remove.isPending} onCancel={() => setConfirmDelete(false)} onConfirm={() => actions.remove.mutate(schedule.id, { onSuccess: () => setConfirmDelete(false) })}/>
   </div>;
 }
 
 /** 列表顶部的概览：一眼看到有多少在跑、今天还会触发几次、最近有没有失败。 */
 function ScheduleOverview({ summary, now }: { summary: ScheduleSummary; now: Date }) {
+  const L = useBi();
   const cell = (label: string, value: ReactNode, tone = 'text-zinc-900') => <div className="min-w-0 rounded-xl border border-zinc-200/70 bg-zinc-50/70 px-3 py-2">
     <div className="text-[12px] text-zinc-400">{label}</div>
     <div className={`mt-0.5 truncate text-[15px] font-semibold tabular-nums ${tone}`}>{value}</div>
@@ -130,14 +135,14 @@ function ScheduleOverview({ summary, now }: { summary: ScheduleSummary; now: Dat
   const next = summary.next?.nextRunAt ? new Date(summary.next.nextRunAt) : undefined;
   return <div className="shrink-0 border-b border-zinc-100 px-4 py-3">
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {cell('启用中', <>{summary.active}{summary.inactive > 0 && <span className="ml-1 text-[12px] font-normal text-zinc-400">/ 停用 {summary.inactive}</span>}</>)}
-      {cell('今天还会触发', summary.dueToday)}
-      {cell('24 小时内已投递', summary.ran24h)}
-      {cell('24 小时内失败', summary.failed24h, summary.failed24h ? 'text-red-600' : 'text-zinc-900')}
+      {cell(L("启用中", "Active"), <>{summary.active}{summary.inactive > 0 && <span className="ml-1 text-[12px] font-normal text-zinc-400">{L("/ 停用", "/ Paused")} {summary.inactive}</span>}</>)}
+      {cell(L("今天还会触发", "Due Today"), summary.dueToday)}
+      {cell(L("24 小时内已投递", "Delivered (24h)"), summary.ran24h)}
+      {cell(L("24 小时内失败", "Failed (24h)"), summary.failed24h, summary.failed24h ? 'text-red-600' : 'text-zinc-900')}
     </div>
     {next && summary.next && <div className="mt-2 flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500">
       <AlarmClock size={12} className="shrink-0 text-zinc-400"/>
-      <span className="shrink-0">下一个</span>
+      <span className="shrink-0">{L("下一个", "Next")}</span>
       <span className="min-w-0 truncate font-medium text-zinc-800">{summary.next.name}</span>
       <span className="shrink-0 tabular-nums">{describeRunTime(next, now)}（{describeCountdown(next, now)}）</span>
     </div>}
@@ -146,11 +151,12 @@ function ScheduleOverview({ summary, now }: { summary: ScheduleSummary; now: Dat
 
 /** 最近执行（跨任务）：列表下方的流水，空闲时也能看到它们在干活。 */
 function RecentRuns({ runs, names, now, onOpenSession }: { runs: ScheduleRun[]; names: Map<string, string>; now: Date; onOpenSession(id: string): void }) {
+  const L = useBi();
   if (!runs.length) return null;
   return <div className="px-4 pb-4 pt-3">
-    <div className="mb-1.5 text-[12px] font-medium text-zinc-400">最近执行</div>
+    <div className="mb-1.5 text-[12px] font-medium text-zinc-400">{L("最近执行", "Recent Runs")}</div>
     <div className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200">
-      {runs.slice(0, 12).map(run => <RunItem key={run.id} run={run} title={names.get(run.scheduleId) ?? '已删除的任务'} now={now} onOpenSession={onOpenSession}/>)}
+      {runs.slice(0, 12).map(run => <RunItem key={run.id} run={run} title={names.get(run.scheduleId) ?? L("已删除的任务", "Deleted Schedule")} now={now} onOpenSession={onOpenSession}/>)}
     </div>
   </div>;
 }
@@ -163,6 +169,7 @@ function RecentRuns({ runs, names, now, onOpenSession }: { runs: ScheduleRun[]; 
  * - 底部始终显示一句话摘要和接下来几次触发时间，创建前就知道它会在什么时候、在哪里跑。
  */
 function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDone, onCancel }: { session?: Session; mainSessionId?: string; agents: Agent[]; sessions: Session[]; /** 传入时是编辑这条任务：表单用它预填，提交走更新而不是创建。 */ editing?: Schedule; onDone(name: string): void; onCancel(): void }) {
+  const L = useBi();
   const qc = useQueryClient();
   const candidates = useMemo(() => bindableSessions(sessions), [sessions]);
   const enabledAgents = useMemo(() => agents.filter(agent => !agent.disabled), [agents]);
@@ -235,10 +242,10 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
   const appendTarget = editing ? sessions.find(item => item.id === form.appendSessionId) : session ?? candidates.find(item => item.id === form.appendSessionId);
   const target = form.delivery === 'append'
     ? appendFollowsMain
-      ? '追加到当前活跃主会话（换代自动跟随）'
-      : appendTarget ? `追加到「${appendTarget.title || appendTarget.cwd}」` : '还没选要追加的会话'
-    : `用 ${enabledAgents.find(agent => agent.id === form.agentId)?.name ?? '…'} 在 ${form.cwd.split(/[\\/]/).filter(Boolean).pop() || '…'} 新开会话`;
-  const when = form.kind === 'once' ? (upcoming[0] ? describeRunTime(upcoming[0], now) : '未选时间') : trigger?.intervalMinutes ? describeInterval(trigger.intervalMinutes) : trigger?.cron ? describeCron(trigger.cron) : '周期未填完整';
+      ? L("追加到当前活跃主会话（换代自动跟随）", "Append to active Main Session (auto-follows handover)")
+      : appendTarget ? L(`追加到「${appendTarget.title || appendTarget.cwd}」`, `Append to "${appendTarget.title || appendTarget.cwd}"`) : L("还没选要追加的会话", "No target session selected")
+    : L(`用 ${enabledAgents.find(agent => agent.id === form.agentId)?.name ?? '…'} 在 ${form.cwd.split(/[\\/]/).filter(Boolean).pop() || '…'} 新开会话`, `New session with ${enabledAgents.find(agent => agent.id === form.agentId)?.name ?? '…'} in ${form.cwd.split(/[\\/]/).filter(Boolean).pop() || '…'}`);
+  const when = form.kind === 'once' ? (upcoming[0] ? describeRunTime(upcoming[0], now) : L("未选时间", "No time selected")) : trigger?.intervalMinutes ? describeInterval(trigger.intervalMinutes) : trigger?.cron ? describeCron(trigger.cron) : L("周期未填完整", "Incomplete schedule");
 
   const label = 'text-[12px] font-medium text-zinc-700';
   const sub = 'text-[12px] text-zinc-400';
@@ -247,13 +254,13 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
   const scheduleResetKey = editing?.id ?? 'new-schedule';
   const selectedAgentName = enabledAgents.find(agent => agent.id === form.agentId)?.name;
   const agentOptions = enabledAgents.map(agent => ({ value: agent.id, label: <span className="flex items-center gap-2"><AgentIcon agentId={agent.id} agentName={agent.name} size={15}/>{agent.name}</span> }));
-  const modelOptions = [{ value: '', label: models.data?.defaultModel ? `Agent 默认（${models.data.defaultModel}）` : 'Agent 默认' }, ...(models.data?.models ?? []).map(item => ({ value: item.id, label: item.name }))];
+  const modelOptions = [{ value: '', label: models.data?.defaultModel ? L(`Agent 默认（${models.data.defaultModel}）`, `Agent Default (${models.data.defaultModel})`) : L("Agent 默认", "Agent Default") }, ...(models.data?.models ?? []).map(item => ({ value: item.id, label: item.name }))];
   const workspaceOptions = workspaces.map(path => ({ value: path, label: <span className="flex min-w-0 items-baseline gap-2"><span className="shrink-0">{path.split(/[\\/]/).filter(Boolean).pop() || path}</span><span className="min-w-0 truncate font-mono text-[12px] text-zinc-400">{path}</span></span> }));
   return <div className="flex min-h-0 flex-1 flex-col" onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); } }}>
     <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-4 sm:px-5">
       <div className="flex flex-col gap-1.5">
         <AiFieldHeader
-          label="到点让 Agent 做什么"
+          label={L("到点让 Agent 做什么", "What should the Agent do")}
           htmlFor="schedule-prompt-input"
           assist={
             <AiTextAssistControl
@@ -267,8 +274,8 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
               onFlash={promptFlash.triggerFlash}
               resetKey={scheduleResetKey}
               context={() => ({
-                field: '定时任务执行指令（Prompt）',
-                purpose: '到点后发送给 Agent 独立执行的完整任务指令；到点时 Agent 可能看不到当前对话，需要自包含背景、目标和汇报要求',
+                field: L("定时任务执行指令（Prompt）", "Scheduled task prompt"),
+                purpose: L("到点后发送给 Agent 独立执行的完整任务指令；到点时 Agent 可能看不到当前对话，需要自包含背景、目标和汇报要求", "Self-contained prompt sent when triggered; include full background, goals, and reporting expectations"),
                 scheduleSummary: `${when} · ${target}`,
                 ...(selectedAgentName ? { agentName: selectedAgentName } : {}),
                 ...(form.cwd.trim() ? { cwd: form.cwd.trim() } : {}),
@@ -279,50 +286,50 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
           }
         />
         <div className={`rounded-lg ${promptFlash.flashClass}`}>
-          <Input.TextArea id="schedule-prompt-input" autoFocus value={form.prompt} onChange={event => update({ prompt: event.target.value })} autoSize={{ minRows: 3, maxRows: 8 }} placeholder="写成能独立执行的完整指令，例如：汇总昨天群里的消息，列出待办" className="text-[13px] leading-5"/>
+          <Input.TextArea id="schedule-prompt-input" autoFocus value={form.prompt} onChange={event => update({ prompt: event.target.value })} autoSize={{ minRows: 3, maxRows: 8 }} placeholder={L("写成能独立执行的完整指令，例如：汇总昨天群里的消息，列出待办", "Write a self-contained instruction, e.g., Summarize yesterday's group chat and list action items")} className="text-[13px] leading-5"/>
         </div>
-        <span className={sub}>到点时 Agent 看不到现在的对话，把背景写进去。</span>
+        <span className={sub}>{L("到点时 Agent 看不到现在的对话，把背景写进去。", "Include all context needed — the Agent may not see this chat when triggered.")}</span>
       </div>
 
-      <div className="flex flex-col gap-2"><span className={label}>什么时候</span>
-        <Segmented<ScheduleFormState['kind']> className="self-start" value={form.kind} onChange={kind => update({ kind })} options={[{ value: 'recurring', label: '重复' }, { value: 'once', label: '只一次' }]}/>
+      <div className="flex flex-col gap-2"><span className={label}>{L("什么时候", "When")}</span>
+        <Segmented<ScheduleFormState['kind']> className="self-start" value={form.kind} onChange={kind => update({ kind })} options={[{ value: 'recurring', label: L("重复", "Recurring") }, { value: 'once', label: L("只一次", "One-time") }]}/>
         {form.kind === 'recurring' ? <>
           <div className="flex flex-wrap items-center gap-2">
             <Select className="w-28" value={form.recurrence.kind} onChange={kind => setRecurrence({ kind })} options={recurrenceKinds.map(item => ({ value: item.kind, label: item.label }))}/>
-            {(form.recurrence.kind === 'daily' || form.recurrence.kind === 'weekdays' || form.recurrence.kind === 'weekly') && <TimePicker aria-label="触发时间" format="HH:mm" minuteStep={5} needConfirm={false} allowClear={false} showNow={false} value={form.recurrence.time ? dayjs(form.recurrence.time, 'HH:mm') : null} onChange={value => setRecurrence({ time: value ? value.format('HH:mm') : '' })} className="w-28"/>}
-            {form.recurrence.kind === 'hourly' && <Select aria-label="每小时的第几分" className="w-32" value={form.recurrence.minute} onChange={minute => setRecurrence({ minute })} options={[0, 5, 10, 15, 20, 30, 45].map(minute => ({ value: minute, label: minute === 0 ? '整点' : `第 ${minute} 分` }))}/>}
+            {(form.recurrence.kind === 'daily' || form.recurrence.kind === 'weekdays' || form.recurrence.kind === 'weekly') && <TimePicker aria-label={L("触发时间", "Trigger time")} format="HH:mm" minuteStep={5} needConfirm={false} allowClear={false} showNow={false} value={form.recurrence.time ? dayjs(form.recurrence.time, 'HH:mm') : null} onChange={value => setRecurrence({ time: value ? value.format('HH:mm') : '' })} className="w-28"/>}
+            {form.recurrence.kind === 'hourly' && <Select aria-label={L("每小时的第几分", "Minute of hour")} className="w-32" value={form.recurrence.minute} onChange={minute => setRecurrence({ minute })} options={[0, 5, 10, 15, 20, 30, 45].map(minute => ({ value: minute, label: minute === 0 ? L("整点", "On the hour") : L(`第 ${minute} 分`, `Minute :${String(minute).padStart(2, '0')}`) }))}/>}
             {form.recurrence.kind === 'interval' && <Space.Compact>
-              <InputNumber<number> aria-label="间隔" min={1} precision={0} value={form.recurrence.every} onChange={value => setRecurrence({ every: value ?? 0 })} prefix={<span className="text-zinc-400">每</span>} className="w-28"/>
-              <Select<IntervalUnit> aria-label="间隔单位" className="w-20" value={form.recurrence.everyUnit} onChange={everyUnit => setRecurrence({ everyUnit })} options={intervalUnits.map(item => ({ value: item.unit, label: item.label }))}/>
+              <InputNumber<number> aria-label={L("间隔", "Interval")} min={1} precision={0} value={form.recurrence.every} onChange={value => setRecurrence({ every: value ?? 0 })} prefix={<span className="text-zinc-400">{L("每", "Every")}</span>} className="w-28"/>
+              <Select<IntervalUnit> aria-label={L("间隔单位", "Interval unit")} className="w-20" value={form.recurrence.everyUnit} onChange={everyUnit => setRecurrence({ everyUnit })} options={intervalUnits.map(item => ({ value: item.unit, label: item.label }))}/>
             </Space.Compact>}
           </div>
-          {form.recurrence.kind === 'weekly' && <Checkbox.Group aria-label="星期" value={form.recurrence.weekdays} onChange={weekdays => setRecurrence({ weekdays })} options={weekdayOrder.map(day => ({ value: day, label: `周${weekdayLabels[day]}` }))}/>}
+          {form.recurrence.kind === 'weekly' && <Checkbox.Group aria-label={L("星期", "Days of week")} value={form.recurrence.weekdays} onChange={weekdays => setRecurrence({ weekdays })} options={weekdayOrder.map(day => ({ value: day, label: L(`周${weekdayLabels[day]}`, `${weekdayLabels[day]}`) }))}/>}
           {form.recurrence.kind === 'custom' && <div className="flex flex-col gap-1">
-            <Input value={form.recurrence.cron} onChange={event => setRecurrence({ cron: event.target.value })} placeholder="0 9 * * 1-5" aria-label="cron 表达式" className="font-mono"/>
-            <span className={sub}>5 段：分 时 日 月 周。例如 <code className="font-mono">0 9 1 * *</code> 是每月 1 号 09:00。</span>
+            <Input value={form.recurrence.cron} onChange={event => setRecurrence({ cron: event.target.value })} placeholder="0 9 * * 1-5" aria-label={L("cron 表达式", "Cron expression")} className="font-mono"/>
+            <span className={sub}>{L("5 段：分 时 日 月 周。例如", "5 fields: min hour day month weekday. E.g.,")} <code className="font-mono">0 9 1 * *</code>  {L("是每月 1 号 09:00。", "runs at 09:00 on the 1st of every month.")}</span>
           </div>}
         </> : <div className="flex flex-wrap items-center gap-2">
-          <DatePicker aria-label="触发时间" showTime={{ format: 'HH:mm' }} format="YYYY-MM-DD HH:mm" allowClear={false} status={oncePast ? 'error' : undefined} disabledDate={day => day.isBefore(dayjs(now), 'day')} value={form.runAt ? dayjs(form.runAt) : null} onChange={value => update({ runAt: value ? value.format('YYYY-MM-DDTHH:mm') : '' })} className="w-48"/>
+          <DatePicker aria-label={L("触发时间", "Trigger time")} showTime={{ format: 'HH:mm' }} format="YYYY-MM-DD HH:mm" allowClear={false} status={oncePast ? 'error' : undefined} disabledDate={day => day.isBefore(dayjs(now), 'day')} value={form.runAt ? dayjs(form.runAt) : null} onChange={value => update({ runAt: value ? value.format('YYYY-MM-DDTHH:mm') : '' })} className="w-48"/>
           <div className="flex flex-wrap gap-1">{oncePresets(now).map(preset => <Button key={preset.label} size="small" type={form.runAt === preset.value ? 'primary' : 'text'} onClick={() => update({ runAt: preset.value })}>{preset.label}</Button>)}</div>
         </div>}
       </div>
 
-      <div className="flex flex-col gap-2"><span className={label}>在哪里执行</span>
+      <div className="flex flex-col gap-2"><span className={label}>{L("在哪里执行", "Where to run")}</span>
         <Segmented className="self-start" value={form.delivery} onChange={delivery => update({ delivery })} options={(['new_session', 'append'] as const).map(delivery => ({ value: delivery, label: deliveryLabels[delivery] }))}/>
         <span className={sub}>{deliveryHints[form.delivery]}</span>
         {form.delivery === 'new_session' ? <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
           <div className="flex flex-col gap-1"><span className={sub}>Agent</span>
-            <Select value={form.agentId || undefined} placeholder="选择 Agent" notFoundContent="没有可用 Agent" options={agentOptions} onChange={agentId => update({ agentId, model: '' })}/>
+            <Select value={form.agentId || undefined} placeholder={L("选择 Agent", "Select Agent")} notFoundContent={L("没有可用 Agent", "No available Agents")} options={agentOptions} onChange={agentId => update({ agentId, model: '' })}/>
           </div>
-          <div className="flex flex-col gap-1"><span className={sub}>模型</span>
+          <div className="flex flex-col gap-1"><span className={sub}>{L("模型", "Model")}</span>
             <Select value={form.model} showSearch optionFilterProp="label" loading={models.isFetching} options={modelOptions} onChange={model => update({ model })}/>
           </div>
-          <div className="flex flex-col gap-1 sm:col-span-2"><span className={sub}>工作目录 <span className="text-zinc-300">可以直接输入绝对路径</span></span>
+          <div className="flex flex-col gap-1 sm:col-span-2"><span className={sub}>{L("工作目录", "Workspace")} <span className="text-zinc-300">{L("可以直接输入绝对路径", "Enter an absolute path")}</span></span>
             <Space.Compact className="w-full">
               <AutoComplete className="min-w-0 flex-1" value={form.cwd} onChange={cwd => update({ cwd })} options={workspaceOptions} filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())} placeholder="/path/to/project" popupMatchSelectWidth>
-                <Input className="font-mono text-[12px]" aria-label="工作目录" allowClear/>
+                <Input className="font-mono text-[12px]" aria-label={L("工作目录", "Workspace")} allowClear/>
               </AutoComplete>
-              {capabilities.data?.directoryPicker && <Button icon={<FolderOpen size={13}/>} loading={pickDirectory.isPending} onClick={() => pickDirectory.mutate()}>浏览</Button>}
+              {capabilities.data?.directoryPicker && <Button icon={<FolderOpen size={13}/>} loading={pickDirectory.isPending} onClick={() => pickDirectory.mutate()}>{L("浏览", "Browse")}</Button>}
             </Space.Compact>
           </div>
         </div> : session && !editing
@@ -332,29 +339,29 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
                 checked={appendFollowsMain}
                 onChange={event => update({ appendSessionId: event.target.checked ? SCHEDULE_MAIN_SESSION_ID : session.id })}
               >
-                <span className="text-[12px] font-medium text-zinc-800">跟随当前活跃主会话（推荐）</span>
+                <span className="text-[12px] font-medium text-zinc-800">{L("跟随当前活跃主会话（推荐）", "Follow active Main Session (Recommended)")}</span>
               </Checkbox>
               <span className="pl-6 text-[12px] text-zinc-500">
                 {appendFollowsMain
-                  ? '主会话交接换代后会自动投递给新一代主会话，不会因旧主会话归档而停用。'
-                  : `仅绑定当前会话「${session.title || session.cwd}」，该会话归档后定时任务会自动停用。`}
+                  ? L("主会话交接换代后会自动投递给新一代主会话，不会因旧主会话归档而停用。", "Automatically delivers to the new Main Session after handover without pausing.")
+                  : L(`仅绑定当前会话「${session.title || session.cwd}」，该会话归档后定时任务会自动停用。`, `Bound only to "${session.title || session.cwd}"; pauses automatically if archived.`)}
               </span>
             </div>
-            : <span className="text-[12px] text-zinc-600">追加到当前会话「{session.title || session.cwd}」</span>
+            : <span className="text-[12px] text-zinc-600">{L("追加到当前会话「", "Append to current session \"")}{session.title || session.cwd}」</span>
           : <Select
             value={form.appendSessionId || undefined}
-            placeholder="选择会话"
-            notFoundContent="没有可追加的会话"
+            placeholder={L("选择会话", "Select Session")}
+            notFoundContent={L("没有可追加的会话", "No sessions available")}
             showSearch
             optionFilterProp="title"
             options={[
               {
                 value: SCHEDULE_MAIN_SESSION_ID,
-                title: `当前活跃主会话 跟随主会话 main ${mainSession?.title ?? ''}`,
+                title: L(`当前活跃主会话 跟随主会话 main ${mainSession?.title ?? ''}`, `Active Main Session Follow Main main ${mainSession?.title ?? ''}`),
                 label: <span className="flex min-w-0 items-center gap-2">
-                  <Tag bordered={false} color="blue" className="m-0 shrink-0 text-[11px]">自动跟随</Tag>
-                  <span className="min-w-0 truncate font-medium text-zinc-800">当前活跃主会话</span>
-                  <span className="ml-auto shrink-0 text-[12px] text-zinc-400">{mainSession ? (mainSession.title || mainSession.cwd) : '换代自动跟随'}</span>
+                  <Tag bordered={false} color="blue" className="m-0 shrink-0 text-[11px]">{L("自动跟随", "Auto-follow")}</Tag>
+                  <span className="min-w-0 truncate font-medium text-zinc-800">{L("当前活跃主会话", "Active Main Session")}</span>
+                  <span className="ml-auto shrink-0 text-[12px] text-zinc-400">{mainSession ? (mainSession.title || mainSession.cwd) : L("换代自动跟随", "Auto-follows handover")}</span>
                 </span>
               },
               ...candidates.map(item => ({ value: item.id, title: `${item.title || item.cwd} ${item.cwd}`, label: <span className="flex min-w-0 items-center gap-2"><AgentIcon agentId={item.agentId} size={15}/><span className="min-w-0 truncate">{item.title || item.cwd}</span><span className="ml-auto shrink-0 font-mono text-[12px] text-zinc-400">{item.cwd.split(/[\\/]/).filter(Boolean).pop()}</span></span> }))
@@ -365,9 +372,9 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
 
       <div className="flex flex-col gap-1.5">
         <AiFieldHeader
-          label="名称"
+          label={L("名称", "Name")}
           htmlFor="schedule-name-input"
-          hint="可选"
+          hint={L("可选", "Optional")}
           assist={
             <AiTextAssistControl
               mode="title_generate"
@@ -380,18 +387,18 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
               onFlash={nameFlash.triggerFlash}
               resetKey={scheduleResetKey}
               context={() => ({
-                field: '定时任务名称',
-                purpose: '用于定时任务列表展示的简短中文任务名称（6–18 字）',
+                field: L("定时任务名称", "Schedule name"),
+                purpose: L("用于定时任务列表展示的简短中文任务名称（6–18 字）", "Short descriptive schedule name for list display"),
                 scheduleSummary: `${when} · ${target}`,
                 maxChars: 20,
-                ...(form.prompt.trim() ? { recentMessages: [{ role: '定时任务内容', text: form.prompt.trim().slice(0, 600) }] } : {})
+                ...(form.prompt.trim() ? { recentMessages: [{ role: L("定时任务内容", "Schedule prompt"), text: form.prompt.trim().slice(0, 600) }] } : {})
               })}
               testId="schedule-name-ai"
             />
           }
         />
         <div className={`rounded-lg ${nameFlash.flashClass}`}>
-          <Input id="schedule-name-input" value={form.name} onChange={event => update({ name: event.target.value })} placeholder={form.prompt.trim() ? form.prompt.trim().slice(0, 24) : '不填则取内容开头'}/>
+          <Input id="schedule-name-input" value={form.name} onChange={event => update({ name: event.target.value })} placeholder={form.prompt.trim() ? form.prompt.trim().slice(0, 24) : L("不填则取内容开头", "Defaults to prompt opening")}/>
         </div>
       </div>
     </div>
@@ -402,15 +409,15 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
         <div className="min-w-0">
           <div className="text-zinc-800"><span className="font-medium">{when}</span><span className="text-zinc-400"> · </span><span className="text-zinc-600">{target}</span></div>
           {oncePast
-            ? <div className="text-[12px] text-red-600">这个时间已经过去了，换一个。</div>
-            : form.kind === 'recurring' && <div className="text-[12px] tabular-nums text-zinc-500">{upcoming.length ? `接下来：${upcoming.map(at => describeRunTime(at, now)).join('、')}` : trigger?.cron ? '未来两周内不会触发，确认表达式没写错' : built?.error}</div>}
+            ? <div className="text-[12px] text-red-600">{L("这个时间已经过去了，换一个。", "This time is in the past; pick a future time.")}</div>
+            : form.kind === 'recurring' && <div className="text-[12px] tabular-nums text-zinc-500">{upcoming.length ? L(`接下来：${upcoming.map(at => describeRunTime(at, now)).join('、')}`, `Next: ${upcoming.map(at => describeRunTime(at, now)).join(', ')}`) : trigger?.cron ? L("未来两周内不会触发，确认表达式没写错", "Will not trigger within the next two weeks — double-check the expression") : built?.error}</div>}
         </div>
       </div>
       {error && <div role="alert" className="mb-2.5 rounded-md border border-red-100 bg-red-50 px-2.5 py-1.5 text-[12px] leading-5 text-red-700">{error}</div>}
       <div className="flex items-center justify-end gap-2">
-        <span className="mr-auto hidden text-[12px] text-zinc-400 sm:inline">⌘/Ctrl + Enter {editing ? '保存' : '创建'}</span>
-        <Button onClick={onCancel} disabled={saving}>取消</Button>
-        <Button type="primary" onClick={submit} loading={saving} disabled={!form.prompt.trim() || oncePast}>{editing ? '保存修改' : '创建'}</Button>
+        <span className="mr-auto hidden text-[12px] text-zinc-400 sm:inline">⌘/Ctrl + Enter {editing ? L("保存", "Save") : L("创建", "Create")}</span>
+        <Button onClick={onCancel} disabled={saving}>{L("取消", "Cancel")}</Button>
+        <Button type="primary" onClick={submit} loading={saving} disabled={!form.prompt.trim() || oncePast}>{editing ? L("保存修改", "Save Changes") : L("创建", "Create")}</Button>
       </div>
     </div>
   </div>;
@@ -421,10 +428,11 @@ function ScheduleForm({ session, mainSessionId, agents, sessions, editing, onDon
  * - 不传 session：全局列表（侧边栏入口），新建时直接选 Agent / 目录，或选一个会话追加。
  * - 传 session：只列这个会话的（会话标题栏入口），新建时用它的配置预填。
  */
-export function ScheduleDialog({ session, mainSessionId, sessions, onClose, onOpenSession }: { session?: Session; mainSessionId?: string; sessions: Session[]; onClose(): void; onOpenSession(id: string): void }) {
+export function ScheduleDialog({ session, mainSessionId, sessions, onClose, onOpenSession, embedded = false }: { session?: Session; mainSessionId?: string; sessions: Session[]; onClose(): void; onOpenSession(id: string): void; embedded?: boolean }) {
+  const L = useBi();
   const agents = useQuery({ queryKey: ['agents'], queryFn: () => api.agents() });
   const panelRef = useRef<HTMLDivElement>(null);
-  useModalFocusTrap({ panel: panelRef, initial: panelRef, dismissible: true, onDismiss: onClose });
+  useModalFocusTrap({ panel: panelRef, initial: panelRef, dismissible: true, onDismiss: onClose, enabled: !embedded });
   const schedules = useQuery({ queryKey: ['schedules', session?.id ?? 'all'], queryFn: () => api.schedules(session?.id), refetchInterval: 15_000 });
   const actions = useScheduleActions();
   const [creating, setCreating] = useState(false);
@@ -442,43 +450,57 @@ export function ScheduleDialog({ session, mainSessionId, sessions, onClose, onOp
   const names = useMemo(() => new Map(items.map(item => [item.id, item.name])), [items]);
   const loadError = schedules.error instanceof Error ? schedules.error.message : undefined;
   const toast = useToast();
-  useUpdateEffect(() => { if (loadError) toast.show(`读取定时任务失败：${loadError}`); }, [loadError]);
+  useUpdateEffect(() => { if (loadError) toast.show(L(`读取定时任务失败：${loadError}`, `Failed to load schedules: ${loadError}`)); }, [loadError]);
 
-  return <div className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-0 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="定时任务" className="ui-dialog flex h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)] sm:h-[min(720px,86dvh)] sm:rounded-[14px] sm:border sm:border-zinc-200">
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-100 px-4">
+  const inner = (
+    <div
+      ref={panelRef}
+      role={embedded ? undefined : 'dialog'}
+      aria-modal={embedded ? undefined : 'true'}
+      aria-label={embedded ? undefined : L("定时任务", "Schedules")}
+      className={embedded
+        ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+        : 'ui-dialog flex h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)] sm:h-[min(720px,86dvh)] sm:rounded-[14px] sm:border sm:border-zinc-200'}
+    >
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-100 px-4 sm:px-5">
         {formOpen
-          ? <><button type="button" onClick={closeForm} aria-label="返回列表" className="-ml-1.5 grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"><ArrowLeft size={16}/></button>
-            <div className="text-[16px] font-semibold text-zinc-900">{editing ? '编辑定时任务' : '新建定时任务'}</div></>
-          : <><div className="flex min-w-0 items-center gap-2 text-[16px] font-semibold text-zinc-900"><AlarmClock size={16}/>定时任务</div>
-            <span className="hidden min-w-0 truncate text-[12px] text-zinc-400 sm:inline">{session ? `「${session.title || session.cwd}」的任务` : '全部会话'}</span></>}
+          ? <><button type="button" onClick={closeForm} aria-label={L("返回列表", "Back to list")} className="-ml-1.5 grid h-8 w-8 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"><ArrowLeft size={16}/></button>
+            <div className={embedded ? 'text-[14px] font-semibold text-zinc-900' : 'text-[16px] font-semibold text-zinc-900'}>{editing ? L("编辑定时任务", "Edit Schedule") : L("新建定时任务", "New Schedule")}</div></>
+          : <><div className={`flex min-w-0 items-center gap-2 font-semibold text-zinc-900 ${embedded ? 'text-[14px]' : 'text-[16px]'}`}><AlarmClock size={embedded ? 15 : 16}/>{L("定时任务", "Schedules")}</div>
+            <span className="hidden min-w-0 truncate text-[12px] text-zinc-400 sm:inline">{session ? L(`「${session.title || session.cwd}」的任务`, `Schedules for "${session.title || session.cwd}"`) : L("全部会话", "All Sessions")}</span></>}
         <div className="ml-auto flex items-center gap-1">
           {/* 空列表时主体里已有「新建定时任务」，标题栏不再重复。 */}
-          {!formOpen && items.length > 0 && <Button type="text" icon={<Plus size={14}/>} onClick={() => setCreating(true)} className="font-medium text-zinc-600">新建</Button>}
-          <button type="button" onClick={onClose} aria-label="关闭" className="grid h-8 w-8 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={16}/></button>
+          {!formOpen && items.length > 0 && <Button type="text" icon={<Plus size={14}/>} onClick={() => setCreating(true)} className="font-medium text-zinc-600">{L("新建", "New")}</Button>}
+          {!embedded && <button type="button" onClick={onClose} aria-label={L("关闭", "Close")} className="grid h-8 w-8 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={16}/></button>}
         </div>
       </div>
       {/* 外壳（标题栏/背景）先上屏；列表和表单下一帧再挂。表单里是一整组 antd 选择器，
           移动端点开时若同步挂载会连同整棵 App 一起卡住。 */}
       {formOpen
         ? <DeferredMount key={editing?.id ?? 'new'} placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-5 py-4"><DeferredSkeleton/></div>}>
-          <ScheduleForm {...(session ? { session } : {})} {...(mainSessionId ? { mainSessionId } : {})} {...(editing ? { editing } : {})} agents={agents.data ?? []} sessions={sessions} onDone={name => { const wasEditing = Boolean(editing); closeForm(); toast.show(wasEditing ? `已保存「${name}」` : `已创建「${name}」`, 'info'); }} onCancel={closeForm}/>
+          <ScheduleForm {...(session ? { session } : {})} {...(mainSessionId ? { mainSessionId } : {})} {...(editing ? { editing } : {})} agents={agents.data ?? []} sessions={sessions} onDone={name => { const wasEditing = Boolean(editing); closeForm(); toast.show(wasEditing ? L(`已保存「${name}」`, `Saved "${name}"`) : L(`已创建「${name}」`, `Created "${name}"`), 'info'); }} onCancel={closeForm}/>
         </DeferredMount>
         : <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-4 py-3"><DeferredSkeleton/></div>}>
           <div className="min-h-0 flex-1 overflow-y-auto pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-            {schedules.isLoading && <div className="flex items-center gap-2 px-4 py-3 text-[12px] text-zinc-400"><Spinner size={13}/>读取中…</div>}
+            {schedules.isLoading && <div className="flex items-center gap-2 px-4 py-3 text-[12px] text-zinc-400"><Spinner size={13}/>{L("读取中…", "Loading…")}</div>}
             {!schedules.isLoading && !items.length && <div className="flex h-full flex-col items-center justify-center gap-3 px-6 pb-10 text-center">
               <div className="grid h-10 w-10 place-items-center rounded-full bg-zinc-100 text-zinc-400"><AlarmClock size={18}/></div>
-              <div className="text-[13px] font-medium text-zinc-700">{session ? '这个会话还没有定时任务' : '还没有定时任务'}</div>
-              <div className="max-w-sm text-[12px] leading-5 text-zinc-400">让 Agent 按时做事：每天早上汇总、工作日巡检、某个时间点提醒。也可以直接在对话里让 Agent 注册。</div>
-              <Button type="primary" icon={<Plus size={14}/>} onClick={() => setCreating(true)} className="mt-1">新建定时任务</Button>
+              <div className="text-[13px] font-medium text-zinc-700">{session ? L("这个会话还没有定时任务", "No schedules for this session yet") : L("还没有定时任务", "No schedules yet")}</div>
+              <div className="max-w-sm text-[12px] leading-5 text-zinc-400">{L("让 Agent 按时做事：每天早上汇总、工作日巡检、某个时间点提醒。也可以直接在对话里让 Agent 注册。", "Automate recurring summaries, weekday checks, or timed reminders. You can also ask any Agent to register schedules in chat.")}</div>
+              <Button type="primary" icon={<Plus size={14}/>} onClick={() => setCreating(true)} className="mt-1">{L("新建定时任务", "New Schedule")}</Button>
             </div>}
             {items.length > 0 && <ScheduleOverview summary={summary} now={now}/>}
-            {items.map(schedule => <ScheduleRow key={schedule.id} schedule={schedule} sessionTitle={isMainSessionScheduleTarget(schedule.sessionId) ? '跟随当前主会话' : session ? undefined : scheduleTarget(schedule, titles, agents.data ?? [])} lastRun={lastRuns.get(schedule.id)} now={now} actions={actions} onOpenSession={openSession} onEdit={setEditing}/>)}
+            {items.map(schedule => <ScheduleRow key={schedule.id} schedule={schedule} sessionTitle={isMainSessionScheduleTarget(schedule.sessionId) ? L("跟随当前主会话", "Follow Main Session") : session ? undefined : scheduleTarget(schedule, titles, agents.data ?? [])} lastRun={lastRuns.get(schedule.id)} now={now} actions={actions} onOpenSession={openSession} onEdit={setEditing}/>)}
             {items.length > 0 && <RecentRuns runs={recentRuns.data ?? []} names={names} now={now} onOpenSession={openSession}/>}
           </div>
         </DeferredMount>}
     </div>
+  );
+
+  if (embedded) return <>{inner}{actions.toast}{toast.toast}</>;
+
+  return <div className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-0 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
+    {inner}
     {actions.toast}{toast.toast}
   </div>;
 }

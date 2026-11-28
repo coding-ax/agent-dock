@@ -6,11 +6,12 @@ import { ExitGate } from './ExitGate';
 import { HoverTooltip } from './HoverTooltip';
 import { Spinner } from './Loaders';
 import { triggerPwaInstall, type PwaInstallSnapshot } from './pwa-install';
+import { bi, useBi } from './i18n';
 
 export type PwaInstallTrigger = () => Promise<'accepted' | 'dismissed' | 'manual'>;
 
 export function pwaInstallTooltipLabel(pwa: Pick<PwaInstallSnapshot, 'installing'>): string {
-  return pwa.installing ? '等待确认安装…' : '安装为桌面应用';
+  return pwa.installing ? bi("等待确认安装…", "Waiting for install confirmation…") : bi("安装为桌面应用", "Install Desktop App");
 }
 
 export async function runSidebarPwaInstallAction(
@@ -40,6 +41,7 @@ export function SidebarPwaInstallButton({
   onInstall?: PwaInstallTrigger;
   initialGuideOpen?: boolean;
 }) {
+  const L = useBi();
   const [guideOpen, setGuideOpen] = useState(initialGuideOpen);
   const [position, setPosition] = useState<{ top: number; left: number; width: number }>();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -80,6 +82,7 @@ export function SidebarPwaInstallButton({
   if (!pwa.visible) return null;
 
   const label = pwaInstallTooltipLabel(pwa);
+  const hoverHint = pwa.installing ? L("等待确认安装…", "Waiting for install confirmation…") : L("安装为桌面应用（独立窗口运行 PWA）", "Install as Desktop App (Standalone PWA Window)");
 
   const handleClick = async () => {
     if (!pwa.canPrompt && !guideOpen) place();
@@ -89,7 +92,7 @@ export function SidebarPwaInstallButton({
   };
 
   return <>
-    <HoverTooltip content={label} side="bottom" align="end">
+    <HoverTooltip content={hoverHint} side="bottom" align="end">
       <button
         ref={triggerRef}
         type="button"
@@ -101,7 +104,7 @@ export function SidebarPwaInstallButton({
         onClick={() => void handleClick()}
         className={`hidden h-7 w-7 shrink-0 place-items-center rounded-lg transition-[color,background-color,transform] duration-150 active:scale-[.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 disabled:pointer-events-none disabled:opacity-50 md:grid ${showGuide ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900'}`}
       >
-        {pwa.installing ? <Spinner size={14} label="正在打开安装弹窗" className="text-zinc-500"/> : <MonitorDown size={15}/>}
+        {pwa.installing ? <Spinner size={14} label={L("正在打开安装弹窗", "Opening install prompt")} className="text-zinc-500"/> : <MonitorDown size={15}/>}
       </button>
     </HoverTooltip>
     {typeof document !== 'undefined' && createPortal(
@@ -110,7 +113,7 @@ export function SidebarPwaInstallButton({
           <div
             ref={popoverRef}
             role="dialog"
-            aria-label="安装为桌面应用指引"
+            aria-label={L("安装为桌面应用指引", "Install Desktop App Guide")}
             data-pwa-install-guide="sidebar-header"
             data-placement="top-end"
             style={{ top: position.top, left: position.left, width: position.width }}
@@ -118,11 +121,11 @@ export function SidebarPwaInstallButton({
           >
             <div className="flex items-center gap-1.5">
               <MonitorDown size={14} className="shrink-0 text-zinc-500"/>
-              <span className="min-w-0 flex-1 text-[13px] font-medium text-zinc-900">安装为桌面应用</span>
-              <HoverTooltip content="关闭" side="bottom">
+              <span className="min-w-0 flex-1 text-[13px] font-medium text-zinc-900">{L("安装为桌面应用", "Install Desktop App")}</span>
+              <HoverTooltip content={L("关闭", "Close")} side="bottom">
                 <button
                   type="button"
-                  aria-label="关闭安装引导"
+                  aria-label={L("关闭安装引导", "Close install guide")}
                   onClick={() => setGuideOpen(false)}
                   className="ui-press grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
                 >

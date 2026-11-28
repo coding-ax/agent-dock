@@ -24,17 +24,25 @@ const files = [
   'AgentUsagePanel.tsx',
   'UsageSourceBadge.tsx',
   'companion/CompanionHeader.tsx',
+  'companion/CompanionCard.tsx',
+  'SessionFilterSelect.tsx',
+  'LarkIcon.tsx',
   'TerminalPanel.tsx',
   'FileExplorerPanel.tsx',
   'Composer.tsx',
+  'PromptTemplates.tsx',
   'AiTextAssist.tsx',
   'AskUserQuestionCard.tsx',
   'AskUserQuestionSettingsPanel.tsx',
   'output-plugins/OutputPluginsCenterPanel.tsx',
+  'output-plugins/SessionOutputPluginsDialog.tsx',
   'output-plugins/ConfirmActionCard.tsx',
   'output-plugins/DeclarativeOutputPluginCard.tsx',
   'ThemeStudioDialog.tsx',
   'ThemeToggle.tsx',
+  'SettingsMenu.tsx',
+  'LarkConfigPanel.tsx',
+  'settings/SettingsCenterDialog.tsx',
   'TaskRecoverySettingsDialog.tsx',
   'TaskRecoveryTimeline.tsx'
 ];
@@ -42,17 +50,22 @@ const files = [
 const read = (name: string) => readFileSync(join(sourceDir, name), 'utf8');
 
 /** 只关心「按钮类」元素上的 title；truncate 用的 title（文本溢出显示全文）不算。 */
-const buttonTitlePattern = /<(?:button|span)[^>]*\b(?:role="button"|aria-label=)[^>]*\btitle="/g;
+const buttonTitlePatterns = [
+  /<(?:button|span)[^>]*\b(?:role="button"|aria-label=)[^>]*\btitle="/g,
+  /<(?:button|span)[^>]*\btitle="[^>]*\b(?:role="button"|aria-label=)/g
+];
 
 describe('提示一致性', () => {
   it('图标按钮不再用原生 title 承载提示', () => {
     const offenders: string[] = [];
     for (const name of files) {
       const source = read(name);
-      for (const match of source.matchAll(buttonTitlePattern)) {
-        // 取所在行，便于报错时定位。
-        const line = source.slice(0, match.index).split('\n').length;
-        offenders.push(`${name}:${line}`);
+      for (const pattern of buttonTitlePatterns) {
+        for (const match of source.matchAll(pattern)) {
+          // 取所在行，便于报错时定位。
+          const line = source.slice(0, match.index).split('\n').length;
+          offenders.push(`${name}:${line}`);
+        }
       }
     }
     expect(offenders, `这些按钮还在用原生 title，应改用 HoverTooltip：${offenders.join(', ')}`).toEqual([]);

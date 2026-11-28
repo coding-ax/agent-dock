@@ -118,16 +118,16 @@ describe('SidebarPwaInstallButton', () => {
     expect(trigger).toHaveBeenCalledTimes(3);
   });
 
-  it('mounts alongside BrandLogo in App.tsx while keeping SettingsMenu and collapsed-strip PWA entries guarded', () => {
+  it('mounts alongside BrandLogo in App.tsx while keeping SettingsCenterDialog and collapsed-strip PWA entries guarded', () => {
     const appSource = readFileSync(join(sourceDir, 'App.tsx'), 'utf8');
-    const settingsSource = readFileSync(join(sourceDir, 'SettingsMenu.tsx'), 'utf8');
+    const settingsSource = readFileSync(join(sourceDir, 'settings', 'SettingsCenterDialog.tsx'), 'utf8');
     const buttonSource = readFileSync(join(sourceDir, 'SidebarPwaInstallButton.tsx'), 'utf8');
 
     expect(appSource).toContain('<BrandLogo iconSize={28} wordmarkHeight={14}/>');
     expect(appSource).toContain('<SidebarPwaInstallButton pwa={pwa}/>');
     expect(appSource).toContain('pwa.visible && pwa.canPrompt');
     expect(settingsSource).toContain('!desktopUpdate.api && pwa.visible');
-    expect(settingsSource).toContain('安装为桌面应用');
+    expect(settingsSource).toContain("t('settings.general.app.pwaTitle')");
     expect(buttonSource).toContain("import { HoverTooltip } from './HoverTooltip'");
     expect(buttonSource).not.toMatch(/\btitle="/);
   });

@@ -13,6 +13,7 @@ import { OutputPluginsCenterPanel } from './output-plugins/OutputPluginsCenterPa
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { AgentIcon } from './AgentIcon';
 import { AgentUsagePanel } from './AgentUsagePanel';
+import { useBi } from './i18n';
 
 const labelClass = 'text-[12px] font-medium text-zinc-700';
 
@@ -32,7 +33,160 @@ function ReadOnlyField({ label, value, mono = false, hint }: { label: string; va
 
 type SettingsTab = 'llm' | 'agents' | 'side-chat' | 'output-plugins';
 
+/**
+ * 独立的 Agent 管理面板（供统一设置中心内嵌及 AgentConfigDialog 复用）。
+ */
+export function AgentsManagePanel({ onClose, embedded = false }: { onClose?(): void; embedded?: boolean }) {
+  const L = useBi();
+  const queryClient = useQueryClient();
+  const agents = useQuery({ queryKey: ['agents-admin'], queryFn: () => api.agents(true), refetchOnWindowFocus: false });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [isNew, setIsNew] = useState(false);
+  const [draft, setDraft] = useState<AgentFormDraft>(newAgentDraft());
+  const [dirty, setDirty] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [probeResult, setProbeResult] = useState<string>();
+  const [probeOk, setProbeOk] = useState(false);
+
+  const sorted = useMemo(() => {
+    const list = agents.data ?? [];
+    return [...list].sort((a, b) => Number(b.builtin) - Number(a.builtin) || a.name.localeCompare(b.name));
+  }, [agents.data]);
+  const selected: Agent | undefined = selectedId ? sorted.find(agent => agent.id === selectedId) : undefined;
+  const readOnly = Boolean(selected?.builtin) && !isNew;
+
+  useEffect(() => {
+    if (isNew) { setDraft(newAgentDraft()); setDirty(false); return; }
+    if (selected) { setDraft(agentToDraft(selected)); setDirty(false); }
+  }, [isNew, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const errors = useMemo(() => dirty ? validateDraft(draft) : [], [draft, dirty]);
+  const errorByField = useMemo(() => new Map<FormError['field'], string>(errors.map(error => [error.field, error.message])), [errors]);
+  const valid = canSave(draft);
+
+  const patch = (partial: Partial<AgentFormDraft>) => { setDraft(current => ({ ...current, ...partial })); setDirty(true); setProbeResult(undefined); };
+  const resolveNewId = () => uniqueAgentId(draft.name, (agents.data ?? []).map(agent => agent.id));
+
+  const save = useMutation({
+    mutationFn: async () => isNew
+      ? api.createAgent({ id: resolveNewId(), ...draftToPayload(draft) })
+      : api.updateAgent(selected!.id, draftToPayload(draft)),
+    onSuccess: agent => {
+      setDirty(false);
+      setIsNew(false);
+      setSelectedId(agent.id);
+      void queryClient.invalidateQueries({ queryKey: ['agents-admin'] });
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
+    }
+  });
+  const remove = useMutation({
+    mutationFn: async () => api.deleteAgent(selected!.id),
+    onSuccess: () => {
+      setDirty(false);
+      setIsNew(false);
+      setSelectedId(null);
+      setDeleteConfirm(false);
+      void queryClient.invalidateQueries({ queryKey: ['agents-admin'] });
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
+    }
+  });
+  const probe = useMutation({
+    mutationFn: async () => {
+      const saved = isNew ? await api.createAgent({ id: resolveNewId(), ...draftToPayload(draft) }) : await api.updateAgent(selected!.id, draftToPayload(draft));
+      const models = await api.agentModels(saved.id, undefined, true);
+      return { saved, models };
+    },
+    onSuccess: ({ saved, models }) => {
+      setProbeOk(true);
+      setProbeResult(models.models.length
+        ? L(`已保存，探测到 ${models.models.length} 个模型${models.defaultModel ? `，默认 ${models.defaultModel}` : ''}${models.warning ? `；${models.warning}` : ''}`, `Saved — detected ${models.models.length} model(s)${models.defaultModel ? `, default ${models.defaultModel}` : ''}${models.warning ? `; ${models.warning}` : ''}`)
+        : L(`已保存，但这个 Agent 没有报告可用模型${models.warning ? `；${models.warning}` : '。它仍可启动，模型可在新建会话时选择。'}`, `Saved, but this Agent reported no models${models.warning ? `; ${models.warning}` : '. It can still launch normally.'}`));
+      setDirty(false);
+      setIsNew(false);
+      setSelectedId(saved.id);
+      void queryClient.invalidateQueries({ queryKey: ['agents-admin'] });
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
+    },
+    onError: error => { setProbeOk(false); setProbeResult(error instanceof Error ? error.message : String(error)); }
+  });
+  const toggleDisabled = useMutation({
+    mutationFn: async (disabled: boolean) => api.setAgentDisabled(selected!.id, disabled),
+    onSuccess: () => {
+      setDeleteConfirm(false);
+      void queryClient.invalidateQueries({ queryKey: ['agents-admin'] });
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
+    }
+  });
+
+  const builtins = sorted.filter(agent => agent.builtin);
+  const customs = sorted.filter(agent => !agent.builtin);
+
+  return <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[200px_1fr] lg:grid-cols-[220px_1fr]">
+      <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-zinc-100 bg-zinc-50/60 px-3 py-2 no-scrollbar md:hidden">
+        <button type="button" onClick={() => { setIsNew(true); setSelectedId(null); }} className={`flex h-8 shrink-0 items-center gap-1 rounded-full border border-dashed px-3 text-[12px] font-medium transition-colors ${isNew ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300 bg-white text-zinc-600'}`}><Plus size={13}/>{L("自定义", "Custom")}</button>
+        {sorted.map(agent => {
+          const active = !isNew && selectedId === agent.id;
+          return <button key={agent.id} type="button" onClick={() => { setIsNew(false); setSelectedId(agent.id); }} className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${active ? 'border-zinc-900 bg-zinc-900 text-white' : agent.disabled ? 'border-zinc-200 bg-white text-zinc-400' : 'border-zinc-200 bg-white text-zinc-700'}`}>
+            <AgentIcon agentId={agent.id} agentName={agent.name} size={13} onDark={active}/>
+            <span>{agent.name}</span>
+            {agent.disabled && <span className={`text-[10px] ${active ? 'text-white/75' : 'text-zinc-400'}`}>{L("停用", "Disabled")}</span>}
+          </button>;
+        })}
+        {agents.isLoading && <span className="flex shrink-0 items-center gap-1.5 px-2 text-[12px] text-zinc-400"><Spinner size={12}/>{L("读取中…", "Loading…")}</span>}
+      </div>
+      <div className="hidden overflow-y-auto border-r border-zinc-100 bg-zinc-50/60 p-2 md:block">
+        <button type="button" onClick={() => { setIsNew(true); setSelectedId(null); }} className={`mb-2 flex h-9 w-full items-center gap-2 rounded-lg border border-dashed border-zinc-300 px-3 text-[12px] font-medium ${isNew ? 'border-zinc-800 bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-white'}`}><Plus size={14}/>{L("自定义 Agent", "Custom Agent")}</button>
+        <AgentGroup label={L("内置", "Built-in")} agents={builtins} selectedId={isNew ? null : selectedId} onSelect={id => { setIsNew(false); setSelectedId(id); }}/>
+        <AgentGroup label={L("自定义", "Custom")} agents={customs} selectedId={isNew ? null : selectedId} onSelect={id => { setIsNew(false); setSelectedId(id); }}/>
+        {agents.isLoading && <div className="flex items-center gap-2 px-2 py-2 text-[12px] text-zinc-400"><Spinner size={12}/>{L("读取中…", "Loading…")}</div>}
+        {agents.error && <div className="px-2 py-2 text-[12px] text-red-600">{agents.error instanceof Error ? agents.error.message : L("读取失败（会话链接无权打开 Agent 设置，请用 master 地址）", "Failed to load (session link cannot access Agent settings — use the admin console URL)")}</div>}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-4 sm:px-4 md:px-5">
+        {agents.error && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-600 md:hidden">{agents.error instanceof Error ? agents.error.message : L("读取失败（会话链接无权打开 Agent 设置，请用 master 地址）", "Failed to load (session link cannot access Agent settings — use the admin console URL)")}</div>}
+        {(isNew || selected) ? <div className="space-y-4">
+          {readOnly
+            ? <>
+              <div className="flex items-center gap-2"><AgentIcon agentId={selected!.id} agentName={selected!.name} size={16}/><div className="min-w-0 flex-1"><ReadOnlyField label={L("名称", "Name")} value={selected!.name}/></div></div>
+              <ReadOnlyField label={L("启动命令", "Command")} value={[selected!.command, ...(selected!.args ?? [])].join(' ')} mono/>
+              <ReadOnlyField label={L("工作目录", "Workspace")} value={selected!.cwd} mono hint={L("跟随会话", "Follow Session")}/>
+              {['codex', 'claude', 'cursor', 'antigravity', 'omp', 'opencode'].includes(selected!.id) && <AgentUsagePanel agentId={selected!.id}/>}
+              <p className="text-[12px] leading-5 text-zinc-400">{L("内置 Agent 的参数由扫描得出（命令、参数、协议、版本），不需要也不能在这里修改；升级客户端后会自动刷新。你只能停用或重新启用它。", "Built-in Agent parameters are auto-detected and refreshed after upgrades. You can disable or re-enable it here.")}</p>
+            </>
+            : <>
+              <div><span className={labelClass}>{L("名称", "Name")}</span><Input size="large" className="mt-1 text-[12px]" value={draft.name} placeholder={L("例如 DeepSeek Harness", "e.g., DeepSeek Harness")} onChange={event => patch({ name: event.target.value })}/><FieldError message={errorByField.get('name')}/></div>
+              <div><span className={labelClass}>{L("启动命令", "Command")}</span><Input size="large" className="mt-1 font-mono text-[12px]" value={draft.command} placeholder={L("例如 /usr/local/bin/dsh", "e.g., /usr/local/bin/dsh")} onChange={event => patch({ command: event.target.value })}/><FieldError message={errorByField.get('command')}/></div>
+              <div><span className={labelClass}>{L("工作目录（可选）", "Workspace (Optional)")}</span><Input size="large" className="mt-1 font-mono text-[12px]" value={draft.cwd} placeholder={L("留空跟随会话", "Leave blank to follow session")} onChange={event => patch({ cwd: event.target.value })}/></div>
+              <p className="text-[12px] leading-5 text-zinc-400">{L("协议、超时、参数、环境变量、模型等由 Agent 自己或运行时决定，不需要在这里配置。模型可在新建会话时选择。", "Protocol, timeouts, args, env vars, and models are discovered automatically by the runtime.")}</p>
+            </>}
+          {probeResult && <div className={`flex items-start gap-2 rounded-md border px-3 py-2 text-[12px] leading-5 ${probeOk ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}><AlertTriangle size={13} className="mt-0.5 shrink-0"/>{probeResult}</div>}
+          {save.error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">{save.error instanceof Error ? save.error.message : L("保存失败", "Save failed")}</div>}
+          {toggleDisabled.error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">{toggleDisabled.error instanceof Error ? toggleDisabled.error.message : L("操作失败", "Action failed")}</div>}
+        </div> : <div className="grid min-h-[260px] place-items-center text-[12px] text-zinc-400">{L("从左侧选择 Agent，或新建一个自定义 Agent。", "Select an Agent on the left or create a custom Agent.")}</div>}
+      </div>
+    </div>
+    {(isNew || selected) && <div className="sticky bottom-0 flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-t border-zinc-100 bg-white px-3.5 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:px-5 sm:py-2">
+      {readOnly
+        ? <button type="button" disabled={toggleDisabled.isPending} onClick={() => setDeleteConfirm(true)} className={`flex h-9 items-center rounded-md border px-3 text-[12px] font-medium disabled:opacity-40 ${selected!.disabled ? 'border-zinc-300 text-zinc-700 hover:bg-zinc-50' : 'border-red-200 text-red-600 hover:bg-red-50'}`}>{selected!.disabled ? L("重新启用", "Re-enable") : L("停用（内置）", "Disable (Built-in)")}</button>
+        : <button type="button" disabled={remove.isPending || save.isPending} onClick={() => setDeleteConfirm(true)} className="flex h-9 items-center rounded-md border border-red-200 px-3 text-[12px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40">{L("删除", "Delete")}</button>}
+      <span className="hidden text-[12px] text-zinc-400 sm:inline">{selected?.version ? L(`版本 ${selected.version}`, `Version ${selected.version}`) : ''}{selected ? `　${selected.id}` : ''}</span>
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+        {!readOnly && <>
+          <button type="button" disabled={!valid || probe.isPending} onClick={() => probe.mutate()} className="flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 px-3 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40">{probe.isPending ? <Spinner size={13}/> : <RefreshCw size={13}/>}{L("保存并探测模型", "Save & Probe Models")}</button>
+          {!embedded && onClose && <button type="button" onClick={onClose} className="flex h-9 items-center rounded-md border border-zinc-300 px-4 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50">{L("取消", "Cancel")}</button>}
+          <button type="button" disabled={!valid || save.isPending} onClick={() => save.mutate()} className="flex h-9 items-center gap-1.5 rounded-md bg-zinc-900 px-4 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">{save.isPending && <Spinner size={13}/>}{L("保存", "Save")}</button>
+        </>}
+        {readOnly && !embedded && onClose && <button type="button" onClick={onClose} className="flex h-9 items-center rounded-md border border-zinc-300 px-4 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50">{L("关闭", "Close")}</button>}
+      </div>
+    </div>}
+    {readOnly
+      ? <ConfirmDialog open={deleteConfirm} tone={selected?.disabled ? undefined : 'danger'} title={selected?.disabled ? L("重新启用此内置 Agent？", "Re-enable this built-in Agent?") : L("停用此内置 Agent？", "Disable this built-in Agent?")} description={selected?.disabled ? L("启用后可以在新建会话时再次选择它。", "Once enabled, it will be selectable when creating new sessions.") : L("停用后新建会话将无法选择它，配置保留在数据库中；下次启动不会自动复活。", "Disabled Agents cannot be selected for new sessions; configuration stays stored.")} confirmLabel={selected?.disabled ? L("重新启用", "Re-enable") : L("停用", "Disabled")} busy={toggleDisabled.isPending} error={toggleDisabled.error instanceof Error ? toggleDisabled.error.message : undefined} onCancel={() => setDeleteConfirm(false)} onConfirm={() => toggleDisabled.mutate(!selected?.disabled)}/>
+      : <ConfirmDialog open={deleteConfirm} tone="danger" title={L("删除此自定义 Agent？", "Delete this custom Agent?")} description={L("删除后不可恢复，已有历史会话保留但无法再启动该 Agent。", "This cannot be undone. Existing sessions remain viewable but cannot be resumed.")} confirmLabel={L("删除", "Delete")} busy={remove.isPending} error={remove.error instanceof Error ? remove.error.message : undefined} onCancel={() => setDeleteConfirm(false)} onConfirm={() => remove.mutate()}/>}
+  </div>;
+}
+
 export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): void; initialTab?: SettingsTab | 'ask-user-question' }) {
+  const L = useBi();
   const panelRef = useRef<HTMLDivElement>(null);
   useModalFocusTrap({ panel: panelRef, initial: panelRef, dismissible: true, onDismiss: () => requestClose() });
   const queryClient = useQueryClient();
@@ -109,8 +263,8 @@ export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): 
       // 这个按钮对新自定义 Agent 的真正价值是「验证这个 CLI 起不起得来」，所以把有没有
       // 发现模型说清楚；只说数量的话，0 个模型看起来像成功。
       setProbeResult(models.models.length
-        ? `已保存，探测到 ${models.models.length} 个模型${models.defaultModel ? `，默认 ${models.defaultModel}` : ''}${models.warning ? `；${models.warning}` : ''}`
-        : `已保存，但这个 Agent 没有报告可用模型${models.warning ? `；${models.warning}` : '。它仍可启动，模型可在新建会话时选择。'}`);
+        ? L(`已保存，探测到 ${models.models.length} 个模型${models.defaultModel ? `，默认 ${models.defaultModel}` : ''}${models.warning ? `；${models.warning}` : ''}`, `Saved — detected ${models.models.length} model(s)${models.defaultModel ? `, default ${models.defaultModel}` : ''}${models.warning ? `; ${models.warning}` : ''}`)
+        : L(`已保存，但这个 Agent 没有报告可用模型${models.warning ? `；${models.warning}` : '。它仍可启动，模型可在新建会话时选择。'}`, `Saved, but this Agent reported no models${models.warning ? `; ${models.warning}` : '. It can still launch normally.'}`));
       setDirty(false);
       setIsNew(false);
       setSelectedId(saved.id);
@@ -139,13 +293,13 @@ export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): 
   const customs = sorted.filter(agent => !agent.builtin);
 
   return <div className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-0 sm:p-4">
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Agent 设置" className="ui-dialog flex h-[100dvh] w-full max-w-none flex-col overflow-hidden rounded-none border-0 border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)] sm:h-[86dvh] sm:max-w-4xl sm:rounded-[14px] sm:border">
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label={L("Agent 设置", "Agent Settings")} className="ui-dialog flex h-[100dvh] w-full max-w-none flex-col overflow-hidden rounded-none border-0 border-zinc-200 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)] sm:h-[86dvh] sm:max-w-4xl sm:rounded-[14px] sm:border">
       <div className="flex shrink-0 flex-col gap-2 border-b border-zinc-100 px-3.5 py-2.5 md:min-h-12 md:flex-row md:items-center md:px-4 md:py-2">
         <div className="flex items-center justify-between gap-2 md:contents">
-          <div className="flex items-center gap-2 text-[16px] font-semibold text-zinc-900"><Bot size={16}/>Agent 设置</div>
-          <button type="button" onClick={requestClose} aria-label="关闭" className="grid h-9 w-9 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800 md:order-3 md:ml-auto md:h-8 md:w-8"><X size={16}/></button>
+          <div className="flex items-center gap-2 text-[16px] font-semibold text-zinc-900"><Bot size={16}/>{L("Agent 设置", "Agent Settings")}</div>
+          <button type="button" onClick={requestClose} aria-label={L("关闭", "Close")} className="grid h-9 w-9 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800 md:order-3 md:ml-auto md:h-8 md:w-8"><X size={16}/></button>
         </div>
-        <span className="w-full overflow-x-auto no-scrollbar md:order-2 md:ml-4 md:w-auto"><Segmented<typeof tab> block value={tab} onChange={setTab} options={[{ value: 'llm', label: '模型端点', icon: <Plug size={12}/> }, { value: 'agents', label: 'Agent', icon: <Bot size={12}/> }, { value: 'side-chat', label: '侧边对话', icon: <MessagesSquare size={12}/> }, { value: 'output-plugins', label: '交互插件', icon: <Puzzle size={12}/> }]}/></span>
+        <span className="w-full overflow-x-auto no-scrollbar md:order-2 md:ml-4 md:w-auto"><Segmented<typeof tab> block value={tab} onChange={setTab} options={[{ value: 'llm', label: L("模型端点", "Model Endpoint"), icon: <Plug size={12}/> }, { value: 'agents', label: 'Agent', icon: <Bot size={12}/> }, { value: 'side-chat', label: L("侧边对话", "Side Chat"), icon: <MessagesSquare size={12}/> }, { value: 'output-plugins', label: L("交互插件", "Output Plugins"), icon: <Puzzle size={12}/> }]}/></span>
       </div>
 
       <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5"><DeferredSkeleton/></div>}>
@@ -158,80 +312,81 @@ export function AgentConfigDialog({ onClose, initialTab = 'llm' }: { onClose(): 
         : <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[220px_1fr]">
           {/* 移动端使用横向胶囊条切换 Agent，避免列表占满上半屏挤压表单；md 以上恢复左侧栏。 */}
           <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-zinc-100 bg-zinc-50/60 px-3 py-2 md:hidden">
-            <button type="button" onClick={() => { setIsNew(true); setSelectedId(null); }} className={`flex h-8 shrink-0 items-center gap-1 rounded-full border border-dashed px-3 text-[12px] font-medium transition-colors ${isNew ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300 bg-white text-zinc-600'}`}><Plus size={13}/>自定义</button>
+            <button type="button" onClick={() => { setIsNew(true); setSelectedId(null); }} className={`flex h-8 shrink-0 items-center gap-1 rounded-full border border-dashed px-3 text-[12px] font-medium transition-colors ${isNew ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300 bg-white text-zinc-600'}`}><Plus size={13}/>{L("自定义", "Custom")}</button>
             {sorted.map(agent => {
               const active = !isNew && selectedId === agent.id;
               return <button key={agent.id} type="button" onClick={() => { setIsNew(false); setSelectedId(agent.id); }} className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${active ? 'border-zinc-900 bg-zinc-900 text-white' : agent.disabled ? 'border-zinc-200 bg-white text-zinc-400' : 'border-zinc-200 bg-white text-zinc-700'}`}>
                 <AgentIcon agentId={agent.id} agentName={agent.name} size={13} onDark={active}/>
                 <span>{agent.name}</span>
-                {agent.disabled && <span className={`text-[10px] ${active ? 'text-white/75' : 'text-zinc-400'}`}>停用</span>}
+                {agent.disabled && <span className={`text-[10px] ${active ? 'text-white/75' : 'text-zinc-400'}`}>{L("停用", "Disabled")}</span>}
               </button>;
             })}
-            {agents.isLoading && <span className="flex shrink-0 items-center gap-1.5 px-2 text-[12px] text-zinc-400"><Spinner size={12}/>读取中…</span>}
+            {agents.isLoading && <span className="flex shrink-0 items-center gap-1.5 px-2 text-[12px] text-zinc-400"><Spinner size={12}/>{L("读取中…", "Loading…")}</span>}
           </div>
           <div className="hidden overflow-y-auto border-r border-zinc-100 bg-zinc-50/60 p-2 md:block">
-            <button type="button" onClick={() => { setIsNew(true); setSelectedId(null); }} className={`mb-2 flex h-9 w-full items-center gap-2 rounded-lg border border-dashed border-zinc-300 px-3 text-[12px] font-medium ${isNew ? 'border-zinc-800 bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-white'}`}><Plus size={14}/>自定义 Agent</button>
-            <AgentGroup label="内置" agents={builtins} selectedId={isNew ? null : selectedId} onSelect={id => { setIsNew(false); setSelectedId(id); }}/>
-            <AgentGroup label="自定义" agents={customs} selectedId={isNew ? null : selectedId} onSelect={id => { setIsNew(false); setSelectedId(id); }}/>
-            {agents.isLoading && <div className="flex items-center gap-2 px-2 py-2 text-[12px] text-zinc-400"><Spinner size={12}/>读取中…</div>}
-            {agents.error && <div className="px-2 py-2 text-[12px] text-red-600">{agents.error instanceof Error ? agents.error.message : '读取失败（会话链接无权打开 Agent 设置，请用 master 地址）'}</div>}
+            <button type="button" onClick={() => { setIsNew(true); setSelectedId(null); }} className={`mb-2 flex h-9 w-full items-center gap-2 rounded-lg border border-dashed border-zinc-300 px-3 text-[12px] font-medium ${isNew ? 'border-zinc-800 bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-white'}`}><Plus size={14}/>{L("自定义 Agent", "Custom Agent")}</button>
+            <AgentGroup label={L("内置", "Built-in")} agents={builtins} selectedId={isNew ? null : selectedId} onSelect={id => { setIsNew(false); setSelectedId(id); }}/>
+            <AgentGroup label={L("自定义", "Custom")} agents={customs} selectedId={isNew ? null : selectedId} onSelect={id => { setIsNew(false); setSelectedId(id); }}/>
+            {agents.isLoading && <div className="flex items-center gap-2 px-2 py-2 text-[12px] text-zinc-400"><Spinner size={12}/>{L("读取中…", "Loading…")}</div>}
+            {agents.error && <div className="px-2 py-2 text-[12px] text-red-600">{agents.error instanceof Error ? agents.error.message : L("读取失败（会话链接无权打开 Agent 设置，请用 master 地址）", "Failed to load (session link cannot access Agent settings — use the admin console URL)")}</div>}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-4 sm:px-4 md:px-5">
-            {agents.error && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-600 md:hidden">{agents.error instanceof Error ? agents.error.message : '读取失败（会话链接无权打开 Agent 设置，请用 master 地址）'}</div>}
+            {agents.error && <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-600 md:hidden">{agents.error instanceof Error ? agents.error.message : L("读取失败（会话链接无权打开 Agent 设置，请用 master 地址）", "Failed to load (session link cannot access Agent settings — use the admin console URL)")}</div>}
             {(isNew || selected) ? <div className="space-y-4">
               {readOnly
                 ? <>
-                  <div className="flex items-center gap-2"><AgentIcon agentId={selected!.id} agentName={selected!.name} size={16}/><div className="min-w-0 flex-1"><ReadOnlyField label="名称" value={selected!.name}/></div></div>
-                  <ReadOnlyField label="启动命令" value={[selected!.command, ...(selected!.args ?? [])].join(' ')} mono/>
-                  <ReadOnlyField label="工作目录" value={selected!.cwd} mono hint="跟随会话"/>
+                  <div className="flex items-center gap-2"><AgentIcon agentId={selected!.id} agentName={selected!.name} size={16}/><div className="min-w-0 flex-1"><ReadOnlyField label={L("名称", "Name")} value={selected!.name}/></div></div>
+                  <ReadOnlyField label={L("启动命令", "Command")} value={[selected!.command, ...(selected!.args ?? [])].join(' ')} mono/>
+                  <ReadOnlyField label={L("工作目录", "Workspace")} value={selected!.cwd} mono hint={L("跟随会话", "Follow Session")}/>
                   {['codex', 'claude', 'cursor', 'antigravity', 'omp', 'opencode'].includes(selected!.id) && <AgentUsagePanel agentId={selected!.id}/>}
-                  <p className="text-[12px] leading-5 text-zinc-400">内置 Agent 的参数由扫描得出（命令、参数、协议、版本），不需要也不能在这里修改；升级客户端后会自动刷新。你只能停用或重新启用它。</p>
+                  <p className="text-[12px] leading-5 text-zinc-400">{L("内置 Agent 的参数由扫描得出（命令、参数、协议、版本），不需要也不能在这里修改；升级客户端后会自动刷新。你只能停用或重新启用它。", "Built-in Agent parameters are auto-detected and refreshed after upgrades. You can disable or re-enable it here.")}</p>
                 </>
                 : <>
-                  <div><span className={labelClass}>名称</span><Input size="large" className="mt-1 text-[12px]" value={draft.name} placeholder="例如 DeepSeek Harness" onChange={event => patch({ name: event.target.value })}/><FieldError message={errorByField.get('name')}/></div>
-                  <div><span className={labelClass}>启动命令</span><Input size="large" className="mt-1 font-mono text-[12px]" value={draft.command} placeholder="例如 /usr/local/bin/dsh" onChange={event => patch({ command: event.target.value })}/><FieldError message={errorByField.get('command')}/></div>
-                  <div><span className={labelClass}>工作目录（可选）</span><Input size="large" className="mt-1 font-mono text-[12px]" value={draft.cwd} placeholder="留空跟随会话" onChange={event => patch({ cwd: event.target.value })}/></div>
-                  <p className="text-[12px] leading-5 text-zinc-400">协议、超时、参数、环境变量、模型等由 Agent 自己或运行时决定，不需要在这里配置。模型可在新建会话时选择。</p>
+                  <div><span className={labelClass}>{L("名称", "Name")}</span><Input size="large" className="mt-1 text-[12px]" value={draft.name} placeholder={L("例如 DeepSeek Harness", "e.g., DeepSeek Harness")} onChange={event => patch({ name: event.target.value })}/><FieldError message={errorByField.get('name')}/></div>
+                  <div><span className={labelClass}>{L("启动命令", "Command")}</span><Input size="large" className="mt-1 font-mono text-[12px]" value={draft.command} placeholder={L("例如 /usr/local/bin/dsh", "e.g., /usr/local/bin/dsh")} onChange={event => patch({ command: event.target.value })}/><FieldError message={errorByField.get('command')}/></div>
+                  <div><span className={labelClass}>{L("工作目录（可选）", "Workspace (Optional)")}</span><Input size="large" className="mt-1 font-mono text-[12px]" value={draft.cwd} placeholder={L("留空跟随会话", "Leave blank to follow session")} onChange={event => patch({ cwd: event.target.value })}/></div>
+                  <p className="text-[12px] leading-5 text-zinc-400">{L("协议、超时、参数、环境变量、模型等由 Agent 自己或运行时决定，不需要在这里配置。模型可在新建会话时选择。", "Protocol, timeouts, args, env vars, and models are discovered automatically by the runtime.")}</p>
                 </>}
               {probeResult && <div className={`flex items-start gap-2 rounded-md border px-3 py-2 text-[12px] leading-5 ${probeOk ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}><AlertTriangle size={13} className="mt-0.5 shrink-0"/>{probeResult}</div>}
-              {save.error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">{save.error instanceof Error ? save.error.message : '保存失败'}</div>}
-              {toggleDisabled.error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">{toggleDisabled.error instanceof Error ? toggleDisabled.error.message : '操作失败'}</div>}
-            </div> : <div className="grid min-h-[320px] place-items-center text-[12px] text-zinc-400">从左侧选择 Agent，或新建一个自定义 Agent。</div>}
+              {save.error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">{save.error instanceof Error ? save.error.message : L("保存失败", "Save failed")}</div>}
+              {toggleDisabled.error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">{toggleDisabled.error instanceof Error ? toggleDisabled.error.message : L("操作失败", "Action failed")}</div>}
+            </div> : <div className="grid min-h-[320px] place-items-center text-[12px] text-zinc-400">{L("从左侧选择 Agent，或新建一个自定义 Agent。", "Select an Agent on the left or create a custom Agent.")}</div>}
           </div>
         </div>}
       </DeferredMount>
 
       {tab === 'agents' && (isNew || selected) && <div className="sticky bottom-0 flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-t border-zinc-100 bg-white px-3.5 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-2">
         {readOnly
-          ? <button type="button" disabled={toggleDisabled.isPending} onClick={() => setDeleteConfirm(true)} className={`flex h-9 items-center rounded-md border px-3 text-[12px] font-medium disabled:opacity-40 ${selected!.disabled ? 'border-zinc-300 text-zinc-700 hover:bg-zinc-50' : 'border-red-200 text-red-600 hover:bg-red-50'}`}>{selected!.disabled ? '重新启用' : '停用（内置）'}</button>
-          : <button type="button" disabled={remove.isPending || save.isPending} onClick={() => setDeleteConfirm(true)} className="flex h-9 items-center rounded-md border border-red-200 px-3 text-[12px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40">删除</button>}
-        <span className="hidden text-[12px] text-zinc-400 sm:inline">{selected?.version ? `版本 ${selected.version}` : ''}{selected ? `　${selected.id}` : ''}</span>
+          ? <button type="button" disabled={toggleDisabled.isPending} onClick={() => setDeleteConfirm(true)} className={`flex h-9 items-center rounded-md border px-3 text-[12px] font-medium disabled:opacity-40 ${selected!.disabled ? 'border-zinc-300 text-zinc-700 hover:bg-zinc-50' : 'border-red-200 text-red-600 hover:bg-red-50'}`}>{selected!.disabled ? L("重新启用", "Re-enable") : L("停用（内置）", "Disable (Built-in)")}</button>
+          : <button type="button" disabled={remove.isPending || save.isPending} onClick={() => setDeleteConfirm(true)} className="flex h-9 items-center rounded-md border border-red-200 px-3 text-[12px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40">{L("删除", "Delete")}</button>}
+        <span className="hidden text-[12px] text-zinc-400 sm:inline">{selected?.version ? L(`版本 ${selected.version}`, `Version ${selected.version}`) : ''}{selected ? `　${selected.id}` : ''}</span>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {!readOnly && <>
-            <button type="button" disabled={!valid || probe.isPending} onClick={() => probe.mutate()} className="flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 px-3 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40">{probe.isPending ? <Spinner size={13}/> : <RefreshCw size={13}/>}保存并探测模型</button>
-            <button type="button" onClick={requestClose} className="flex h-9 items-center rounded-md border border-zinc-300 px-4 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50">取消</button>
-            <button type="button" disabled={!valid || save.isPending} onClick={() => save.mutate()} className="flex h-9 items-center gap-1.5 rounded-md bg-zinc-900 px-4 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">{save.isPending && <Spinner size={13}/>}保存</button>
+            <button type="button" disabled={!valid || probe.isPending} onClick={() => probe.mutate()} className="flex h-9 items-center gap-1.5 rounded-md border border-zinc-300 px-3 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40">{probe.isPending ? <Spinner size={13}/> : <RefreshCw size={13}/>}{L("保存并探测模型", "Save & Probe Models")}</button>
+            <button type="button" onClick={requestClose} className="flex h-9 items-center rounded-md border border-zinc-300 px-4 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50">{L("取消", "Cancel")}</button>
+            <button type="button" disabled={!valid || save.isPending} onClick={() => save.mutate()} className="flex h-9 items-center gap-1.5 rounded-md bg-zinc-900 px-4 text-[12px] font-medium text-white hover:bg-zinc-800 disabled:opacity-40">{save.isPending && <Spinner size={13}/>}{L("保存", "Save")}</button>
           </>}
-          {readOnly && <button type="button" onClick={requestClose} className="flex h-9 items-center rounded-md border border-zinc-300 px-4 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50">关闭</button>}
+          {readOnly && <button type="button" onClick={requestClose} className="flex h-9 items-center rounded-md border border-zinc-300 px-4 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50">{L("关闭", "Close")}</button>}
         </div>
       </div>}
-      <ConfirmDialog open={closeConfirm} title="放弃未保存的修改？" description="当前 Agent 配置尚未保存，关闭后修改将丢失。" confirmLabel="放弃修改" tone="danger" busy={false} onCancel={() => setCloseConfirm(false)} onConfirm={onClose}/>
+      <ConfirmDialog open={closeConfirm} title={L("放弃未保存的修改？", "Discard unsaved changes?")} description={L("当前 Agent 配置尚未保存，关闭后修改将丢失。", "Your Agent configuration changes have not been saved and will be lost.")} confirmLabel={L("放弃修改", "Discard")} tone="danger" busy={false} onCancel={() => setCloseConfirm(false)} onConfirm={onClose}/>
       {readOnly
-        ? <ConfirmDialog open={deleteConfirm} tone={selected?.disabled ? undefined : 'danger'} title={selected?.disabled ? '重新启用此内置 Agent？' : '停用此内置 Agent？'} description={selected?.disabled ? '启用后可以在新建会话时再次选择它。' : '停用后新建会话将无法选择它，配置保留在数据库中；下次启动不会自动复活。'} confirmLabel={selected?.disabled ? '重新启用' : '停用'} busy={toggleDisabled.isPending} error={toggleDisabled.error instanceof Error ? toggleDisabled.error.message : undefined} onCancel={() => setDeleteConfirm(false)} onConfirm={() => toggleDisabled.mutate(!selected?.disabled)}/>
-        : <ConfirmDialog open={deleteConfirm} tone="danger" title="删除此自定义 Agent？" description="删除后不可恢复，已有历史会话保留但无法再启动该 Agent。" confirmLabel="删除" busy={remove.isPending} error={remove.error instanceof Error ? remove.error.message : undefined} onCancel={() => setDeleteConfirm(false)} onConfirm={() => remove.mutate()}/>}
+        ? <ConfirmDialog open={deleteConfirm} tone={selected?.disabled ? undefined : 'danger'} title={selected?.disabled ? L("重新启用此内置 Agent？", "Re-enable this built-in Agent?") : L("停用此内置 Agent？", "Disable this built-in Agent?")} description={selected?.disabled ? L("启用后可以在新建会话时再次选择它。", "Once enabled, it will be selectable when creating new sessions.") : L("停用后新建会话将无法选择它，配置保留在数据库中；下次启动不会自动复活。", "Disabled Agents cannot be selected for new sessions; configuration stays stored.")} confirmLabel={selected?.disabled ? L("重新启用", "Re-enable") : L("停用", "Disabled")} busy={toggleDisabled.isPending} error={toggleDisabled.error instanceof Error ? toggleDisabled.error.message : undefined} onCancel={() => setDeleteConfirm(false)} onConfirm={() => toggleDisabled.mutate(!selected?.disabled)}/>
+        : <ConfirmDialog open={deleteConfirm} tone="danger" title={L("删除此自定义 Agent？", "Delete this custom Agent?")} description={L("删除后不可恢复，已有历史会话保留但无法再启动该 Agent。", "This cannot be undone. Existing sessions remain viewable but cannot be resumed.")} confirmLabel={L("删除", "Delete")} busy={remove.isPending} error={remove.error instanceof Error ? remove.error.message : undefined} onCancel={() => setDeleteConfirm(false)} onConfirm={() => remove.mutate()}/>}
     </div>
   </div>;
 }
 
 
 function AgentGroup({ label, agents, selectedId, onSelect }: { label: string; agents: Agent[]; selectedId: string | null; onSelect(id: string): void }) {
+  const L = useBi();
   if (!agents.length) return null;
   return <div className="mb-2">
     <div className="px-2 py-1 text-[12px] font-medium uppercase tracking-wide text-zinc-400">{label}</div>
     {agents.map(agent => <button key={agent.id} type="button" onClick={() => onSelect(agent.id)} title={agent.id} className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] transition-colors ${selectedId === agent.id ? 'bg-zinc-900 text-white' : agent.disabled ? 'text-zinc-300' : 'text-zinc-700 hover:bg-white'}`}>
       <AgentIcon agentId={agent.id} agentName={agent.name} size={13} onDark={selectedId === agent.id}/>
       <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-      {agent.disabled && <span className={`shrink-0 rounded px-1 py-0.5 text-[12px] ${selectedId === agent.id ? 'bg-white/20 text-white/80' : 'bg-zinc-200 text-zinc-500'}`}>停用</span>}
+      {agent.disabled && <span className={`shrink-0 rounded px-1 py-0.5 text-[12px] ${selectedId === agent.id ? 'bg-white/20 text-white/80' : 'bg-zinc-200 text-zinc-500'}`}>{L("停用", "Disabled")}</span>}
     </button>)}
   </div>;
 }
