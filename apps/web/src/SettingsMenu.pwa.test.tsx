@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BUILTIN_THEMES } from '@agent-dock/agent-dock-shared';
 import type { PwaInstallSnapshot } from './pwa-install';
 import { resolvePwaInstallSnapshot } from './pwa-install';
 
@@ -26,7 +27,9 @@ vi.mock('./api', () => ({
       canUpdate: false,
       updating: false,
       runtime: 'daemon'
-    }))
+    })),
+    autostartStatus: vi.fn(async () => ({ supported: false, enabled: false })),
+    keepAwakeStatus: vi.fn(async () => ({ supported: false, enabled: false, keepDisplay: false }))
   }
 }));
 vi.mock('@tanstack/react-query', async importOriginal => ({
@@ -42,36 +45,61 @@ vi.mock('./pwa-install', async importOriginal => ({
   ...(await importOriginal<typeof import('./pwa-install')>()),
   usePwaInstall: () => mockedPwaSnapshot
 }));
-vi.mock('./SelfUpdateNotice', () => ({ SelfUpdateNotice: () => null }));
+vi.mock('./SelfUpdateNotice', () => ({ SelfUpdateNotice: () => null, SelfUpdateWatcher: () => null }));
 vi.mock('./AutostartToggle', () => ({ AutostartToggle: () => null }));
 vi.mock('./KeepAwakeToggle', () => ({ KeepAwakeToggle: () => null }));
-vi.mock('./ThemeToggle', () => ({ ThemeSegmented: () => null }));
+vi.mock('./ThemeToggle', () => ({ ThemeSegmented: () => null, QuickThemeToggleButton: () => null }));
+vi.mock('./useModalFocusTrap', () => ({ useModalFocusTrap: () => undefined }));
+vi.mock('./theme', () => ({
+  useThemeMode: () => 'system',
+  useResolvedTheme: () => 'light',
+  useActiveTheme: () => BUILTIN_THEMES[0]!,
+  useThemesState: () => ({
+    themes: BUILTIN_THEMES,
+    preferences: { modePreference: 'system', activeThemeId: BUILTIN_THEMES[0]!.id, activeLightThemeId: BUILTIN_THEMES[0]!.id, activeDarkThemeId: BUILTIN_THEMES[1]!.id },
+    activeTheme: BUILTIN_THEMES[0]!,
+    previewTheme: null
+  }),
+  setThemeMode: () => undefined
+}));
+vi.mock('./companion/useCompanion', () => ({
+  useCompanion: () => ({
+    adopted: false,
+    name: '小A同学',
+    mainSession: null,
+    companion: null,
+    counts: { needsUser: 0, planned: 0, pendingDrafts: 0, open: 0 },
+    status: '',
+    mood: 'curious',
+    stage: 'kitten'
+  })
+}));
 
-import { SettingsMenu } from './SettingsMenu';
+import { SettingsCenterDialog } from './settings/SettingsCenterDialog';
 import { TooltipProvider } from './HoverTooltip';
 
 const noop = () => undefined;
 const baseProps = {
   webDenied: false,
+  agents: [],
+  sessions: [],
   archivedCount: 0,
-  onUsage: noop,
-  onSchedule: noop,
-  onArchived: noop,
-  onImport: noop,
-  onAgentConfig: noop,
-  onSideChatConfig: noop,
-  onAssistant: noop,
-  onLark: noop,
-  onLarkAvatar: noop,
-  onShare: noop
+  onClose: noop,
+  onOpenSession: noop,
+  onOpenMain: noop,
+  onAdopt: noop,
+  onOpenUsage: noop,
+  onOpenArchived: noop,
+  onOpenImport: noop,
+  onOpenShare: noop
 };
 
-function renderSettingsMenu() {
+function renderSettingsCenter() {
   vi.stubGlobal('document', { body: {} });
   const queryClient = new QueryClient();
   return renderToStaticMarkup(
     createElement(QueryClientProvider, { client: queryClient },
-      createElement(TooltipProvider, null, createElement(SettingsMenu, baseProps))
+      createElement(TooltipProvider, null, createElement(SettingsCenterDialog, baseProps))
     )
   );
 }
@@ -86,9 +114,9 @@ afterEach(() => {
   });
 });
 
-describe('SettingsMenu PWA install visibility', () => {
+describe('SettingsCenterDialog PWA install visibility', () => {
   it('shows PWA install entry in normal desktop Chrome/Edge Web browsers', () => {
-    const html = renderSettingsMenu();
+    const html = renderSettingsCenter();
     expect(html).toContain('安装为桌面应用');
     expect(html).toContain('>PWA<');
   });
@@ -101,7 +129,7 @@ describe('SettingsMenu PWA install visibility', () => {
       userAgent: chromeDesktopUa,
       hasDeferredPrompt: true
     });
-    const html = renderSettingsMenu();
+    const html = renderSettingsCenter();
     expect(html).not.toContain('安装为桌面应用');
     expect(html).not.toContain('>PWA<');
     expect(html).not.toContain('Chrome');
@@ -115,7 +143,7 @@ describe('SettingsMenu PWA install visibility', () => {
       userAgent: electronDefaultUa,
       hasDeferredPrompt: true
     });
-    const html = renderSettingsMenu();
+    const html = renderSettingsCenter();
     expect(html).not.toContain('安装为桌面应用');
     expect(html).not.toContain('>PWA<');
     expect(html).not.toContain('Chrome');
@@ -130,7 +158,7 @@ describe('SettingsMenu PWA install visibility', () => {
       installed: false,
       manualHint: 'Chrome'
     };
-    const html = renderSettingsMenu();
+    const html = renderSettingsCenter();
     expect(html).not.toContain('安装为桌面应用');
     expect(html).not.toContain('>PWA<');
     expect(html).not.toContain('Chrome');

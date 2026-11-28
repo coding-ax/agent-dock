@@ -117,7 +117,7 @@ async function seedSessionWithTask(
 
 describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm modes', () => {
   it('audits daemon-restart interrupted ordinary sessions while strictly excluding user_stopped, completed, assistant-managed, ephemeral, and system turns', async () => {
-    const baseMs = Date.parse('2026-11-28T07:00:00.000Z');
+    const baseMs = Date.now();
     const recentIso = new Date(baseMs - 3 * 60_000).toISOString();
     const { repos, runtime, sentPrompts } = createRuntimeHarness();
 
@@ -263,7 +263,7 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
   });
 
   it('enforces 15-minute staleness window guardrail and skips old crashed tasks', async () => {
-    const baseMs = Date.parse('2026-11-28T07:00:00.000Z');
+    const baseMs = Date.now();
     const staleIso = new Date(baseMs - 20 * 60_000).toISOString(); // 20 min ago (> 15 min)
     const freshIso = new Date(baseMs - 5 * 60_000).toISOString();  // 5 min ago (<= 15 min)
     const { repos, runtime, sentPrompts } = createRuntimeHarness();
@@ -294,7 +294,7 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
   });
 
   it('enforces max 1 auto-recovery attempt anti-crash-loop guardrail across consecutive restarts', async () => {
-    const boot1Ms = Date.parse('2026-11-28T07:00:00.000Z');
+    const boot1Ms = Date.now();
     const { repos } = createRuntimeHarness();
 
     // Boot #1: original task interrupted -> auto-recovers into recoveryTaskId
@@ -396,7 +396,7 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
   });
 
   it('staggers multiple auto-recovery launches and aborts if user already sent a newer message during stagger wait', async () => {
-    const baseMs = Date.parse('2026-11-28T07:00:00.000Z');
+    const baseMs = Date.now();
     const recentIso = new Date(baseMs - 60_000).toISOString();
     const { repos, runtime } = createRuntimeHarness();
 
@@ -424,13 +424,14 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
     await service.auditStartupInterruptions();
 
     // Simulate user sending a brand-new turn to ses_b while ses_b is waiting in stagger delay
+    const newerTurnIso = new Date(Math.max(baseMs, Date.now()) + 5_000).toISOString();
     await repos.tasks.save({
       id: 'task_user_new',
       sessionId: 'ses_b',
       prompt: '不用续跑了，改做这件事',
       status: 'completed',
-      createdAt: new Date(baseMs + 5_000).toISOString(),
-      updatedAt: new Date(baseMs + 5_000).toISOString()
+      createdAt: newerTurnIso,
+      updatedAt: newerTurnIso
     });
 
     await vi.waitFor(async () => {
@@ -448,7 +449,7 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
   });
 
   it('respects mode=off without dispatching or sending confirmation cards', async () => {
-    const baseMs = Date.parse('2026-11-28T07:00:00.000Z');
+    const baseMs = Date.now();
     const { repos, runtime, sentPrompts } = createRuntimeHarness();
     await saveTaskRecoveryConfig(repos, { mode: 'off' });
     await seedSessionWithTask(repos, {
@@ -480,7 +481,7 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
   });
 
   it('supports confirm mode with Web + Lark dual-end idempotent locking, in-place Lark card lock, and dismiss flow', async () => {
-    const baseMs = Date.parse('2026-11-28T07:00:00.000Z');
+    const baseMs = Date.now();
     const recentIso = new Date(baseMs - 2 * 60_000).toISOString();
     const { repos, runtime, sentPrompts } = createRuntimeHarness();
     await saveTaskRecoveryConfig(repos, { mode: 'confirm' });
@@ -589,7 +590,7 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
   });
 
   it('exposes config, records, and session recovery decision REST endpoints cleanly', async () => {
-    const baseMs = Date.parse('2026-11-28T07:00:00.000Z');
+    const baseMs = Date.now();
     const { repos, runtime } = createRuntimeHarness();
     await runtime.initialize([mockAgent]);
 
@@ -726,7 +727,7 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
   });
 
   it('wires registerLarkRoutes session binding lookup to send and lock Feishu Schema 2.0 confirm cards for handover and native Lark sessions', async () => {
-    const baseMs = Date.parse('2026-11-28T07:00:00.000Z');
+    const baseMs = Date.now();
     const recentIso = new Date(baseMs - 60_000).toISOString();
     const { repos, runtime } = createRuntimeHarness();
     await runtime.initialize([mockAgent]);
