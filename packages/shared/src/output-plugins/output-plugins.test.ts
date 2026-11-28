@@ -6,16 +6,20 @@ import {
   ASSISTANT_REPLY_ORIGIN,
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+  BUILTIN_RICH_BLOCKS_PLUGIN_ID,
   CONFIRM_ACTION_INTERACTION_ORIGIN,
   CONFIRM_ACTION_XML_TAG,
   LEGACY_ASK_USER_QUESTION_PLUGIN_ALIAS,
   LEGACY_CONFIRM_ACTION_PLUGIN_ALIAS,
+  LEGACY_RICH_BLOCKS_PLUGIN_ALIAS,
   OutputPluginRegistry,
+  RICH_BLOCKS_TAG_NAME,
   askUserQuestionOutputPlugin,
   confirmActionOutputPlugin,
   createDeclarativeOutputPlugin,
   createDefaultOutputPluginRegistry,
   declarativeOutputPluginManifestSchema,
+  defaultGlobalOutputPluginsConfig,
   formatConfirmActionInteractionForAgent,
   formatOutputPluginInteractionSourceLabel,
   getSessionOutputPluginOverride,
@@ -27,6 +31,7 @@ import {
   parseAssistantReplyOrigin,
   parseConfirmActionInteraction,
   resolveOutputPluginEnabled,
+  richBlocksOutputPlugin,
   serializeAskUserQuestionAnswer,
   serializeConfirmActionInteraction,
   type ConfirmActionInteractionPayload,
@@ -83,11 +88,12 @@ const releaseInfoManifest: DeclarativeOutputPluginManifest = {
 };
 
 describe('output-plugins shared contract & registry', () => {
-  it('registers builtin AskUserQuestion and ConfirmAction and resolves short aliases seamlessly', () => {
+  it('registers builtin AskUserQuestion, ConfirmAction, and default-off RichBlocks and resolves short aliases seamlessly', () => {
     const registry = createDefaultOutputPluginRegistry();
     expect(registry.list().map(p => p.id)).toEqual([
       BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
-      BUILTIN_CONFIRM_ACTION_PLUGIN_ID
+      BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+      BUILTIN_RICH_BLOCKS_PLUGIN_ID
     ]);
 
     const viaCanonical = registry.get(BUILTIN_ASK_USER_QUESTION_PLUGIN_ID);
@@ -116,6 +122,33 @@ describe('output-plugins shared contract & registry', () => {
     expect(normalizeOutputPluginId('confirm-action')).toBe(BUILTIN_CONFIRM_ACTION_PLUGIN_ID);
     expect(confirmActionOutputPlugin.builtin).toBe(true);
     expect(confirmActionOutputPlugin.defaultEnabled).toBe(true);
+
+    // Built-in Plugin #3: rich-blocks (defaultEnabled = false, markdown-blocks)
+    expect(registry.get(BUILTIN_RICH_BLOCKS_PLUGIN_ID)).toBe(richBlocksOutputPlugin);
+    expect(registry.get(LEGACY_RICH_BLOCKS_PLUGIN_ALIAS)).toBe(richBlocksOutputPlugin);
+    expect(registry.getByTagName(RICH_BLOCKS_TAG_NAME)).toBe(richBlocksOutputPlugin);
+    expect(normalizeOutputPluginId('rich-blocks')).toBe(BUILTIN_RICH_BLOCKS_PLUGIN_ID);
+    expect(richBlocksOutputPlugin.builtin).toBe(true);
+    expect(richBlocksOutputPlugin.defaultEnabled).toBe(false);
+    expect(richBlocksOutputPlugin.syntaxKind).toBe('markdown-blocks');
+    expect(richBlocksOutputPlugin.capabilities).toEqual({
+      web: true,
+      lark: true,
+      interactive: false,
+      streamingPlaceholder: false
+    });
+    expect(defaultGlobalOutputPluginsConfig().plugins[BUILTIN_RICH_BLOCKS_PLUGIN_ID]).toBe(false);
+    expect(resolveOutputPluginEnabled(BUILTIN_RICH_BLOCKS_PLUGIN_ID)).toBe(false);
+    expect(resolveOutputPluginEnabled('rich-blocks', { sessionOverrides: { 'rich-blocks': true } })).toBe(true);
+    expect(getSessionOutputPluginOverride(BUILTIN_RICH_BLOCKS_PLUGIN_ID, { 'rich-blocks': true })).toBe(true);
+
+    // Markdown-block plugins must never produce false XML matches or streaming placeholders
+    const onlyRich = new Set([BUILTIN_RICH_BLOCKS_PLUGIN_ID]);
+    expect(registry.parseTrailingOutput('<agentdock-rich-blocks>hi</agentdock-rich-blocks>', onlyRich)).toBeNull();
+    expect(registry.splitStreamingOutput('正文\n<agentd', true, onlyRich)).toEqual({
+      kind: 'none',
+      proseText: '正文\n<agentd'
+    });
   });
 
   it('parses builtin ConfirmAction XML with fence immunity, streaming placeholder, and interaction routing', () => {
@@ -478,5 +511,63 @@ describe('output-plugins shared contract & registry', () => {
     expect(parseAssistantReplyOrigin('assistant_reply:小A同学')).toEqual({ kind: 'reply', responderName: '小A同学' });
     expect(parseAssistantReplyOrigin('assistant_answer:布丁')).toEqual({ kind: 'answer', responderName: '布丁' });
     expect(parseAssistantReplyOrigin(undefined)).toBeNull();
+  });
+
+  it('parses JSON-in-XML fallback payloads for ConfirmAction and declarative plugins cleanly', () => {
+    const registry = createDefaultOutputPluginRegistry();
+    registry.register(createDeclarativeOutputPlugin(deployApprovalManifest));
+    registry.register(createDeclarativeOutputPlugin(envFormManifest));
+
+    const confirmJsonReply = `即将发布，请确认：
+
+<agentdock-confirm-action>
+{
+  "id": "confirm_json_1",
+  "title": "发布 v0.3.31",
+  "summary": "将推送 npm latest 并更新本机 daemon",
+  "risk": "high",
+  "details": [
+    { "label": "版本", "value": "0.3.31" },
+    { "label": "范围", "value": "shared + server" }
+  ],
+  "command": "npm publish --tag latest",
+  "confirm_label": "立即发布",
+  "allow_comment": true
+}
+</agentdock-confirm-action>`;
+    const parsedConfirm = registry.parseTrailingOutput(confirmJsonReply);
+    expect(parsedConfirm?.pluginId).toBe(BUILTIN_CONFIRM_ACTION_PLUGIN_ID);
+    expect(parsedConfirm?.proseText).toBe('即将发布，请确认：');
+    expect(parsedConfirm?.spec).toMatchObject({
+      id: 'confirm_json_1',
+      title: '发布 v0.3.31',
+      summary: '将推送 npm latest 并更新本机 daemon',
+      risk: 'high',
+      command: 'npm publish --tag latest',
+      confirmLabel: '立即发布',
+      allowComment: true,
+      details: [
+        { label: '版本', value: '0.3.31' },
+        { label: '范围', value: 'shared + server' }
+      ]
+    });
+
+    const formJsonReply = `请填写环境参数：
+<agentdock-env-form>
+{
+  "id": "env_json_1",
+  "title": "环境配置",
+  "fields": [
+    { "name": "region", "label": "区域", "type": "select", "required": true, "options": [{ "value": "cn", "label": "中国" }] }
+  ]
+}
+</agentdock-env-form>`;
+    const parsedForm = registry.parseTrailingOutput(formJsonReply);
+    expect(parsedForm?.pluginId).toBe('local:env-form');
+    expect(parsedForm?.spec).toMatchObject({
+      id: 'env_json_1',
+      title: '环境配置',
+      fields: [{ name: 'region', label: '区域', type: 'select', required: true, options: [{ value: 'cn', label: '中国' }] }]
+    });
   });
 });

@@ -282,7 +282,7 @@ const RAW_SETTINGS_SEARCH_ITEMS: readonly RawSettingsSearchItem[] = [
     descriptionKey: 'settings.search.outputPlugins.desc',
     category: 'agent',
     subTab: 'output-plugins',
-    keywords: ['交互插件', '插件中心', '询问卡', '确认卡', 'xml', '插件', 'chajian', 'jiaohuchajian', 'chajianzhongxin', 'xunwenka', 'querenka', 'cj', 'jhcj', 'askuserquestion', 'confirm', 'plugin', 'plugins', 'output']
+    keywords: ['交互插件', '插件中心', '询问卡', '确认卡', '富文本', '指标', '时间轴', 'xml', 'metrics', 'steps', 'kpi', 'rich-blocks', '插件', 'chajian', 'jiaohuchajian', 'chajianzhongxin', 'xunwenka', 'querenka', 'fuwenben', 'cj', 'jhcj', 'askuserquestion', 'confirm', 'plugin', 'plugins', 'output']
   },
   {
     id: 'schedules',

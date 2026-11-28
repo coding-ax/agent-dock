@@ -10,6 +10,7 @@ export * from './ask-user-question.js';
 export * from './output-plugins/index.js';
 export * from './themes.js';
 export * from './task-recovery.js';
+export * from './rich-markdown.js';
 export * from './i18n/index.js';
 import type { BoardRepository } from './boards.js';
 import type { TaskRecoveryRepository } from './task-recovery.js';

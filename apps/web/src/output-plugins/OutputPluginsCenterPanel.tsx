@@ -65,6 +65,7 @@ function PluginCatalogCard({
   const L = useBi();
   const locale = useLocale();
   const localized = localizeOutputPluginDisplay(plugin, locale);
+  const isMarkdownBlocks = plugin.syntaxKind === 'markdown-blocks';
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -110,26 +111,41 @@ function PluginCatalogCard({
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
             <code className="max-w-full truncate rounded-md border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 font-mono text-[11px] text-zinc-700">
-              &lt;{plugin.tagName}&gt;
+              {isMarkdownBlocks ? '```metrics / ```steps' : `<${plugin.tagName}>`}
             </code>
+            {isMarkdownBlocks && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-600">
+                <Code2 size={10} className="text-sky-600 dark:text-sky-400"/>
+                {L("Markdown 块", "Markdown Blocks")}
+              </span>
+            )}
             {plugin.capabilities.web && (
               <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-600">
                 <Sparkles size={10} className="text-sky-600 dark:text-sky-400"/>
-                Web {plugin.capabilities.interactive ? L("交互卡", "Interactive") : L("展示卡", "Display")}
+                {isMarkdownBlocks
+                  ? L("Web 富文本", "Web Rich")
+                  : `Web ${plugin.capabilities.interactive ? L("交互卡", "Interactive") : L("展示卡", "Display")}`}
               </span>
             )}
             {plugin.capabilities.lark && (
               <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-600">
                 <Send size={10} className="text-blue-600 dark:text-blue-400"/>
-                
-                {L("飞书 2.0 卡片", "Lark 2.0 Card")}
+                {isMarkdownBlocks ? L("飞书降级", "Lark Fallback") : L("飞书 2.0 卡片", "Lark 2.0 Card")}
               </span>
             )}
-            <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-600">
-              <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400"/>
-              
-              {L("围栏免疫", "Fence-safe")}
-            </span>
+            {isMarkdownBlocks ? (
+              !plugin.defaultEnabled && (
+                <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-500">
+                  <ShieldCheck size={10} className="text-zinc-500"/>
+                  {L("默认关闭", "Default Off")}
+                </span>
+              )
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-600">
+                <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400"/>
+                {L("围栏免疫", "Fence-safe")}
+              </span>
+            )}
           </div>
         </div>
         <Switch
@@ -150,7 +166,11 @@ function PluginCatalogCard({
         >
           <ChevronRight size={13} className={`shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}/>
           <Code2 size={12} className="shrink-0 text-zinc-400"/>
-          <span>{L("协议格式速览与按需提示词", "Protocol Format & On-Demand Prompt")}</span>
+          <span>
+            {isMarkdownBlocks
+              ? L("Markdown 语法速览与按需提示词", "Markdown Syntax & On-Demand Prompt")
+              : L("协议格式速览与按需提示词", "Protocol Format & On-Demand Prompt")}
+          </span>
           {plugin.sourcePath && (
             <span className="ml-auto hidden max-w-[45%] truncate font-mono text-[10.5px] font-normal text-zinc-400 sm:inline">
               {plugin.sourcePath}
@@ -162,8 +182,15 @@ function PluginCatalogCard({
             {plugin.protocolExample && (
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-medium text-zinc-500">{L("XML 输出示例（需位于回答最末尾，勿包代码块）", "XML Output Example (place at end of reply, outside code blocks)")}</span>
-                  <CopyMiniButton text={plugin.protocolExample} label={L("复制 XML 示例", "Copy XML Example")}/>
+                  <span className="text-[11px] font-medium text-zinc-500">
+                    {isMarkdownBlocks
+                      ? L("Markdown 块示例（仅总结、发版、调研、阶段汇报等需要速览时克制使用）", "Markdown Block Example (use sparingly for summaries, releases, research, or milestones)")
+                      : L("XML 输出示例（需位于回答最末尾，勿包代码块）", "XML Output Example (place at end of reply, outside code blocks)")}
+                  </span>
+                  <CopyMiniButton
+                    text={plugin.protocolExample}
+                    label={isMarkdownBlocks ? L("复制语法示例", "Copy Syntax Example") : L("复制 XML 示例", "Copy XML Example")}
+                  />
                 </div>
                 <pre className="m-0 mt-1 overflow-x-auto rounded-lg border border-zinc-200 bg-[rgb(var(--bg))] p-2.5 font-mono text-[11px] leading-5 text-zinc-700">
                   {plugin.protocolExample}
@@ -186,9 +213,10 @@ function PluginCatalogCard({
   );
 }
 
-/** Agent 设置弹窗内的「交互插件中心」面板（管理所有内置与本地声明式纯 XML 交互插件）。 */
+/** Agent 设置弹窗内的「交互插件中心」面板（管理所有内置与本地声明式交互/富文本输出插件）。 */
 export function OutputPluginsCenterPanel() {
   const L = useBi();
+  const locale = useLocale();
   const qc = useQueryClient();
   const { query, catalog, plugins, enabledCount, totalCount } = useOutputPluginsCatalog(true);
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string }>();
@@ -206,11 +234,12 @@ export function OutputPluginsCenterPanel() {
       qc.setQueryData(OUTPUT_PLUGINS_QUERY_KEY, next);
       void qc.invalidateQueries({ queryKey: ASK_USER_QUESTION_CONFIG_QUERY_KEY });
       const target = next.plugins.find(item => item.id === variables.pluginId);
+      const targetName = target ? localizeOutputPluginDisplay(target, locale).name : variables.pluginId;
       setFeedback({
         ok: true,
         message: variables.enabled
-          ? L(`已全局默认开启「${target?.name ?? variables.pluginId}」：仅影响未单独覆写的会话，不会覆盖单会话已关闭的配置。`, `Enabled "${target?.name ?? variables.pluginId}" globally by default (sessions with custom overrides are unchanged).`)
-          : L(`已全局默认关闭「${target?.name ?? variables.pluginId}」：未单独开启的会话不再注入协议，零 Token 消耗；不影响已在单会话独立开启的配置。`, `Disabled "${target?.name ?? variables.pluginId}" globally by default (zero token overhead unless overridden per session).`)
+          ? L(`已全局默认开启「${targetName}」：仅影响未单独覆写的会话，不会覆盖单会话已关闭的配置。`, `Enabled "${targetName}" globally by default (sessions with custom overrides are unchanged).`)
+          : L(`已全局默认关闭「${targetName}」：未单独开启的会话不再注入协议，零 Token 消耗；不影响已在单会话独立开启的配置。`, `Disabled "${targetName}" globally by default (zero token overhead unless overridden per session).`)
       });
     },
     onError: error => {

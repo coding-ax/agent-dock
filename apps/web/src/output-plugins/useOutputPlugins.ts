@@ -22,6 +22,8 @@ export interface ResolvedSessionOutputPluginItem {
   description: string;
   icon: string;
   tagName: string;
+  syntaxKind?: OutputPluginCatalogItem['syntaxKind'];
+  defaultEnabled?: boolean;
   version: string;
   builtin: boolean;
   /** 本会话或草稿当前生效状态。 */
@@ -77,6 +79,8 @@ export function buildSessionOutputPluginItems(
       description: plugin.description,
       icon: plugin.icon,
       tagName: plugin.tagName,
+      ...(plugin.syntaxKind ? { syntaxKind: plugin.syntaxKind } : {}),
+      defaultEnabled: plugin.defaultEnabled,
       version: plugin.version,
       builtin: plugin.builtin,
       enabled,

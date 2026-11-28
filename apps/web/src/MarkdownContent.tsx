@@ -1,8 +1,9 @@
-import { lazy, memo, Suspense, useMemo, useState, type ReactNode } from 'react';
+import { lazy, memo, Suspense, useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useThrottle, useTimeout } from 'ahooks';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
+import { CALLOUT_KINDS, parseMetricsBlock, parseStepsBlock, type CalloutKind } from '@agent-dock/agent-dock-shared';
 import { rehypeTextUnits } from './rehype-text-units';
 import { Check, Copy, FileText, ImageOff } from 'lucide-react';
 import { Highlight, Prism, themes } from 'prism-react-renderer';
@@ -10,6 +11,24 @@ import { formatLineRange, isImageFilePath, localFileLink, parseFileLink } from '
 import { useDockStore } from './store';
 import { useResolvedTheme } from './theme';
 import { useBi } from './i18n';
+import {
+  remarkCallouts,
+  remarkInlineRichSyntax,
+  remarkRichBlockMetadata,
+  remarkSafeMath
+} from './rich-markdown/remark-plugins';
+import { sanitizeSvgMarkup } from './rich-markdown/svg-sanitize';
+import { MathRenderer } from './rich-markdown/MathRenderer';
+import {
+  MermaidDiagramBlock,
+  RichCallout,
+  RichMetricsBlock,
+  RichStepsBlock,
+  RichTableBlock,
+  StreamingBlockPlaceholder,
+  SvgDiagramBlock,
+  type DiagramLightboxRequest
+} from './rich-markdown/RichBlocks';
 
 // 图片放大预览只在点开图片时才需要，动态加载以免把 lightbox 及其样式计入首屏。
 const ImageLightbox = lazy(() => import('./ImageLightbox'));
@@ -138,8 +157,26 @@ function remarkLeadingSlashCommand() {
   };
 }
 
-const baseRemarkPlugins = [remarkGfm, remarkBreaks, remarkFileAutolink];
-const userCommandRemarkPlugins = [remarkGfm, remarkBreaks, remarkFileAutolink, remarkLeadingSlashCommand];
+// 顺序关键：remarkCallouts 与 remarkSafeMath 必须在 remarkBreaks 之前运行，确保多行 Callout 首行与 $$ 块公式完整解析。
+const baseRemarkPlugins = [
+  remarkGfm,
+  remarkCallouts,
+  remarkSafeMath,
+  remarkBreaks,
+  remarkInlineRichSyntax,
+  remarkFileAutolink,
+  remarkRichBlockMetadata
+];
+const userCommandRemarkPlugins = [
+  remarkGfm,
+  remarkCallouts,
+  remarkSafeMath,
+  remarkBreaks,
+  remarkInlineRichSyntax,
+  remarkFileAutolink,
+  remarkRichBlockMetadata,
+  remarkLeadingSlashCommand
+];
 
 /**
  * 提取消息中用 `[label](file:///...png|svg)` 或裸 `file:///...png|svg` 引用的本地图片/SVG，
@@ -344,26 +381,36 @@ function LinkedImageThumbnails({ images }: { images: LinkedImageItem[] }) {
   );
 }
 
-const markdownComponents: Components = {
-  // 跳链默认新开标签页：Agent 输出的链接若在同页打开会直接踢走当前会话时间线，很迷。
-  // 统一 target="_blank" + rel，外部站内链接一律新开。
-  a({ href, children }) {
-    return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">{children}</a>;
-  },
-  code({ className, children }) {
-    if (isBlockCode(className, children)) return <CodeBlock className={className} code={String(children).replace(/\n$/, '')}/>;
-    if (className?.split(/\s+/).includes('ui-slash-command')) return <code className="ui-slash-command">{children}</code>;
-    return <code className="ui-inline-code rounded bg-zinc-100 px-[.32rem] py-[.12rem] font-mono text-[.9em] text-zinc-800">{children}</code>;
-  },
-  pre({ children }) { return <>{children}</>; },
-  // 横向滚动放在外层 div 上，不能直接让 table display:block（iOS WebKit 会撑破容器导致整页横滑，见 index.css）。
-  table({ children }) {
-    return <div className="markdown-table-scroll"><table>{children}</table></div>;
-  }
-  // img 由 MarkdownContent 内部覆盖：它需要 sessionId 才能把本地与 uploads 路径改写成可访问 URL。
-};
+const CALLOUT_KIND_SET = new Set<string>(CALLOUT_KINDS);
 
-export const MarkdownContent = memo(function MarkdownContent({ children, sessionId, throttleMs, animateUnits = false, highlightSlashCommands = false, showLinkedImageThumbnails = true }: { children: string; sessionId: string | undefined; throttleMs?: number; /** 流式输出时给文字挂词级模糊入场；历史消息保持 false。 */ animateUnits?: boolean; /** 用户消息：把开头的 /命令 渲染成彩色命令 chip。 */ highlightSlashCommands?: boolean; /** 是否在消息下方自动附带图片/SVG 链接的紧凑缩略图。 */ showLinkedImageThumbnails?: boolean }) {
+function extractRawCodeLanguage(className?: string): string {
+  return /(?:^|\s)language-([\w-]+)/.exec(className ?? '')?.[1]?.toLowerCase() ?? '';
+}
+
+export const MarkdownContent = memo(function MarkdownContent({
+  children,
+  sessionId,
+  throttleMs,
+  animateUnits = false,
+  isStreaming = false,
+  enableRichBlocks = false,
+  highlightSlashCommands = false,
+  showLinkedImageThumbnails = true
+}: {
+  children: string;
+  sessionId: string | undefined;
+  throttleMs?: number;
+  /** 流式输出时给文字挂词级模糊入场；历史消息保持 false。 */
+  animateUnits?: boolean;
+  /** 当前消息是否处于流式输出态（未闭合的 mermaid/svg/metrics/steps 显示平稳占位）。 */
+  isStreaming?: boolean;
+  /** 是否开启富文本排版块（```metrics / ```steps）；默认关闭，未开启时保留原始代码块。 */
+  enableRichBlocks?: boolean;
+  /** 用户消息：把开头的 /命令 渲染成彩色命令 chip。 */
+  highlightSlashCommands?: boolean;
+  /** 是否在消息下方自动附带图片/SVG 链接的紧凑缩略图。 */
+  showLinkedImageThumbnails?: boolean;
+}) {
   // 流式文本（思考过程 / 进行中的回复）每秒可达 40+ 次 token 更新，ReactMarkdown
   // 每次都对整段文本重新 parse、Prism 重新高亮全部代码块，主线程长任务会把
   // spinner 和整页拖成鬼畜闪。节流后 parse 频率降到个位数/秒；trailing 触发
@@ -375,9 +422,17 @@ export const MarkdownContent = memo(function MarkdownContent({ children, session
     [markdown, sessionId, showLinkedImageThumbnails]
   );
 
-  const components: Components = {
-    ...markdownComponents,
-    a({ href, children }) {
+  // Mermaid / SVG 矢量图统一接入懒加载全屏 Lightbox：只有用户点击放大时才挂载。
+  const [diagramLightboxOpened, setDiagramLightboxOpened] = useState(false);
+  const [diagramLightbox, setDiagramLightbox] = useState<DiagramLightboxRequest | null>(null);
+  const openDiagramLightbox = useCallback((req: DiagramLightboxRequest) => {
+    setDiagramLightboxOpened(true);
+    setDiagramLightbox(req);
+  }, []);
+
+  const components = useMemo<Components>(() => ({
+    // 跳链默认新开标签页：Agent 输出的链接若在同页打开会直接踢走当前会话时间线，很迷。
+    a({ href, children: linkChildren }) {
       const parsed = href ? parseFileLink(href) : undefined;
       if (parsed && sessionId) {
         return <button
@@ -392,9 +447,89 @@ export const MarkdownContent = memo(function MarkdownContent({ children, session
             });
           }}
           className="inline-flex max-w-full items-baseline gap-1 rounded px-1 py-0.5 text-left align-baseline font-medium text-link underline decoration-link/40 underline-offset-2 transition-colors hover:bg-blue-50/70 hover:decoration-link"
-        ><FileText size={12} className="relative top-[1px] shrink-0 opacity-70"/><span className="min-w-0 [overflow-wrap:anywhere]">{children}</span></button>;
+        ><FileText size={12} className="relative top-[1px] shrink-0 opacity-70"/><span className="min-w-0 [overflow-wrap:anywhere]">{linkChildren}</span></button>;
       }
-      return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">{children}</a>;
+      return <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">{linkChildren}</a>;
+    },
+    blockquote({ node: _node, children: quoteChildren, ...rest }) {
+      const attrs = rest as Record<string, unknown>;
+      const rawKind = typeof attrs['data-callout'] === 'string' ? attrs['data-callout'].toLowerCase() : '';
+      if (CALLOUT_KIND_SET.has(rawKind)) {
+        const customTitle = typeof attrs['data-callout-title'] === 'string' ? attrs['data-callout-title'] : undefined;
+        return <RichCallout kind={rawKind as CalloutKind} title={customTitle}>{quoteChildren}</RichCallout>;
+      }
+      return <blockquote>{quoteChildren}</blockquote>;
+    },
+    div({ node: _node, children: divChildren, ...rest }) {
+      const attrs = rest as Record<string, unknown>;
+      if (attrs['data-math-block'] && typeof attrs['data-math-expr'] === 'string') {
+        return <MathRenderer expr={attrs['data-math-expr']} displayMode />;
+      }
+      return <div {...rest}>{divChildren}</div>;
+    },
+    span({ node: _node, children: spanChildren, ...rest }) {
+      const attrs = rest as Record<string, unknown>;
+      if (attrs['data-math-inline'] && typeof attrs['data-math-expr'] === 'string') {
+        return <MathRenderer expr={attrs['data-math-expr']} />;
+      }
+      if (attrs['data-math-block'] && typeof attrs['data-math-expr'] === 'string') {
+        return <MathRenderer expr={attrs['data-math-expr']} displayMode inlineContainer />;
+      }
+      return <span {...rest}>{spanChildren}</span>;
+    },
+    input({ node: _node, type, checked, ...rest }) {
+      if (type === 'checkbox') {
+        return (
+          <span
+            className="ui-md-checkbox"
+            data-checked={checked ? 'true' : 'false'}
+            role="checkbox"
+            aria-checked={Boolean(checked)}
+            aria-readonly="true"
+          >
+            {checked ? <Check size={11} strokeWidth={2.8} aria-hidden="true" /> : null}
+          </span>
+        );
+      }
+      return <input type={type} checked={checked} {...rest} />;
+    },
+    code({ node: _node, className, children: codeChildren, ...rest }) {
+      const attrs = rest as Record<string, unknown>;
+      const rawLang = extractRawCodeLanguage(className);
+      const rawCode = String(codeChildren).replace(/\n$/, '');
+      const unclosed = attrs['data-unclosed'] === 'true';
+
+      const isRichBlockLang = enableRichBlocks && (rawLang === 'metrics' || rawLang === 'steps');
+      if (rawLang === 'mermaid' || rawLang === 'svg' || isRichBlockLang) {
+        // 未闭合围栏（流式输出中或半截中断）一律显示平稳轻量骨架，绝不每帧闪红报错或高度抽搐。
+        if (unclosed) {
+          return <StreamingBlockPlaceholder kind={rawLang as 'mermaid' | 'svg' | 'metrics' | 'steps'} code={rawCode} />;
+        }
+        if (rawLang === 'metrics') {
+          const items = parseMetricsBlock(rawCode);
+          if (items) return <RichMetricsBlock items={items} />;
+        } else if (rawLang === 'steps') {
+          const items = parseStepsBlock(rawCode);
+          if (items) return <RichStepsBlock items={items} />;
+        } else if (rawLang === 'svg') {
+          if (sanitizeSvgMarkup(rawCode)) {
+            return <SvgDiagramBlock code={rawCode} onOpenLightbox={openDiagramLightbox} />;
+          }
+        } else if (rawLang === 'mermaid') {
+          return <MermaidDiagramBlock code={rawCode} onOpenLightbox={openDiagramLightbox} />;
+        }
+      }
+
+      if (isBlockCode(className, codeChildren)) return <CodeBlock className={className} code={rawCode}/>;
+      if (className?.split(/\s+/).includes('ui-slash-command')) return <code className="ui-slash-command">{codeChildren}</code>;
+      return <code className="ui-inline-code rounded bg-zinc-100 px-[.32rem] py-[.12rem] font-mono text-[.9em] text-zinc-800">{codeChildren}</code>;
+    },
+    pre({ children: preChildren }) { return <>{preChildren}</>; },
+    // 无框紧凑表格：保留外层横向滚动包裹（防止 iOS WebKit 整页横滑），附右上角「复制表格 / MD」轻操作。
+    table({ node: _node, children: tableChildren, ...rest }) {
+      const attrs = rest as Record<string, unknown>;
+      const rawMarkdown = typeof attrs['data-raw-markdown'] === 'string' ? attrs['data-raw-markdown'] : undefined;
+      return <RichTableBlock rawMarkdown={rawMarkdown}>{tableChildren}</RichTableBlock>;
     },
     img({ src, alt }) {
       const resolved = resolveImageSrc(src ?? '', sessionId);
@@ -403,11 +538,31 @@ export const MarkdownContent = memo(function MarkdownContent({ children, session
       if (!resolved) return null;
       return <LightboxImage src={resolved} alt={alt ?? ''} />;
     }
-  };
+  }), [sessionId, openDiagramLightbox, isStreaming, enableRichBlocks]);
+
   // remark-breaks：单个换行按用户输入保留（输入框已改成 Enter 换行）。否则多行提示词会被
   // CommonMark 折叠成一整段，长命令 / 路径全挤在一起，既难读也难看。
   return <>
-    <ReactMarkdown remarkPlugins={highlightSlashCommands ? userCommandRemarkPlugins : baseRemarkPlugins} rehypePlugins={animateUnits ? [rehypeTextUnits] : []} urlTransform={url => /^file:/i.test(url) ? url : defaultUrlTransform(url)} components={components}>{markdown}</ReactMarkdown>
+    <ReactMarkdown
+      remarkPlugins={highlightSlashCommands ? userCommandRemarkPlugins : baseRemarkPlugins}
+      rehypePlugins={animateUnits ? [rehypeTextUnits] : []}
+      urlTransform={url => /^file:/i.test(url) ? url : defaultUrlTransform(url)}
+      components={components}
+    >
+      {markdown}
+    </ReactMarkdown>
     {linkedImages.length > 0 && <LinkedImageThumbnails images={linkedImages} />}
+    {diagramLightboxOpened && (
+      <Suspense fallback={null}>
+        <ImageLightbox
+          svgMarkup={diagramLightbox?.svgMarkup}
+          alt={diagramLightbox?.alt}
+          downloadName={diagramLightbox?.downloadName}
+          kind={diagramLightbox?.kind}
+          open={diagramLightbox !== null}
+          onClose={() => setDiagramLightbox(null)}
+        />
+      </Suspense>
+    )}
   </>;
 });

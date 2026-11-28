@@ -10,6 +10,7 @@ import {
   ASK_USER_QUESTION_XML_TAG,
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+  BUILTIN_RICH_BLOCKS_PLUGIN_ID,
   CONFIRM_ACTION_INTERACTION_ORIGIN,
   CONFIRM_ACTION_XML_TAG,
   declarativePluginInteractionOrigin,
@@ -96,10 +97,12 @@ describe('OutputPluginService & local declarative plugin loader', () => {
       expect(catalog.plugins.map(p => p.id)).toEqual([
         BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
         BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+        BUILTIN_RICH_BLOCKS_PLUGIN_ID,
         'local:deploy-approval'
       ]);
       expect(catalog.plugins.find(p => p.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID)?.globalEnabled).toBe(true);
       expect(catalog.plugins.find(p => p.id === BUILTIN_CONFIRM_ACTION_PLUGIN_ID)?.globalEnabled).toBe(true);
+      expect(catalog.plugins.find(p => p.id === BUILTIN_RICH_BLOCKS_PLUGIN_ID)?.globalEnabled).toBe(false);
       expect(catalog.plugins.find(p => p.id === 'local:deploy-approval')?.globalEnabled).toBe(false);
       expect(catalog.warnings).toHaveLength(2);
       expect(catalog.warnings.some(w => w.file === 'broken.json')).toBe(true);
@@ -124,6 +127,7 @@ describe('OutputPluginService & local declarative plugin loader', () => {
       expect(reloaded.plugins.map(p => p.id)).toEqual([
         BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
         BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+        BUILTIN_RICH_BLOCKS_PLUGIN_ID,
         'local:deploy-approval',
         'local:release-info'
       ]);
@@ -255,8 +259,19 @@ describe('OutputPluginService & local declarative plugin loader', () => {
         expect(listRes.json().plugins.map((p: any) => p.id)).toEqual([
           BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
           BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+          BUILTIN_RICH_BLOCKS_PLUGIN_ID,
           'local:deploy-approval'
         ]);
+        expect(listRes.json().config.plugins[BUILTIN_RICH_BLOCKS_PLUGIN_ID]).toBe(false);
+
+        // 非交互式内置插件（rich-blocks）调用 /interact 时应清晰返回 400，不触发 dispatch
+        const richInteractRes = await app.inject({
+          method: 'POST',
+          url: '/api/sessions/ses_1/output-plugins/rich-blocks/interact',
+          payload: { instanceId: 'rb_1' }
+        });
+        expect(richInteractRes.statusCode).toBe(400);
+        expect(tasks).toHaveLength(0);
 
         // 内置插件 #2（confirm-action）支持短别名路由、补充意见与 409 幂等防重
         const confirmRes = await app.inject({
@@ -505,5 +520,115 @@ describe('OutputPluginService & local declarative plugin loader', () => {
       repos.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('re-injects active XML plugin protocols once after detecting context compaction (usage drop) without spamming subsequent turns', async () => {
+    const config = createMemoryConfig();
+    const recentEvents: Array<{ id: string; sessionId: string; sequence: number; type: 'status'; timestamp: string; data: Record<string, unknown> }> = [
+      { id: 'e1', sessionId: 'ses_compact', sequence: 13865, type: 'status', timestamp: '2026-11-28T05:21:00Z', data: { state: 'usage', used: 500_162, size: 1_048_576 } }
+    ];
+    const service = new OutputPluginService({
+      config,
+      disableLocalPlugins: true,
+      runtime: {
+        getSession: async () => makeSession({ id: 'ses_compact' }),
+        getRecentEvents: async () => [...recentEvents],
+        dispatch: vi.fn() as any
+      }
+    });
+    const session = makeSession({
+      id: 'ses_compact',
+      outputPlugins: { [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: false }
+    });
+
+    // Turn 1：首次注入（仅注入启用的 ask-user-question，不注入关闭的 confirm-action）
+    const t1 = await service.promptForSession(session, '第 1 轮提问');
+    expect(t1).toContain(`<${ASK_USER_QUESTION_XML_TAG}`);
+    expect(t1).not.toContain(`<${CONFIRM_ACTION_XML_TAG}`);
+
+    // Turn 2：上下文正常增长（500K -> 511K），不重复注入
+    recentEvents.push({ id: 'e2', sessionId: 'ses_compact', sequence: 13921, type: 'status', timestamp: '2026-11-28T05:27:59Z', data: { state: 'usage', used: 511_781, size: 1_048_576 } });
+    expect(await service.promptForSession(session, '第 2 轮提问')).toBe('第 2 轮提问');
+
+    // 复现 2026-11-28 05:44:15Z 现场：上下文压缩 520,940 -> 21,186，之后涨到 50,963
+    recentEvents.push(
+      { id: 'e3', sessionId: 'ses_compact', sequence: 13930, type: 'status', timestamp: '2026-11-28T05:44:09Z', data: { state: 'usage', used: 520_940, size: 1_048_576 } },
+      { id: 'e4', sessionId: 'ses_compact', sequence: 13932, type: 'status', timestamp: '2026-11-28T05:44:15Z', data: { state: 'usage', used: 21_186, size: 1_048_576 } },
+      { id: 'e5', sessionId: 'ses_compact', sequence: 14042, type: 'status', timestamp: '2026-11-28T06:22:50Z', data: { state: 'usage', used: 50_963, size: 1_048_576 } }
+    );
+
+    // Turn 3：识别到上下文压缩，自动重新注入启用的协议（且不会误给关闭的插件发停用提示）
+    const t3 = await service.promptForSession(session, '压缩后的用户消息');
+    expect(t3).toContain(`<${ASK_USER_QUESTION_XML_TAG}`);
+    expect(t3).not.toContain('操作确认卡片协议已关闭');
+    expect(t3.endsWith('压缩后的用户消息')).toBe(true);
+
+    // Turn 4：虽然 recentEvents 里仍残留旧的 13930/13932 压缩事件，但 lastSeenSeq 已推进，绝不重复刷屏注入
+    recentEvents.push({ id: 'e6', sessionId: 'ses_compact', sequence: 14058, type: 'status', timestamp: '2026-11-28T07:12:03Z', data: { state: 'usage', used: 55_000, size: 1_048_576 } });
+    expect(await service.promptForSession(session, '压缩后第 2 轮')).toBe('压缩后第 2 轮');
+  });
+
+  it('keeps builtin:rich-blocks off by default with zero prompt injection, and injects/re-injects on-demand when enabled', async () => {
+    const config = createMemoryConfig();
+    const recentEvents: Array<{ id: string; sessionId: string; sequence: number; type: 'status'; timestamp: string; data: Record<string, unknown> }> = [
+      { id: 'r1', sessionId: 'ses_rich', sequence: 100, type: 'status', timestamp: '2026-11-28T08:00:00Z', data: { state: 'usage', used: 80_000, size: 1_048_576 } }
+    ];
+    const service = new OutputPluginService({
+      config,
+      disableLocalPlugins: true,
+      runtime: {
+        getSession: async () => makeSession({ id: 'ses_rich' }),
+        getRecentEvents: async () => [...recentEvents],
+        dispatch: vi.fn() as any
+      }
+    });
+
+    // 默认目录：3 个内置插件，2/3 开启，rich-blocks 默认关闭
+    const catalog = await service.catalog();
+    expect(catalog.plugins.map(p => p.id)).toEqual([
+      BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+      BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+      BUILTIN_RICH_BLOCKS_PLUGIN_ID
+    ]);
+    expect(catalog.plugins.filter(p => p.globalEnabled).length).toBe(2);
+    expect(catalog.config.plugins[BUILTIN_RICH_BLOCKS_PLUGIN_ID]).toBe(false);
+
+    // 默认关闭时：零 rich-blocks 提示词注入（0 Token 开销）
+    const defaultSession = makeSession({ id: 'ses_rich' });
+    const t1 = await service.promptForSession(defaultSession, '做一下发版总结');
+    expect(t1).not.toContain('[AgentDock 富文本排版块指引]');
+    expect(t1).not.toContain('```metrics');
+    expect(t1).not.toContain('```steps');
+
+    // 会话级开启 rich-blocks 后：首次按需注入精简 metrics / steps 语法指引
+    const enabledSession = makeSession({
+      id: 'ses_rich',
+      outputPlugins: { [BUILTIN_RICH_BLOCKS_PLUGIN_ID]: true }
+    });
+    const t2 = await service.promptForSession(enabledSession, '生成阶段汇报');
+    expect(t2).toContain('[AgentDock 富文本排版块指引]');
+    expect(t2).toContain('```metrics');
+    expect(t2).toContain('```steps');
+    expect(t2.endsWith('生成阶段汇报')).toBe(true);
+
+    // 下一轮不再重复注入
+    expect(await service.promptForSession(enabledSession, '继续补充')).toBe('继续补充');
+
+    // 上下文压缩后自动重注一次
+    recentEvents.push(
+      { id: 'r2', sessionId: 'ses_rich', sequence: 110, type: 'status', timestamp: '2026-11-28T08:05:00Z', data: { state: 'usage', used: 200_000, size: 1_048_576 } },
+      { id: 'r3', sessionId: 'ses_rich', sequence: 112, type: 'status', timestamp: '2026-11-28T08:05:05Z', data: { state: 'usage', used: 18_000, size: 1_048_576 } }
+    );
+    const t4 = await service.promptForSession(enabledSession, '压缩后再汇总');
+    expect(t4).toContain('[AgentDock 富文本排版块指引]');
+
+    // 中途关闭后下发一次性短提醒，再下一轮回归零注入
+    const disabledSession = makeSession({
+      id: 'ses_rich',
+      outputPlugins: { [BUILTIN_RICH_BLOCKS_PLUGIN_ID]: false }
+    });
+    const t5 = await service.promptForSession(disabledSession, '普通闲聊');
+    expect(t5).toContain('富文本排版块插件（metrics / steps）已关闭');
+    expect(await service.promptForSession(disabledSession, '再聊一句')).toBe('再聊一句');
   });
 });

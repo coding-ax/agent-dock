@@ -11,6 +11,11 @@ export const BUILTIN_CONFIRM_ACTION_PLUGIN_ID = 'builtin:confirm-action';
 /** 兼容短名别名，读写时自动归一化为 `builtin:confirm-action`。 */
 export const LEGACY_CONFIRM_ACTION_PLUGIN_ALIAS = 'confirm-action';
 
+/** 内置富文本排版块插件 #3（Rich Blocks：`metrics` / `steps`，全局默认关闭）的规范 ID。 */
+export const BUILTIN_RICH_BLOCKS_PLUGIN_ID = 'builtin:rich-blocks';
+/** 兼容短名别名，读写时自动归一化为 `builtin:rich-blocks`。 */
+export const LEGACY_RICH_BLOCKS_PLUGIN_ALIAS = 'rich-blocks';
+
 /** 持久化在 `configs` 表中的插件全局默认开关配置键。 */
 export const OUTPUT_PLUGINS_CONFIG_KEY = 'output_plugins.config';
 
@@ -159,6 +164,8 @@ export interface OutputPluginMetadata {
   description: string;
   icon: OutputPluginIconName;
   tagName: string;
+  /** 输出语法形态：默认 `xml`（末尾裸 XML 标签），`markdown-blocks` 表示围栏 Markdown 块（如 ```metrics / ```steps）。 */
+  syntaxKind?: 'xml' | 'markdown-blocks';
   defaultEnabled: boolean;
   version: string;
   builtin: boolean;
@@ -246,6 +253,9 @@ export function normalizeOutputPluginId(id: string): string {
   if (trimmed === LEGACY_CONFIRM_ACTION_PLUGIN_ALIAS) {
     return BUILTIN_CONFIRM_ACTION_PLUGIN_ID;
   }
+  if (trimmed === LEGACY_RICH_BLOCKS_PLUGIN_ALIAS) {
+    return BUILTIN_RICH_BLOCKS_PLUGIN_ID;
+  }
   return trimmed;
 }
 
@@ -268,7 +278,8 @@ export function defaultGlobalOutputPluginsConfig(): OutputPluginsGlobalConfig {
   return {
     plugins: {
       [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: DEFAULT_ASK_USER_QUESTION_CONFIG.askUserQuestionXmlEnabled,
-      [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: true
+      [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: true,
+      [BUILTIN_RICH_BLOCKS_PLUGIN_ID]: false
     }
   };
 }
@@ -382,6 +393,9 @@ export function resolveOutputPluginEnabled(
     } else if (canonicalId === BUILTIN_CONFIRM_ACTION_PLUGIN_ID) {
       const alias = overrides[LEGACY_CONFIRM_ACTION_PLUGIN_ALIAS];
       if (typeof alias === 'boolean') return alias;
+    } else if (canonicalId === BUILTIN_RICH_BLOCKS_PLUGIN_ID) {
+      const alias = overrides[LEGACY_RICH_BLOCKS_PLUGIN_ALIAS];
+      if (typeof alias === 'boolean') return alias;
     }
   }
   if (canonicalId === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID && typeof options.legacySessionAskEnabled === 'boolean') {
@@ -397,6 +411,9 @@ export function resolveOutputPluginEnabled(
     } else if (canonicalId === BUILTIN_CONFIRM_ACTION_PLUGIN_ID) {
       const globalAlias = globalMap[LEGACY_CONFIRM_ACTION_PLUGIN_ALIAS];
       if (typeof globalAlias === 'boolean') return globalAlias;
+    } else if (canonicalId === BUILTIN_RICH_BLOCKS_PLUGIN_ID) {
+      const globalAlias = globalMap[LEGACY_RICH_BLOCKS_PLUGIN_ALIAS];
+      if (typeof globalAlias === 'boolean') return globalAlias;
     }
   }
   if (typeof options.defaultEnabled === 'boolean') return options.defaultEnabled;
@@ -404,6 +421,7 @@ export function resolveOutputPluginEnabled(
     return DEFAULT_ASK_USER_QUESTION_CONFIG.askUserQuestionXmlEnabled;
   }
   if (canonicalId === BUILTIN_CONFIRM_ACTION_PLUGIN_ID) return true;
+  if (canonicalId === BUILTIN_RICH_BLOCKS_PLUGIN_ID) return false;
   return false;
 }
 
@@ -422,6 +440,9 @@ export function getSessionOutputPluginOverride(
       if (typeof alias === 'boolean') return alias;
     } else if (canonicalId === BUILTIN_CONFIRM_ACTION_PLUGIN_ID) {
       const alias = sessionOverrides[LEGACY_CONFIRM_ACTION_PLUGIN_ALIAS];
+      if (typeof alias === 'boolean') return alias;
+    } else if (canonicalId === BUILTIN_RICH_BLOCKS_PLUGIN_ID) {
+      const alias = sessionOverrides[LEGACY_RICH_BLOCKS_PLUGIN_ALIAS];
       if (typeof alias === 'boolean') return alias;
     }
   }

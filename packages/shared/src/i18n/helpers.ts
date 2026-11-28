@@ -1,6 +1,7 @@
 import {
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+  BUILTIN_RICH_BLOCKS_PLUGIN_ID,
   normalizeOutputPluginId
 } from '../output-plugins/types.js';
 import type { CustomTheme } from '../themes.js';
@@ -60,6 +61,12 @@ export function localizeOutputPluginDisplay(
     return {
       name: tShared(locale, 'plugin.confirmAction.name'),
       description: tShared(locale, 'plugin.confirmAction.description')
+    };
+  }
+  if (canonical === BUILTIN_RICH_BLOCKS_PLUGIN_ID) {
+    return {
+      name: tShared(locale, 'plugin.richBlocks.name'),
+      description: tShared(locale, 'plugin.richBlocks.description')
     };
   }
   return { name: plugin.name, description: plugin.description };

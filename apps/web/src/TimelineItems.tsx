@@ -3,6 +3,7 @@ import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode 
 import { QueryClientContext } from '@tanstack/react-query';
 import {
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+  BUILTIN_RICH_BLOCKS_PLUGIN_ID,
   defaultOutputPluginRegistry,
   isAssistantReplyOrigin,
   outputPluginInstanceKey,
@@ -246,6 +247,7 @@ function ActivitySteps({ steps, ongoing, replay, sessionId, activeStepId, askUse
   const last = steps.at(-1);
   const slot = reservePending || pending;
   const effectiveEnabledIds = resolveEffectivePluginIds(enabledOutputPluginIds, askUserQuestionXmlEnabled);
+  const enableRichBlocks = effectiveEnabledIds.has(BUILTIN_RICH_BLOCKS_PLUGIN_ID);
   return <div className="relative">
     {/* 留空的「处理中」行不画竖线，竖线照旧止于最后一步。 */}
     <span aria-hidden="true" className={`absolute left-2 top-2 w-px bg-zinc-200 ${slot && !pending ? 'bottom-11' : 'bottom-3'}`}/>
@@ -261,12 +263,12 @@ function ActivitySteps({ steps, ongoing, replay, sessionId, activeStepId, askUse
           const plugin = outputPluginRegistry.get(split.pluginId);
           const placeholderTitle = split.kind === 'pending' ? split.partialTitle : plugin?.getTitle?.(split.spec);
           return <div key={step.id} data-search-step-id={step.id} className="relative pl-6">
-            {split.proseText && <AssistantMarkdown text={split.proseText} active={false} replay={replay} sessionId={sessionId}/>}
+            {split.proseText && <AssistantMarkdown text={split.proseText} active={false} replay={replay} sessionId={sessionId} enableRichBlocks={enableRichBlocks}/>}
             {plugin && defaultWebOutputPluginRendererRegistry.renderStreamingPlaceholder(plugin, placeholderTitle)}
           </div>;
         }
       }
-      return <div key={step.id} data-search-step-id={step.id} className="relative pl-6"><AssistantMarkdown text={rawText} active={streaming} replay={replay || !streaming} sessionId={sessionId}/></div>;
+      return <div key={step.id} data-search-step-id={step.id} className="relative pl-6"><AssistantMarkdown text={rawText} active={streaming} replay={replay || !streaming} sessionId={sessionId} enableRichBlocks={enableRichBlocks}/></div>;
     })}
     {slot && <div aria-hidden={pending ? undefined : true} className="relative min-h-8 py-1 text-[13px] text-zinc-400">
       {pending && <div className="ui-timeline-item flex min-h-6 items-center pl-6">
@@ -597,13 +599,14 @@ export const TimelineItem = memo(function TimelineItem({
   const settled = replay || !streaming;
   const rawAssistantText = event.data.text ?? '';
   const effectiveEnabledIds = resolveEffectivePluginIds(enabledOutputPluginIds, askUserQuestionXmlEnabled);
+  const enableRichBlocks = effectiveEnabledIds.has(BUILTIN_RICH_BLOCKS_PLUGIN_ID);
   if (effectiveEnabledIds.size > 0 && (final || streaming)) {
     const split = outputPluginRegistry.splitStreamingOutput(rawAssistantText, streaming, effectiveEnabledIds);
     if (split.kind === 'pending') {
       const plugin = outputPluginRegistry.get(split.pluginId);
       if (plugin) {
         return <>
-          {split.proseText && <AssistantMarkdown text={split.proseText} active={false} replay={settled} final={final} animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>}
+          {split.proseText && <AssistantMarkdown text={split.proseText} active={false} replay={settled} final={final} animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId} enableRichBlocks={enableRichBlocks}/>}
           {defaultWebOutputPluginRendererRegistry.renderStreamingPlaceholder(plugin, split.partialTitle)}
         </>;
       }
@@ -628,7 +631,7 @@ export const TimelineItem = memo(function TimelineItem({
               }
             : undefined;
         return <>
-          {split.proseText && <AssistantMarkdown text={split.proseText} active={false} replay={settled} final={final} animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>}
+          {split.proseText && <AssistantMarkdown text={split.proseText} active={false} replay={settled} final={final} animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId} enableRichBlocks={enableRichBlocks}/>}
           {streaming && !final
             ? defaultWebOutputPluginRendererRegistry.renderStreamingPlaceholder(plugin, plugin.getTitle?.(split.spec))
             : defaultWebOutputPluginRendererRegistry.renderCard({
@@ -648,8 +651,8 @@ export const TimelineItem = memo(function TimelineItem({
   // 轮次结束时搬出来的 final 行，内容刚才已经在执行面板里显示过：不重播入场动画，否则回答会先消失再淡入。
   // 首屏历史（replay）照常和其它行一起淡入。
   const assistant = final
-    ? <AssistantMarkdown text={rawAssistantText} active={streaming} replay={settled} final animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId}/>
-    : <AssistantMarkdown text={rawAssistantText} active={streaming} replay={settled} assistantLabel={assistantLabel} sessionId={sessionId}/>;
+    ? <AssistantMarkdown text={rawAssistantText} active={streaming} replay={settled} final animateEnter={replay} assistantLabel={assistantLabel} sessionId={sessionId} enableRichBlocks={enableRichBlocks}/>
+    : <AssistantMarkdown text={rawAssistantText} active={streaming} replay={settled} assistantLabel={assistantLabel} sessionId={sessionId} enableRichBlocks={enableRichBlocks}/>;
   return assistant;
 }, (prev, next) => prev.final === next.final && prev.streaming === next.streaming && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId
   && prev.sentPrompt === next.sentPrompt

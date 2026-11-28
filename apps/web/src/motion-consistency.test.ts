@@ -53,7 +53,8 @@ describe('unified motion design system', () => {
       './index.css',
       './board/board.css',
       './companion/companion.css',
-      './lark-regex-trigger.css'
+      './lark-regex-trigger.css',
+      './rich-markdown/rich-markdown.css'
     ]) {
       expect(read(file)).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
     }
@@ -64,9 +65,10 @@ describe('unified motion design system', () => {
     const boardCss = read('./board/board.css');
     const companionCss = read('./companion/companion.css');
     const regexCss = read('./lark-regex-trigger.css');
+    const richMdCss = read('./rich-markdown/rich-markdown.css');
 
     // No permanent will-change declarations across stylesheets
-    for (const css of [motionCss, boardCss, regexCss]) {
+    for (const css of [motionCss, boardCss, regexCss, richMdCss]) {
       expect(css).not.toMatch(/\bwill-change\s*:/);
     }
 

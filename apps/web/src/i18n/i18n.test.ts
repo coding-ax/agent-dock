@@ -209,10 +209,14 @@ describe('Web i18n catalog integrity, AntD/dayjs sync & bilingual Settings searc
     }
     const askEn = localizeOutputPluginDisplay({ id: 'builtin:ask-user-question', name: '询问卡片', description: '中文描述' }, 'en-US');
     const confirmEn = localizeOutputPluginDisplay({ id: 'builtin:confirm-action', name: '操作确认卡', description: '中文描述' }, 'en-US');
+    const richBlocksEn = localizeOutputPluginDisplay({ id: 'builtin:rich-blocks', name: '富文本排版块', description: '中文描述' }, 'en-US');
     expect(CJK_RE.test(askEn.name)).toBe(false);
     expect(CJK_RE.test(askEn.description ?? '')).toBe(false);
     expect(CJK_RE.test(confirmEn.name)).toBe(false);
     expect(CJK_RE.test(confirmEn.description ?? '')).toBe(false);
+    expect(richBlocksEn.name).toBe('Rich Blocks (metrics / steps)');
+    expect(CJK_RE.test(richBlocksEn.name)).toBe(false);
+    expect(CJK_RE.test(richBlocksEn.description ?? '')).toBe(false);
   });
 
   it('guards core UI entry files against raw untranslated JSX Chinese regressions', () => {
@@ -235,7 +239,9 @@ describe('Web i18n catalog integrity, AntD/dayjs sync & bilingual Settings searc
       'board/BoardCard.tsx',
       'board/BoardColumn.tsx',
       'output-plugins/OutputPluginsCenterPanel.tsx',
-      'output-plugins/SessionOutputPluginsDialog.tsx'
+      'output-plugins/SessionOutputPluginsDialog.tsx',
+      'rich-markdown/RichBlocks.tsx',
+      'rich-markdown/MathRenderer.tsx'
     ];
     const webSrc = resolve(__dirname, '..');
     const violations: string[] = [];

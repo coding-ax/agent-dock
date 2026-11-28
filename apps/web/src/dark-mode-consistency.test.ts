@@ -67,4 +67,12 @@ describe('暗色模式一致性', () => {
     expect(css).toContain('html[data-theme="dark"] .ui-kitten-card');
     expect(css).toContain('html[data-theme="dark"] .ui-kitten-reply-bubble');
   });
+
+  it('rich-markdown.css 为 Callout、高亮与按键提供暗色模式覆盖', () => {
+    const richCss = readFileSync(join(sourceDir, 'rich-markdown', 'rich-markdown.css'), 'utf8');
+    expect(richCss).toContain('html[data-theme="dark"] .ui-md-mark');
+    expect(richCss).toContain('html[data-theme="dark"] .ui-md-kbd');
+    expect(richCss).toContain('html[data-theme="dark"] .ui-rich-callout');
+    expect(richCss).toContain('html[data-theme="dark"] .ui-rich-callout[data-callout="important"]');
+  });
 });

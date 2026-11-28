@@ -22,8 +22,16 @@ interface HastNode {
 
 // 链接标签不拆：流式输出时链接会在闭合的一帧突然出现，若把标签里的每个字再包成
 // ui-tw-unit，整段链接会带上一串各自淡入的 span，视觉上就是「链接一直跳动」。
-// code / pre 跳过是因为空格与缩进有语义，拆了会变形。
-const SKIP_TAGS = new Set(['code', 'pre', 'a']);
+// code / pre / kbd / svg / math 跳过是因为空格、按键胶囊、矢量图与公式有严格结构语义，拆了会变形。
+const SKIP_TAGS = new Set(['code', 'pre', 'a', 'kbd', 'svg', 'math', 'annotation']);
+
+function isRichAtomicNode(node: HastNode): boolean {
+  if (node.type !== 'element') return false;
+  if (SKIP_TAGS.has(node.tagName ?? '')) return true;
+  const props = node.properties;
+  if (!props) return false;
+  return Boolean(props['data-math-inline'] || props['data-math-block'] || props['dataMathInline'] || props['dataMathBlock']);
+}
 
 /** 中日韩字符：这类语言没有空格分词，按单字切，观感才均匀。 */
 const CJK = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/;
@@ -66,7 +74,7 @@ function unitElement(value: string): HastNode {
 
 function walk(node: HastNode, insideSkip: boolean): void {
   if (!Array.isArray(node.children)) return;
-  const isSkip = insideSkip || (node.type === 'element' && SKIP_TAGS.has(node.tagName ?? ''));
+  const isSkip = insideSkip || isRichAtomicNode(node);
   const next: HastNode[] = [];
   for (const child of node.children) {
     // 纯空白文本节点原样保留：它们是 table/tr/ul 等结构之间的换行，包成 span 会产生非法嵌套

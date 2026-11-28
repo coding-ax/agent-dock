@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowRight,
   Check,
+  Code2,
   Globe,
   Puzzle,
   RotateCcw,
@@ -62,6 +63,7 @@ function SessionPluginItemCard({
   const L = useBi();
   const locale = useLocale();
   const localized = localizeOutputPluginDisplay(plugin, locale);
+  const isMarkdownBlocks = plugin.syntaxKind === 'markdown-blocks';
   const overrideState = plugin.override === null
     ? 'inherit'
     : plugin.override
@@ -121,23 +123,27 @@ function SessionPluginItemCard({
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
             <code className="max-w-full truncate rounded-md border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 font-mono text-[11px] text-zinc-600">
-              &lt;{plugin.tagName}&gt;
+              {isMarkdownBlocks ? '```metrics / ```steps' : `<${plugin.tagName}>`}
             </code>
             <span className="inline-flex items-center rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-500">
-              
               {L("全局默认：", "Global: ")}{plugin.globalEnabled ? L("开启", "On") : L("关闭", "Off")}
             </span>
+            {isMarkdownBlocks && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-500">
+                <Code2 size={10} className="text-sky-600 dark:text-sky-400"/>
+                {L("Markdown 块", "Markdown Blocks")}
+              </span>
+            )}
             {plugin.capabilities.web && (
               <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-500">
                 <Sparkles size={10} className="text-sky-600 dark:text-sky-400"/>
-                Web
+                {isMarkdownBlocks ? L("Web 富文本", "Web Rich") : 'Web'}
               </span>
             )}
             {plugin.capabilities.lark && (
               <span className="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-zinc-50/70 px-1.5 py-0.5 text-zinc-500">
                 <Send size={10} className="text-blue-600 dark:text-blue-400"/>
-                
-                {L("飞书", "Lark")}
+                {isMarkdownBlocks ? L("飞书降级", "Lark Fallback") : L("飞书", "Lark")}
               </span>
             )}
             {plugin.override !== null && !archived && (

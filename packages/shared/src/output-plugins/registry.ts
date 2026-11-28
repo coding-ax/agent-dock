@@ -1,5 +1,6 @@
 import { askUserQuestionOutputPlugin } from './ask-user-question-plugin.js';
 import { confirmActionOutputPlugin } from './confirm-action-plugin.js';
+import { richBlocksOutputPlugin } from './rich-blocks-plugin.js';
 import {
   normalizeOutputPluginId,
   resolvePluginPromptInstruction,
@@ -137,6 +138,7 @@ export class OutputPluginRegistry {
       description: plugin.description,
       icon: plugin.icon,
       tagName: plugin.tagName,
+      ...(plugin.syntaxKind ? { syntaxKind: plugin.syntaxKind } : {}),
       defaultEnabled: plugin.defaultEnabled,
       version: plugin.version,
       builtin: plugin.builtin,
@@ -168,7 +170,8 @@ export class OutputPluginRegistry {
     enabledPluginIds?: ReadonlySet<string>
   ): OutputPluginParseResult | null {
     if (!text) return null;
-    const candidates = this.resolveCandidates(enabledPluginIds);
+    const candidates = this.resolveCandidates(enabledPluginIds)
+      .filter(plugin => plugin.syntaxKind !== 'markdown-blocks');
     if (!candidates.length) return null;
 
     const lower = text.toLowerCase();
@@ -195,7 +198,8 @@ export class OutputPluginRegistry {
     enabledPluginIds?: ReadonlySet<string>
   ): OutputPluginStreamingSplit {
     if (!text) return { kind: 'none', proseText: '' };
-    const candidates = this.resolveCandidates(enabledPluginIds);
+    const candidates = this.resolveCandidates(enabledPluginIds)
+      .filter(plugin => plugin.syntaxKind !== 'markdown-blocks');
     if (!candidates.length) return { kind: 'none', proseText: text };
 
     const masked = maskProtectedMarkdown(text);
@@ -220,6 +224,7 @@ export class OutputPluginRegistry {
     // 优先匹配已出现完整标签名的插件；其次匹配刚吐到 `<agentd...` 前缀的插件
     let fallbackPrefixMatch: OutputPluginStreamingSplit | null = null;
     for (const plugin of candidates) {
+      if (!plugin.capabilities.streamingPlaceholder) continue;
       const pending = detectPendingStreamingXmlTag(text, plugin.tagName, masked);
       if (!pending) continue;
       const hit: OutputPluginStreamingSplit = {
@@ -255,7 +260,8 @@ export class OutputPluginRegistry {
 
 export const BUILTIN_OUTPUT_PLUGINS: ReadonlyArray<OutputPluginDefinition<any, any>> = [
   askUserQuestionOutputPlugin,
-  confirmActionOutputPlugin
+  confirmActionOutputPlugin,
+  richBlocksOutputPlugin
 ];
 
 export function createDefaultOutputPluginRegistry(): OutputPluginRegistry {

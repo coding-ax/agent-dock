@@ -23,6 +23,8 @@ export interface ComposerOutputPluginItem {
   description: string;
   icon: string;
   tagName: string;
+  syntaxKind?: 'xml' | 'markdown-blocks';
+  defaultEnabled?: boolean;
   builtin: boolean;
   /** 本会话或草稿当前生效状态。 */
   enabled: boolean;

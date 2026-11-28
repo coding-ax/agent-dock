@@ -321,10 +321,10 @@ describe('AskUserQuestion frontend rendering', () => {
       )
     );
     expect(draftHtml).toContain('data-testid="composer-output-plugins-trigger"');
-    // 内置插件 #1 ask-user-question 关闭，内置插件 #2 confirm-action 仍默认开启（1 / 2）
+    // 内置插件 #1 ask-user-question 关闭，内置插件 #2 confirm-action 仍默认开启，内置插件 #3 rich-blocks 默认关闭（1 / 3）
     expect(draftHtml).toContain('data-state="on"');
     expect(draftHtml).toContain('data-enabled-count="1"');
-    expect(draftHtml).toContain('交互插件：新会话已启用 1 / 2');
+    expect(draftHtml).toContain('交互插件：新会话已启用 1 / 3');
 
     // 草稿偏好覆写与恢复跟随全局
     const overridden = withDraftAskUserQuestionEnabled(EMPTY_DRAFT_COMPOSER_PREFS, false);

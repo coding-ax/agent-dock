@@ -71,7 +71,7 @@ function Content({ content, side, align }: { content: ReactNode; side?: TooltipS
     align={align}
     sideOffset={8}
     collisionPadding={8}
-    className="ui-tooltip pointer-events-none z-[60]"
+    className="ui-tooltip pointer-events-none z-[10050]"
   >
     <div className="ui-tooltip-surface max-h-[46vh] max-w-[460px] overflow-hidden whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-[12px] leading-5 text-zinc-700 shadow-[0_10px_30px_rgba(24,24,27,.14)]">{content}</div>
   </TooltipPrimitive.Content>;

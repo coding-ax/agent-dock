@@ -44,7 +44,9 @@ const files = [
   'LarkConfigPanel.tsx',
   'settings/SettingsCenterDialog.tsx',
   'TaskRecoverySettingsDialog.tsx',
-  'TaskRecoveryTimeline.tsx'
+  'TaskRecoveryTimeline.tsx',
+  'ImageLightbox.tsx',
+  'rich-markdown/RichBlocks.tsx'
 ];
 
 const read = (name: string) => readFileSync(join(sourceDir, name), 'utf8');

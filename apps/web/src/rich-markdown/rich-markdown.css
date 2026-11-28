@@ -1,0 +1,761 @@
+/*
+ * AgentDock 原生富文本排版体系（杂志编辑感、无常驻灰顶栏、背景原生融入、20 套亮/暗主题自适应）。
+ * 严禁使用 will-change，所有动效仅走 opacity/transform 并遵守 prefers-reduced-motion。
+ */
+
+:root {
+  --rich-callout-important: #7c3aed;
+  --rich-mark-bg: rgba(254, 240, 138, 0.54);
+  --rich-mark-underline: rgba(234, 179, 8, 0.32);
+}
+
+html[data-theme="dark"] {
+  --rich-callout-important: #c4b5fd;
+  --rich-mark-bg: rgba(250, 204, 21, 0.22);
+  --rich-mark-underline: rgba(250, 204, 21, 0.34);
+}
+
+/* ============================================================================
+ * 1. 行内微排版：==荧光重点== / <mark>、<kbd> 按键胶囊、圆角任务复选框
+ * ============================================================================ */
+
+.ui-md-mark {
+  background-color: var(--rich-mark-bg);
+  color: inherit;
+  padding: 0.06em 0.32em;
+  border-radius: 0.3em;
+  box-shadow: inset 0 -1px 0 var(--rich-mark-underline);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+html[data-theme="dark"] .ui-md-mark {
+  color: rgb(var(--zinc-950));
+}
+
+.ui-md-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.48em;
+  padding: 0.06em 0.42em;
+  margin: 0 0.12em;
+  font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8em;
+  font-weight: 500;
+  line-height: 1.42;
+  vertical-align: baseline;
+  color: rgb(var(--zinc-800));
+  background: rgb(var(--surface));
+  border: 1px solid rgb(var(--zinc-300));
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  box-shadow: 0 1px 0 rgb(var(--zinc-300) / .55);
+  white-space: nowrap;
+}
+
+html[data-theme="dark"] .ui-md-kbd {
+  color: rgb(var(--zinc-900));
+  background: rgb(var(--elevated));
+  border-color: rgb(var(--zinc-300));
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* 圆角高质感任务复选框（- [x] / - [ ]），保证多行文本与嵌套子列表严格左对齐 */
+.markdown ul.contains-task-list,
+.ui-user-bubble ul.contains-task-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.markdown li.task-list-item,
+.ui-user-bubble li.task-list-item {
+  position: relative;
+  list-style: none;
+  padding-left: 1.65rem;
+  margin: 0.42em 0;
+}
+
+.markdown li.task-list-item > p:first-child,
+.ui-user-bubble li.task-list-item > p:first-child {
+  margin-top: 0;
+}
+
+.ui-md-checkbox {
+  position: absolute;
+  left: 0;
+  top: 0.34em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 5px;
+  border: 1.5px solid rgb(var(--zinc-300));
+  background: transparent;
+  color: transparent;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.ui-md-checkbox[data-checked="true"] {
+  border-color: rgb(var(--accent));
+  background: rgb(var(--accent));
+  color: rgb(var(--accent-fg));
+}
+
+/* ============================================================================
+ * 2. 5 级无框 Callout（GFM Alert：NOTE / TIP / IMPORTANT / WARNING / CAUTION）
+ * ============================================================================ */
+
+.ui-rich-callout {
+  --callout-color: var(--theme-info, rgb(var(--link)));
+  --callout-bg: rgb(var(--sky-50) / .72);
+  margin: 0.95rem 0;
+  padding: 0.78rem 1rem 0.82rem 1rem;
+  border-left: 3px solid var(--callout-color);
+  border-radius: 3px 10px 10px 3px;
+  background: var(--callout-bg);
+  background: color-mix(in srgb, var(--callout-color) 7%, rgb(var(--bg)));
+}
+
+html[data-theme="dark"] .ui-rich-callout {
+  background: var(--callout-bg);
+  background: color-mix(in srgb, var(--callout-color) 11%, rgb(var(--bg)));
+}
+
+.ui-rich-callout[data-callout="note"] {
+  --callout-color: var(--theme-info, rgb(var(--link)));
+  --callout-bg: rgb(var(--sky-50) / .72);
+}
+
+.ui-rich-callout[data-callout="tip"] {
+  --callout-color: var(--theme-success, rgb(16 185 129));
+  --callout-bg: rgb(var(--emerald-50) / .72);
+}
+
+.ui-rich-callout[data-callout="important"] {
+  --callout-color: var(--rich-callout-important);
+  --callout-bg: rgba(124, 58, 237, 0.065);
+}
+
+html[data-theme="dark"] .ui-rich-callout[data-callout="important"] {
+  --callout-bg: rgba(196, 181, 253, 0.11);
+}
+
+.ui-rich-callout[data-callout="warning"] {
+  --callout-color: var(--theme-warning, rgb(217 119 6));
+  --callout-bg: rgb(var(--amber-50) / .75);
+}
+
+.ui-rich-callout[data-callout="caution"] {
+  --callout-color: var(--theme-danger, rgb(220 38 38));
+  --callout-bg: rgb(var(--red-50) / .75);
+}
+
+.ui-rich-callout-header {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.825rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--callout-color);
+}
+
+.ui-rich-callout-icon {
+  flex-shrink: 0;
+}
+
+.ui-rich-callout-body {
+  color: rgb(var(--zinc-800));
+  font-size: 0.935rem;
+  line-height: 1.65;
+}
+
+.ui-rich-callout-body > :first-child {
+  margin-top: 0;
+}
+
+.ui-rich-callout-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* ============================================================================
+ * 3. 无框 KPI 指标条（metrics）：桌面横排、窄屏/移动端自动折为 2×2 细线网格
+ * ============================================================================ */
+
+.ui-rich-metrics {
+  display: grid;
+  grid-template-columns: repeat(var(--ui-metrics-cols, 4), minmax(0, 1fr));
+  margin: 0.95rem 0;
+  padding: 0.2rem 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.ui-rich-metric-item {
+  min-width: 0;
+  padding: 0.45rem 1.05rem;
+  border-left: 1px solid rgb(var(--zinc-200) / .78);
+}
+
+.ui-rich-metric-item:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+/* 超过 4 项换行到第 2 行时，第 5 项左侧也去竖线并加顶部细线 */
+.ui-rich-metrics[data-cols="4"] .ui-rich-metric-item:nth-child(4n + 1) {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.ui-rich-metrics[data-cols="4"] .ui-rich-metric-item:nth-child(n + 5) {
+  border-top: 1px solid rgb(var(--zinc-200) / .72);
+  padding-top: 0.72rem;
+  margin-top: 0.35rem;
+}
+
+.ui-rich-metric-label {
+  font-size: 0.75rem;
+  font-weight: 450;
+  line-height: 1.4;
+  color: rgb(var(--zinc-500));
+  overflow-wrap: anywhere;
+}
+
+.ui-rich-metric-value {
+  margin-top: 0.2rem;
+  font-size: 1.375rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.24;
+  color: rgb(var(--zinc-900));
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.ui-rich-metric-sub {
+  margin-top: 0.22rem;
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: rgb(var(--zinc-500));
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.ui-rich-metric-sub[data-tone="positive"] {
+  color: var(--theme-success, rgb(5 150 105));
+}
+
+.ui-rich-metric-sub[data-tone="negative"] {
+  color: var(--theme-danger, rgb(220 38 38));
+}
+
+.ui-rich-metric-sub[data-tone="warning"] {
+  color: var(--theme-warning, rgb(217 119 6));
+}
+
+.ui-rich-metric-sub[data-tone="info"] {
+  color: var(--theme-info, rgb(var(--link)));
+}
+
+/* 390px 移动端及窄屏：自动折为 2×2 细线网格，零横向溢出 */
+@media (max-width: 639px) {
+  .ui-rich-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-top: 1px solid rgb(var(--zinc-200) / .72);
+    border-bottom: 1px solid rgb(var(--zinc-200) / .72);
+    padding: 0;
+  }
+
+  .ui-rich-metrics[data-cols="1"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ui-rich-metric-item,
+  .ui-rich-metrics[data-cols="4"] .ui-rich-metric-item:nth-child(4n + 1),
+  .ui-rich-metrics[data-cols="4"] .ui-rich-metric-item:nth-child(n + 5) {
+    margin-top: 0;
+    padding: 0.72rem 0.75rem;
+    border-left: 0;
+    border-top: 0;
+  }
+
+  .ui-rich-metric-item:nth-child(odd) {
+    padding-left: 0.1rem;
+  }
+
+  .ui-rich-metric-item:nth-child(even) {
+    border-left: 1px solid rgb(var(--zinc-200) / .72);
+    padding-right: 0.1rem;
+  }
+
+  .ui-rich-metric-item:nth-child(n + 3) {
+    border-top: 1px solid rgb(var(--zinc-200) / .72);
+  }
+
+  .ui-rich-metric-value {
+    font-size: 1.2rem;
+  }
+}
+
+/* ============================================================================
+ * 4. 步进时间轴（steps）：三态节点 + 竖向连接细线
+ * ============================================================================ */
+
+.markdown ol.ui-rich-steps,
+.ui-user-bubble ol.ui-rich-steps {
+  list-style: none;
+  margin: 0.9rem 0;
+  padding-left: 0;
+}
+
+.ui-rich-step {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding-bottom: 1rem;
+  margin: 0;
+}
+
+.ui-rich-step:last-child {
+  padding-bottom: 0;
+}
+
+/* 竖向连接细线 */
+.ui-rich-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 9.5px;
+  top: 23px;
+  bottom: 2px;
+  width: 1.5px;
+  background: rgb(var(--zinc-200));
+}
+
+.ui-rich-step-marker {
+  position: relative;
+  z-index: 1;
+  margin-top: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.ui-rich-step[data-status="done"] .ui-rich-step-marker {
+  background: rgb(var(--accent));
+  color: rgb(var(--accent-fg));
+}
+
+.ui-rich-step[data-status="active"] .ui-rich-step-marker {
+  background: rgb(var(--zinc-100));
+  background: color-mix(in srgb, var(--theme-accent, rgb(var(--accent))) 14%, rgb(var(--bg)));
+  border: 1.5px solid rgb(var(--zinc-300));
+  border-color: color-mix(in srgb, var(--theme-accent, rgb(var(--accent))) 38%, transparent);
+}
+
+.ui-rich-step[data-status="active"] .ui-rich-step-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: rgb(var(--accent));
+}
+
+.ui-rich-step[data-status="pending"] .ui-rich-step-marker {
+  background: rgb(var(--bg));
+  border: 1.5px solid rgb(var(--zinc-300));
+}
+
+.ui-rich-step[data-status="pending"] .ui-rich-step-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: rgb(var(--zinc-300));
+}
+
+.ui-rich-step-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.ui-rich-step-title {
+  font-size: 0.935rem;
+  font-weight: 600;
+  line-height: 1.45;
+  color: rgb(var(--zinc-900));
+}
+
+.ui-rich-step[data-status="pending"] .ui-rich-step-title {
+  font-weight: 500;
+  color: rgb(var(--zinc-500));
+}
+
+.ui-rich-step-detail {
+  margin-top: 0.16rem;
+  font-size: 0.825rem;
+  line-height: 1.55;
+  color: rgb(var(--zinc-500));
+  overflow-wrap: anywhere;
+}
+
+/* ============================================================================
+ * 5. 无框紧凑表格 + 右上角轻量化操作条（无灰顶栏）
+ * ============================================================================ */
+
+.ui-rich-table-wrap {
+  position: relative;
+  margin: 0.95rem 0;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ui-rich-table-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  margin-bottom: 0.3rem;
+}
+
+.ui-rich-table-wrap .markdown-table-scroll {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ui-rich-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.ui-rich-table-wrap th,
+.ui-rich-table-wrap td {
+  border-right: 0;
+  border-bottom: 1px solid rgb(var(--zinc-200) / .72);
+  padding: 0.6rem 0.9rem;
+  text-align: left;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-rich-table-wrap th:first-child,
+.ui-rich-table-wrap td:first-child {
+  padding-left: 0;
+}
+
+.ui-rich-table-wrap th:last-child,
+.ui-rich-table-wrap td:last-child {
+  padding-right: 0;
+}
+
+.ui-rich-table-wrap th {
+  background: transparent;
+  color: rgb(var(--zinc-500));
+  font-size: 0.8rem;
+  font-weight: 550;
+  border-bottom: 1px solid rgb(var(--zinc-200));
+}
+
+.ui-rich-table-wrap tbody tr:last-child td {
+  border-bottom: 1px solid rgb(var(--zinc-200) / .5);
+}
+
+.ui-rich-table-wrap tbody tr:hover td {
+  background: rgb(var(--zinc-50) / .55);
+}
+
+/* 轻量化共用操作按钮（表格右上角 & 图表悬浮角标） */
+.ui-rich-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 0.48rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgb(var(--zinc-500));
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+
+.ui-rich-action-btn:hover {
+  color: rgb(var(--zinc-900));
+  background: rgb(var(--zinc-100) / .85);
+}
+
+.ui-rich-action-btn.is-active {
+  color: rgb(var(--zinc-900));
+  background: rgb(var(--zinc-100));
+  border-color: rgb(var(--zinc-200));
+}
+
+.ui-rich-action-btn.is-copied {
+  color: var(--theme-success, rgb(5 150 105));
+}
+
+/* ============================================================================
+ * 6. Mermaid & SVG 原生矢量画布 + 右上角悬浮轻操作（绝无常驻灰顶栏）
+ * ============================================================================ */
+
+.ui-rich-media-block {
+  position: relative;
+  margin: 1rem 0;
+  max-width: 100%;
+  min-width: 0;
+  border-radius: 10px;
+  border: 1px solid rgb(var(--zinc-200) / .55);
+  background: color-mix(in srgb, rgb(var(--surface)) 72%, rgb(var(--bg)));
+  padding: 0.85rem 0.9rem;
+  transition: border-color 160ms ease;
+}
+
+.ui-rich-media-block:hover {
+  border-color: rgb(var(--zinc-300) / .85);
+}
+
+.ui-rich-floating-actions {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.55rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.18rem;
+  padding: 0.16rem 0.22rem;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--zinc-200) / .75);
+  background: rgb(var(--bg) / .86);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition: opacity 150ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ui-rich-floating-actions {
+    opacity: 0.62;
+  }
+  .ui-rich-media-block:hover .ui-rich-floating-actions,
+  .ui-rich-media-block:focus-within .ui-rich-floating-actions {
+    opacity: 1;
+  }
+}
+
+.ui-rich-diagram-canvas {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2.45rem 0.5rem 0.65rem;
+  border: 0;
+  background: transparent;
+  text-align: center;
+  cursor: zoom-in;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ui-rich-svg-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ui-rich-svg-stage > svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.ui-rich-source-box {
+  border-radius: 8px;
+  background: rgb(var(--code-bg));
+  border: 1px solid rgb(var(--zinc-200) / .75);
+  overflow: hidden;
+}
+
+.ui-rich-source-box,
+.ui-rich-source-box * {
+  overflow-wrap: normal;
+}
+
+/* 修复 Prism markdown 语法输出 <span class="token table"> 与 Tailwind .table { display: table } 冲突导致表格源码逐词换行 */
+.prism-code .token.table {
+  display: inline;
+}
+
+.ui-rich-media-block .ui-rich-source-box {
+  margin-top: 2.1rem;
+}
+
+.ui-rich-source-pre {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  overflow-x: auto;
+  white-space: pre;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+.ui-rich-fallback-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+
+.ui-rich-fallback-note {
+  font-size: 0.76rem;
+  color: rgb(var(--zinc-500));
+}
+
+.ui-rich-media-block--fallback .ui-rich-source-box {
+  margin-top: 0;
+}
+
+/* ============================================================================
+ * 7. 流式未闭合占位（固定轻量骨架，60Hz 零抽搐）
+ * ============================================================================ */
+
+.ui-rich-streaming-placeholder {
+  margin: 0.9rem 0;
+  min-height: 84px;
+  padding: 0.8rem 0.95rem;
+  border-radius: 10px;
+  border: 1px dashed rgb(var(--zinc-300) / .78);
+  background: rgb(var(--zinc-50) / .52);
+}
+
+.ui-rich-streaming-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: rgb(var(--zinc-500));
+}
+
+.ui-rich-streaming-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: rgb(var(--accent));
+  animation: ui-rich-pulse 1.4s ease-in-out infinite;
+}
+
+.ui-rich-streaming-preview {
+  margin: 0.48rem 0 0;
+  padding: 0;
+  max-height: 5.2rem;
+  overflow: hidden;
+  font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: rgb(var(--zinc-400));
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ui-rich-streaming-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.ui-rich-streaming-bar {
+  display: block;
+  height: 10px;
+  border-radius: 9999px;
+  background: rgb(var(--zinc-200) / .72);
+  animation: ui-rich-pulse 1.5s ease-in-out infinite;
+}
+
+.ui-rich-streaming-bar--lg {
+  width: 68%;
+}
+
+.ui-rich-streaming-bar--md {
+  width: 44%;
+}
+
+@keyframes ui-rich-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.95; }
+}
+
+/* ============================================================================
+ * 8. LaTeX / KaTeX 数学公式（自适应主题文字色与窄屏横向滚动）
+ * ============================================================================ */
+
+.ui-rich-math-block {
+  display: block;
+  margin: 0.9rem 0;
+  padding: 0.35rem 0.25rem;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  color: rgb(var(--zinc-900));
+  -webkit-overflow-scrolling: touch;
+}
+
+.ui-rich-math-block--in-p {
+  margin: 0.65rem 0;
+}
+
+.ui-rich-math-inline {
+  display: inline;
+  color: rgb(var(--zinc-900));
+}
+
+.ui-rich-math-inline .katex {
+  font-size: 1.02em;
+}
+
+.ui-rich-math-block .katex-display {
+  margin: 0.25rem 0;
+}
+
+.ui-rich-math-fallback {
+  font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+  color: rgb(var(--zinc-700));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-rich-streaming-dot,
+  .ui-rich-streaming-bar {
+    animation: none;
+    opacity: 0.7;
+  }
+
+  .ui-rich-action-btn,
+  .ui-rich-media-block,
+  .ui-rich-floating-actions {
+    transition: none;
+  }
+}

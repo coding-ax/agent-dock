@@ -8,6 +8,7 @@ import { WebAccessDeniedError } from './api';
 import { initPwaInstall, registerPwaServiceWorker } from './pwa-install';
 import './index.css';
 import './motion.css';
+import './rich-markdown/rich-markdown.css';
 
 initPwaInstall();
 registerPwaServiceWorker();

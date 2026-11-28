@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+  BUILTIN_RICH_BLOCKS_PLUGIN_ID,
   CONFIRM_ACTION_INTERACTION_ORIGIN,
   createDeclarativeOutputPlugin,
   declarativePluginInteractionOrigin,
@@ -21,6 +22,7 @@ import {
 } from '@agent-dock/agent-dock-shared';
 import { Composer } from '../Composer';
 import { TooltipProvider } from '../HoverTooltip';
+import { I18nProvider } from '../i18n';
 import { ActivityPanel, TimelineItem } from '../TimelineItems';
 import { detectInjectionTags } from '../bubble-injection';
 import {
@@ -260,11 +262,49 @@ describe('Web Output Plugins system', () => {
     expect(html).toContain('交互插件中心');
     expect(html).toContain('询问卡片（AskUserQuestion）');
     expect(html).toContain('操作确认卡（ConfirmAction）');
+    expect(html).toContain('富文本排版块（metrics / steps）');
+    expect(html).toContain('Markdown 块');
+    expect(html).toContain('Web 富文本');
+    expect(html).toContain('飞书降级');
+    expect(html).toContain('默认关闭');
     expect(html).toContain('发布审批卡');
     expect(html).toContain('部署参数表');
     expect(html).toContain('broken.json');
     expect(html).toContain('/Users/demo/.agentdock/output-plugins');
     expect(html).toContain('data-testid="output-plugins-reload"');
+
+    // en-US 渲染内置 3 插件（不含中文自定义扩展）时零中文泄漏，且默认 2/3 开启（Rich Blocks 关闭）
+    const enQc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const builtinSnapshot: OutputPluginsCatalogSnapshot = {
+      configured: false,
+      config: {
+        plugins: {
+          [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: true,
+          [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: true,
+          [BUILTIN_RICH_BLOCKS_PLUGIN_ID]: false
+        }
+      },
+      localDir: '/Users/demo/.agentdock/output-plugins',
+      localDirExists: false,
+      warnings: [],
+      plugins: buildFallbackOutputPluginCatalogItems()
+    };
+    enQc.setQueryData(OUTPUT_PLUGINS_QUERY_KEY, builtinSnapshot);
+    const enHtml = renderToStaticMarkup(
+      createElement(I18nProvider, { locale: 'en-US' },
+        createElement(QueryClientProvider, { client: enQc },
+          createElement(TooltipProvider, null, createElement(OutputPluginsCenterPanel))
+        )
+      )
+    );
+    expect(enHtml).toContain('Rich Blocks (metrics / steps)');
+    expect(enHtml).toContain('Markdown Blocks');
+    expect(enHtml).toContain('Web Rich');
+    expect(enHtml).toContain('Lark Fallback');
+    expect(enHtml).toContain('Default Off');
+    expect(enHtml).toContain(`data-testid="plugin-center-card-${BUILTIN_RICH_BLOCKS_PLUGIN_ID}"`);
+    expect(enHtml).toContain('data-plugin-enabled="false"');
+    expect(/[\u4e00-\u9fff]/.test(enHtml)).toBe(false);
   });
 
   it('renders SessionOutputPluginsDialog with clear per-session scope, override states, reset actions, and dual-session isolation', () => {
@@ -303,16 +343,18 @@ describe('Web Output Plugins system', () => {
         )
       );
 
-    // 1. 默认态（无覆写）：全部跟随全局、不展示重置全部条
+    // 1. 默认态（无覆写）：全部跟随全局（2/3 启用：AskUserQuestion 开、ConfirmAction 开、Rich Blocks 默认关闭）、不展示重置全部条
     const inheritHtml = renderDialog(baseSession);
     expect(inheritHtml).toContain('data-testid="session-output-plugins-dialog"');
     expect(inheritHtml).toContain('data-session-id="ses_a"');
     expect(inheritHtml).toContain('当前会话 · 交互插件');
     expect(inheritHtml).toContain('作用会话：会话 A');
     expect(inheritHtml).toContain('仅影响当前会话，不改动全局默认与其他会话');
-    expect(inheritHtml).toContain('2/2 启用');
+    expect(inheritHtml).toContain('2/3 启用');
     expect(inheritHtml).toContain('全部跟随全局默认');
     expect(inheritHtml).toContain('跟随全局');
+    expect(inheritHtml).toContain('富文本排版块（metrics / steps）');
+    expect(inheritHtml).toContain('```metrics / ```steps');
     expect(inheritHtml).toContain('前往全局插件中心管理默认开关与本地插件');
     expect(inheritHtml).not.toContain('data-testid="session-plugins-reset-all"');
     expect(inheritHtml).not.toContain('仅本会话关闭');
@@ -607,5 +649,114 @@ describe('Web Output Plugins system', () => {
     const cleared = withoutDraftOutputPluginOverrides(multi);
     expect(cleared.outputPlugins).toBeUndefined();
     expect(cleared.askUserQuestionEnabled).toBeUndefined();
+  });
+
+  it('renders JSON-in-XML AskUserQuestion payloads (rich_text_upgrade_plan) as an interactive card in Web TimelineItem without leaking raw XML/JSON', () => {
+    const registry = buildClientOutputPluginRegistry(catalogItems);
+    const enabledIds = resolveSessionEnabledOutputPluginIds(
+      catalogItems,
+      { plugins: { [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: true } }
+    );
+    const event: TimelineEvent = {
+      id: 'a_rich_json',
+      sequence: 15253,
+      type: 'text',
+      timestamp: '2026-11-28T12:05:45.666Z',
+      data: {
+        role: 'assistant',
+        text: `请你拍板两个细节：\n\n<agentdock-ask-user-question>\n{\n  "id": "rich_text_upgrade_plan",\n  "title": "原生富文本渲染升级范围确认",\n  "description": "确认你想落地的范围：",\n  "questions": [\n    {\n      "id": "scope",\n      "question": "这次落地范围选哪一档？",\n      "options": [\n        { "value": "full_rich_text_plus_prompt", "label": "全套原生富文本渲染 + 教 Agent 会主动输出（推荐）", "description": "一次做齐全部组件" },\n        { "value": "render_only", "label": "只做前端全套富文本渲染器", "description": "零 Token 增量" }\n      ]\n    },\n    {\n      "id": "release_order",\n      "question": "怎么安排发版？",\n      "options": [\n        { "value": "ship_0331_first", "label": "先发 0.3.31 上线来源 Tag（推荐）" },\n        { "value": "bundle_together", "label": "合并发一版" }\n      ]\n    }\n  ]\n}\n</agentdock-ask-user-question>`
+      }
+    } as TimelineEvent;
+
+    const html = renderToStaticMarkup(
+      createElement(TooltipProvider, null, createElement(TimelineItem, {
+        event,
+        final: true,
+        replay: true,
+        outputPluginRegistry: registry,
+        enabledOutputPluginIds: enabledIds
+      }))
+    );
+    expect(html).toContain('data-ask-card=""');
+    expect(html).toContain('data-ask-card-id="rich_text_upgrade_plan"');
+    expect(html).toContain('原生富文本渲染升级范围确认');
+    expect(html).toContain('data-ask-option="full_rich_text_plus_prompt"');
+    expect(html).toContain('data-ask-option="ship_0331_first"');
+    expect(html).not.toContain('agentdock-ask-user-question');
+    expect(html).not.toContain('&quot;questions&quot;');
+  });
+
+  it('gates metrics/steps rendering in TimelineItem on builtin:rich-blocks while keeping standard rich Markdown always on', () => {
+    const builtinCatalog = buildFallbackOutputPluginCatalogItems();
+    const defaultEnabledIds = resolveSessionEnabledOutputPluginIds(builtinCatalog);
+    expect(defaultEnabledIds.has(BUILTIN_ASK_USER_QUESTION_PLUGIN_ID)).toBe(true);
+    expect(defaultEnabledIds.has(BUILTIN_CONFIRM_ACTION_PLUGIN_ID)).toBe(true);
+    expect(defaultEnabledIds.has(BUILTIN_RICH_BLOCKS_PLUGIN_ID)).toBe(false);
+
+    const richEvent: TimelineEvent = {
+      id: 'a_rich_blocks_gate',
+      sequence: 20,
+      type: 'text',
+      timestamp: '2026-11-28T14:00:00.000Z',
+      data: {
+        role: 'assistant',
+        text: [
+          '> [!TIP]',
+          '> 标准 Callout 与表格默认始终开启。',
+          '',
+          '| 模块 | 状态 |',
+          '| --- | --- |',
+          '| Callout | 默认开启 |',
+          '',
+          '```metrics',
+          '线上版本: v0.3.31 | +6 路合入',
+          '```',
+          '',
+          '```steps',
+          '[x] 基线检查 | 已完成',
+          '[~] 灰度观察 | 进行中',
+          '```'
+        ].join('\n')
+      }
+    } as TimelineEvent;
+
+    // 1. 默认关闭态：Callout 与紧凑表格照常富文本渲染，metrics / steps 保持原始清晰代码块
+    const offHtml = renderToStaticMarkup(
+      createElement(TooltipProvider, null, createElement(TimelineItem, {
+        event: richEvent,
+        final: true,
+        replay: true,
+        sessionId: 'ses_rich_gate',
+        enabledOutputPluginIds: defaultEnabledIds
+      }))
+    );
+    expect(offHtml).toContain('data-callout="tip"');
+    expect(offHtml).toContain('data-testid="rich-table"');
+    expect(offHtml).not.toContain('data-testid="rich-metrics"');
+    expect(offHtml).not.toContain('data-testid="rich-steps"');
+    expect(offHtml).toContain('code-renderer');
+
+    // 2. 会话开启 builtin:rich-blocks 后：metrics / steps 即刻渲染为无框 KPI 条与步进时间轴
+    const onIds = resolveSessionEnabledOutputPluginIds(builtinCatalog, undefined, {
+      [BUILTIN_RICH_BLOCKS_PLUGIN_ID]: true
+    });
+    expect(onIds.has(BUILTIN_RICH_BLOCKS_PLUGIN_ID)).toBe(true);
+    const onHtml = renderToStaticMarkup(
+      createElement(TooltipProvider, null, createElement(TimelineItem, {
+        event: richEvent,
+        final: true,
+        replay: true,
+        sessionId: 'ses_rich_gate',
+        enabledOutputPluginIds: onIds
+      }))
+    );
+    expect(onHtml).toContain('data-callout="tip"');
+    expect(onHtml).toContain('data-testid="rich-table"');
+    expect(onHtml).toContain('data-testid="rich-metrics"');
+    expect(onHtml).toContain('data-testid="rich-steps"');
+    expect(onHtml).not.toContain('code-renderer');
+
+    // 注入标签识别
+    expect(detectInjectionTags('[AgentDock 富文本排版块指引]\n...')).toContain('富文本排版块');
   });
 });

@@ -186,11 +186,89 @@ html[data-theme="dark"] .ad-lightbox .yarl__container {
   color: rgba(255, 255, 255, 0.74);
 }
 
+.ad-lightbox-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ad-lightbox .yarl__button.ad-lightbox-zoom-pct {
+  width: auto;
+  min-width: 54px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.ad-lightbox .yarl__button.ad-lightbox-pill-btn {
+  width: auto;
+  padding: 0 11px;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ad-lightbox-pill-label {
+  line-height: 1;
+}
+
+/* Mermaid / SVG 矢量图全屏预览舞台：承接当前主题表面色，避免浅色主题暗字在深色磨砂遮罩上丢失对比度 */
+.ad-lightbox-diagram-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 28px;
+  border-radius: 14px;
+  border: 1px solid rgb(var(--zinc-200) / .85);
+  background-color: rgb(var(--surface));
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
+  cursor: grab;
+}
+
+.ad-lightbox-diagram-stage:active {
+  cursor: grabbing;
+}
+
+.ad-lightbox-diagram-svg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.ad-lightbox-diagram-svg > svg {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+}
+
 @media (max-width: 639px) {
   .ad-lightbox .yarl__toolbar {
     top: max(12px, env(safe-area-inset-top));
     right: max(12px, env(safe-area-inset-right));
-    gap: 6px;
+    gap: 5px;
+  }
+
+  .ad-lightbox-zoom-group {
+    gap: 4px;
+  }
+
+  .ad-lightbox .yarl__button.ad-lightbox-pill-btn {
+    padding: 0 8px;
+  }
+
+  .ad-lightbox-pill-label {
+    display: none;
+  }
+
+  .ad-lightbox-diagram-stage {
+    padding: 14px 16px;
+    border-radius: 10px;
   }
 
   .ad-lightbox-meta {

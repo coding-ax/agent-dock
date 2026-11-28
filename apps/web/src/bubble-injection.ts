@@ -26,6 +26,8 @@ const INJECTION_TAG_RULES: ReadonlyArray<{ pattern: RegExp; label: string; label
   { pattern: /用户询问卡片协议已关闭/, label: '询问卡片协议', labelEn: 'AskUserQuestion Protocol' },
   { pattern: /\[AgentDock 操作确认卡片协议\]/, label: '操作确认协议', labelEn: 'ConfirmAction Protocol' },
   { pattern: /操作确认卡片协议已关闭/, label: '操作确认协议', labelEn: 'ConfirmAction Protocol' },
+  { pattern: /\[AgentDock 富文本排版块指引\]/, label: '富文本排版块', labelEn: 'Rich Blocks' },
+  { pattern: /富文本排版块插件（metrics \/ steps）已关闭/, label: '富文本排版块', labelEn: 'Rich Blocks' },
   { pattern: /\[AgentDock 交互插件协议/, label: '交互插件协议', labelEn: 'Output Plugin Protocol' },
   { pattern: /交互插件「[^」]+」已关闭/, label: '交互插件协议', labelEn: 'Output Plugin Protocol' },
   { pattern: /\[AgentDock 定时任务\b/, label: '定时任务', labelEn: 'Scheduled Task' },

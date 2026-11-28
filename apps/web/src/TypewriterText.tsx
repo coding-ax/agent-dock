@@ -24,11 +24,11 @@ function useAnimatedText(text: string, active: boolean, replay: boolean) {
   // 流结束后尾巴还要 drain 一小段，动画继续播完；光标却只跟 active。drain 期间下一段往往
   // 已经开始输出，两边都挂光标就会同时闪好几个。
   const animating = active || revealed.length < text.length;
-  return { revealed, caret: active, animateUnits: animating && revealed.length <= UNIT_ANIMATION_MAX_CHARS };
+  return { revealed, caret: active, animating, animateUnits: animating && revealed.length <= UNIT_ANIMATION_MAX_CHARS };
 }
 
 /** 助手正文。只有正在流式输出时挂光标，历史/最终态与收尾 drain 都不挂。 */
-export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active, replay = false, final = false, animateEnter = true, assistantLabel = 'Agent', sessionId }: {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active, replay = false, final = false, animateEnter = true, assistantLabel = 'Agent', sessionId, enableRichBlocks = false }: {
   text: string;
   active: boolean;
   /** 首屏 payload 渲染出来的行：已经显示过的文本不重播。 */
@@ -38,9 +38,11 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active,
   animateEnter?: boolean;
   assistantLabel?: string;
   sessionId: string | undefined;
+  /** 是否开启 ```metrics / ```steps 结构化渲染（由 `builtin:rich-blocks` 插件开关控制，默认关闭）。 */
+  enableRichBlocks?: boolean;
 }) {
   const L = useBi();
-  const { revealed, caret, animateUnits } = useAnimatedText(text, active, replay);
+  const { revealed, caret, animating, animateUnits } = useAnimatedText(text, active, replay);
   // 流式输出时至少占一行：打字机从 0 字起播，空的 article 上下外边距会叠成一个，
   // 它顶替「处理中」那一行时时间线先缩 44px、等第一个字出来再撑开 50px——就是首段回复时那一下「弹」。
   return <article
@@ -48,14 +50,14 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active,
     aria-label={final ? L(`${assistantLabel} 最终输出`, `${assistantLabel} final output`) : undefined}
     className={`assistant-output markdown ${animateEnter ? 'ui-timeline-item' : ''} ${final ? 'mb-6 mt-2' : 'my-6'} ${active ? 'min-h-[1.7em]' : ''} max-w-[78ch] text-[15px] leading-[1.7] text-zinc-800 ${caret ? 'ui-typewriter-caret' : ''}`}
   >
-    <MarkdownContent sessionId={sessionId} animateUnits={animateUnits}>{revealed}</MarkdownContent>
+    <MarkdownContent sessionId={sessionId} animateUnits={animateUnits} isStreaming={animating} enableRichBlocks={enableRichBlocks}>{revealed}</MarkdownContent>
   </article>;
-}, (prev, next) => prev.text === next.text && prev.active === next.active && prev.replay === next.replay && prev.final === next.final && prev.animateEnter === next.animateEnter && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId);
+}, (prev, next) => prev.text === next.text && prev.active === next.active && prev.replay === next.replay && prev.final === next.final && prev.animateEnter === next.animateEnter && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId && prev.enableRichBlocks === next.enableRichBlocks);
 
 /** 思考过程。折叠体里同样走逐字，只在 live 时挂光标。 */
 export const ThinkingMarkdown = memo(function ThinkingMarkdown({ text, active, replay = false, sessionId }: { text: string; active: boolean; replay?: boolean; sessionId: string | undefined }) {
-  const { revealed, caret, animateUnits } = useAnimatedText(text, active, replay);
+  const { revealed, caret, animating, animateUnits } = useAnimatedText(text, active, replay);
   return <div className={`markdown pl-5 pt-1 text-[13px] leading-[1.7] text-zinc-500 ${caret ? 'ui-typewriter-caret' : ''}`}>
-    <MarkdownContent sessionId={sessionId} animateUnits={animateUnits}>{revealed}</MarkdownContent>
+    <MarkdownContent sessionId={sessionId} animateUnits={animateUnits} isStreaming={animating}>{revealed}</MarkdownContent>
   </div>;
 }, (prev, next) => prev.text === next.text && prev.active === next.active && prev.replay === next.replay && prev.sessionId === next.sessionId);
