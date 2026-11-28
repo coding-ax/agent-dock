@@ -5,6 +5,7 @@ import {
   createDeclarativeOutputPlugin,
   createDefaultOutputPluginRegistry,
   defaultOutputPluginRegistry,
+  getSessionOutputPluginOverride,
   resolveOutputPluginEnabled,
   type OutputPluginCatalogItem,
   type OutputPluginRegistry,
@@ -14,6 +15,78 @@ import {
 import { api } from '../api';
 
 export const OUTPUT_PLUGINS_QUERY_KEY = ['output-plugins'] as const;
+
+export interface ResolvedSessionOutputPluginItem {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  tagName: string;
+  version: string;
+  builtin: boolean;
+  /** 本会话或草稿当前生效状态。 */
+  enabled: boolean;
+  /** 全局默认状态。 */
+  globalEnabled: boolean;
+  /** 本会话或草稿显式覆写（boolean = 覆写，null = 跟随全局默认）。 */
+  override: boolean | null;
+  capabilities: OutputPluginCatalogItem['capabilities'];
+  sourcePath?: string;
+}
+
+/** 合并目录快照、全局配置与兼容开关，得到稳定的全局默认插件配置对象。 */
+export function buildEffectiveGlobalPluginsConfig(
+  catalog: ReadonlyArray<OutputPluginCatalogItem>,
+  globalConfig?: OutputPluginsGlobalConfig | null,
+  askUserQuestionXmlEnabled = true
+): OutputPluginsGlobalConfig {
+  const base: Record<string, boolean> = {};
+  for (const item of catalog) {
+    base[item.id] = item.globalEnabled;
+  }
+  if (globalConfig?.plugins) {
+    Object.assign(base, globalConfig.plugins);
+  } else {
+    base[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] = askUserQuestionXmlEnabled;
+  }
+  return { plugins: base };
+}
+
+/** 计算单个会话（或新建草稿）的完整插件状态视图，严格区分全局默认与本会话独立覆写。 */
+export function buildSessionOutputPluginItems(
+  catalog: ReadonlyArray<OutputPluginCatalogItem>,
+  globalConfig: OutputPluginsGlobalConfig,
+  sessionOverrides?: SessionOutputPluginsMap | null,
+  legacySessionAskEnabled?: boolean | null
+): ResolvedSessionOutputPluginItem[] {
+  return catalog.map(plugin => {
+    const globalEnabled = resolveOutputPluginEnabled(plugin.id, {
+      defaultEnabled: plugin.globalEnabled,
+      globalConfig
+    });
+    const override = getSessionOutputPluginOverride(plugin.id, sessionOverrides, legacySessionAskEnabled);
+    const enabled = resolveOutputPluginEnabled(plugin.id, {
+      defaultEnabled: globalEnabled,
+      globalConfig,
+      sessionOverrides,
+      legacySessionAskEnabled
+    });
+    return {
+      id: plugin.id,
+      name: plugin.name,
+      description: plugin.description,
+      icon: plugin.icon,
+      tagName: plugin.tagName,
+      version: plugin.version,
+      builtin: plugin.builtin,
+      enabled,
+      globalEnabled,
+      override,
+      capabilities: plugin.capabilities,
+      ...(plugin.sourcePath ? { sourcePath: plugin.sourcePath } : {})
+    };
+  });
+}
 
 /** 在服务端目录未返回前（或离线单测 SSR 时）使用的默认内置插件目录快照。 */
 export function buildFallbackOutputPluginCatalogItems(): OutputPluginCatalogItem[] {

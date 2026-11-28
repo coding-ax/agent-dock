@@ -68,6 +68,8 @@ export interface SubmitAskUserQuestionAnswerInput {
   title?: string;
   source: AskUserQuestionSource;
   answeredBy?: string;
+  responderName?: string;
+  responderSessionId?: string;
   answers: AskUserQuestionAnswerItem[];
   clientMessageId?: string;
   mode?: 'queue' | 'interrupt';
@@ -92,6 +94,10 @@ export type AskUserQuestionAnsweredListener = (
 const webAnswerBodySchema = z.object({
   questionId: z.string().trim().min(1).max(200),
   title: z.string().trim().max(300).optional(),
+  source: z.enum(['web', 'assistant']).optional(),
+  answeredBy: z.string().trim().max(200).optional(),
+  responderName: z.string().trim().max(200).optional(),
+  responderSessionId: z.string().trim().max(200).optional(),
   answers: z.array(askUserQuestionAnswerItemSchema).min(1),
   mode: z.enum(['queue', 'interrupt']).optional(),
   clientMessageId: z.string().trim().min(1).max(200).optional()
@@ -206,6 +212,8 @@ export class AskUserQuestionService {
       title: input.title,
       source: input.source,
       actedBy: input.answeredBy,
+      responderName: input.responderName,
+      responderSessionId: input.responderSessionId,
       answers: input.answers,
       clientMessageId: input.clientMessageId,
       mode: input.mode,
@@ -249,7 +257,10 @@ export function registerAskUserQuestionRoutes(app: FastifyInstance, service: Ask
       sessionId: request.params.id,
       questionId: parsed.data.questionId,
       title: parsed.data.title,
-      source: 'web',
+      source: parsed.data.source ?? 'web',
+      answeredBy: parsed.data.answeredBy,
+      responderName: parsed.data.responderName,
+      responderSessionId: parsed.data.responderSessionId,
       answers: parsed.data.answers,
       mode: parsed.data.mode,
       clientMessageId: parsed.data.clientMessageId

@@ -1,10 +1,12 @@
 import {
   defaultOutputPluginRegistry,
+  parseAssistantReplyOrigin,
   type OutputPluginRegistry
 } from '@agent-dock/agent-dock-shared';
 import { buildActivitySteps, thinkingTitle, timelineRowKey, type TimelineEvent, type TimelineTurn } from './timeline';
 import { summarizeTools, toolPresentation } from './tool-presentation';
 import { toolDetailView } from './tool-detail';
+import { bi } from './i18n';
 
 export const SYSTEM_PROMPT_SEARCH_KEY = 'system-prompt';
 
@@ -104,10 +106,19 @@ function extractEventSearchText(
         ].filter(Boolean).join('\n');
       }
     }
+    const assistantMeta = parseAssistantReplyOrigin(event.data.origin);
+    if (assistantMeta) {
+      const parts = [
+        assistantMeta.kind === 'answer' ? bi("小猫代答", "Kitten Reply") : bi("小猫回复", "Kitten Reply"),
+        ...(assistantMeta.responderName ? [assistantMeta.responderName, bi(`${assistantMeta.responderName}${assistantMeta.kind === 'answer' ? '代答' : '回复'}`, `${assistantMeta.responderName} Reply`)] : []),
+        stripMarkdownForSearch(event.data.text ?? '')
+      ].filter(Boolean);
+      return parts.join('\n');
+    }
     return stripMarkdownForSearch(event.data.text ?? '');
   }
   if (event.type === 'warning') return stripMarkdownForSearch(event.data.text ?? '');
-  if (event.type === 'error') return stripMarkdownForSearch(event.data.message ?? 'Agent 运行失败');
+  if (event.type === 'error') return stripMarkdownForSearch(event.data.message ?? bi("Agent 运行失败", "Agent Run Failed"));
   if (event.type === 'permission_request') return event.data.title ?? '';
   if (event.type === 'tool_call' || event.type === 'tool_result') return extractToolSearchText(event);
   return '';
@@ -171,7 +182,7 @@ export function searchTimeline({
           const title = thinkingTitle(raw, false);
           text = raw ? stripMarkdownForSearch(raw) : (title ?? '');
         } else if (step.kind === 'tools') {
-          const summary = summarizeTools(step.events) || `${step.events.length} 次工具调用`;
+          const summary = summarizeTools(step.events) || bi(`${step.events.length} 次工具调用`, `${step.events.length} tool call(s)`);
           const toolTexts = step.events.map(extractToolSearchText);
           text = [summary, ...toolTexts].join('\n');
         } else {

@@ -2,8 +2,9 @@ import { spawn, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
-import { now, RuntimeError, type RepositoryBundle, type Session, type SessionInterruptIntent } from '@agent-dock/agent-dock-shared';
+import { ASSISTANT_REPLY_ORIGIN, now, pickFinalAssistantText, RuntimeError, type AgentEvent, type RepositoryBundle, type Session, type SessionInterruptIntent } from '@agent-dock/agent-dock-shared';
 import { resolveLoginShell } from '../terminal-manager.js';
+import { OutputPluginService } from '../output-plugins/service.js';
 import { AssistantStore } from './store.js';
 import { beginTaskRun, finishTaskRun } from './timing.js';
 import { AssistantLifecycle } from './lifecycle-service.js';
@@ -11,6 +12,13 @@ import { HANDOFF_BRIEFING_MARKER, MAINTENANCE_MARKER, isHandoffExecuting, type H
 import { discoverAgentModels } from '../agent-models.js';
 import { LarkAvatarResolutionError, larkAvatarResolutionHttpStatus } from '../lark-avatar/id-resolution.js';
 import { validateCwd } from './cwd.js';
+import {
+  findPendingSessionInteraction,
+  formatPendingInteractionSignalSummary,
+  resolveAssistantAnswerSubmission,
+  type AnswerTaskInteractionInput,
+  type PendingSideInteraction
+} from './pending-interaction.js';
 import type {
   AssistantSignal, AssistantSignalKind, AssistantTask, CompanionProfile, DraftRecord,
   NotifyInput, TaskCheck, TaskReviewRecord, WatchRecord
@@ -39,6 +47,9 @@ const SIGNAL_THROTTLE_MS: Record<AssistantSignalKind, number> = {
 const STOP_LOOP_WINDOW_MS = 10 * 60_000;
 const STALL_DEFAULT_MINUTES = 20;
 const MAX_OUTPUT = 4 * 1024;
+/** 侧边会话未调 task report 自然结束一轮时，附进 [review] 督办信号的最后回复摘要上限。 */
+const REVIEW_REPLY_SUMMARY_MAX_CHARS = 500;
+const REVIEW_REPLY_EVENT_LIMIT = 500;
 /** 督办注入的唯一文本标记；来源识别以 task.origin 为准，这段文本只作兜底。 */
 const INJECTED_SIGNAL_PREFIX = '以下是 daemon 汇总的督办信号';
 /**
@@ -140,6 +151,8 @@ export interface AssistantServiceOptions {
   boardSnapshot?: () => Promise<string>;
   /** 事项状态变化回调：实时通知看板 SSE 刷新卡片。 */
   onTaskMutated?: (task: AssistantTask) => void;
+  /** 纯 XML 输出交互插件服务：用于督办透出未答交互卡与主会话小猫原生代答（`task answer`）。 */
+  outputPlugins?: OutputPluginService;
 }
 
 export interface StartTaskInput {
@@ -169,6 +182,7 @@ export class AssistantService {
   private readonly postGithubComment: NonNullable<AssistantServiceOptions['postGithubComment']>;
   private readonly boardSnapshotProvider?: AssistantServiceOptions['boardSnapshot'];
   private readonly onTaskMutated?: AssistantServiceOptions['onTaskMutated'];
+  private readonly outputPlugins: OutputPluginService;
   private unsubscribe?: () => void;
   private timer?: NodeJS.Timeout;
   private flushTimer?: NodeJS.Timeout;
@@ -188,6 +202,19 @@ export class AssistantService {
     this.postGithubComment = options.postGithubComment ?? defaultPostGithubComment;
     this.boardSnapshotProvider = options.boardSnapshot;
     this.onTaskMutated = options.onTaskMutated;
+    this.outputPlugins = options.outputPlugins ?? new OutputPluginService({
+      config: this.repos.config,
+      channelMappings: this.repos.channelMappings,
+      runtime: {
+        getSession: id => this.repos.sessions.get(id),
+        getTasks: id => typeof this.runtime.getTasks === 'function'
+          ? this.runtime.getTasks(id)
+          : this.repos.tasks.listBySession(id),
+        dispatch: (id, prompt, mode, agentPrompt, riskPolicy, origin, clientMessageId) =>
+          this.runtime.dispatch(id, prompt, mode, agentPrompt, riskPolicy, origin, clientMessageId)
+      },
+      disableLocalPlugins: true
+    });
     this.store = new AssistantStore(options.databaseUrl === ':memory:' ? ':memory:' : `${options.databaseUrl}.assistant.db`);
     this.lifecycle = new AssistantLifecycle({
       store: this.store, runtime: this.runtime, repos: this.repos, log: this.log,
@@ -569,7 +596,9 @@ export class AssistantService {
         } else {
           finishTaskRun(task);
           this.store.saveTask(task);
-          this.signal('review', task.title, '侧边会话这一轮结束，等待验收', task.id, event.sessionId);
+          const detail = await this.buildNaturalReviewDetail(event.sessionId, task.id);
+          if (this.stopped) return;
+          this.signal('review', task.title, detail, task.id, event.sessionId);
         }
       }
     }
@@ -608,6 +637,35 @@ export class AssistantService {
     return error ? `侧边会话失败：${error}` : '侧边会话失败（未返回结果）';
   }
 
+  /**
+   * 侧边会话未调 task report 就自然结束一轮时，顺手把最后一条助手回复的精简摘要附进
+   * [review] 督办信号里，让主会话小猫一眼看清它是在交付验收还是在提问/求确认；
+   * 若末尾存在未作答的交互卡片（AskUserQuestion / ConfirmAction 等），一并透出 widgetId、标题与选项摘要。
+   */
+  private async buildNaturalReviewDetail(sessionId: string, taskId?: string): Promise<string> {
+    const base = '侧边会话这一轮结束，等待验收';
+    const events = await this.repos.events.listRecent(sessionId, REVIEW_REPLY_EVENT_LIMIT).catch(() => []);
+    const pendingCard = await findPendingSessionInteraction({
+      sessionId,
+      repos: this.repos,
+      outputPlugins: this.outputPlugins,
+      recentEvents: events
+    }).catch(() => undefined);
+    if (pendingCard) {
+      const proseCompact = pendingCard.proseText.replace(/\s+/g, ' ').trim();
+      const proseChars = [...proseCompact];
+      const proseSummary = proseChars.length > 240
+        ? `${proseChars.slice(0, 240).join('').trimEnd()}…`
+        : proseCompact;
+      const cardSummary = formatPendingInteractionSignalSummary(pendingCard, taskId);
+      return proseSummary
+        ? `${base}；最后回复摘要：${proseSummary}；${cardSummary}`
+        : `${base}；${cardSummary}`;
+    }
+    const summary = summarizeLastAssistantReply(events);
+    return summary ? `${base}；最后回复摘要：${summary}` : base;
+  }
+
   private signal(kind: AssistantSignalKind, title: string, detail: string, taskId?: string, sessionId?: string) {
     const fingerprint = `${kind}:${taskId ?? sessionId ?? title}`;
     const last = this.recentSignals.get(fingerprint) ?? 0;
@@ -636,7 +694,7 @@ export class AssistantService {
         ...lines
       ].join('\n')
       : [
-        `${INJECTED_SIGNAL_PREFIX}。先看是否需要你处理；需要用户拍板时用 agent-dock notify --ask。`,
+        `${INJECTED_SIGNAL_PREFIX}。先看是否需要你处理；若看到侧边会话最后回复是在提问/求确认：属于技术细节或上下文明确的，直接帮它回答并用 agent-dock task append <任务ID> --text "..." 续跑（末尾带未答询问卡/确认卡时用 agent-dock task answer <任务ID> 原生代答）；属于产品/偏好/高风险决策的，整理问题、推荐方案与备选方案转呈用户拍板（需要时用 agent-dock notify --ask），拿到答案后再用 task answer 或 task append 传回侧边会话。`,
         '',
         ...lines
       ].join('\n');
@@ -714,7 +772,9 @@ export class AssistantService {
         } else {
           finishTaskRun(task);
           this.store.saveTask(task);
-          this.signal('review', task.title, '侧边会话这一轮结束，等待验收', task.id, task.sessionId);
+          const detail = await this.buildNaturalReviewDetail(task.sessionId, task.id);
+          if (this.stopped) return;
+          this.signal('review', task.title, detail, task.id, task.sessionId);
         }
         continue;
       }
@@ -913,16 +973,116 @@ export class AssistantService {
     task.round += 1;
     task.state = 'running';
     beginTaskRun(task);
+    this.recentSignals.delete(`review:${task.id}`);
     this.store.saveTask(task);
     this.onTaskMutated?.(task);
     const gaps = checks.filter(check => !check.met).map(check => `- ${check.criterion}${check.evidence ? `：${check.evidence}` : ''}`).join('\n');
-    await this.runtime.dispatch(task.sessionId, [
+    const reworkMessage = [
       `返工第 ${task.round} 轮。以下验收标准还没通过：`,
       gaps || '- 请按原验收标准补齐证据',
+      ...(note?.trim() ? ['', `补充说明：${note.trim()}`] : []),
       '',
       '完成后逐条给出证据。'
-    ].join('\n'));
+    ].join('\n');
+    await this.runtime.dispatch(task.sessionId, reworkMessage, 'queue', reworkMessage, undefined, ASSISTANT_REPLY_ORIGIN);
     return task;
+  }
+
+  /**
+   * 探测某事项侧边会话末尾是否存在尚未作答的交互卡片（AskUserQuestion / ConfirmAction 等）。
+   */
+  async getPendingTaskInteraction(taskId: string, expectedWidgetId?: string): Promise<PendingSideInteraction | undefined> {
+    const task = this.store.getTask(taskId);
+    if (!task?.sessionId) return undefined;
+    return findPendingSessionInteraction({
+      sessionId: task.sessionId,
+      repos: this.repos,
+      outputPlugins: this.outputPlugins,
+      expectedWidgetId
+    });
+  }
+
+  /**
+   * 主会话小猫原生代答侧边会话末尾的交互卡片（AskUserQuestion / ConfirmAction / 声明式插件）：
+   * - 以 `source: 'assistant'` + 当前小猫名与主会话 ID 幂等提交并锁定原卡片；
+   * - 自动向侧边会话派发专属问答/确认回显续跑轮次，并将事项状态恢复为 `running`。
+   */
+  async answerTaskInteraction(
+    taskId: string,
+    input: AnswerTaskInteractionInput
+  ): Promise<
+    | { status: 'submitted'; task: AssistantTask; pluginId: string; instanceId: string; payload: unknown; dispatchedTask?: unknown }
+    | { status: 'already_submitted'; task: AssistantTask; pluginId: string; instanceId: string; existing: unknown }
+  > {
+    const mainId = this.requireMain();
+    const task = this.store.getTask(taskId);
+    if (!task) throw new RuntimeError('TASK_NOT_FOUND', `事项不存在：${taskId}`, 404);
+    if (task.plan) throw new RuntimeError('TASK_NOT_STARTED', '计划卡还没开工，没有可代答的侧边会话', 409);
+    if (isUserStopped(task)) throw this.stoppedTaskError(task);
+    if (!task.sessionId) throw new RuntimeError('SESSION_NOT_FOUND', '该事项还没有关联的侧边会话', 404);
+
+    let session = await this.repos.sessions.get(task.sessionId);
+    if (!session) throw new RuntimeError('SESSION_NOT_FOUND', `侧边会话不存在：${task.sessionId}`, 404);
+    if (session.archivedAt) throw new RuntimeError('SESSION_ARCHIVED', '侧边会话已归档，无法提交代答', 409);
+
+    const companion = await this.getCompanion();
+    const responderName = normalizeCompanionName(input.responderName) ?? companion?.name ?? DEFAULT_COMPANION_NAME;
+    const responderSessionId = input.responderSessionId?.trim() || mainId;
+
+    const pending = await findPendingSessionInteraction({
+      sessionId: session.id,
+      repos: this.repos,
+      outputPlugins: this.outputPlugins,
+      expectedWidgetId: input.widgetId?.trim() || undefined
+    });
+
+    const submission = resolveAssistantAnswerSubmission({
+      sessionId: session.id,
+      pending,
+      input,
+      responderName,
+      responderSessionId,
+      pluginLookup: pluginId => this.outputPlugins.registry.get(pluginId)
+    });
+
+    if (session.state === 'stopped' || session.state === 'failed') {
+      const restartable = this.runtime as { restart?: (id: string) => Promise<Session> };
+      if (typeof restartable.restart === 'function') {
+        session = await restartable.restart(session.id);
+      }
+    }
+
+    const result = await this.outputPlugins.submitInteraction(submission);
+    if (result.status === 'already_submitted') {
+      return {
+        status: 'already_submitted',
+        task,
+        pluginId: result.pluginId,
+        instanceId: result.instanceId,
+        existing: result.existing
+      };
+    }
+
+    if (task.archivedAt) this.store.unarchiveTasks([task.id], now());
+    const wasRunning = task.state === 'running';
+    task.state = 'running';
+    if (!wasRunning) {
+      beginTaskRun(task);
+      this.recentSignals.delete(`review:${task.id}`);
+    }
+    task.outcome = undefined;
+    task.closedAt = undefined;
+    this.store.saveTask(task);
+    this.onTaskMutated?.(task);
+
+    return {
+      status: 'submitted',
+      task,
+      pluginId: result.pluginId,
+      instanceId: result.instanceId,
+      payload: result.payload,
+      dispatchedTask: result.task
+    };
   }
 
   /**
@@ -943,12 +1103,16 @@ export class AssistantService {
     const wasRunning = task.state === 'running';
     task.state = 'running';
     // 进行中补要求不会中断当前这一轮，不能把本轮起点重置成现在；只有从验收/停止/关闭恢复才重开一轮。
-    if (!wasRunning) beginTaskRun(task);
+    if (!wasRunning) {
+      beginTaskRun(task);
+      // 问答/续做开启新一轮后，允许本轮结束时立刻触发新的 [review] 督办，不被上一轮的 10 分钟节流吞掉。
+      this.recentSignals.delete(`review:${task.id}`);
+    }
     task.outcome = undefined;
     task.closedAt = undefined;
     task.notes = [task.notes, `续做要求：${request}`].filter(Boolean).join('\n');
     const message = [
-      '用户补充/打回要求（续做原事项，不要新开便签）：',
+      '主会话小猫回复/续做指示（续做原事项，不要新开便签）：',
       request,
       '',
       '沿用原事项的验收标准；完成后逐条给出证据。'
@@ -972,7 +1136,7 @@ export class AssistantService {
       if (reasoningEffort) task.reasoningEffort = reasoningEffort;
       await this.nameSession(session.id, task.title);
       this.store.saveTask(task);
-      await this.runtime.dispatch(session.id, `${buildTaskPrompt(task)}\n\n${message}`, mode);
+      await this.runtime.dispatch(session.id, request, mode, `${buildTaskPrompt(task)}\n\n${message}`, undefined, ASSISTANT_REPLY_ORIGIN);
       if (isUserStopped(task)) {
         task.lastResumedAt = now();
         task.resumedStopCount = task.stopCount ?? 0;
@@ -990,7 +1154,7 @@ export class AssistantService {
           session = await restartable.restart(session.id);
         }
       }
-      await this.runtime.dispatch(session.id, message, mode);
+      await this.runtime.dispatch(session.id, request, mode, message, undefined, ASSISTANT_REPLY_ORIGIN);
       if (isUserStopped(task)) {
         task.lastResumedAt = now();
         task.resumedStopCount = task.stopCount ?? 0;
@@ -1280,6 +1444,7 @@ export function buildMainSystemPrompt(): string {
     '- 主题换肤：`agent-dock theme list` 看主题；用户要求生成自定义配色或把 VS Code 主题插件（`.vsix`/`.json`/`.jsonc`/Marketplace 链接）发进会话时，可用 `agent-dock theme create --name "..." --mode light|dark --tokens \'<json>\' --source ai --apply` 或 `agent-dock theme import-vscode <路径或链接> --apply` 实时生效（换肤属于轻量界面编排，可直接执行或派侧边会话）。',
     '- 验收：`agent-dock task review <任务ID> --verdict accepted|rework|needs_user|cancelled --check "验收标准=met:证据" --note "..."`；rework 必须写清缺哪条证据。',
     '- 续做：`agent-dock task append <任务ID> --text "用户补充要求"`；已验收/已关闭的便签也能重开并派回原侧边会话。',
+    '- 代答交互卡：`agent-dock task answer <任务ID> --answer <选项值或题号=选项值> [--other "说明"]`（或确认卡 `--decision confirm|cancel [--comment "说明"]`）；侧边会话末尾有待答询问卡/确认卡时，由你原生代答并锁定卡片、自动驱使它续跑。',
     '- 取消：`agent-dock task cancel <任务ID> --reason "..."`；只在事项确实不该继续时用。',
     '- 侧边会话：`agent-dock session show <会话ID>` 读实际输出；`agent-dock session send <会话ID> "补充要求" --mode queue` 追加要求，紧急时 `--mode interrupt`。',
     '- 监控：`agent-dock watch add --name "CI 绿了" --command "..." --every 5m`；脚本 exit 0 表示条件满足，适合等外部状态，不适合代替一次性排查。',
@@ -1322,8 +1487,9 @@ export function buildMainSystemPrompt(): string {
     '- 如果确实需要用户拍板，用 `agent-dock notify --ask`，不要靠反复派活/督办来逼用户回应。',
     '',
     '【验收】',
-    '- 收到督办后，先 `agent-dock task show <任务ID>`，再用 `agent-dock session show <侧边会话ID>` 看实际输出和证据。',
-    '- 对 done-when 每一条逐条找证据：命令输出、文件路径与行号、测试结果、页面结果等；一条都不能跳，也不能用概括代替。',
+    '- 收到督办后，先看督办信号里的最后回复摘要；需要核对完整输出和证据时，再 `agent-dock task show <任务ID>` 与 `agent-dock session show <侧边会话ID>`。',
+    '- 若看到侧边会话最后回复是在提问或求确认：属于技术细节或上下文明确的，直接帮它回答并用 `agent-dock task append <任务ID> --text "..."` 续跑（末尾带有待答询问卡/确认卡时用 `agent-dock task answer <任务ID>` 原生代答），并向用户简述「已代答什么」；属于产品、偏好或高风险决策的，整理问题、推荐方案与备选方案转呈用户拍板（可先标 `task review <任务ID> --verdict needs_user` 或用 `agent-dock notify --ask`），拿到结论后再用 `task append` 把答案传回侧边会话续跑（交互卡则用 `task answer` 代填回传）。',
+    '- 若侧边会话已交付结果，对 done-when 每一条逐条找证据：命令输出、文件路径与行号、测试结果、页面结果等；一条都不能跳，也不能用概括代替。',
     '- 任一条找不到证据，必须 `agent-dock task review <任务ID> --verdict rework`，写明缺哪条、要补什么证据；只有每一条都有证据才 `--verdict accepted`。',
     '',
     '【汇报与拍板】',
@@ -1417,9 +1583,9 @@ function buildAppendDirective(prompt: string): string {
   ].join('\n');
 }
 
-function buildTaskPrompt(task: AssistantTask): string {
+export function buildTaskPrompt(task: AssistantTask): string {
   const lines = [
-    '你是主会话派出的侧边会话，独立完成下面的事项，不要向用户提问。',
+    '你是主会话派出的侧边会话，独立推进并完成下面的事项。',
     `事项 ID：${task.id}`,
     `事项：${task.title}`,
     task.notes ? `说明：${task.notes}` : '',
@@ -1430,12 +1596,42 @@ function buildTaskPrompt(task: AssistantTask): string {
     '执行要求：',
     '- 直接动手完成，不要只给建议；需要读文件、跑命令、改代码就用工具。',
     '- 不要做与事项无关的改动；不要提交或推送，除非事项明确要求。',
+    '- 琐碎或可自查的技术细节自行决策推进；真遇到关键产品分叉、需求歧义或高风险需要确认时，直接把问题、你的推荐方案和备选方案清晰写在回复里并结束本轮即可，无需额外运行提问命令（主会话会自动看到你的最后回复，能代答的直接拍板续跑，需用户拍板的会转呈给用户再把结论传回给你）。',
     '- 需要浏览器操作时先运行 `ego-browser skill`，用 ego-browser；不要用无头浏览器或临时 Playwright/Puppeteer 脚本。',
-    '- 完成后必须运行 `agent-dock task report --kind done --text "..." --evidence "..."` 汇报，并在最终回复里逐条对照验收标准给出证据。',
-    '- 被卡住、需要权限或需要用户拍板时，用 `agent-dock task report --kind blocked|question --text "..."` 汇报。',
+    '- 完成后运行 `agent-dock task report --kind done --text "..." --evidence "..."` 汇报，并在最终回复里逐条对照验收标准给出证据。',
+    '- 遇到环境/权限硬阻塞无法继续时，可用 `agent-dock task report --kind blocked --text "..."` 汇报，或直接说明阻塞原因结束本轮。',
     '- 没有证据的条目不算完成。'
   ];
   return lines.filter(Boolean).join('\n');
+}
+
+/**
+ * 提取侧边会话最近一轮最后一条助手回复的精简单行摘要（附进 [review] 督办信号）。
+ * 只看最后一条 user 提示之后的事件，避免本轮无文本输出时误带出上一轮历史回复；
+ * 复用 shared 的 pickFinalAssistantText 合并流式分片并过滤告警/后台工具噪音，
+ * 同时压成单行，保持前端 parseSupervisionDetail 对 `- [review] ...（atask_xxx）` 的解析兼容。
+ */
+export function summarizeLastAssistantReply(
+  events: AgentEvent[],
+  maxChars = REVIEW_REPLY_SUMMARY_MAX_CHARS
+): string {
+  if (!events.length || maxChars <= 0) return '';
+  let lastUserIndex = -1;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    const data = event.data as Record<string, unknown> | undefined;
+    if (event.type === 'text' && data?.role === 'user') {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  const turnEvents = lastUserIndex >= 0 ? events.slice(lastUserIndex + 1) : events;
+  const raw = pickFinalAssistantText(turnEvents);
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  const chars = [...normalized];
+  if (chars.length <= maxChars) return normalized;
+  return `${chars.slice(0, maxChars).join('').trimEnd()}…`;
 }
 
 function parseDurationSeconds(value: string, fallback: number): number {

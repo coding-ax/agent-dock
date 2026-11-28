@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ASK_USER_QUESTION_ANSWER_ORIGIN,
   ASK_USER_QUESTION_XML_TAG,
+  ASSISTANT_ANSWER_ORIGIN,
+  ASSISTANT_REPLY_ORIGIN,
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
   CONFIRM_ACTION_INTERACTION_ORIGIN,
@@ -15,11 +17,15 @@ import {
   createDefaultOutputPluginRegistry,
   declarativeOutputPluginManifestSchema,
   formatConfirmActionInteractionForAgent,
+  formatOutputPluginInteractionSourceLabel,
   getSessionOutputPluginOverride,
+  isAssistantReplyOrigin,
   mergeSessionOutputPluginsPatch,
   normalizeGlobalOutputPluginsConfig,
   normalizeOutputPluginId,
   normalizeSessionOutputPlugins,
+  parseAssistantReplyOrigin,
+  parseConfirmActionInteraction,
   resolveOutputPluginEnabled,
   serializeAskUserQuestionAnswer,
   serializeConfirmActionInteraction,
@@ -409,5 +415,68 @@ describe('output-plugins shared contract & registry', () => {
     expect(second.skipped).toHaveLength(1);
     expect(registry.has('local:deploy-approval')).toBe(false);
     expect(registry.has(BUILTIN_ASK_USER_QUESTION_PLUGIN_ID)).toBe(true);
+  });
+
+  it('supports source="assistant" across ConfirmAction, declarative plugins, and assistant reply origin helpers', () => {
+    const confirmPayload: ConfirmActionInteractionPayload = {
+      version: 1,
+      pluginId: BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+      actionId: 'confirm_cat_1',
+      title: '清理本地构建缓存',
+      risk: 'low',
+      decision: 'confirm',
+      decisionLabel: '确认执行',
+      comment: '沙箱内安全操作，放行执行',
+      source: 'assistant',
+      decidedBy: '小A同学',
+      responderName: '小A同学',
+      responderSessionId: 'ses_main',
+      decidedAt: '2026-11-28T02:12:00.000Z'
+    };
+    const confirmRaw = serializeConfirmActionInteraction(confirmPayload);
+    expect(parseConfirmActionInteraction(confirmRaw)).toEqual(confirmPayload);
+    const confirmAgentPrompt = confirmActionOutputPlugin.formatInteractionForAgent!(confirmPayload);
+    expect(confirmAgentPrompt).toContain('主会话小猫（小A同学）已代用户对操作确认卡「清理本地构建缓存」做出决定');
+    expect(confirmAgentPrompt).toContain('沙箱内安全操作');
+    expect(confirmActionOutputPlugin.summarizeInteraction!(confirmPayload)).toContain('小猫已代确认');
+    expect(confirmActionOutputPlugin.extractInteractionSearchText!(confirmPayload)).toContain('小A同学代答');
+
+    const deployPlugin = createDeclarativeOutputPlugin(deployApprovalManifest);
+    const declPayload: DeclarativeOutputPluginInteractionPayload = {
+      version: 1,
+      pluginId: 'local:deploy-approval',
+      pluginName: '发布审批卡',
+      instanceId: 'rel_cat_1',
+      title: '预发验证',
+      source: 'assistant',
+      actedBy: '布丁',
+      responderName: '布丁',
+      responderSessionId: 'ses_main',
+      actedAt: '2026-11-28T02:13:00.000Z',
+      actionValue: 'approve',
+      actionLabel: '批准发布',
+      fields: [],
+      note: '仅发布预发环境'
+    };
+    const declPrompt = deployPlugin.formatInteractionForAgent!(declPayload);
+    expect(declPrompt).toContain('主会话小猫（布丁）');
+    expect(declPrompt).toContain('仅发布预发环境');
+    expect(deployPlugin.summarizeInteraction!(declPayload)).toContain('小猫已代答');
+    expect(deployPlugin.extractInteractionSearchText!(declPayload)).toContain('布丁代答');
+
+    expect(formatOutputPluginInteractionSourceLabel('assistant')).toBe('小猫代答');
+    expect(formatOutputPluginInteractionSourceLabel('assistant', { responderName: '小A同学' })).toBe('小A同学代答');
+    expect(formatOutputPluginInteractionSourceLabel('lark', { actorName: '暮雪离歌' })).toBe('飞书 · 暮雪离歌');
+    expect(formatOutputPluginInteractionSourceLabel('web')).toBe('网页端');
+
+    expect(isAssistantReplyOrigin(ASSISTANT_REPLY_ORIGIN)).toBe(true);
+    expect(isAssistantReplyOrigin(ASSISTANT_ANSWER_ORIGIN)).toBe(true);
+    expect(isAssistantReplyOrigin('assistant_reply:小A同学')).toBe(true);
+    expect(isAssistantReplyOrigin('injected')).toBe(false);
+    expect(parseAssistantReplyOrigin('assistant_reply')).toEqual({ kind: 'reply' });
+    expect(parseAssistantReplyOrigin('assistant_answer')).toEqual({ kind: 'answer' });
+    expect(parseAssistantReplyOrigin('assistant_reply:小A同学')).toEqual({ kind: 'reply', responderName: '小A同学' });
+    expect(parseAssistantReplyOrigin('assistant_answer:布丁')).toEqual({ kind: 'answer', responderName: '布丁' });
+    expect(parseAssistantReplyOrigin(undefined)).toBeNull();
   });
 });

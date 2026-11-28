@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
+import { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
+import { createRepositories } from '@agent-dock/agent-dock-storage';
 import {
   ASK_USER_QUESTION_CONFIG_KEY,
   ASK_USER_QUESTION_XML_TAG,
@@ -384,6 +386,124 @@ describe('OutputPluginService & local declarative plugin loader', () => {
       expect(r2.json()).toEqual({ configured: true, config: { askUserQuestionXmlEnabled: false } });
     } finally {
       await app.close();
+    }
+  });
+
+  it('isolates per-session outputPlugins overrides across two sessions and global defaults end-to-end', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentdock-outp-isolation-'));
+    const repos = createRepositories(join(dir, 'test.sqlite'));
+    const driver = {
+      start: vi.fn(async () => {}),
+      send: vi.fn(async () => {}),
+      interrupt: vi.fn(async () => {}),
+      resume: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      setModel: vi.fn(async () => {}),
+      setReasoningEffort: vi.fn(async () => {}),
+      setPermissionMode: vi.fn()
+    };
+    const runtime = new AgentDockRuntime(repos, {
+      probe: () => ({ protocol: 'acp', available: true, pause: false, resume: true }),
+      driverFactory: () => driver
+    });
+    await runtime.initialize([{
+      id: 'mock',
+      name: 'Mock Agent',
+      command: 'mock',
+      args: [],
+      protocol: 'acp',
+      env: {},
+      permissionMode: 'full-trust',
+      timeout: 30,
+      capabilities: { pause: false, resume: false },
+      builtin: true
+    }]);
+    const outputPlugins = new OutputPluginService({
+      config: repos.config,
+      channelMappings: repos.channelMappings,
+      runtime,
+      disableLocalPlugins: true
+    });
+    const app = await buildApp(runtime, { outputPlugins });
+    try {
+      const sesA = await runtime.start({ agentId: 'mock', cwd: dir });
+      const sesB = await runtime.start({ agentId: 'mock', cwd: dir });
+
+      // 初始状态：会话 A、会话 B 均继承全局默认（2/2 启用）
+      const initialCatalog = (await app.inject({ method: 'GET', url: '/api/output-plugins' })).json();
+      expect(initialCatalog.config.plugins[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]).toBe(true);
+      expect(initialCatalog.config.plugins[BUILTIN_CONFIRM_ACTION_PLUGIN_ID]).toBe(true);
+
+      // 会话 A 单独关闭 ConfirmAction（通过会话级 PATCH /api/sessions/:id/config）
+      const patchARes = await app.inject({
+        method: 'PATCH',
+        url: `/api/sessions/${sesA.id}/config`,
+        payload: { outputPlugins: { [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: false } }
+      });
+      expect(patchARes.statusCode).toBe(200);
+      const updatedA = patchARes.json() as Session;
+      expect(updatedA.outputPlugins).toEqual({ [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: false });
+
+      // 会话 B 与全局默认配置 100% 不受影响
+      const freshB = await runtime.getSession(sesB.id);
+      expect(freshB?.outputPlugins).toBeUndefined();
+      const catalogAfterA = (await app.inject({ method: 'GET', url: '/api/output-plugins' })).json();
+      expect(catalogAfterA.config.plugins[BUILTIN_CONFIRM_ACTION_PLUGIN_ID]).toBe(true);
+
+      // 按需提示词注入同样严格按会话隔离
+      const enabledA = await outputPlugins.enabledPluginIdsForSession(updatedA);
+      const enabledB = await outputPlugins.enabledPluginIdsForSession(freshB);
+      expect([...enabledA]).toEqual([BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]);
+      expect([...enabledB].sort()).toEqual([
+        BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+        BUILTIN_CONFIRM_ACTION_PLUGIN_ID
+      ].sort());
+
+      const promptA = await outputPlugins.promptForSession(updatedA, '执行任务 A');
+      const promptB = await outputPlugins.promptForSession(freshB!, '执行任务 B');
+      expect(promptA).toContain(`<${ASK_USER_QUESTION_XML_TAG}`);
+      expect(promptA).not.toContain(`<${CONFIRM_ACTION_XML_TAG}`);
+      expect(promptB).toContain(`<${ASK_USER_QUESTION_XML_TAG}`);
+      expect(promptB).toContain(`<${CONFIRM_ACTION_XML_TAG}`);
+
+      // 修改全局默认关闭 ask-user-question，但会话 A 显式覆写开启 ask-user-question：
+      // 会话 A 不被全局覆写强行覆盖，会话 B（无覆写）自动跟随全局关闭
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/sessions/${sesA.id}/config`,
+        payload: { outputPlugins: { [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: true } }
+      });
+      await app.inject({
+        method: 'PUT',
+        url: '/api/output-plugins/config',
+        payload: { plugins: { [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: false } }
+      });
+      const reloadedA = await runtime.getSession(sesA.id);
+      const reloadedB = await runtime.getSession(sesB.id);
+      expect(await outputPlugins.isPluginEnabledForSession(BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, reloadedA)).toBe(true);
+      expect(await outputPlugins.isPluginEnabledForSession(BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, reloadedB)).toBe(false);
+
+      // 会话 A 一键恢复跟随全局默认
+      const resetARes = await app.inject({
+        method: 'PATCH',
+        url: `/api/sessions/${sesA.id}/config`,
+        payload: {
+          outputPlugins: {
+            [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: null,
+            [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: null
+          }
+        }
+      });
+      expect(resetARes.statusCode).toBe(200);
+      const resetA = resetARes.json() as Session;
+      expect(resetA.outputPlugins).toBeUndefined();
+      expect(await outputPlugins.isPluginEnabledForSession(BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, resetA)).toBe(false);
+      expect(await outputPlugins.isPluginEnabledForSession(BUILTIN_CONFIRM_ACTION_PLUGIN_ID, resetA)).toBe(true);
+    } finally {
+      await app.close();
+      await runtime.shutdown();
+      repos.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

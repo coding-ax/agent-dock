@@ -14,6 +14,21 @@ export interface TaskReviewCliOptions extends AssistantCliOptions {
 export interface TaskAppendCliOptions extends AssistantCliOptions {
   text?: string; mode?: string;
 }
+export interface TaskAnswerCliOptions extends AssistantCliOptions {
+  widget?: string;
+  plugin?: string;
+  answer?: string[];
+  answersJson?: string;
+  other?: string;
+  decision?: string;
+  decisionLabel?: string;
+  comment?: string;
+  action?: string;
+  actionLabel?: string;
+  note?: string;
+  responder?: string;
+  mode?: string;
+}
 export interface TaskReportCliOptions extends AssistantCliOptions {
   kind?: string; text?: string; evidence?: string;
 }
@@ -46,7 +61,18 @@ function formatHuman(value: unknown): string {
   if (Array.isArray(record.tasks)) return formatTasks(record.tasks as Array<Record<string, unknown>>);
   if (Array.isArray(record.watches)) return formatWatches(record.watches as Array<Record<string, unknown>>);
   if (Array.isArray(record.drafts)) return formatDrafts(record.drafts as Array<Record<string, unknown>>);
-  if (record.task && typeof record.task === 'object') return formatTask(record.task as Record<string, unknown>);
+  if (record.accepted === true && record.instanceId && record.task && typeof record.task === 'object') {
+    const task = record.task as Record<string, unknown>;
+    return `🐾 已代答交互卡 ${String(record.instanceId)}（${String(record.pluginId ?? '')}）并驱动事项 ${String(task.id ?? '')}「${String(task.title ?? '')}」继续执行`;
+  }
+  if (record.task && typeof record.task === 'object') {
+    const base = formatTask(record.task as Record<string, unknown>);
+    if (record.pendingInteraction && typeof record.pendingInteraction === 'object') {
+      const pending = record.pendingInteraction as Record<string, unknown>;
+      return `${base}\n待答交互卡：widgetId=${String(pending.widgetId ?? '')}（${String(pending.pluginId ?? '')}${pending.title ? ` · ${String(pending.title)}` : ''}）`;
+    }
+    return base;
+  }
   if (record.watch && typeof record.watch === 'object') return formatWatch(record.watch as Record<string, unknown>);
   if (record.draft && typeof record.draft === 'object') return formatDraft(record.draft as Record<string, unknown>);
   if (record.session && typeof record.session === 'object') return `主会话：${String((record.session as Record<string, unknown>).id ?? '')}`;
@@ -194,6 +220,71 @@ export async function runTaskAppend(id: string, options: TaskAppendCliOptions): 
   if (mode !== 'queue' && mode !== 'interrupt') throw new Error('--mode 必须是 queue / interrupt');
   const result = await callDaemon(daemon(), `/api/assistant/tasks/${encodeURIComponent(id)}/append`, 'POST', {
     text, mode, ...fromFields(options.from)
+  });
+  return print(result, options.json);
+}
+
+/** 解析 `--answer` 参数：支持 `q1=opt_a,opt_b`、`q1=opt_a|补充理由` 或单题快捷值 `opt_a`。 */
+export function parseQuickAnswerArg(raw: string): { questionId?: string; values?: string[]; otherText?: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) throw new Error('--answer 不能为空');
+  const eq = trimmed.indexOf('=');
+  const questionId = eq > 0 ? trimmed.slice(0, eq).trim() : undefined;
+  const valuePart = (eq > 0 ? trimmed.slice(eq + 1) : trimmed).trim();
+  if (!valuePart) throw new Error(`--answer 缺少作答内容：${raw}`);
+  const pipe = valuePart.indexOf('|');
+  const choicesRaw = (pipe >= 0 ? valuePart.slice(0, pipe) : valuePart).trim();
+  const otherText = pipe >= 0 ? valuePart.slice(pipe + 1).trim() : undefined;
+  const values = choicesRaw ? choicesRaw.split(',').map(item => item.trim()).filter(Boolean) : [];
+  return {
+    ...(questionId ? { questionId } : {}),
+    ...(values.length ? { values } : {}),
+    ...(otherText ? { otherText } : {})
+  };
+}
+
+export async function runTaskAnswer(id: string, options: TaskAnswerCliOptions): Promise<string> {
+  const mode = options.mode ?? 'queue';
+  if (mode !== 'queue' && mode !== 'interrupt') throw new Error('--mode 必须是 queue / interrupt');
+  if (options.decision && options.decision !== 'confirm' && options.decision !== 'cancel') {
+    throw new Error('--decision 必须是 confirm 或 cancel');
+  }
+  let answers: unknown;
+  if (options.answersJson?.trim()) {
+    try {
+      answers = JSON.parse(options.answersJson);
+    } catch (error) {
+      throw new Error(`--answers-json 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!Array.isArray(answers)) throw new Error('--answers-json 必须是数组');
+  }
+  const quickAnswers = (options.answer ?? []).map(parseQuickAnswerArg);
+  const hasPayload = Boolean(
+    answers
+    || quickAnswers.length
+    || options.other?.trim()
+    || options.decision
+    || options.action?.trim()
+    || options.note?.trim()
+  );
+  if (!hasPayload) {
+    throw new Error('请至少提供 --answer、--other、--answers-json、--decision 或 --action 中的一项');
+  }
+  const result = await callDaemon(daemon(), `/api/assistant/tasks/${encodeURIComponent(id)}/answer`, 'POST', {
+    ...(options.widget?.trim() ? { widgetId: options.widget.trim() } : {}),
+    ...(options.plugin?.trim() ? { pluginId: options.plugin.trim() } : {}),
+    ...(answers ? { answers } : {}),
+    ...(quickAnswers.length ? { quickAnswers } : {}),
+    ...(options.other?.trim() ? { otherText: options.other.trim() } : {}),
+    ...(options.decision ? { decision: options.decision } : {}),
+    ...(options.decisionLabel?.trim() ? { decisionLabel: options.decisionLabel.trim() } : {}),
+    ...(options.comment?.trim() ? { comment: options.comment.trim() } : {}),
+    ...(options.action?.trim() ? { actionValue: options.action.trim() } : {}),
+    ...(options.actionLabel?.trim() ? { actionLabel: options.actionLabel.trim() } : {}),
+    ...(options.note?.trim() ? { note: options.note.trim() } : {}),
+    ...(options.responder?.trim() ? { responderName: options.responder.trim() } : {}),
+    mode,
+    ...fromFields(options.from)
   });
   return print(result, options.json);
 }

@@ -3,9 +3,7 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
-  Globe2,
   MessageSquarePlus,
-  Send,
   ShieldAlert,
   ShieldCheck,
   Terminal,
@@ -21,6 +19,8 @@ import type {
 import { Disclosure } from '../Disclosure';
 import { Spinner } from '../Loaders';
 import { UserMessageTime } from '../SendTimeHint';
+import { InteractionSourceBadge } from './InteractionSourceBadge';
+import { bi, useBi } from '../i18n';
 
 export interface ConfirmActionInteractInput {
   decision: ConfirmActionDecision;
@@ -38,7 +38,7 @@ const riskConfig: Record<ConfirmActionRisk, {
   confirmBtn: string;
 }> = {
   high: {
-    label: '高风险',
+    get label() { return bi("高风险", "High Risk"); },
     iconBox: 'border-red-200/80 bg-red-50 text-red-700 dark:text-red-300',
     badge: 'border-red-200 bg-red-50 text-red-700 dark:text-red-300',
     border: 'border-red-200/90',
@@ -46,7 +46,7 @@ const riskConfig: Record<ConfirmActionRisk, {
     confirmBtn: 'bg-red-600 text-[#ffffff] hover:bg-red-700'
   },
   medium: {
-    label: '需确认',
+    get label() { return bi("需确认", "Confirm"); },
     iconBox: 'border-amber-200/80 bg-amber-50 text-amber-700 dark:text-amber-300',
     badge: 'border-amber-200 bg-amber-50 text-amber-700 dark:text-amber-300',
     border: 'border-zinc-200',
@@ -54,7 +54,7 @@ const riskConfig: Record<ConfirmActionRisk, {
     confirmBtn: 'bg-accent text-accent-fg hover:opacity-90'
   },
   low: {
-    label: '常规确认',
+    get label() { return bi("常规确认", "Standard"); },
     iconBox: 'border-sky-200/80 bg-sky-50 text-sky-700 dark:text-sky-300',
     badge: 'border-sky-200 bg-sky-50 text-sky-700 dark:text-sky-300',
     border: 'border-zinc-200',
@@ -63,32 +63,13 @@ const riskConfig: Record<ConfirmActionRisk, {
   }
 };
 
-function SourceBadge({ source, decidedBy }: { source: 'web' | 'lark'; decidedBy?: string }) {
-  const isLark = source === 'lark';
-  const label = isLark
-    ? (decidedBy?.trim() ? `飞书 · ${decidedBy.trim()}` : '飞书')
-    : (decidedBy?.trim() ? `网页端 · ${decidedBy.trim()}` : '网页端');
-  return (
-    <span
-      data-confirm-source={source}
-      className={`inline-flex max-w-full shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ${
-        isLark
-          ? 'border-blue-200 bg-blue-50 text-blue-700 dark:text-blue-300'
-          : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
-      }`}
-    >
-      {isLark ? <Send size={10} className="shrink-0"/> : <Globe2 size={10} className="shrink-0"/>}
-      <span className="truncate">{label}</span>
-    </span>
-  );
-}
-
 /** 流式输出阶段末尾出现未闭合 `<agentdock-confirm-action` 时的轻盈占位，彻底隐藏裸 XML 源码。 */
 export const ConfirmActionStreamingPlaceholder = memo(function ConfirmActionStreamingPlaceholder({
   title
 }: {
   title?: string;
 }) {
+  const L = useBi();
   return (
     <div
       role="status"
@@ -99,7 +80,7 @@ export const ConfirmActionStreamingPlaceholder = memo(function ConfirmActionStre
       <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500 ui-live-dot"/>
       <ShieldCheck size={15} className="shrink-0 text-amber-600 dark:text-amber-400"/>
       <span className="ui-shimmer-text min-w-0 truncate font-medium">
-        {title ? `正在生成「${title}」操作确认卡…` : '正在生成操作确认卡…'}
+        {title ? L(`正在生成「${title}」操作确认卡…`, `Generating confirmation card for "${title}"…`) : L("正在生成操作确认卡…", "Generating confirmation card…")}
       </span>
     </div>
   );
@@ -129,6 +110,7 @@ export const ConfirmActionCard = memo(function ConfirmActionCard({
   error?: string;
   onInteract?(input: ConfirmActionInteractInput): void | Promise<void>;
 }) {
+  const L = useBi();
   const [commentOpen, setCommentOpen] = useState(false);
   const [comment, setComment] = useState('');
   const [pendingDecision, setPendingDecision] = useState<ConfirmActionDecision | null>(null);
@@ -136,27 +118,35 @@ export const ConfirmActionCard = memo(function ConfirmActionCard({
 
   if (answered) {
     const confirmed = answered.decision === 'confirm';
+    const isAssistant = answered.source === 'assistant';
     return (
       <section
-        aria-label={`${spec.title}（${confirmed ? '已确认执行' : '已取消操作'}）`}
+        aria-label={L(`${spec.title}（${confirmed ? '已确认执行' : '已取消操作'}）`, `${spec.title} (${confirmed ? 'Confirmed' : 'Cancelled'})`)}
         data-confirm-card=""
         data-confirm-card-id={spec.id}
         data-confirm-card-state="answered"
+        data-confirm-card-source={answered.source}
         data-confirm-decision={answered.decision}
         className={`ui-timeline-item my-3 max-w-[78ch] overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] ${
-          confirmed ? 'border-emerald-200/80' : 'border-zinc-200'
+          isAssistant
+            ? 'ui-kitten-card'
+            : confirmed ? 'border-emerald-200/80' : 'border-zinc-200'
         }`}
       >
         <div
           className={`flex flex-wrap items-center gap-2 border-b border-zinc-200/75 px-3.5 py-2.5 ${
-            confirmed ? 'bg-emerald-50/55' : 'bg-zinc-50/80'
+            isAssistant
+              ? (confirmed ? 'ui-kitten-card-header' : 'bg-zinc-50/80')
+              : (confirmed ? 'bg-emerald-50/55' : 'bg-zinc-50/80')
           }`}
         >
           <span
             className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg border ${
-              confirmed
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
-                : 'border-zinc-200 bg-zinc-100 text-zinc-600'
+              isAssistant && confirmed
+                ? 'ui-kitten-icon-box'
+                : confirmed
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
+                  : 'border-zinc-200 bg-zinc-100 text-zinc-600'
             }`}
           >
             {confirmed ? <Check size={13} className="ui-icon-pop"/> : <X size={13} className="ui-icon-pop"/>}
@@ -168,26 +158,35 @@ export const ConfirmActionCard = memo(function ConfirmActionCard({
               </span>
               <span
                 className={`rounded-full border px-1.5 py-px text-[11px] font-medium ${
-                  confirmed
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
-                    : 'border-zinc-200 bg-zinc-100 text-zinc-600'
+                  isAssistant && confirmed
+                    ? 'ui-kitten-chip'
+                    : confirmed
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
+                      : 'border-zinc-200 bg-zinc-100 text-zinc-600'
                 }`}
               >
-                {confirmed ? '已确认执行' : '已取消操作'}
+                {confirmed ? L("已确认执行", "Confirmed") : L("已取消操作", "Cancelled")}
               </span>
             </div>
           </div>
-          <SourceBadge source={answered.source} decidedBy={answered.decidedBy}/>
+          <InteractionSourceBadge
+            source={answered.source}
+            actorName={answered.decidedBy}
+            responderName={answered.responderName}
+            dataAttr="confirm"
+          />
         </div>
 
         <div className="space-y-2 px-3.5 py-2.5 text-[12.5px] leading-5">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-zinc-500">最终决定：</span>
+            <span className="text-zinc-500">{L("最终决定：", "Decision: ")}</span>
             <span
               className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[12px] font-medium ${
-                confirmed
-                  ? 'border-emerald-200/80 bg-emerald-50/70 text-emerald-800 dark:text-emerald-300'
-                  : 'border-zinc-200 bg-zinc-50 text-zinc-700'
+                isAssistant && confirmed
+                  ? 'ui-kitten-chip'
+                  : confirmed
+                    ? 'border-emerald-200/80 bg-emerald-50/70 text-emerald-800 dark:text-emerald-300'
+                    : 'border-zinc-200 bg-zinc-50 text-zinc-700'
               }`}
             >
               {confirmed ? <Check size={11}/> : <X size={11}/>}
@@ -197,7 +196,7 @@ export const ConfirmActionCard = memo(function ConfirmActionCard({
           {answered.comment?.trim() && (
             <div className="rounded-lg border border-zinc-200/80 bg-zinc-50/80 px-2.5 py-1.5 text-[12.5px] leading-5 text-zinc-700 whitespace-pre-wrap [overflow-wrap:anywhere]">
               <span className="mr-1.5 inline-block rounded bg-zinc-200/70 px-1 py-px text-[10px] font-medium text-zinc-600">
-                补充意见
+                {isAssistant ? L("代答理由", "Reason") : L("补充意见", "Comment")}
               </span>
               {answered.comment}
             </div>
@@ -267,7 +266,7 @@ export const ConfirmActionCard = memo(function ConfirmActionCard({
           <div className="overflow-hidden rounded-xl border border-zinc-200/85 bg-[rgb(var(--bg))]">
             <div className="flex items-center gap-1.5 border-b border-zinc-200/70 bg-zinc-50/60 px-3 py-1.5 text-[11px] font-medium text-zinc-500">
               <Terminal size={12} className="shrink-0"/>
-              <span>待执行命令</span>
+              <span>{L("待执行命令", "Command")}</span>
             </div>
             <pre className="m-0 overflow-x-auto px-3 py-2 font-mono text-[12px] leading-5 text-zinc-800">
               <code>{spec.command}</code>
@@ -286,21 +285,22 @@ export const ConfirmActionCard = memo(function ConfirmActionCard({
                 className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-zinc-300 bg-zinc-50/60 px-2.5 py-1.5 text-[12px] font-medium text-zinc-600 transition-colors hover:border-zinc-400 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <MessageSquarePlus size={13}/>
-                <span>添加补充意见（可选）</span>
+                <span>{L("添加补充意见（可选）", "Add comment (optional)")}</span>
               </button>
             ) : (
               <Disclosure open={commentOpen || Boolean(comment)} unmountOnClose>
                 <div>
                   <label className="mb-1 block text-[11.5px] font-medium text-zinc-600">
-                    补充意见（可选，点击确认或取消时一并回传）
+                    
+                    {L("补充意见（可选，点击确认或取消时一并回传）", "Comment (optional, sent with your decision)")}
                   </label>
                   <textarea
                     rows={2}
                     disabled={disabled || submitting}
                     value={comment}
                     onChange={event => setComment(event.target.value)}
-                    aria-label={`${spec.title} - 补充意见`}
-                    placeholder={spec.commentPlaceholder || '例如：请先在灰度环境验证，或缩小变更范围…'}
+                    aria-label={L(`${spec.title} - 补充意见`, `${spec.title} - Comment`)}
+                    placeholder={spec.commentPlaceholder || L("例如：请先在灰度环境验证，或缩小变更范围…", "e.g., Verify in staging first or limit blast radius…")}
                     className="ui-field w-full resize-y rounded-xl border border-zinc-200 bg-[rgb(var(--bg))] px-3 py-2 text-[13px] leading-5 text-zinc-900 placeholder:text-zinc-400 disabled:opacity-60"
                   />
                 </div>
@@ -322,7 +322,7 @@ export const ConfirmActionCard = memo(function ConfirmActionCard({
 
       <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200/80 bg-zinc-50/55 px-4 py-2.5">
         <span className="min-w-0 text-[12px] text-zinc-500">
-          {disabledReason || (spec.risk === 'high' ? '高风险操作，请仔细核对后再拍板' : '请确认是否继续执行')}
+          {disabledReason || (spec.risk === 'high' ? L("高风险操作，请仔细核对后再拍板", "High-risk operation — review carefully before confirming") : L("请确认是否继续执行", "Confirm whether to proceed"))}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <button
@@ -332,7 +332,7 @@ export const ConfirmActionCard = memo(function ConfirmActionCard({
             onClick={() => handleDecide('cancel')}
             className="ui-press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-zinc-300 bg-[rgb(var(--surface))] px-3.5 text-[13px] font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-45"
           >
-            {submitting && pendingDecision === 'cancel' ? <Spinner size={13} label="正在提交"/> : <X size={14}/>}
+            {submitting && pendingDecision === 'cancel' ? <Spinner size={13} label={L("正在提交", "Submitting")}/> : <X size={14}/>}
             <span>{spec.cancelLabel}</span>
           </button>
           <button
@@ -342,8 +342,8 @@ export const ConfirmActionCard = memo(function ConfirmActionCard({
             onClick={() => handleDecide('confirm')}
             className={`ui-press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-4 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-45 ${meta.confirmBtn}`}
           >
-            {submitting && pendingDecision === 'confirm' ? <Spinner size={13} label="正在提交"/> : <Check size={14}/>}
-            <span>{submitting && pendingDecision === 'confirm' ? '提交中…' : spec.confirmLabel}</span>
+            {submitting && pendingDecision === 'confirm' ? <Spinner size={13} label={L("正在提交", "Submitting")}/> : <Check size={14}/>}
+            <span>{submitting && pendingDecision === 'confirm' ? L("提交中…", "Submitting…") : spec.confirmLabel}</span>
           </button>
         </div>
       </footer>
@@ -362,7 +362,12 @@ export const ConfirmActionInteractionCard = memo(function ConfirmActionInteracti
   payload: ConfirmActionInteractionPayload;
   timestamp: string;
 }) {
+  const L = useBi();
   const confirmed = payload.decision === 'confirm';
+  const isAssistant = payload.source === 'assistant';
+  const hasNamedResponder = Boolean(payload.responderName?.trim() || payload.decidedBy?.trim());
+  const statusLabel = confirmed ? L("已确认执行", "Confirmed") : L("已取消操作", "Cancelled");
+  const headerHeading = isAssistant && hasNamedResponder ? L(`小猫代答 · ${statusLabel}`, `Kitten Reply · ${statusLabel}`) : statusLabel;
   return (
     <div
       data-confirm-interaction-card=""
@@ -372,26 +377,37 @@ export const ConfirmActionInteractionCard = memo(function ConfirmActionInteracti
       className="ui-user-send-time-row group/msg ui-timeline-item relative my-6 flex flex-col items-end"
     >
       <div
-        className={`w-full max-w-[min(100%,540px)] overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] text-left shadow-[0_2px_12px_rgba(24,24,27,0.05)] ${
-          confirmed ? 'border-emerald-200/90' : 'border-zinc-200'
+        className={`w-full max-w-[min(100%,540px)] overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] text-left ${
+          isAssistant
+            ? 'ui-kitten-card'
+            : confirmed
+              ? 'border-emerald-200/90 shadow-[0_2px_12px_rgba(24,24,27,0.05)]'
+              : 'border-zinc-200 shadow-[0_2px_12px_rgba(24,24,27,0.05)]'
         }`}
       >
         <div
           className={`flex flex-wrap items-center gap-2 border-b border-zinc-200/75 px-3.5 py-2 ${
-            confirmed ? 'bg-emerald-50/65' : 'bg-zinc-50/80'
+            isAssistant
+              ? (confirmed ? 'ui-kitten-card-header' : 'bg-zinc-50/80')
+              : (confirmed ? 'bg-emerald-50/65' : 'bg-zinc-50/80')
           }`}
         >
           {confirmed
-            ? <CheckCircle2 size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400"/>
+            ? <CheckCircle2 size={14} className={`shrink-0 ${isAssistant ? 'ui-kitten-accent-icon' : 'text-emerald-600 dark:text-emerald-400'}`}/>
             : <XCircle size={14} className="shrink-0 text-zinc-500"/>}
           <span className="shrink-0 text-[12px] font-semibold text-zinc-900">
-            {confirmed ? '已确认执行' : '已取消操作'}
+            {headerHeading}
           </span>
           {payload.title && (
             <span className="min-w-0 truncate text-[12px] text-zinc-500">· {payload.title}</span>
           )}
           <div className="ml-auto flex max-w-full shrink-0 items-center">
-            <SourceBadge source={payload.source} decidedBy={payload.decidedBy}/>
+            <InteractionSourceBadge
+              source={payload.source}
+              actorName={payload.decidedBy}
+              responderName={payload.responderName}
+              dataAttr="confirm"
+            />
           </div>
         </div>
 
@@ -399,9 +415,11 @@ export const ConfirmActionInteractionCard = memo(function ConfirmActionInteracti
           <div className="flex flex-wrap items-center gap-1.5">
             <span
               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-0.5 text-[12.5px] font-medium ${
-                confirmed
-                  ? 'border-emerald-200/90 bg-emerald-50/80 text-emerald-900 dark:text-emerald-300'
-                  : 'border-zinc-200 bg-zinc-100/90 text-zinc-800'
+                isAssistant && confirmed
+                  ? 'ui-kitten-chip'
+                  : confirmed
+                    ? 'border-emerald-200/90 bg-emerald-50/80 text-emerald-900 dark:text-emerald-300'
+                    : 'border-zinc-200 bg-zinc-100/90 text-zinc-800'
               }`}
             >
               {confirmed ? <Check size={12}/> : <X size={12}/>}
@@ -411,7 +429,7 @@ export const ConfirmActionInteractionCard = memo(function ConfirmActionInteracti
           {payload.comment?.trim() && (
             <div className="rounded-lg border border-zinc-200/90 bg-zinc-50/90 px-2.5 py-1.5 text-[13px] leading-5 text-zinc-800 whitespace-pre-wrap [overflow-wrap:anywhere]">
               <span className="mr-1.5 inline-block rounded bg-zinc-200/80 px-1 py-px text-[10px] font-medium text-zinc-600">
-                补充意见
+                {isAssistant ? L("代答理由", "Reason") : L("补充意见", "Comment")}
               </span>
               {payload.comment}
             </div>

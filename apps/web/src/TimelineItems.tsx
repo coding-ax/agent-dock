@@ -1,9 +1,12 @@
 import { AlertTriangle, BookOpen, BrainCircuit, Check, ChevronRight, CircleStop, CircleX, Clock, Compass, Database, FilePenLine, FlaskConical, FolderOpen, GitBranch, Globe2, Image, ListTodo, MessageCircleQuestion, MessageSquare, Plug, Search, Sparkles, Square, StickyNote, Terminal, Users, Workflow, Wrench, Zap } from 'lucide-react';
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { QueryClientContext } from '@tanstack/react-query';
 import {
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   defaultOutputPluginRegistry,
+  isAssistantReplyOrigin,
   outputPluginInstanceKey,
+  parseAssistantReplyOrigin,
   TASK_RECOVERY_ORIGIN,
   type AskUserQuestionAnswerItem,
   type AskUserQuestionAnswerPayload,
@@ -26,6 +29,7 @@ import { isSystemRoundOrigin } from './companion/lifecycle-model';
 import { TaskRecoveryNotice } from './TaskRecoveryTimeline';
 import { UserMessageTime } from './SendTimeHint';
 import { Disclosure } from './Disclosure';
+import { useBi } from './i18n';
 
 /**
  * 时间线的渲染单元。原先这些组件都藏在 SessionPane 内部，只有它能用；「实际请求」轨迹面板
@@ -60,20 +64,22 @@ const isToolTerminal = (event: TimelineEvent) => event.data.status === 'complete
 
 /** 命令输出默认只露最后 40 行，避免一次工具调用把整条时间线撑开。 */
 function CommandOutput({ text }: { text: string }) {
+  const L = useBi();
   const [showAll, setShowAll] = useState(false);
   const lines = text.split('\n');
   const truncated = !showAll && lines.length > 40;
   return <div>
     <pre className="m-0 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md bg-zinc-50 p-2.5 font-mono text-[12px] leading-5 text-zinc-600">{truncated ? lines.slice(-40).join('\n') : text}</pre>
-    {truncated && <button type="button" onClick={() => setShowAll(true)} className="mt-1 rounded px-1 py-0.5 text-[12px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900">显示全部（{lines.length} 行）</button>}
+    {truncated && <button type="button" onClick={() => setShowAll(true)} className="mt-1 rounded px-1 py-0.5 text-[12px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900">{L("显示全部（", "Show all (")}{lines.length}  {L("行）", " lines)")}</button>}
   </div>;
 }
 
 function CollapsibleOutput({ text }: { text: string }) {
+  const L = useBi();
   const [open, setOpen] = useState(false);
   const lines = text.split('\n');
   return <div>
-    <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex items-center gap-1 rounded px-1 py-0.5 text-[12px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"><ChevronRight size={12} className={`transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>输出{lines.length > 0 ? `（${lines.length} 行）` : ''}</button>
+    <button type="button" aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex items-center gap-1 rounded px-1 py-0.5 text-[12px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"><ChevronRight size={12} className={`transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>{L("输出", "Output")}{lines.length > 0 ? L(`（${lines.length} 行）`, ` (${lines.length} lines)`) : ''}</button>
     <Disclosure open={open}><CommandOutput text={text}/></Disclosure>
   </div>;
 }
@@ -104,6 +110,7 @@ function ToolDetail({ view }: { view: ToolDetailView }) {
 }
 
 const ToolCard = memo(function ToolCard({ event }: { event: TimelineEvent }) {
+  const L = useBi();
   const [open, setOpen] = useState(false);
   const terminal = isToolTerminal(event);
   const failed = event.data.status === 'failed';
@@ -114,7 +121,7 @@ const ToolCard = memo(function ToolCard({ event }: { event: TimelineEvent }) {
   return <div className="ui-timeline-item">
     <button type="button" data-timeline-disclosure aria-expanded={open} disabled={!hasDetails} onClick={() => setOpen(value => !value)} className="group/tool flex min-h-8 w-full items-center gap-2 rounded-md px-1 py-1 text-left text-[12px] text-zinc-500 transition-colors hover:bg-zinc-50 disabled:cursor-default disabled:hover:bg-transparent">
       <ToolKindIcon kind={presentation.kind} size={13}/><span className="min-w-0 flex-1 truncate">{presentation.label}{presentation.detail && presentation.detail !== presentation.label && <span title={presentation.detail} className="ml-1.5 font-mono text-zinc-400">{presentation.detail}</span>}</span>
-      <span className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap tabular-nums ${failed ? 'text-red-500' : 'text-zinc-400'}`}>{elapsed && <span>{elapsed}</span>}{!terminal && <Spinner size={12}/>}{failed && <span>失败</span>}{hasDetails && <ChevronRight size={12} className={`transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>}</span>
+      <span className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap tabular-nums ${failed ? 'text-red-500' : 'text-zinc-400'}`}>{elapsed && <span>{elapsed}</span>}{!terminal && <Spinner size={12}/>}{failed && <span>{L("失败", "Failed")}</span>}{hasDetails && <ChevronRight size={12} className={`transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>}</span>
     </button>
     <Disclosure open={open}>{hasDetails && <div className="mb-1 pl-2.5"><div className="border-l border-zinc-200 pl-3"><ToolDetail view={toolDetailView(event.data)}/></div></div>}</Disclosure>
   </div>;
@@ -172,10 +179,11 @@ function useStepElapsed(live: boolean) {
 }
 
 const ToolsStep = memo(function ToolsStep({ events, forceOpen = false, stepId }: { events: TimelineEvent[]; forceOpen?: boolean; stepId?: string }) {
+  const L = useBi();
   const runningEvent = events.find(event => !isToolTerminal(event));
   const running = Boolean(runningEvent);
   const failedCount = events.filter(event => event.data.status === 'failed').length;
-  const summary = summarizeTools(events) || `${events.length} 次工具调用`;
+  const summary = summarizeTools(events) || L(`${events.length} 次工具调用`, `${events.length} tool call(s)`);
   const first = toolPresentation(events[0]!.data);
   const last = events.at(-1)!;
   const current = toolPresentation((runningEvent ?? last).data);
@@ -183,12 +191,12 @@ const ToolsStep = memo(function ToolsStep({ events, forceOpen = false, stepId }:
   const elapsed = formatElapsed(elapsedMilliseconds(events[0]!.data.startedAt ?? events[0]!.timestamp, running ? undefined : last.data.completedAt ?? last.timestamp, now));
   // 进行中用进行时（「正在执行命令」），已经跑完的项补一句计数；完成后才用汇总（「执行了 3 条命令」）。
   const doneCount = events.filter(isToolTerminal).length;
-  const runningLabel = `${toolActionLabel(current, false)}${doneCount ? ` · 已完成 ${doneCount} 项` : ''}`;
+  const runningLabel = L(`${toolActionLabel(current, false)}${doneCount ? ` · 已完成 ${doneCount} 项` : ''}`, `${toolActionLabel(current, false)}${doneCount ? ` · ${doneCount} done` : ''}`);
   const subtitle = current.detail;
   const meta = <>
-    {failedCount > 0 && <span className="text-red-500">{failedCount} 次失败</span>}
+    {failedCount > 0 && <span className="text-red-500">{failedCount}  {L("次失败", " failed")}</span>}
     {failedCount > 0 && (events.length > 1 || elapsed) && <span className="mx-1 text-zinc-300">·</span>}
-    {events.length > 1 && <span>{events.length} 次</span>}
+    {events.length > 1 && <span>{events.length}  {L("次", " calls")}</span>}
     {events.length > 1 && elapsed && <span className="mx-1 text-zinc-300">·</span>}
     {elapsed && <span>{elapsed}</span>}
   </>;
@@ -204,10 +212,11 @@ const ToolsStep = memo(function ToolsStep({ events, forceOpen = false, stepId }:
   && prev.events.every((event, index) => eventRenderSignature(event) === eventRenderSignature(next.events[index]!)));
 
 const ThinkingStep = memo(function ThinkingStep({ event, live, replay, sessionId, forceOpen = false, stepId }: { event: TimelineEvent; live: boolean; replay: boolean; sessionId: string | undefined; forceOpen?: boolean; stepId?: string }) {
+  const L = useBi();
   const elapsedValue = formatElapsed(useStepElapsed(live));
   const title = thinkingTitle(event.data.text, live);
   // 结束后没有标题时把耗时并进标题（「已思考 8 秒」）；有标题时耗时放右侧。
-  const main = live ? (title ?? '思考中') : (title ?? (elapsedValue ? `已思考 ${elapsedValue}` : '已思考'));
+  const main = live ? (title ?? L("思考中", "Thinking")) : (title ?? (elapsedValue ? L(`已思考 ${elapsedValue}`, `Thought for ${elapsedValue}`) : L("已思考", "Thought")));
   const meta = title && elapsedValue ? elapsedValue : undefined;
   return <StepDisclosure icon={<BrainCircuit size={16}/>} running={live} forceOpen={forceOpen} stepId={stepId} title={main} meta={meta}>
     <div className="max-h-80 overflow-y-auto"><ThinkingMarkdown text={event.data.text ?? ''} active={live} replay={replay || !live} sessionId={sessionId}/></div>
@@ -269,6 +278,7 @@ function ActivitySteps({ steps, ongoing, replay, sessionId, activeStepId, askUse
 }
 
 export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, replay = false, sessionId, hasAnswer = false, taskStatus = 'running', modelLabel, startedAt, completedAt, forceOpen = false, activeStepId, askUserQuestionXmlEnabled = true, outputPluginRegistry = defaultOutputPluginRegistry, enabledOutputPluginIds }: { groups: TimelineActivityGroup[]; ongoing: boolean; /** 首屏 payload 渲染出来的行：其中的流式文本不做重播动画。 */ replay?: boolean; sessionId: string | undefined; hasAnswer?: boolean; taskStatus?: string; modelLabel: string; startedAt?: string; completedAt?: string; forceOpen?: boolean; activeStepId?: string; askUserQuestionXmlEnabled?: boolean; outputPluginRegistry?: OutputPluginRegistry; enabledOutputPluginIds?: ReadonlySet<string> }) {
+  const L = useBi();
   const steps = useMemo(() => buildActivitySteps(groups), [groups]);
   const [open, setOpen] = useState(forceOpen);
   useEffect(() => {
@@ -280,7 +290,7 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
   const failed = taskStatus === 'failed';
   const incomplete = taskStatus === 'incomplete';
   const missingFinal = !ongoing && !hasAnswer;
-  const missingFinalText = interrupted ? '任务已中断，未产生最终输出。' : failed ? '任务执行失败，未产生最终输出。' : 'Agent 未返回最终输出。';
+  const missingFinalText = interrupted ? L("任务已中断，未产生最终输出。", "Task interrupted before producing final output.") : failed ? L("任务执行失败，未产生最终输出。", "Task failed before producing final output.") : L("Agent 未返回最终输出。", "Agent did not return a final output.");
   const last = steps.at(-1);
   // 最后一步不是还在转的思考 / 工具 / 流式正文时（刚发出、或工具刚返回等下一步），给一行加载提示，免得界面像卡住。
   const idle = ongoing && (!last || (last.kind === 'tools' && last.events.every(isToolTerminal)));
@@ -290,23 +300,23 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
   const reservePending = ongoing && (!last || last.kind === 'tools');
 
   // 进行中：不套外壳，每一步按输出顺序平铺，正文正常展示。
-  if (ongoing) return <section aria-live="polite" aria-label={`${modelLabel} 执行过程`} className="my-3">
+  if (ongoing) return <section aria-live="polite" aria-label={L(`${modelLabel} 执行过程`, `${modelLabel} trace`)} className="my-3">
     {/* 当前有思考/工具/正文在跑时，「处理中」占位行不显示；耗时挪到过程区右上角，仍然每秒刷新。 */}
-    {!idle && elapsed && <div className="mb-1 flex justify-end pr-1 text-[11px] tabular-nums text-zinc-400">已用时 {elapsed}</div>}
-    <ActivitySteps steps={steps} ongoing replay={replay} sessionId={sessionId} activeStepId={activeStepId} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginRegistry={outputPluginRegistry} enabledOutputPluginIds={enabledOutputPluginIds} reservePending={reservePending} pending={idle} pendingLabel={`处理中${elapsed ? ` · ${elapsed}` : ''}`}/>
+    {!idle && elapsed && <div className="mb-1 flex justify-end pr-1 text-[11px] tabular-nums text-zinc-400">{L("已用时", "Elapsed")} {elapsed}</div>}
+    <ActivitySteps steps={steps} ongoing replay={replay} sessionId={sessionId} activeStepId={activeStepId} askUserQuestionXmlEnabled={askUserQuestionXmlEnabled} outputPluginRegistry={outputPluginRegistry} enabledOutputPluginIds={enabledOutputPluginIds} reservePending={reservePending} pending={idle} pendingLabel={L(`处理中${elapsed ? ` · ${elapsed}` : ''}`, `Running${elapsed ? ` · ${elapsed}` : ''}`)}/>
   </section>;
 
   // 结束后：中间过程全部收进一行「已处理 xx」，只留最终输出；点开才看完整过程。
   const StatusIcon = interrupted ? Square : failed ? CircleX : incomplete ? AlertTriangle : Check;
   const statusTone = interrupted ? 'text-zinc-400' : failed ? 'text-red-500' : incomplete ? 'text-amber-500' : 'text-emerald-600';
-  const statusText = interrupted ? '已取消' : failed ? '已失败' : incomplete ? '未完成' : undefined;
+  const statusText = interrupted ? L("已取消", "Cancelled") : failed ? L("已失败", "Failed") : incomplete ? L("未完成", "Incomplete") : undefined;
   return <>
     {steps.length > 0 && <div className="ui-timeline-item my-3">
       <button type="button" data-timeline-disclosure aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex min-h-8 w-full items-center gap-2 py-1 text-left text-[13px] text-zinc-500 transition-colors hover:text-zinc-900">
         <StatusIcon size={14} className={`shrink-0 ${statusTone}`}/>
-        <span className="whitespace-nowrap">{elapsed ? `已处理 ${elapsed}` : '查看执行过程'}</span>
+        <span className="whitespace-nowrap">{elapsed ? L(`已处理 ${elapsed}`, `Completed in ${elapsed}`) : L("查看执行过程", "View execution trace")}</span>
         <span className="text-zinc-300">·</span>
-        <span className="whitespace-nowrap">{steps.length} 步</span>
+        <span className="whitespace-nowrap">{steps.length}  {L("步", " steps")}</span>
         {statusText && <span className={`text-[12px] ${statusTone}`}>{statusText}</span>}
         <ChevronRight size={13} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>
       </button>
@@ -314,7 +324,7 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
     </div>}
     {steps.length === 0 && elapsed && <div className="ui-timeline-item my-3 flex min-h-8 items-center gap-2 text-[13px] text-zinc-500">
       <StatusIcon size={14} className={`shrink-0 ${statusTone}`}/>
-      <span className="whitespace-nowrap">已处理 {elapsed}</span>
+      <span className="whitespace-nowrap">{L("已处理", "Done")} {elapsed}</span>
       {statusText && <span className={`text-[12px] ${statusTone}`}>{statusText}</span>}
     </div>}
     {missingFinal && <div role="status" className="ui-timeline-item my-4 flex items-center gap-2 text-[13px] text-zinc-500">{failed ? <CircleX size={14} className="text-red-500"/> : interrupted ? <CircleStop size={14} className="text-zinc-400"/> : <MessageSquare size={14} className={incomplete ? 'text-amber-500' : 'text-zinc-400'}/>}<span>{missingFinalText}</span></div>}
@@ -330,9 +340,10 @@ export const ActivityPanel = memo(function ActivityPanel({ groups, ongoing, repl
   && prev.groups.every((group, index) => group.id === next.groups[index]!.id && groupRenderSignature(group) === groupRenderSignature(next.groups[index]!)));
 
 const PermissionCard = memo(function PermissionCard({ event }: { event: TimelineEvent }) {
+  const L = useBi();
   return <div className="ui-timeline-item my-4 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3.5">
-    <div className="flex items-start gap-3"><span className="mt-0.5 shrink-0 text-orange-700"><Square size={14}/></span><div className="min-w-0 flex-1"><div className="text-sm font-semibold text-zinc-900">操作已拦截</div><p className="mt-1 text-sm leading-6 text-zinc-600">{event.data.title}</p>
-      <div className="mt-2 text-xs font-medium text-zinc-500">{event.data.status === 'pending' ? '历史授权请求已失效；当前版本固定使用完全访问' : event.data.status}</div>
+    <div className="flex items-start gap-3"><span className="mt-0.5 shrink-0 text-orange-700"><Square size={14}/></span><div className="min-w-0 flex-1"><div className="text-sm font-semibold text-zinc-900">{L("操作已拦截", "Action Blocked")}</div><p className="mt-1 text-sm leading-6 text-zinc-600">{event.data.title}</p>
+      <div className="mt-2 text-xs font-medium text-zinc-500">{event.data.status === 'pending' ? L("历史授权请求已失效；当前版本固定使用完全访问", "Legacy permission request expired; full access is enabled") : event.data.status}</div>
     </div></div>
   </div>;
 });
@@ -340,15 +351,16 @@ const PermissionCard = memo(function PermissionCard({ event }: { event: Timeline
 /** 嵌在用户气泡顶部的隐式注入块：默认折叠成一行摘要（标出注入类别与字数），点开即可查看完整原文。
  *  通过 Disclosure 的 unmountOnClose 兼顾 200ms 展开/收起动画与收起后卸载 <pre>，避免隐藏内容撑住气泡宽度。 */
 function BubbleInjectionBlock({ injection, labelOverride }: { injection: BubbleInjection; labelOverride?: string }) {
+  const L = useBi();
   const [open, setOpen] = useState(false);
-  const label = labelOverride ?? (injection.kind === 'prefix' ? '注入' : '实际发送');
-  const summary = injection.tags.length ? injection.tags.join(' · ') : '系统注入';
+  const label = labelOverride ?? (injection.kind === 'prefix' ? L("注入", "Injected") : L("实际发送", "Actual prompt"));
+  const summary = injection.tags.length ? injection.tags.join(' · ') : L("系统注入", "System Injection");
   return <div className="mb-2 overflow-hidden rounded-xl border border-zinc-200/90 bg-white/75 text-left">
     <button type="button" data-timeline-disclosure aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-zinc-600 transition-colors hover:bg-zinc-100/80 hover:text-zinc-900">
       <Sparkles size={12} className="shrink-0 text-zinc-400"/>
       <span className="shrink-0 font-medium text-zinc-700">{label}</span>
       <span className="min-w-0 flex-1 truncate text-zinc-500">{summary}</span>
-      <span className="shrink-0 tabular-nums text-[11px] text-zinc-400">{injection.charCount} 字</span>
+      <span className="shrink-0 tabular-nums text-[11px] text-zinc-400">{injection.charCount}  {L("字", " chars")}</span>
       <ChevronRight size={12} className={`shrink-0 text-zinc-400 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>
     </button>
     <Disclosure open={open} unmountOnClose>
@@ -357,8 +369,77 @@ function BubbleInjectionBlock({ injection, labelOverride }: { injection: BubbleI
   </div>;
 }
 
+/** 安全读取当前认领小猫名：无 QueryClientProvider 的单测/独立渲染场景静默回落 undefined。 */
+function useOptionalCompanionName(): string | undefined {
+  const queryClient = useContext(QueryClientContext);
+  if (!queryClient) return undefined;
+  const cached = queryClient.getQueryData<{ companion?: { name?: string | null } | null; mainSession?: { customTitle?: string | null } | null }>(['assistant-state']);
+  const name = cached?.companion?.name?.trim() || cached?.mainSession?.customTitle?.trim();
+  return name || undefined;
+}
+
+/**
+ * 侧边会话中由主会话小猫下发的自然语言回复/指示/返工轮次（`origin === 'assistant_reply'` 等）：
+ * 用带「🐾 小猫回复」徽标的柔紫/暖琥珀专属回复卡片呈现，与人类亲自打字气泡一眼可辨。
+ */
+const AssistantReplyBubble = memo(function AssistantReplyBubble({
+  origin,
+  text,
+  sentPrompt,
+  timestamp,
+  sessionId,
+  explicitResponderName
+}: {
+  origin: string;
+  text: string;
+  sentPrompt?: string | null;
+  timestamp: string;
+  sessionId?: string;
+  explicitResponderName?: string;
+}) {
+  const L = useBi();
+  const meta = parseAssistantReplyOrigin(origin);
+  const companionName = useOptionalCompanionName();
+  const responderName = explicitResponderName?.trim() || meta?.responderName || companionName;
+  const suffix = meta?.kind === 'answer' ? L("代答", " Reply") : L("回复", " Reply");
+  const badgeLabel = responderName ? `${responderName}${suffix}` : L(`小猫${suffix}`, `Kitten${suffix}`);
+  const cleanText = stripImageReferenceLines(text);
+  const injection = extractBubbleInjection(text, sentPrompt);
+
+  return (
+    <div
+      data-assistant-reply-bubble=""
+      data-assistant-reply-origin={origin}
+      className="ui-user-send-time-row group/msg ui-timeline-item relative my-6 flex flex-col items-end"
+    >
+      <div className="ui-kitten-reply-bubble relative min-w-0 w-fit max-w-[min(100%,88%)] overflow-hidden rounded-[18px] border text-left sm:max-w-[min(82%,580px)]">
+        <div className="ui-kitten-reply-header flex flex-wrap items-center gap-2 border-b px-3.5 py-2">
+          <span
+            data-assistant-reply-badge=""
+            className="ui-kitten-badge inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4"
+          >
+            <span aria-hidden="true" className="shrink-0 text-[11px] leading-none">🐾</span>
+            <span className="truncate">{badgeLabel}</span>
+          </span>
+          <span className="ml-auto shrink-0 text-[11px] text-zinc-500">
+            {responderName ? L("小猫回复 · 来自主会话", "Kitten Reply · Main Session") : L("来自主会话", "From Main Session")}
+          </span>
+        </div>
+        <div className="ui-user-bubble px-4 py-2.5 text-[14.5px] leading-[1.65] text-zinc-900">
+          {injection && <BubbleInjectionBlock injection={injection} labelOverride={L("主会话下发指令", "Main Session Instruction")}/>}
+          <MarkdownContent sessionId={sessionId} highlightSlashCommands>{cleanText}</MarkdownContent>
+        </div>
+      </div>
+      <div className="ui-user-send-time-slot mt-1 flex max-w-[min(100%,88%)] items-center justify-end gap-2 sm:max-w-[min(82%,580px)]">
+        <UserMessageTime timestamp={timestamp}/>
+      </div>
+    </div>
+  );
+});
+
 /** 会话创建时写入 ACP 的 System Prompt：放在时间线最顶部，默认折叠，方便一眼看到本会话的底层注入。 */
 export const SystemPromptBubble = memo(function SystemPromptBubble({ prompt, forceOpen = false }: { prompt: string; forceOpen?: boolean }) {
+  const L = useBi();
   const [open, setOpen] = useState(forceOpen);
   useEffect(() => {
     if (forceOpen) setOpen(true);
@@ -367,8 +448,8 @@ export const SystemPromptBubble = memo(function SystemPromptBubble({ prompt, for
     <div className="min-w-0 max-w-[80%] overflow-hidden rounded-[16px] border border-zinc-200/90 bg-zinc-50/90 text-left">
       <button type="button" data-timeline-disclosure aria-expanded={open} onClick={() => setOpen(value => !value)} className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[12px] text-zinc-600 transition-colors hover:bg-zinc-100/80 hover:text-zinc-900">
         <Sparkles size={12} className="shrink-0 text-zinc-400"/>
-        <span className="shrink-0 font-medium text-zinc-700">会话 System Prompt</span>
-        <span className="shrink-0 tabular-nums text-[11px] text-zinc-400">{prompt.length} 字</span>
+        <span className="shrink-0 font-medium text-zinc-700">{L("会话 System Prompt", "Session System Prompt")}</span>
+        <span className="shrink-0 tabular-nums text-[11px] text-zinc-400">{prompt.length}  {L("字", " chars")}</span>
         <ChevronRight size={12} className={`ml-auto shrink-0 text-zinc-400 transition-transform duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] ${open ? 'rotate-90' : ''}`}/>
       </button>
       <Disclosure open={open} unmountOnClose>
@@ -426,13 +507,14 @@ export const TimelineItem = memo(function TimelineItem({
   onSubmitAskAnswer?(spec: AskUserQuestionSpec, answers: AskUserQuestionAnswerItem[]): void | Promise<void>;
   onInteractOutputPlugin?(plugin: OutputPluginMetadata, spec: unknown, input: unknown): void | Promise<void>;
 }) {
+  const L = useBi();
   if (event.type === 'tool_call' || event.type === 'tool_result') return <ToolCard event={event}/>;
   if (event.type === 'permission_request') return <PermissionCard event={event}/>;
   if (event.type === 'warning') return <aside role="status" className="ui-timeline-item my-4 overflow-hidden rounded-xl border border-amber-200 bg-amber-50/60">
-    <div className="flex items-start gap-2.5 px-4 py-3"><AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-700"/><div className="min-w-0 flex-1 [overflow-wrap:anywhere]"><div className="text-[13px] font-semibold text-amber-950">{event.data.warningKind === 'skill' ? 'Skill 提示' : 'Agent 警告'}</div><div className="mt-1 text-[13px] leading-5 text-amber-800"><MarkdownContent sessionId={sessionId}>{event.data.text ?? ''}</MarkdownContent></div></div></div>
+    <div className="flex items-start gap-2.5 px-4 py-3"><AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-700"/><div className="min-w-0 flex-1 [overflow-wrap:anywhere]"><div className="text-[13px] font-semibold text-amber-950">{event.data.warningKind === 'skill' ? L("Skill 提示", "Skill Prompt") : L("Agent 警告", "Agent Warning")}</div><div className="mt-1 text-[13px] leading-5 text-amber-800"><MarkdownContent sessionId={sessionId}>{event.data.text ?? ''}</MarkdownContent></div></div></div>
   </aside>;
   if (event.type === 'error') return <aside role="alert" className="ui-timeline-item my-4 overflow-hidden rounded-xl border border-red-200 bg-red-50/60">
-    <div className="flex items-start gap-2.5 px-4 py-3"><CircleX size={15} className="mt-0.5 shrink-0 text-red-600"/><div className="min-w-0 flex-1 [overflow-wrap:anywhere]"><div className="text-[13px] font-semibold text-red-950">Agent 错误</div><div className="mt-1 text-[13px] leading-5 text-red-800"><MarkdownContent sessionId={sessionId}>{event.data.message ?? 'Agent 运行失败'}</MarkdownContent></div></div></div>
+    <div className="flex items-start gap-2.5 px-4 py-3"><CircleX size={15} className="mt-0.5 shrink-0 text-red-600"/><div className="min-w-0 flex-1 [overflow-wrap:anywhere]"><div className="text-[13px] font-semibold text-red-950">{L("Agent 错误", "Agent Error")}</div><div className="mt-1 text-[13px] leading-5 text-red-800"><MarkdownContent sessionId={sessionId}>{event.data.message ?? L("Agent 运行失败", "Agent Run Failed")}</MarkdownContent></div></div></div>
   </aside>;
   if (event.type === 'thinking') return null;
   // 纯 XML 交互插件回传轮次（含 AskUserQuestion 及全部声明式交互插件）：统一按 origin 路由到专属回显卡片。
@@ -450,8 +532,8 @@ export const TimelineItem = memo(function TimelineItem({
     const injection = extractBubbleInjection(event.data.text ?? '', sentPrompt);
     return <div className="ui-user-send-time-row group/msg ui-timeline-item relative my-6 flex flex-col items-end">
       <div className="relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] border border-zinc-200/80 bg-[rgb(var(--bubble))] px-4 py-2.5 text-[14px] leading-[1.6] text-zinc-800">
-        {injection && <BubbleInjectionBlock injection={injection} labelOverride="表情触发注入"/>}
-        <div className="text-zinc-700">{event.data.text ?? '飞书表情触发'}</div>
+        {injection && <BubbleInjectionBlock injection={injection} labelOverride={L("表情触发注入", "Reaction Trigger")}/>}
+        <div className="text-zinc-700">{event.data.text ?? L("飞书表情触发", "Lark Reaction Trigger")}</div>
       </div>
       <div className="ui-user-send-time-slot mt-1 flex max-w-[80%] items-center justify-end gap-2"><UserMessageTime timestamp={event.timestamp}/></div>
     </div>;
@@ -474,6 +556,20 @@ export const TimelineItem = memo(function TimelineItem({
     const detail = sentPrompt && sentPrompt.length > baseDetail.length ? sentPrompt : baseDetail;
     return <TaskRecoveryNotice text={event.data.text} detail={detail} timestamp={event.timestamp} recoveryRecord={recoveryRecord}/>;
   }
+  // 侧边会话中由主会话小猫下发的自然语言回复/代答/返工轮次：渲染专属「🐾 小猫回复」气泡而非伪装成人类打字。
+  if (isAssistantReplyOrigin(event.data.origin)) {
+    const explicitResponderName = typeof event.data.responderName === 'string' ? event.data.responderName : undefined;
+    return (
+      <AssistantReplyBubble
+        origin={event.data.origin!}
+        text={event.data.text ?? ''}
+        sentPrompt={sentPrompt}
+        timestamp={event.timestamp}
+        sessionId={sessionId}
+        explicitResponderName={explicitResponderName}
+      />
+    );
+  }
   const user = event.data.role === 'user';
   if (user) {
     const text = stripImageReferenceLines(event.data.text ?? '');
@@ -487,11 +583,11 @@ export const TimelineItem = memo(function TimelineItem({
       <div className={`relative min-w-0 ui-user-bubble max-w-[80%] rounded-[18px] bg-[rgb(var(--bubble))] px-4 py-2.5 text-[15px] leading-[1.7] text-zinc-900 ${interrupting ? 'ring-1 ring-orange-200/90' : ''}`}>
         {injection && <BubbleInjectionBlock injection={injection}/>}
         <MarkdownContent sessionId={sessionId} highlightSlashCommands>{text}</MarkdownContent>
-        {event.data.optimistic && <Spinner size={14} label={interrupting ? '正在打断并发送' : '发送中'} className={`absolute bottom-4 right-full mr-2 ${interrupting ? 'text-orange-700' : 'text-zinc-400'}`}/>}
+        {event.data.optimistic && <Spinner size={14} label={interrupting ? L("正在打断并发送", "Interrupting & Sending") : L("发送中", "Sending")} className={`absolute bottom-4 right-full mr-2 ${interrupting ? 'text-orange-700' : 'text-zinc-400'}`}/>}
       </div>
       <div className="ui-user-send-time-slot mt-1 flex max-w-[80%] items-center justify-end gap-2">
         {interrupting
-          ? <span role="status" data-interrupting-notice="" className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-700"><Zap size={11} className="shrink-0"/><span className="ui-shimmer-text">正在打断当前回复，即将发送…</span></span>
+          ? <span role="status" data-interrupting-notice="" className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-700"><Zap size={11} className="shrink-0"/><span className="ui-shimmer-text">{L("正在打断当前回复，即将发送…", "Interrupting current reply, sending next…")}</span></span>
           : <UserMessageTime timestamp={event.timestamp}/>}
       </div>
     </div>;
@@ -574,6 +670,7 @@ export const TimelineItem = memo(function TimelineItem({
   && prev.event.timestamp === next.event.timestamp
   && eventRenderSignature(prev.event) === eventRenderSignature(next.event)
   // error/warning/permission 卡片的 payload 变化也要刷新；text 长度已在签名内。
+  && (prev.event.data.origin ?? '') === (next.event.data.origin ?? '')
   && JSON.stringify(prev.event.data.status ?? '') === JSON.stringify(next.event.data.status ?? '')
   && (prev.event.data.message ?? '') === (next.event.data.message ?? '')
   && (prev.event.data.title ?? '') === (next.event.data.title ?? ''));

@@ -220,6 +220,43 @@ describe('ask-user-question XML protocol', () => {
     expect(buildAskUserQuestionPromptGuidance()).toContain(`<${ASK_USER_QUESTION_XML_TAG}`);
   });
 
+  it('supports source="assistant" with responderName and responderSessionId', () => {
+    const payload = {
+      version: 1 as const,
+      questionId: 'db_choice_cat',
+      title: '选择存储方案',
+      source: 'assistant' as const,
+      answeredBy: '小A同学',
+      responderName: '小A同学',
+      responderSessionId: 'ses_main',
+      answeredAt: '2026-11-28T02:10:00.000Z',
+      answers: [
+        {
+          questionId: 'q1',
+          prompt: '希望采用哪种持久化方案？',
+          selectedValues: ['sqlite'],
+          selectedLabels: ['SQLite'],
+          otherText: '单机轻量零运维，开启 WAL 即可'
+        }
+      ]
+    };
+
+    const raw = serializeAskUserQuestionAnswer(payload);
+    expect(parseAskUserQuestionAnswer(raw)).toEqual(payload);
+
+    const forAgent = formatAskUserQuestionAnswerForAgent(payload);
+    expect(forAgent).toContain('主会话小猫（小A同学）已代用户回答你刚才的询问「选择存储方案」');
+    expect(forAgent).toContain('小猫代答 · 小A同学');
+    expect(forAgent).toContain('SQLite (sqlite)');
+    expect(forAgent).toContain('单机轻量零运维');
+    expect(forAgent).toContain('请基于以上主会话代答的明确结论继续执行下一步');
+
+    expect(summarizeAskUserQuestionAnswer(payload)).toContain('小猫已代答「选择存储方案」');
+    const searchText = extractAskUserQuestionAnswerSearchText(payload);
+    expect(searchText).toContain('小猫代答');
+    expect(searchText).toContain('小A同学代答');
+  });
+
   it('resolves session-level askUserQuestionEnabled override over global default consistently', () => {
     expect(resolveAskUserQuestionEnabled(undefined, true)).toBe(true);
     expect(resolveAskUserQuestionEnabled(null, true)).toBe(true);

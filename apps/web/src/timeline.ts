@@ -1,6 +1,7 @@
 import type { DockEvent, Task } from './api';
+import { bi, getCurrentLocale } from './i18n';
 import { busyStates } from './session-states';
-import { agentWarningPrefix, isAgentStreamErrorText, isCarriedOverToolCall, isTurnActivity, pickFinalAssistantEntry, stripAgentStreamErrorSuffix } from '@agent-dock/agent-dock-shared';
+import { agentWarningPrefix, isAgentStreamErrorText, isCarriedOverToolCall, isTurnActivity, pickFinalAssistantEntry, stripAgentStreamErrorSuffix, type Locale } from '@agent-dock/agent-dock-shared';
 
 /** 表情触发的轮次（飞书 reaction；也用于兼容历史静默触发记录）：没有用户气泡。 */
 export const EMOJI_TRIGGER_ORIGIN = 'emoji';
@@ -103,7 +104,7 @@ export function toolCommand(input: unknown) {
 }
 
 export function toolDisplayName(data: TimelineEvent['data']) {
-  return toolCommand(data.input) ?? (typeof data.name === 'string' && data.name.trim() ? data.name.trim() : '工具调用');
+  return toolCommand(data.input) ?? (typeof data.name === 'string' && data.name.trim() ? data.name.trim() : bi("工具调用", "Tool Call"));
 }
 
 export function toolDescription(data: TimelineEvent['data']) {
@@ -120,7 +121,7 @@ function mergedToolName(previous: unknown, current: unknown) {
     : /^(?:terminal|read file|edit|write|fetch|find|web search|preparing file…)$/i.test(name)
       ? 1
       : name ? 2 : -1;
-  if (!after || specificity(after) < specificity(before)) return before || after || '工具调用';
+  if (!after || specificity(after) < specificity(before)) return before || after || bi("工具调用", "Tool Call");
   return after;
 }
 
@@ -500,14 +501,14 @@ export function groupTimelineSections(sections: TimelineSection[]): TimelineTurn
  * 早期没有 task.updatedAt 的数据才退回发送时间并标「发送」。纯用户消息轮没有可看的
  * 轮末内容，气泡旁的时间已经足够，不再多挂一个角标。
  */
-export function turnTimeBadge(turn: TimelineTurn): { timestamp: string; align: 'left' | 'right'; kind: '发送' | '完成' } | undefined {
+export function turnTimeBadge(turn: TimelineTurn): { timestamp: string; align: 'left' | 'right'; kind: string } | undefined {
   if (!turn.terminal) return undefined;
   const onlyUserMessage = turn.sections.length === 1 && turn.sections[0]!.kind === 'event'
     && turn.sections[0]!.event.data.role === 'user';
   if (onlyUserMessage) return undefined;
   const timestamp = turn.completedAt ?? turn.sentAt;
   if (!timestamp) return undefined;
-  return { timestamp, align: 'left', kind: turn.completedAt ? '完成' : '发送' };
+  return { timestamp, align: 'left', kind: turn.completedAt ? bi("完成", "Done") : bi("发送", "Sent") };
 }
 
 /**
@@ -547,7 +548,7 @@ function activityLabel(events: TimelineEvent[]): { label: string; labelTitle: st
   const tool = events.find(event => event.type === 'tool_call' || event.type === 'tool_result');
   if (tool) { const name = toolDescription(tool.data) ?? toolDisplayName(tool.data); return { label: name, labelTitle: name }; }
   const thinking = [...events].reverse().find(event => event.type === 'thinking');
-  const fallback = thinking ? '思考过程' : '执行过程';
+  const fallback = thinking ? bi("思考过程", "Thinking") : bi("执行过程", "Execution");
   return { label: fallback, labelTitle: fallback };
 }
 

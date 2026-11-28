@@ -3,10 +3,8 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
-  Globe2,
   MessageCircleQuestion,
   PenLine,
-  Send,
   Sparkles
 } from 'lucide-react';
 import type {
@@ -18,6 +16,8 @@ import type {
 import { Disclosure } from './Disclosure';
 import { Spinner } from './Loaders';
 import { UserMessageTime } from './SendTimeHint';
+import { InteractionSourceBadge } from './output-plugins/InteractionSourceBadge';
+import { useBi } from './i18n';
 
 interface QuestionDraftState {
   selectedValues: string[];
@@ -63,33 +63,13 @@ function buildSubmittedAnswers(spec: AskUserQuestionSpec, drafts: DraftMap): Ask
   });
 }
 
-/** 来源徽标（网页端 / 飞书），用于询问卡片已答态与特殊问答回复卡片统一呈现。 */
-function SourceBadge({ source, answeredBy }: { source: 'web' | 'lark'; answeredBy?: string }) {
-  const isLark = source === 'lark';
-  const label = isLark
-    ? (answeredBy?.trim() ? `飞书 · ${answeredBy.trim()}` : '飞书')
-    : (answeredBy?.trim() ? `网页端 · ${answeredBy.trim()}` : '网页端');
-  return (
-    <span
-      data-ask-source={source}
-      className={`inline-flex max-w-full shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ${
-        isLark
-          ? 'border-blue-200 bg-blue-50 text-blue-700'
-          : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-      }`}
-    >
-      {isLark ? <Send size={10} className="shrink-0"/> : <Globe2 size={10} className="shrink-0"/>}
-      <span className="truncate">{label}</span>
-    </span>
-  );
-}
-
 /** 流式输出阶段末尾出现未闭合 `<agentdock-ask-user-question` 时的轻盈占位，彻底隐藏裸 XML 源码。 */
 export const AskUserQuestionStreamingPlaceholder = memo(function AskUserQuestionStreamingPlaceholder({
   title
 }: {
   title?: string;
 }) {
+  const L = useBi();
   return (
     <div
       role="status"
@@ -100,7 +80,7 @@ export const AskUserQuestionStreamingPlaceholder = memo(function AskUserQuestion
       <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500 ui-live-dot"/>
       <MessageCircleQuestion size={15} className="shrink-0 text-sky-600"/>
       <span className="ui-shimmer-text min-w-0 truncate font-medium">
-        {title ? `正在生成「${title}」选项…` : '正在生成选项…'}
+        {title ? L(`正在生成「${title}」选项…`, `Generating options for "${title}"…`) : L("正在生成选项…", "Generating options…")}
       </span>
     </div>
   );
@@ -124,6 +104,7 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
   error?: string;
   onSubmit?(answers: AskUserQuestionAnswerItem[]): void | Promise<void>;
 }) {
+  const L = useBi();
   const [drafts, setDrafts] = useState<DraftMap>(() => initialDrafts(spec));
 
   const answeredCount = useMemo(
@@ -135,29 +116,54 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
 
   // 已回答态：优雅锁定为只读摘要卡，彻底禁止重复提交
   if (answered) {
+    const isAssistant = answered.source === 'assistant';
     return (
       <section
-        aria-label={spec.title ? `${spec.title}（已回答）` : '询问卡片（已回答）'}
+        aria-label={spec.title ? L(`${spec.title}（${isAssistant ? '小猫已代答' : '已回答'}）`, `${spec.title} (${isAssistant ? 'Kitten Answered' : 'Answered'})`) : (isAssistant ? L("询问卡片（小猫已代答）", "Question Card (Kitten Answered)") : L("询问卡片（已回答）", "Question Card (Answered)"))}
         data-ask-card=""
         data-ask-card-id={spec.id}
         data-ask-card-state="answered"
-        className="ui-timeline-item my-3 max-w-[78ch] overflow-hidden rounded-2xl border border-emerald-200/80 bg-[rgb(var(--surface))]"
+        data-ask-card-source={answered.source}
+        className={`ui-timeline-item my-3 max-w-[78ch] overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] ${
+          isAssistant ? 'ui-kitten-card' : 'border-emerald-200/80'
+        }`}
       >
-        <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/75 bg-emerald-50/55 px-3.5 py-2.5">
-          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700">
+        <div
+          className={`flex flex-wrap items-center gap-2 border-b border-zinc-200/75 px-3.5 py-2.5 ${
+            isAssistant ? 'ui-kitten-card-header' : 'bg-emerald-50/55'
+          }`}
+        >
+          <span
+            className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg border ${
+              isAssistant
+                ? 'ui-kitten-icon-box'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            }`}
+          >
             <Check size={13} className="ui-icon-pop"/>
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="truncate text-[13px] font-semibold text-zinc-900">
-                {spec.title || '询问已确认'}
+                {spec.title || L("询问已确认", "Question Confirmed")}
               </span>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[11px] font-medium text-emerald-700">
-                已回答
+              <span
+                className={`rounded-full border px-1.5 py-px text-[11px] font-medium ${
+                  isAssistant
+                    ? 'ui-kitten-chip'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                }`}
+              >
+                {isAssistant ? L("已代答", "Answered") : L("已回答", "Answered")}
               </span>
             </div>
           </div>
-          <SourceBadge source={answered.source} answeredBy={answered.answeredBy}/>
+          <InteractionSourceBadge
+            source={answered.source}
+            actorName={answered.answeredBy}
+            responderName={answered.responderName}
+            dataAttr="ask"
+          />
         </div>
 
         <div className="divide-y divide-zinc-200/60 px-3.5 py-1">
@@ -173,16 +179,22 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
                 {item.selectedLabels.map((label, labelIdx) => (
                   <span
                     key={`${label}-${labelIdx}`}
-                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-emerald-200/80 bg-emerald-50/70 px-2 py-0.5 text-[12px] font-medium text-emerald-800 [overflow-wrap:anywhere]"
+                    className={`inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-0.5 text-[12px] font-medium [overflow-wrap:anywhere] ${
+                      isAssistant
+                        ? 'ui-kitten-chip'
+                        : 'border-emerald-200/80 bg-emerald-50/70 text-emerald-800'
+                    }`}
                   >
                     <Check size={11} className="shrink-0"/>
                     <span>{label}</span>
                   </span>
                 ))}
                 {item.otherText?.trim() && (
-                  <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[12px] text-zinc-700 [overflow-wrap:anywhere]">
-                    {item.selectedLabels.length > 0 && <span className="text-[10px] text-zinc-400">补充</span>}
-                    <span>{item.otherText}</span>
+                  <span className="inline-flex max-w-full items-start gap-1.5 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[12px] leading-5 text-zinc-700 [overflow-wrap:anywhere]">
+                    {item.selectedLabels.length > 0 && (
+                      <span className="mt-0.5 shrink-0 whitespace-nowrap rounded bg-zinc-200/75 px-1 py-px text-[10px] font-medium leading-4 text-zinc-600">{isAssistant ? L("理由", "Reason") : L("补充", "Note")}</span>
+                    )}
+                    <span className="min-w-0 flex-1">{item.otherText}</span>
                   </span>
                 )}
               </div>
@@ -256,7 +268,7 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
 
   return (
     <section
-      aria-label={spec.title || '需要你的确认'}
+      aria-label={spec.title || L("需要你的确认", "Your Input Needed")}
       data-ask-card=""
       data-ask-card-id={spec.id}
       data-ask-card-state="pending"
@@ -269,10 +281,10 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="m-0 text-[14px] font-semibold leading-5 text-zinc-900 [overflow-wrap:anywhere]">
-              {spec.title || '需要你的确认'}
+              {spec.title || L("需要你的确认", "Your Input Needed")}
             </h3>
             <span className="ml-auto shrink-0 rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-500">
-              {multiQuestion ? `共 ${spec.questions.length} 题` : spec.questions[0]?.multi ? '多选' : '单选'}
+              {multiQuestion ? L(`共 ${spec.questions.length} 题`, `${spec.questions.length} question(s)`) : spec.questions[0]?.multi ? L("多选", "Multi-select") : L("单选", "Single-select")}
             </span>
           </div>
           {spec.description && (
@@ -303,7 +315,8 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
                     </span>
                     {multiQuestion && question.multi && (
                       <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[11px] font-medium text-sky-700">
-                        多选
+                        
+                        {L("多选", "Multi-select")}
                       </span>
                     )}
                   </div>
@@ -357,7 +370,8 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
                             {option.recommended && (
                               <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[11px] font-medium leading-4 text-sky-700">
                                 <Sparkles size={10} className="shrink-0"/>
-                                推荐
+                                
+                                {L("推荐", "Recommended")}
                               </span>
                             )}
                           </span>
@@ -402,7 +416,7 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
                         {draft.otherSelected ? <Check size={11} strokeWidth={3} className="ui-icon-pop"/> : <PenLine size={10}/>}
                       </span>
                       <span className="min-w-0 flex-1 text-[13.5px] font-medium text-zinc-700">
-                        {question.multi ? '其他 / 自定义补充' : '其他 / 自定义回答'}
+                        {question.multi ? L("其他 / 自定义补充", "Other / Custom note") : L("其他 / 自定义回答", "Other / Custom answer")}
                       </span>
                     </button>
                   )}
@@ -419,8 +433,8 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
                             handleSubmit();
                           }
                         }}
-                        aria-label={`${question.prompt} - 自定义回答`}
-                        placeholder={question.otherPlaceholder || '请输入你的自定义回答（⌘/Ctrl + Enter 提交）…'}
+                        aria-label={L(`${question.prompt} - 自定义回答`, `${question.prompt} - Custom answer`)}
+                        placeholder={question.otherPlaceholder || L("请输入你的自定义回答（⌘/Ctrl + Enter 提交）…", "Enter your custom answer (⌘/Ctrl + Enter to submit)…")}
                         className="ui-field w-full resize-y rounded-xl border border-zinc-200 bg-[rgb(var(--bg))] px-3 py-2 text-[13.5px] leading-5 text-zinc-900 placeholder:text-zinc-400 disabled:opacity-60"
                       />
                     </div>
@@ -447,10 +461,10 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
           {disabledReason
             ? disabledReason
             : multiQuestion
-              ? `已完成 ${answeredCount} / ${spec.questions.length} 题`
+              ? L(`已完成 ${answeredCount} / ${spec.questions.length} 题`, `Answered ${answeredCount} / ${spec.questions.length}`)
               : allAnswered
-                ? '已选择，点击提交继续对话'
-                : '请选择或填写后提交'}
+                ? L("已选择，点击提交继续对话", "Selected — click submit to continue")
+                : L("请选择或填写后提交", "Select or type an answer to submit")}
         </span>
         <button
           type="button"
@@ -459,8 +473,8 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
           onClick={handleSubmit}
           className="ui-press ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-zinc-900 px-4 text-[13px] font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {submitting ? <Spinner size={13} label="正在提交"/> : <Check size={14}/>}
-          <span>{submitting ? '提交中…' : '提交回答'}</span>
+          {submitting ? <Spinner size={13} label={L("正在提交", "Submitting")}/> : <Check size={14}/>}
+          <span>{submitting ? L("提交中…", "Submitting…") : L("提交回答", "Submit Answer")}</span>
         </button>
       </footer>
     </section>
@@ -469,7 +483,8 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
 
 /**
  * 回答轮次的专属视觉呈现（区别于普通用户气泡）：
- * 精致顶栏标示「已回复询问」+ 来源徽标（网页端 / 飞书），逐题成对展示当时的问题 Q 与用户的答案 A。
+ * 精致顶栏标示「已回复询问 / 小猫代答」+ 来源徽标（网页端 / 飞书 / 🐾 小猫代答），
+ * 逐题成对展示当时的问题 Q 与回答 A。
  */
 export const AskUserQuestionAnswerCard = memo(function AskUserQuestionAnswerCard({
   payload,
@@ -478,7 +493,13 @@ export const AskUserQuestionAnswerCard = memo(function AskUserQuestionAnswerCard
   payload: AskUserQuestionAnswerPayload;
   timestamp: string;
 }) {
+  const L = useBi();
   const multiQuestion = payload.answers.length > 1;
+  const isAssistant = payload.source === 'assistant';
+  const hasNamedResponder = Boolean(payload.responderName?.trim() || payload.answeredBy?.trim());
+  const headerHeading = isAssistant
+    ? (hasNamedResponder ? L("小猫代答", "Kitten Reply") : L("已回复询问", "Question Answered"))
+    : L("已回复询问", "Question Answered");
   return (
     <div
       data-ask-answer-card=""
@@ -486,15 +507,30 @@ export const AskUserQuestionAnswerCard = memo(function AskUserQuestionAnswerCard
       data-ask-answer-source={payload.source}
       className="ui-user-send-time-row group/msg ui-timeline-item relative my-6 flex flex-col items-end"
     >
-      <div className="w-full max-w-[min(100%,560px)] overflow-hidden rounded-2xl border border-sky-200/90 bg-[rgb(var(--surface))] text-left shadow-[0_2px_12px_rgba(14,165,233,0.06)]">
-        <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/75 bg-sky-50/65 px-3.5 py-2">
-          <CheckCircle2 size={14} className="shrink-0 text-sky-600"/>
-          <span className="shrink-0 text-[12px] font-semibold text-zinc-900">已回复询问</span>
+      <div
+        className={`w-full max-w-[min(100%,560px)] overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] text-left ${
+          isAssistant
+            ? 'ui-kitten-card'
+            : 'border-sky-200/90 shadow-[0_2px_12px_rgba(14,165,233,0.06)]'
+        }`}
+      >
+        <div
+          className={`flex flex-wrap items-center gap-2 border-b border-zinc-200/75 px-3.5 py-2 ${
+            isAssistant ? 'ui-kitten-card-header' : 'bg-sky-50/65'
+          }`}
+        >
+          <CheckCircle2 size={14} className={`shrink-0 ${isAssistant ? 'ui-kitten-accent-icon' : 'text-sky-600'}`}/>
+          <span className="shrink-0 text-[12px] font-semibold text-zinc-900">{headerHeading}</span>
           {payload.title && (
             <span className="min-w-0 truncate text-[12px] text-zinc-500">· {payload.title}</span>
           )}
           <div className="ml-auto flex max-w-full shrink-0 items-center">
-            <SourceBadge source={payload.source} answeredBy={payload.answeredBy}/>
+            <InteractionSourceBadge
+              source={payload.source}
+              actorName={payload.answeredBy}
+              responderName={payload.responderName}
+              dataAttr="ask"
+            />
           </div>
         </div>
 
@@ -514,7 +550,11 @@ export const AskUserQuestionAnswerCard = memo(function AskUserQuestionAnswerCard
                 </div>
 
                 <div className="flex items-start gap-2">
-                  <span className="mt-0.5 inline-flex h-[18px] min-w-[20px] shrink-0 items-center justify-center rounded-md bg-sky-100 px-1 font-mono text-[10px] font-bold tracking-wide text-sky-700">
+                  <span
+                    className={`mt-0.5 inline-flex h-[18px] min-w-[20px] shrink-0 items-center justify-center rounded-md px-1 font-mono text-[10px] font-bold tracking-wide ${
+                      isAssistant ? 'ui-kitten-a-badge' : 'bg-sky-100 text-sky-700'
+                    }`}
+                  >
                     A
                   </span>
                   <div className="min-w-0 flex-1 space-y-1.5">
@@ -523,9 +563,13 @@ export const AskUserQuestionAnswerCard = memo(function AskUserQuestionAnswerCard
                         {item.selectedLabels.map((label, labelIdx) => (
                           <span
                             key={`${label}-${labelIdx}`}
-                            className="inline-flex max-w-full items-center gap-1 rounded-lg border border-sky-200/90 bg-sky-50/85 px-2.5 py-0.5 text-[13px] font-medium leading-5 text-sky-900 [overflow-wrap:anywhere]"
+                            className={`inline-flex max-w-full items-center gap-1 rounded-lg border px-2.5 py-0.5 text-[13px] font-medium leading-5 [overflow-wrap:anywhere] ${
+                              isAssistant
+                                ? 'ui-kitten-chip'
+                                : 'border-sky-200/90 bg-sky-50/85 text-sky-900'
+                            }`}
                           >
-                            <Check size={12} className="shrink-0 text-sky-600"/>
+                            <Check size={12} className={`shrink-0 ${isAssistant ? 'ui-kitten-accent-icon' : 'text-sky-600'}`}/>
                             <span>{label}</span>
                           </span>
                         ))}
@@ -535,14 +579,14 @@ export const AskUserQuestionAnswerCard = memo(function AskUserQuestionAnswerCard
                       <div className="rounded-lg border border-zinc-200/90 bg-zinc-50/90 px-2.5 py-1.5 text-[13px] leading-5 text-zinc-800 whitespace-pre-wrap [overflow-wrap:anywhere]">
                         {hasSelected && (
                           <span className="mr-1.5 inline-block rounded bg-zinc-200/80 px-1 py-px text-[10px] font-medium text-zinc-600">
-                            自定义
+                            {isAssistant ? L("代答理由", "Reason") : L("自定义", "Custom")}
                           </span>
                         )}
                         {item.otherText}
                       </div>
                     )}
                     {!hasSelected && !hasOther && (
-                      <span className="text-[12.5px] text-zinc-400">（未作答）</span>
+                      <span className="text-[12.5px] text-zinc-400">{L("（未作答）", "(Unanswered)")}</span>
                     )}
                   </div>
                 </div>

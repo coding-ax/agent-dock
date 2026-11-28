@@ -1,8 +1,42 @@
 import type { FastifyInstance } from 'fastify';
-import { RuntimeError } from '@agent-dock/agent-dock-shared';
+import {
+  askUserQuestionAnswerItemSchema,
+  confirmActionDecisions,
+  confirmActionRisks,
+  declarativeInteractionFieldSchema,
+  RuntimeError
+} from '@agent-dock/agent-dock-shared';
+import { z } from 'zod';
 import type { AssistantService } from './service.js';
 import type { DraftRecord, TaskCheck } from './types.js';
 import { registerLifecycleRoutes } from './lifecycle-routes.js';
+
+const assistantQuickAnswerSchema = z.object({
+  questionId: z.string().trim().min(1).max(120).optional(),
+  values: z.array(z.string().trim().min(1).max(400)).optional(),
+  otherText: z.string().trim().max(4_000).optional()
+});
+
+const answerTaskBodySchema = z.object({
+  widgetId: z.string().trim().min(1).max(200).optional(),
+  instanceId: z.string().trim().min(1).max(200).optional(),
+  pluginId: z.string().trim().min(1).max(120).optional(),
+  title: z.string().trim().max(300).optional(),
+  answers: z.array(askUserQuestionAnswerItemSchema).optional(),
+  quickAnswers: z.array(assistantQuickAnswerSchema).optional(),
+  otherText: z.string().trim().max(4_000).optional(),
+  decision: z.enum(confirmActionDecisions).optional(),
+  decisionLabel: z.string().trim().max(120).optional(),
+  risk: z.enum(confirmActionRisks).optional(),
+  comment: z.string().trim().max(4_000).optional(),
+  actionValue: z.string().trim().max(200).optional(),
+  actionLabel: z.string().trim().max(200).optional(),
+  fields: z.array(declarativeInteractionFieldSchema).optional(),
+  note: z.string().trim().max(4_000).optional(),
+  responderName: z.string().trim().max(200).optional(),
+  mode: z.enum(['queue', 'interrupt']).optional(),
+  from: z.string().trim().max(200).optional()
+});
 
 type TaskBody = {
   title?: string; notes?: string; doneWhen?: string[]; expectMinutes?: number;
@@ -85,7 +119,12 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
   app.get<{ Params: { id: string } }>('/api/assistant/tasks/:id', async (request, reply) => {
     const task = assistant.getTask(request.params.id);
     if (!task) return reply.code(404).send({ error: { code: 'TASK_NOT_FOUND', message: '事项不存在' } });
-    return { task, reviews: assistant.listReviews(task.id) };
+    const pendingInteraction = await assistant.getPendingTaskInteraction(task.id).catch(() => undefined);
+    return {
+      task,
+      reviews: assistant.listReviews(task.id),
+      ...(pendingInteraction ? { pendingInteraction } : {})
+    };
   });
 
   app.post<{ Body: TaskBody & { from?: string } }>('/api/assistant/tasks', async request => {
@@ -137,6 +176,55 @@ export function registerAssistantRoutes(app: FastifyInstance, assistant: Assista
     const mode = request.body?.mode ?? 'queue';
     if (mode !== 'queue' && mode !== 'interrupt') throw bad('mode 必须是 queue / interrupt');
     return { task: await assistant.appendTask(request.params.id, text, mode) };
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>('/api/assistant/tasks/:id/answer', async (request, reply) => {
+    const parsed = answerTaskBodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw bad(`代答参数不合法：${parsed.error.issues.map(issue => `${issue.path.join('.') || 'body'} ${issue.message}`).join('；')}`);
+    }
+    const mainId = assertMain(assistant, parsed.data.from);
+    const result = await assistant.answerTaskInteraction(request.params.id, {
+      widgetId: parsed.data.widgetId ?? parsed.data.instanceId,
+      pluginId: parsed.data.pluginId,
+      title: parsed.data.title,
+      answers: parsed.data.answers,
+      quickAnswers: parsed.data.quickAnswers,
+      otherText: parsed.data.otherText,
+      decision: parsed.data.decision,
+      decisionLabel: parsed.data.decisionLabel,
+      risk: parsed.data.risk,
+      comment: parsed.data.comment,
+      actionValue: parsed.data.actionValue,
+      actionLabel: parsed.data.actionLabel,
+      fields: parsed.data.fields,
+      note: parsed.data.note,
+      responderName: parsed.data.responderName,
+      responderSessionId: parsed.data.from ?? mainId,
+      mode: parsed.data.mode
+    });
+    if (result.status === 'already_submitted') {
+      return reply.code(409).send({
+        error: {
+          code: 'OUTPUT_PLUGIN_ALREADY_SUBMITTED',
+          message: '该交互卡片已完成响应，无需重复代答'
+        },
+        alreadySubmitted: true,
+        alreadyAnswered: true,
+        pluginId: result.pluginId,
+        instanceId: result.instanceId,
+        existing: result.existing,
+        task: result.task
+      });
+    }
+    return reply.code(202).send({
+      accepted: true,
+      pluginId: result.pluginId,
+      instanceId: result.instanceId,
+      payload: result.payload,
+      task: result.task,
+      dispatchedTask: result.dispatchedTask
+    });
   });
 
   app.post<{ Params: { id: string }; Body: { reason?: string; from?: string } }>('/api/assistant/tasks/:id/cancel', async request => {

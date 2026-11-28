@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
-import { now, type RepositoryBundle } from '@agent-dock/agent-dock-shared';
+import { ASSISTANT_REPLY_ORIGIN, now, type RepositoryBundle } from '@agent-dock/agent-dock-shared';
 import {
-  AssistantService, buildMainSystemPrompt, buildSuperagentDirective, classifyMainTurn,
-  shouldSuppressStopSignal,
+  AssistantService, buildMainSystemPrompt, buildSuperagentDirective, buildTaskPrompt, classifyMainTurn,
+  shouldSuppressStopSignal, summarizeLastAssistantReply,
   type AssistantServiceOptions
 } from './service.js';
 import { AssistantStore } from './store.js';
@@ -733,7 +733,14 @@ describe('AssistantService', () => {
     expect(reopened.round).toBe(1);
     expect(service.listTasks()).toHaveLength(1);
     expect(reopened.notes).toContain('按钮还是太小');
-    expect(runtime.dispatch).toHaveBeenLastCalledWith('ses_side', expect.stringContaining('按钮还是太小'), 'queue');
+    expect(runtime.dispatch).toHaveBeenLastCalledWith(
+      'ses_side',
+      expect.stringContaining('按钮还是太小'),
+      'queue',
+      expect.stringContaining('按钮还是太小'),
+      undefined,
+      ASSISTANT_REPLY_ORIGIN
+    );
   });
 
   it('reopens an archived side session in the task workspace', async () => {
@@ -933,7 +940,134 @@ describe('AssistantService', () => {
 
     const appended = await service.appendTask(task.id, '重新继续推进', 'queue');
     expect(restart).toHaveBeenCalledWith(task.sessionId);
-    expect(runtime.dispatch).toHaveBeenLastCalledWith(task.sessionId, expect.stringContaining('重新继续推进'), 'queue');
+    expect(runtime.dispatch).toHaveBeenLastCalledWith(
+      task.sessionId,
+      expect.stringContaining('重新继续推进'),
+      'queue',
+      expect.stringContaining('重新继续推进'),
+      undefined,
+      ASSISTANT_REPLY_ORIGIN
+    );
     expect(appended.state).toBe('running');
+  });
+
+  it('guides side sessions to ask key questions directly in their reply without forcing an extra CLI call', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+    await repos.sessions.save({
+      id: 'ses_side', agentId: 'claude', state: 'idle', cwd: '/tmp', runId: 'run_side',
+      createdAt: now(), updatedAt: now()
+    });
+
+    const task = await service.startTask({ title: '确认方案分叉', doneWhen: ['给出实现与单测'] });
+    const dispatchedPrompt = runtime.dispatch.mock.calls.at(-1)![1] as string;
+    expect(dispatchedPrompt).toBe(buildTaskPrompt(task));
+    expect(dispatchedPrompt).not.toContain('不要向用户提问');
+    expect(dispatchedPrompt).not.toContain('--kind blocked|question');
+    expect(dispatchedPrompt).not.toContain('--kind question');
+    expect(dispatchedPrompt).toContain('琐碎或可自查的技术细节自行决策推进');
+    expect(dispatchedPrompt).toContain('直接把问题、你的推荐方案和备选方案清晰写在回复里并结束本轮即可');
+    expect(dispatchedPrompt).toContain('无需额外运行提问命令');
+    expect(dispatchedPrompt).toContain('主会话会自动看到你的最后回复');
+    expect(dispatchedPrompt).toContain('agent-dock task report --kind done');
+
+    // 既有 task report --kind question / blocked / done 兼容性保持不变。
+    await service.reportTask(task.sessionId!, 'question', '旧路径仍兼容');
+    await service.reportTask(task.sessionId!, 'blocked', '缺少权限');
+    await service.reportTask(task.sessionId!, 'done', '已完成', 'pnpm test 通过');
+    expect(service.getTask(task.id)?.state).toBe('review');
+  });
+
+  it('guides the main session to answer technical side-session questions directly and escalate product decisions', () => {
+    const prompt = buildMainSystemPrompt();
+    expect(prompt).toContain('先看督办信号里的最后回复摘要');
+    expect(prompt).toContain('若看到侧边会话最后回复是在提问或求确认');
+    expect(prompt).toContain('属于技术细节或上下文明确的，直接帮它回答并用 `agent-dock task append <任务ID> --text "..."` 续跑');
+    expect(prompt).toContain('属于产品、偏好或高风险决策的，整理问题、推荐方案与备选方案转呈用户拍板');
+    expect(prompt).toContain('拿到结论后再用 `task append` 把答案传回侧边会话续跑');
+  });
+
+  it('attaches a concise single-line summary of the last assistant reply to natural [review] signals', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '梳理发布策略', doneWhen: ['确认策略并落地'], agentId: 'claude' });
+    const sideId = task.sessionId!;
+    await repos.events.append({ id: 'e1', sessionId: sideId, sequence: 1, type: 'text', timestamp: now(), data: { role: 'user', text: '开始做任务' } });
+    await repos.events.append({ id: 'e2', sessionId: sideId, sequence: 2, type: 'text', timestamp: now(), data: { role: 'assistant', text: '先读一下配置文件。' } });
+    await repos.events.append({ id: 'e3', sessionId: sideId, sequence: 3, type: 'tool_call', timestamp: now(), data: { id: 'tc1', name: 'read_file', status: 'completed' } });
+    await repos.events.append({ id: 'e4', sessionId: sideId, sequence: 4, type: 'text', timestamp: now(), data: { role: 'assistant', text: 'Warning: 技能描述被裁剪' } });
+    await repos.events.append({ id: 'e5', sessionId: sideId, sequence: 5, type: 'text', timestamp: now(), data: { role: 'assistant', text: '遇到一个产品分叉需要确认：\n' } });
+    await repos.events.append({ id: 'e6', sessionId: sideId, sequence: 6, type: 'text', timestamp: now(), data: { role: 'assistant', text: '- 推荐方案 A：自动推送到正式群\n- 备选方案 B：仅保存草稿\n请问按哪个推进？' } });
+
+    await service.handleStatus({ sessionId: sideId, state: 'completed' });
+    await service.flushNow();
+
+    const reviewCall = runtime.dispatch.mock.calls.at(-1)!;
+    const full = reviewCall[3] as string;
+    expect(full).toContain('若看到侧边会话最后回复是在提问/求确认');
+    expect(full).toContain('属于技术细节或上下文明确的，直接帮它回答并用 agent-dock task append');
+    expect(full).toContain('属于产品/偏好/高风险决策的，整理问题、推荐方案与备选方案转呈用户拍板');
+    const reviewLine = full.split('\n').find(line => line.startsWith('- [review] '))!;
+    expect(reviewLine).toBeTruthy();
+    expect(reviewLine).toContain(`（${task.id}）`);
+    expect(reviewLine.endsWith(`（${task.id}）`)).toBe(true);
+    expect(reviewLine).toContain('最后回复摘要：遇到一个产品分叉需要确认： - 推荐方案 A：自动推送到正式群 - 备选方案 B：仅保存草稿 请问按哪个推进？');
+    expect(reviewLine).not.toContain('先读一下配置文件');
+    expect(reviewLine).not.toContain('Warning:');
+
+    // 主会话用 task append 回答问题续跑后，下一轮自然结束也能立即发出新的 [review]，不被 10 分钟节流吞掉。
+    await service.appendTask(task.id, '按方案 B 仅保存草稿推进');
+    await repos.events.append({ id: 'e7', sessionId: sideId, sequence: 7, type: 'text', timestamp: now(), data: { role: 'user', text: '按方案 B 仅保存草稿推进' } });
+    await repos.events.append({ id: 'e8', sessionId: sideId, sequence: 8, type: 'text', timestamp: now(), data: { role: 'assistant', text: '已按方案 B 完成改动，单测 12/12 通过。' } });
+    const dispatchesBeforeSecondReview = runtime.dispatch.mock.calls.length;
+    await service.handleStatus({ sessionId: sideId, state: 'completed' });
+    await service.flushNow();
+
+    expect(runtime.dispatch.mock.calls.length).toBe(dispatchesBeforeSecondReview + 1);
+    const secondFull = runtime.dispatch.mock.calls.at(-1)![3] as string;
+    expect(secondFull).toContain('最后回复摘要：已按方案 B 完成改动，单测 12/12 通过。');
+    expect(secondFull).not.toContain('遇到一个产品分叉需要确认');
+  });
+
+  it('attaches the last assistant reply summary during scan() and truncates long replies cleanly', async () => {
+    const { repos, service, runtime } = harness();
+    await service.initialize();
+    const main = await mainSession(repos);
+    await service.setMainSession(main.id);
+
+    const task = await service.startTask({ title: '长回复截断', doneWhen: ['完成'], agentId: 'claude' });
+    const sideId = task.sessionId!;
+    const longText = `问题背景：${'详情内容'.repeat(200)}请问选哪个方案？`;
+    await repos.sessions.save({
+      id: sideId, agentId: 'claude', state: 'idle', cwd: '/tmp', runId: 'run_side',
+      createdAt: now(), updatedAt: now()
+    });
+    await repos.events.append({ id: 'l1', sessionId: sideId, sequence: 1, type: 'text', timestamp: now(), data: { role: 'user', text: '开始' } });
+    await repos.events.append({ id: 'l2', sessionId: sideId, sequence: 2, type: 'text', timestamp: now(), data: { role: 'assistant', text: longText } });
+
+    await service.scan();
+    await service.flushNow();
+
+    const full = runtime.dispatch.mock.calls.at(-1)![3] as string;
+    const reviewLine = full.split('\n').find(line => line.startsWith('- [review] '))!;
+    expect(reviewLine).toContain('最后回复摘要：问题背景：');
+    expect(reviewLine).toContain(`…（${task.id}）`);
+    const summaryPart = reviewLine.split('最后回复摘要：')[1]!.replace(`（${task.id}）`, '');
+    expect([...summaryPart].length).toBeLessThanOrEqual(501);
+  });
+
+  it('does not leak an earlier turn reply when the latest turn has no assistant text', () => {
+    const summary = summarizeLastAssistantReply([
+      { id: '1', sessionId: 's', sequence: 1, type: 'text', timestamp: now(), data: { role: 'user', text: '第 1 轮' } },
+      { id: '2', sessionId: 's', sequence: 2, type: 'text', timestamp: now(), data: { role: 'assistant', text: '第 1 轮的历史回复' } },
+      { id: '3', sessionId: 's', sequence: 3, type: 'text', timestamp: now(), data: { role: 'user', text: '第 2 轮' } },
+      { id: '4', sessionId: 's', sequence: 4, type: 'tool_call', timestamp: now(), data: { id: 'tc2', name: 'bash', status: 'completed' } }
+    ]);
+    expect(summary).toBe('');
   });
 });

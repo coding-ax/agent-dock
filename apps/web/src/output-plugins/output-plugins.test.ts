@@ -1,4 +1,7 @@
 import { createElement } from 'react';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -30,11 +33,15 @@ import { buildTimelineSections, groupTimelineSections, type TimelineEvent } from
 import { searchTimeline } from '../timeline-search';
 import {
   buildClientOutputPluginRegistry,
+  buildEffectiveGlobalPluginsConfig,
   buildFallbackOutputPluginCatalogItems,
+  buildSessionOutputPluginItems,
   OUTPUT_PLUGINS_QUERY_KEY,
   OutputPluginsCenterPanel,
-  resolveSessionEnabledOutputPluginIds
+  resolveSessionEnabledOutputPluginIds,
+  SessionOutputPluginsDialog
 } from './index';
+import type { Session } from '../api';
 
 const deployApprovalManifest: DeclarativeOutputPluginManifest = {
   id: 'local:deploy-approval',
@@ -248,6 +255,8 @@ describe('Web Output Plugins system', () => {
       )
     );
     expect(html).toContain('data-testid="output-plugins-center"');
+    expect(html).toContain('data-testid="output-plugins-global-scope-banner"');
+    expect(html).toContain('全局默认开关 · 仅影响未单独覆写的会话，不会强行覆盖已在单会话里单独配置的插件');
     expect(html).toContain('交互插件中心');
     expect(html).toContain('询问卡片（AskUserQuestion）');
     expect(html).toContain('操作确认卡（ConfirmAction）');
@@ -256,6 +265,138 @@ describe('Web Output Plugins system', () => {
     expect(html).toContain('broken.json');
     expect(html).toContain('/Users/demo/.agentdock/output-plugins');
     expect(html).toContain('data-testid="output-plugins-reload"');
+  });
+
+  it('renders SessionOutputPluginsDialog with clear per-session scope, override states, reset actions, and dual-session isolation', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const builtinCatalog = buildFallbackOutputPluginCatalogItems();
+    const globalConfig = buildEffectiveGlobalPluginsConfig(builtinCatalog, {
+      plugins: {
+        [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: true,
+        [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: true
+      }
+    });
+
+    const baseSession: Session = {
+      id: 'ses_a',
+      agentId: 'codex',
+      state: 'idle',
+      cwd: '/tmp/project',
+      runId: 'run_a',
+      createdAt: '2026-11-28T00:00:00.000Z',
+      updatedAt: '2026-11-28T00:00:00.000Z',
+      title: '会话 A'
+    };
+
+    const renderDialog = (session: Session, items = builtinCatalog, global = globalConfig) =>
+      renderToStaticMarkup(
+        createElement(QueryClientProvider, { client: qc },
+          createElement(TooltipProvider, null,
+            createElement(SessionOutputPluginsDialog, {
+              session,
+              outputPluginItems: items,
+              outputPluginsGlobalConfig: global,
+              onClose: () => undefined,
+              onOpenGlobalCenter: () => undefined
+            })
+          )
+        )
+      );
+
+    // 1. 默认态（无覆写）：全部跟随全局、不展示重置全部条
+    const inheritHtml = renderDialog(baseSession);
+    expect(inheritHtml).toContain('data-testid="session-output-plugins-dialog"');
+    expect(inheritHtml).toContain('data-session-id="ses_a"');
+    expect(inheritHtml).toContain('当前会话 · 交互插件');
+    expect(inheritHtml).toContain('作用会话：会话 A');
+    expect(inheritHtml).toContain('仅影响当前会话，不改动全局默认与其他会话');
+    expect(inheritHtml).toContain('2/2 启用');
+    expect(inheritHtml).toContain('全部跟随全局默认');
+    expect(inheritHtml).toContain('跟随全局');
+    expect(inheritHtml).toContain('前往全局插件中心管理默认开关与本地插件');
+    expect(inheritHtml).not.toContain('data-testid="session-plugins-reset-all"');
+    expect(inheritHtml).not.toContain('仅本会话关闭');
+
+    // 2. 会话 A 单独关闭 ConfirmAction，同时单独开启全局默认关闭的本地扩展
+    const sessionAOverridden: Session = {
+      ...baseSession,
+      outputPlugins: {
+        [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: false,
+        'local:deploy-approval': true
+      }
+    };
+    const extendedGlobal = buildEffectiveGlobalPluginsConfig(catalogItems, {
+      plugins: {
+        [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: true,
+        [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: true,
+        'local:deploy-approval': false,
+        'local:env-form': true
+      }
+    });
+    const overriddenHtml = renderDialog(sessionAOverridden, catalogItems, extendedGlobal);
+    expect(overriddenHtml).toContain('已独立覆写 2 项');
+    expect(overriddenHtml).toContain('仅本会话关闭');
+    expect(overriddenHtml).toContain('仅本会话开启');
+    expect(overriddenHtml).toContain('跟随全局');
+    expect(overriddenHtml).toContain(`data-testid="session-plugin-reset-${BUILTIN_CONFIRM_ACTION_PLUGIN_ID}"`);
+    expect(overriddenHtml).toContain('data-testid="session-plugin-reset-local:deploy-approval"');
+    expect(overriddenHtml).toContain('data-testid="session-plugins-reset-all"');
+    expect(overriddenHtml).toContain('恢复跟随全局默认');
+
+    // 3. 双会话隔离：会话 A 关闭 ConfirmAction 后，会话 B 仍 100% 跟随全局保持 2/2 启用；
+    //    反过来全局关闭 ConfirmAction 后，若会话 A 显式开启则仍保持开启，会话 B 则跟随全局关闭。
+    const sessionAItems = buildSessionOutputPluginItems(
+      builtinCatalog,
+      globalConfig,
+      { [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: false }
+    );
+    const sessionBItems = buildSessionOutputPluginItems(builtinCatalog, globalConfig, undefined);
+    expect(sessionAItems.filter(p => p.enabled).map(p => p.id)).toEqual([BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]);
+    expect(sessionAItems.find(p => p.id === BUILTIN_CONFIRM_ACTION_PLUGIN_ID)?.override).toBe(false);
+    expect(sessionBItems.filter(p => p.enabled).map(p => p.id)).toEqual([
+      BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+      BUILTIN_CONFIRM_ACTION_PLUGIN_ID
+    ]);
+    expect(sessionBItems.every(p => p.override === null)).toBe(true);
+
+    const globalConfirmOff = buildEffectiveGlobalPluginsConfig(builtinCatalog, {
+      plugins: {
+        [BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]: true,
+        [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: false
+      }
+    });
+    const sessionAPinnedOn = buildSessionOutputPluginItems(
+      builtinCatalog,
+      globalConfirmOff,
+      { [BUILTIN_CONFIRM_ACTION_PLUGIN_ID]: true }
+    );
+    const sessionBFollowsGlobal = buildSessionOutputPluginItems(builtinCatalog, globalConfirmOff, undefined);
+    expect(sessionAPinnedOn.find(p => p.id === BUILTIN_CONFIRM_ACTION_PLUGIN_ID)?.enabled).toBe(true);
+    expect(sessionAPinnedOn.find(p => p.id === BUILTIN_CONFIRM_ACTION_PLUGIN_ID)?.override).toBe(true);
+    expect(sessionBFollowsGlobal.find(p => p.id === BUILTIN_CONFIRM_ACTION_PLUGIN_ID)?.enabled).toBe(false);
+
+    // 4. 归档会话为只读，禁用开关并隐藏重置按钮
+    const archivedHtml = renderDialog({
+      ...sessionAOverridden,
+      archivedAt: '2026-11-28T01:00:00.000Z'
+    }, builtinCatalog, globalConfig);
+    expect(archivedHtml).toContain('当前会话已归档，交互插件配置为只读状态');
+    expect(archivedHtml).not.toContain('data-testid="session-plugins-reset-all"');
+
+    // 5. 源码守卫：会话级弹窗与底栏组件绝不调用全局 saveOutputPluginsConfig 接口
+    const here = dirname(fileURLToPath(import.meta.url));
+    const dialogSource = readFileSync(join(here, 'SessionOutputPluginsDialog.tsx'), 'utf8');
+    const sessionPaneSource = readFileSync(join(here, '..', 'SessionPane.tsx'), 'utf8');
+    const composerSource = readFileSync(join(here, '..', 'Composer.tsx'), 'utf8');
+    const draftComposerSource = readFileSync(join(here, '..', 'DraftComposer.tsx'), 'utf8');
+    expect(dialogSource).toContain('api.setSessionOutputPlugins');
+    expect(dialogSource).not.toContain('saveOutputPluginsConfig');
+    expect(sessionPaneSource).not.toContain('saveOutputPluginsConfig');
+    expect(composerSource).not.toContain('saveOutputPluginsConfig');
+    expect(draftComposerSource).not.toContain('saveOutputPluginsConfig');
+    expect(composerSource).toContain('仅对当前会话生效，不影响全局默认与其他会话');
+    expect(composerSource).toContain('仅对即将创建的会话生效，不影响全局默认与其他会话');
+    expect(composerSource).toContain('全局插件中心');
   });
 
   it('renders builtin ConfirmAction card (pending, confirmed, cancelled, streaming placeholder) and bespoke echo turn', () => {

@@ -21,7 +21,7 @@ describe('会话标题栏精简与聚合布局', () => {
     expect(source).not.toContain('CompanionHeaderNotes');
     expect(source).not.toContain('RetireButton');
     expect(source).not.toContain('<Square size={10} fill="currentColor"/>停止');
-    expect(composerSource).toContain('aria-label="中断当前任务"');
+    expect(composerSource).toContain('aria-label={L("中断当前任务", "Stop current task")}');
     // 底部输入框不再重复占位旧 Token / Context meter，统一迁移到顶栏 Agent 聚合面板。
     expect(composerSource).not.toContain('SessionUsageMeter');
     expect(composerSource).not.toContain('ContextMeter');
@@ -46,21 +46,35 @@ describe('会话标题栏精简与聚合布局', () => {
   });
 
   it('⋯ 菜单完整收纳会话与主会话辅助操作，并支持轻微状态点提示', () => {
-    expect(source).toContain("id: 'schedules', label: '定时任务'");
-    expect(source).toContain("id: 'system-prompt', label: '查看系统提示词'");
-    expect(source).toContain("id: 'handover', label: '托管到飞书机器人'");
-    expect(source).toContain("id: 'handover-open', label: `已托管：${handoverInfo.name}`");
-    expect(source).toContain("id: 'handover-settings', label: '飞书同步设置'");
-    expect(source).toContain("id: 'lark-sync-settings', label: '飞书同步设置'");
+    expect(source).toContain("id: 'session-output-plugins'");
+    expect(source).toContain("openAppDialog('session-output-plugins', { sessionId: session.id })");
+    expect(source).toContain('hasPluginOverrides ? L(" · 覆写", " · Custom") : \'\'');
+    expect(source).toContain('id: \'schedules\', label: L("定时任务", "Schedules")');
+    expect(source).toContain('id: \'system-prompt\', label: L("查看系统提示词", "View System Prompt")');
+    expect(source).toContain('id: \'handover\', label: L("托管到飞书机器人", "Host in Lark Bot")');
+    expect(source).toContain("id: 'handover-open', label: L(`已托管：${handoverInfo.name}`");
+    expect(source).toContain('id: \'handover-settings\', label: L("飞书同步设置", "Lark Sync Settings")');
+    expect(source).toContain('id: \'lark-sync-settings\', label: L("飞书同步设置", "Lark Sync Settings")');
     expect(source).toContain("id: 'companion-notes'");
     expect(source).toContain("id: 'companion-retire'");
     expect(source).toContain('data-menu-indicator={indicator}');
+
+    // 守卫：会话顶栏 ⋯ 菜单绝不直接跳全局交互插件中心（避免误改全局）
+    const menuStart = source.indexOf('const regularMenuGroups: SessionMenuGroup[]');
+    const menuEnd = source.indexOf('const dangerMenuGroups: SessionMenuGroup[]', menuStart);
+    const menuBlock = source.slice(menuStart, menuEnd);
+    expect(menuBlock).toContain("openAppDialog('session-output-plugins', { sessionId: session.id })");
+    expect(menuBlock).not.toContain("openAppDialog('output-plugins')");
+
+    const app = readFileSync(join(here, 'App.tsx'), 'utf8');
+    expect(app).toContain("'session-output-plugins':");
+    expect(app).toContain('<SessionOutputPluginsDialog');
   });
 
   it('把手机扫码入口固定在侧栏底部，而不是会话标题栏', () => {
     expect(source).not.toContain('在手机上打开');
     const settings = readFileSync(join(here, 'SettingsMenu.tsx'), 'utf8');
-    expect(settings).toContain('aria-label="在手机上打开"');
+    expect(settings).toContain("aria-label={t('settings.menu.shareAria')}");
     expect(settings).toContain('<Smartphone');
     expect(settings).toContain('onShare');
     const app = readFileSync(join(here, 'App.tsx'), 'utf8');

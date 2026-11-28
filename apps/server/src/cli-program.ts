@@ -6,7 +6,7 @@ import type {
 } from './sources-router/cli.js';
 import type {
   AssistantCliOptions, DraftCreateCliOptions, MainCliOptions, NotifyCliOptions,
-  TaskAppendCliOptions, TaskReportCliOptions, TaskReviewCliOptions, TaskStartCliOptions, WatchAddCliOptions
+  TaskAnswerCliOptions, TaskAppendCliOptions, TaskReportCliOptions, TaskReviewCliOptions, TaskStartCliOptions, WatchAddCliOptions
 } from './assistant/cli.js';
 import type {
   LarkMessageListenCliOptions, LarkMessageReadCliOptions, LarkMessageSendCliOptions
@@ -178,6 +178,7 @@ export interface CliHandlers {
   taskShow?(id: string, options: AssistantCliOptions): void | Promise<void>;
   taskReview?(id: string, options: TaskReviewCliOptions): void | Promise<void>;
   taskAppend?(id: string, options: TaskAppendCliOptions): void | Promise<void>;
+  taskAnswer?(id: string, options: TaskAnswerCliOptions): void | Promise<void>;
   taskReport?(options: TaskReportCliOptions): void | Promise<void>;
   taskCancel?(id: string, options: AssistantCliOptions & { reason?: string }): void | Promise<void>;
   watchAdd?(options: WatchAddCliOptions): void | Promise<void>;
@@ -667,6 +668,25 @@ Notes:
     .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
     .option('--json', '输出 JSON')
     .action((id, options) => handlers.taskAppend?.(id, options));
+  task.command('answer')
+    .description('主会话小猫原生代答侧边会话末尾的交互卡片（AskUserQuestion / ConfirmAction / 声明式插件）')
+    .argument('<task-id>', '事项 ID')
+    .option('--widget <widget-id>', '卡片 widgetId；不传自动匹配末尾最新未答交互卡')
+    .option('--plugin <plugin-id>', '插件 ID；不传按卡片自动推断')
+    .option('--answer <spec>', '询问卡作答（如 q1=opt_a 或 q1=a,b|理由；单题可直接写选项值），可重复', collect, [])
+    .option('--other <text>', '询问卡自定义补充/代答理由')
+    .option('--answers-json <json>', '完整 AskUserQuestionAnswerItem[] JSON 数组')
+    .option('--decision <decision>', '操作确认卡决策：confirm 或 cancel')
+    .option('--decision-label <label>', '可选：覆盖确认卡决策文案')
+    .option('--comment <text>', '操作确认卡补充意见')
+    .option('--action <value>', '声明式交互卡操作值')
+    .option('--action-label <label>', '声明式交互卡操作文案')
+    .option('--note <text>', '声明式交互卡补充说明')
+    .option('--responder <name>', '可选：覆盖代答小猫名（默认使用当前小猫名）')
+    .option('--mode <mode>', 'queue / interrupt', 'queue')
+    .option('--from <session-id>', '来源会话；默认 $agentdock_session_id')
+    .option('--json', '输出 JSON')
+    .action((id, options) => handlers.taskAnswer?.(id, options));
   task.command('report')
     .description('侧边会话汇报：done / question / blocked')
     .requiredOption('--kind <kind>', 'done / question / blocked')

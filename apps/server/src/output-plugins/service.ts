@@ -109,6 +109,8 @@ export interface SubmitOutputPluginInteractionInput {
   title?: string;
   source: OutputPluginInteractionSource;
   actedBy?: string;
+  responderName?: string;
+  responderSessionId?: string;
   /** `builtin:ask-user-question` 专用作答列表。 */
   answers?: AskUserQuestionAnswerItem[];
   /** `builtin:confirm-action` 专用决策字段。 */
@@ -153,6 +155,10 @@ const webInteractBodySchema = z.object({
   questionId: z.string().trim().min(1).max(200).optional(),
   actionId: z.string().trim().min(1).max(200).optional(),
   title: z.string().trim().max(300).optional(),
+  source: z.enum(['web', 'assistant']).optional(),
+  actedBy: z.string().trim().max(200).optional(),
+  responderName: z.string().trim().max(200).optional(),
+  responderSessionId: z.string().trim().max(200).optional(),
   answers: z.array(askUserQuestionAnswerItemSchema).optional(),
   decision: z.enum(confirmActionDecisions).optional(),
   decisionLabel: z.string().trim().max(120).optional(),
@@ -492,12 +498,17 @@ export class OutputPluginService {
       if (!normalizedAnswers.length || !hasAnyAnswer) {
         throw new RuntimeError('EMPTY_ASK_USER_QUESTION_ANSWER', '请至少选择或填写一项回答后再提交', 400);
       }
+      const responderName = input.responderName?.trim() || undefined;
+      const responderSessionId = input.responderSessionId?.trim() || undefined;
+      const answeredBy = input.actedBy?.trim() || responderName;
       const payload: AskUserQuestionAnswerPayload = {
         version: 1,
         questionId: instanceId,
         ...(input.title?.trim() ? { title: input.title.trim() } : {}),
         source: input.source,
-        ...(input.actedBy?.trim() ? { answeredBy: input.actedBy.trim() } : {}),
+        ...(answeredBy ? { answeredBy } : {}),
+        ...(responderName ? { responderName } : {}),
+        ...(responderSessionId ? { responderSessionId } : {}),
         answeredAt: now(),
         answers: normalizedAnswers
       };
@@ -524,6 +535,9 @@ export class OutputPluginService {
         || input.actionLabel?.trim()
         || (rawDecision === 'confirm' ? '确认执行' : '取消');
       const comment = (input.comment ?? input.note)?.trim() || undefined;
+      const responderName = input.responderName?.trim() || undefined;
+      const responderSessionId = input.responderSessionId?.trim() || undefined;
+      const decidedBy = input.actedBy?.trim() || responderName;
       const payload: ConfirmActionInteractionPayload = {
         version: 1,
         pluginId: BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
@@ -534,7 +548,9 @@ export class OutputPluginService {
         decisionLabel,
         ...(comment ? { comment } : {}),
         source: input.source,
-        ...(input.actedBy?.trim() ? { decidedBy: input.actedBy.trim() } : {}),
+        ...(decidedBy ? { decidedBy } : {}),
+        ...(responderName ? { responderName } : {}),
+        ...(responderSessionId ? { responderSessionId } : {}),
         decidedAt: now()
       };
       return {
@@ -561,6 +577,9 @@ export class OutputPluginService {
       throw new RuntimeError('EMPTY_OUTPUT_PLUGIN_INTERACTION', '请先选择操作或填写表单内容后再提交', 400);
     }
 
+    const responderName = input.responderName?.trim() || undefined;
+    const responderSessionId = input.responderSessionId?.trim() || undefined;
+    const actedBy = input.actedBy?.trim() || responderName;
     const payload: DeclarativeOutputPluginInteractionPayload = {
       version: 1,
       pluginId: plugin.id,
@@ -568,7 +587,9 @@ export class OutputPluginService {
       instanceId,
       ...(input.title?.trim() ? { title: input.title.trim() } : {}),
       source: input.source,
-      ...(input.actedBy?.trim() ? { actedBy: input.actedBy.trim() } : {}),
+      ...(actedBy ? { actedBy } : {}),
+      ...(responderName ? { responderName } : {}),
+      ...(responderSessionId ? { responderSessionId } : {}),
       actedAt: now(),
       ...(actionValue ? { actionValue } : {}),
       ...(actionLabel ? { actionLabel } : {}),
@@ -711,7 +732,10 @@ export function registerOutputPluginRoutes(app: FastifyInstance, service: Output
         sessionId: request.params.id,
         instanceId,
         title: parsed.data.title,
-        source: 'web',
+        source: parsed.data.source ?? 'web',
+        actedBy: parsed.data.actedBy,
+        responderName: parsed.data.responderName,
+        responderSessionId: parsed.data.responderSessionId,
         answers: parsed.data.answers,
         decision: parsed.data.decision,
         decisionLabel: parsed.data.decisionLabel,

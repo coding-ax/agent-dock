@@ -46,7 +46,7 @@ import { runScheduleAdd, runScheduleList, runSchedulePause, runScheduleRemove, r
 import { runUsageBreakdown, runUsageQuota, runUsageSession, runUsageSummary } from './usage-cli.js';
 import {
   runDraftCreate, runDraftDiscard, runDraftList, runDraftSend, runMainClear, runMainGet, runMainRestore, runMainSet,
-  runNotify, runTaskCancel, runTaskList, runTaskPlan,
+  runNotify, runTaskAnswer, runTaskCancel, runTaskList, runTaskPlan,
   runTaskAppend, runTaskReport, runTaskReview, runTaskShow, runTaskStart, runWatchAdd, runWatchControl,
   runWatchList, runWatchRemove, runWatchShow
 } from './assistant/cli.js';
@@ -262,6 +262,7 @@ async function main() {
     taskShow: async (id, options) => { process.stdout.write(await runTaskShow(id, options)); },
     taskReview: async (id, options) => { process.stdout.write(await runTaskReview(id, options)); },
     taskAppend: async (id, options) => { process.stdout.write(await runTaskAppend(id, options)); },
+    taskAnswer: async (id, options) => { process.stdout.write(await runTaskAnswer(id, options)); },
     taskReport: async options => { process.stdout.write(await runTaskReport(options)); },
     taskCancel: async (id, options) => { process.stdout.write(await runTaskCancel(id, options)); },
     watchAdd: async options => { process.stdout.write(await runWatchAdd(options)); },

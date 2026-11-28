@@ -83,6 +83,8 @@ export const declarativeOutputPluginInteractionSchema = z.object({
   title: z.string().trim().max(300).optional(),
   source: z.enum(outputPluginInteractionSources),
   actedBy: z.string().trim().max(200).optional(),
+  responderName: z.string().trim().max(200).optional(),
+  responderSessionId: z.string().trim().max(200).optional(),
   actedAt: z.string().min(1),
   actionValue: z.string().trim().max(200).optional(),
   actionLabel: z.string().trim().max(200).optional(),
@@ -321,8 +323,10 @@ export function formatDeclarativeInteractionForAgent(
   manifest: DeclarativeOutputPluginManifest,
   payload: DeclarativeOutputPluginInteractionPayload
 ): string {
-  const sourceLabel = payload.source === 'lark' ? '飞书' : '网页端';
-  const actorSuffix = payload.actedBy?.trim() ? ` · ${payload.actedBy.trim()}` : '';
+  const isAssistant = payload.source === 'assistant';
+  const responder = payload.responderName?.trim() || payload.actedBy?.trim();
+  const sourceLabel = isAssistant ? '小猫代答' : payload.source === 'lark' ? '飞书' : '网页端';
+  const actorSuffix = responder ? ` · ${responder}` : '';
   const fieldsSummary = payload.fields.length
     ? payload.fields.map(field => `- ${field.label}：${field.displayValue || field.value}`).join('\n')
     : '';
@@ -334,7 +338,7 @@ export function formatDeclarativeInteractionForAgent(
       instanceId: payload.instanceId,
       title: payload.title ?? manifest.name,
       source: sourceLabel,
-      actedBy: payload.actedBy ?? '',
+      actedBy: responder ?? '',
       actionValue: payload.actionValue ?? '',
       actionLabel: payload.actionLabel ?? payload.actionValue ?? '',
       fieldsSummary,
@@ -344,7 +348,9 @@ export function formatDeclarativeInteractionForAgent(
 
   const titlePart = payload.title?.trim() ? `「${payload.title.trim()}」` : `「${manifest.name}」`;
   const lines: string[] = [
-    `用户已在${titlePart}交互卡片中完成操作（来源：${sourceLabel}${actorSuffix}）：`
+    isAssistant
+      ? `主会话小猫${responder ? `（${responder}）` : ''}已在${titlePart}交互卡片中代用户完成操作（来源：${sourceLabel}${actorSuffix}）：`
+      : `用户已在${titlePart}交互卡片中完成操作（来源：${sourceLabel}${actorSuffix}）：`
   ];
   if (payload.actionLabel || payload.actionValue) {
     const label = payload.actionLabel || payload.actionValue!;
@@ -358,7 +364,11 @@ export function formatDeclarativeInteractionForAgent(
     lines.push(`- 补充说明：${payload.note.trim()}`);
   }
   lines.push('');
-  lines.push('请基于以上用户的明确操作继续执行下一步。');
+  lines.push(
+    isAssistant
+      ? '请基于以上主会话代答的操作结果继续执行下一步。'
+      : '请基于以上用户的明确操作继续执行下一步。'
+  );
   return lines.join('\n');
 }
 
@@ -373,7 +383,9 @@ export function summarizeDeclarativeInteraction(
     if (val) parts.push(`${field.label}=${val}`);
   }
   if (payload.note?.trim()) parts.push(payload.note.trim());
-  const prefix = payload.title?.trim() ? `已响应「${payload.title.trim()}」` : `已响应「${manifest.name}」`;
+  const prefix = payload.source === 'assistant'
+    ? (payload.title?.trim() ? `小猫已代答「${payload.title.trim()}」` : `小猫已代答「${manifest.name}」`)
+    : (payload.title?.trim() ? `已响应「${payload.title.trim()}」` : `已响应「${manifest.name}」`);
   if (!parts.length) return prefix;
   const full = `${prefix}：${parts.join(' / ')}`;
   return full.length > 80 ? `${full.slice(0, 79)}…` : full;
@@ -494,9 +506,13 @@ export function createDeclarativeOutputPlugin(
           formatInteractionForAgent: (payload: DeclarativeOutputPluginInteractionPayload) => formatDeclarativeInteractionForAgent(manifest, payload),
           summarizeInteraction: (payload: DeclarativeOutputPluginInteractionPayload) => summarizeDeclarativeInteraction(manifest, payload),
           extractInteractionSearchText: (payload: DeclarativeOutputPluginInteractionPayload) => {
-            const parts: string[] = [manifest.name, payload.source === 'lark' ? '飞书' : '网页端'];
+            const parts: string[] = [
+              manifest.name,
+              payload.source === 'assistant' ? '小猫代答' : payload.source === 'lark' ? '飞书' : '网页端'
+            ];
             if (payload.title) parts.push(payload.title);
-            if (payload.actedBy) parts.push(payload.actedBy);
+            if (payload.responderName) parts.push(payload.responderName, `${payload.responderName}代答`);
+            if (payload.actedBy && payload.actedBy !== payload.responderName) parts.push(payload.actedBy);
             if (payload.actionLabel) parts.push(payload.actionLabel);
             for (const field of payload.fields) {
               parts.push(field.label, field.displayValue || field.value);

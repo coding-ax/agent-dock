@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createRepositories } from '@agent-dock/agent-dock-storage';
-import { RuntimeError, type RepositoryBundle, type Session, type TaskRecord } from '@agent-dock/agent-dock-shared';
+import { ASSISTANT_REPLY_ORIGIN, RuntimeError, type RepositoryBundle, type Session, type TaskRecord } from '@agent-dock/agent-dock-shared';
 import { isDaemonRunning, readDaemonStatus, resolveDaemonDir } from './daemon/daemon.js';
 import { formatSessionList, formatTranscript, sessionHeader, writeTranscript } from './session-cli-format.js';
 import { assertDelegatedControl, extendedSessionPeerIds } from './sources-router/session-peers.js';
@@ -136,7 +136,33 @@ export async function runSessionSend(targetId: string, message: string, options:
   const prompt = message.trim();
   if (!prompt) throw new Error('消息不能为空。');
   if (options.mode && options.mode !== 'queue' && options.mode !== 'interrupt') throw new Error('发送模式只能是 queue 或 interrupt。');
-  return controlPeer(targetId, `/api/sessions/${encodeURIComponent(targetId)}/send`, 'POST', options, { prompt, mode: options.mode ?? 'queue' });
+  const state = requireDaemon(options.daemonDir);
+  const fromId = await assertPeerTarget(state.database, targetId, options.from);
+  // 若发送方为主会话小猫且目标为侧边会话，自动标注 origin='assistant_reply'，避免伪装成人类直接输入。
+  let origin: string | undefined;
+  const repos = createRepositories(state.database);
+  try {
+    const [mainSessionId, fromSession, targetSession] = await Promise.all([
+      repos.config.get('assistant.main'),
+      repos.sessions.get(fromId),
+      repos.sessions.get(targetId)
+    ]);
+    const isMainAssistant = Boolean(
+      (mainSessionId?.trim() && mainSessionId.trim() === fromId)
+      || fromSession?.source === 'assistant-main'
+    );
+    if (isMainAssistant && targetSession?.source === 'side-chat') {
+      origin = ASSISTANT_REPLY_ORIGIN;
+    }
+  } finally {
+    repos.close();
+  }
+  const result = await callDaemon(state, `/api/sessions/${encodeURIComponent(targetId)}/send`, 'POST', {
+    prompt,
+    mode: options.mode ?? 'queue',
+    ...(origin ? { origin } : {})
+  });
+  return JSON.stringify({ ok: true, from: fromId, to: targetId, ...result }) + '\n';
 }
 
 export async function runSessionInterrupt(targetId: string, options: SessionControlOptions = {}): Promise<string> {

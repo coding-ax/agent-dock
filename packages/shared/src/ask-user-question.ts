@@ -76,7 +76,7 @@ export type StreamingAskUserQuestionSplit =
   | { kind: 'pending'; proseText: string; partialTitle?: string }
   | { kind: 'complete'; proseText: string; spec: AskUserQuestionSpec; rawXml: string };
 
-export const askUserQuestionSources = ['web', 'lark'] as const;
+export const askUserQuestionSources = ['web', 'lark', 'assistant'] as const;
 export type AskUserQuestionSource = (typeof askUserQuestionSources)[number];
 
 export const askUserQuestionAnswerItemSchema = z.object({
@@ -95,6 +95,8 @@ export const askUserQuestionAnswerPayloadSchema = z.object({
   title: z.string().max(300).optional(),
   source: z.enum(askUserQuestionSources),
   answeredBy: z.string().max(200).optional(),
+  responderName: z.string().trim().max(200).optional(),
+  responderSessionId: z.string().trim().max(200).optional(),
   answeredAt: z.string().min(1),
   answers: z.array(askUserQuestionAnswerItemSchema).min(1)
 });
@@ -300,11 +302,15 @@ export function parseAskUserQuestionAnswer(raw: string | null | undefined): AskU
 }
 
 export function formatAskUserQuestionAnswerForAgent(payload: AskUserQuestionAnswerPayload): string {
-  const sourceLabel = payload.source === 'lark' ? '飞书' : '网页端';
-  const actorSuffix = payload.answeredBy?.trim() ? ` · ${payload.answeredBy.trim()}` : '';
+  const isAssistant = payload.source === 'assistant';
+  const responder = payload.responderName?.trim() || payload.answeredBy?.trim();
+  const sourceLabel = isAssistant ? '小猫代答' : payload.source === 'lark' ? '飞书' : '网页端';
+  const actorSuffix = responder ? ` · ${responder}` : '';
   const titlePart = payload.title?.trim() ? `「${payload.title.trim()}」` : '';
   const lines: string[] = [
-    `用户已回答你刚才的询问${titlePart}（来源：${sourceLabel}${actorSuffix}）：`
+    isAssistant
+      ? `主会话小猫${responder ? `（${responder}）` : ''}已代用户回答你刚才的询问${titlePart}（来源：${sourceLabel}${actorSuffix}）：`
+      : `用户已回答你刚才的询问${titlePart}（来源：${sourceLabel}${actorSuffix}）：`
   ];
 
   payload.answers.forEach((item, index) => {
@@ -324,7 +330,11 @@ export function formatAskUserQuestionAnswerForAgent(payload: AskUserQuestionAnsw
   });
 
   lines.push('');
-  lines.push('请基于以上用户的明确选择继续执行下一步。');
+  lines.push(
+    isAssistant
+      ? '请基于以上主会话代答的明确结论继续执行下一步。'
+      : '请基于以上用户的明确选择继续执行下一步。'
+  );
   return lines.join('\n');
 }
 
@@ -337,7 +347,9 @@ export function summarizeAskUserQuestionAnswer(payload: AskUserQuestionAnswerPay
     return parts.join('、');
   }).filter(Boolean);
   const joined = snippets.join(' / ');
-  const prefix = payload.title?.trim() ? `已回复「${payload.title.trim()}」` : '已回复询问';
+  const prefix = payload.source === 'assistant'
+    ? (payload.title?.trim() ? `小猫已代答「${payload.title.trim()}」` : '小猫已代答询问')
+    : (payload.title?.trim() ? `已回复「${payload.title.trim()}」` : '已回复询问');
   if (!joined) return prefix;
   const full = `${prefix}：${joined}`;
   return full.length > 80 ? `${full.slice(0, 79)}…` : full;
@@ -359,9 +371,13 @@ export function extractAskUserQuestionSearchText(spec: AskUserQuestionSpec): str
 }
 
 export function extractAskUserQuestionAnswerSearchText(payload: AskUserQuestionAnswerPayload): string {
-  const parts: string[] = ['已回复询问', payload.source === 'lark' ? '飞书' : '网页端'];
+  const parts: string[] = [
+    payload.source === 'assistant' ? '小猫代答' : '已回复询问',
+    payload.source === 'assistant' ? '小猫代答' : payload.source === 'lark' ? '飞书' : '网页端'
+  ];
   if (payload.title) parts.push(payload.title);
-  if (payload.answeredBy) parts.push(payload.answeredBy);
+  if (payload.responderName) parts.push(payload.responderName, `${payload.responderName}代答`);
+  if (payload.answeredBy && payload.answeredBy !== payload.responderName) parts.push(payload.answeredBy);
   for (const item of payload.answers) {
     parts.push(item.prompt);
     for (const label of item.selectedLabels) parts.push(label);

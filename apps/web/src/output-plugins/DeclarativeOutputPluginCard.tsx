@@ -3,9 +3,7 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
-  ExternalLink,
-  Globe2,
-  Send
+  ExternalLink
 } from 'lucide-react';
 import type {
   DeclarativeInteractionField,
@@ -16,7 +14,9 @@ import type {
 } from '@agent-dock/agent-dock-shared';
 import { Spinner } from '../Loaders';
 import { UserMessageTime } from '../SendTimeHint';
+import { InteractionSourceBadge } from './InteractionSourceBadge';
 import { PluginIcon } from './PluginIcon';
+import { useBi } from '../i18n';
 
 export interface DeclarativeCardInteractPayload {
   actionValue?: string;
@@ -43,26 +43,6 @@ const toneBadge: Record<OutputPluginAccentTone, string> = {
   zinc: 'border-zinc-200 bg-zinc-100 text-zinc-600'
 };
 
-function InteractionSourceBadge({ source, actedBy }: { source: 'web' | 'lark'; actedBy?: string }) {
-  const isLark = source === 'lark';
-  const label = isLark
-    ? (actedBy?.trim() ? `飞书 · ${actedBy.trim()}` : '飞书')
-    : (actedBy?.trim() ? `网页端 · ${actedBy.trim()}` : '网页端');
-  return (
-    <span
-      data-plugin-source={source}
-      className={`inline-flex max-w-full shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ${
-        isLark
-          ? 'border-blue-200 bg-blue-50 text-blue-700 dark:text-blue-300'
-          : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
-      }`}
-    >
-      {isLark ? <Send size={10} className="shrink-0"/> : <Globe2 size={10} className="shrink-0"/>}
-      <span className="truncate">{label}</span>
-    </span>
-  );
-}
-
 /** 声明式插件流式未闭合占位条（彻底隐藏裸 XML 源码）。 */
 export const DeclarativeOutputPluginStreamingPlaceholder = memo(function DeclarativeOutputPluginStreamingPlaceholder({
   plugin,
@@ -71,6 +51,7 @@ export const DeclarativeOutputPluginStreamingPlaceholder = memo(function Declara
   plugin: OutputPluginMetadata;
   title?: string;
 }) {
+  const L = useBi();
   return (
     <div
       role="status"
@@ -81,7 +62,7 @@ export const DeclarativeOutputPluginStreamingPlaceholder = memo(function Declara
       <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500 ui-live-dot"/>
       <PluginIcon name={plugin.icon} size={15} className="shrink-0 text-sky-600 dark:text-sky-400"/>
       <span className="ui-shimmer-text min-w-0 truncate font-medium">
-        {title ? `正在生成「${title}」卡片…` : `正在生成「${plugin.name}」卡片…`}
+        {title ? L(`正在生成「${title}」卡片…`, `Generating "${title}" card…`) : L(`正在生成「${plugin.name}」卡片…`, `Generating "${plugin.name}" card…`)}
       </span>
     </div>
   );
@@ -113,6 +94,7 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
   error?: string;
   onInteract?(input: DeclarativeCardInteractPayload): void | Promise<void>;
 }) {
+  const L = useBi();
   const [note, setNote] = useState('');
   const [formValues, setFormValues] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
@@ -130,16 +112,30 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
   }, [spec.kind, spec.fields, formValues]);
 
   if (answered) {
+    const isAssistant = answered.source === 'assistant';
     return (
       <section
-        aria-label={`${spec.title || plugin.name}（已响应）`}
+        aria-label={L(`${spec.title || plugin.name}（${isAssistant ? '小猫已代答' : '已响应'}）`, `${spec.title || plugin.name} (${isAssistant ? 'Kitten Answered' : 'Responded'})`)}
         data-output-plugin-card={plugin.id}
         data-output-plugin-instance={spec.id}
         data-output-plugin-state="answered"
-        className="ui-timeline-item my-3 max-w-[78ch] overflow-hidden rounded-2xl border border-emerald-200/80 bg-[rgb(var(--surface))]"
+        data-output-plugin-source={answered.source}
+        className={`ui-timeline-item my-3 max-w-[78ch] overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] ${
+          isAssistant ? 'ui-kitten-card' : 'border-emerald-200/80'
+        }`}
       >
-        <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/75 bg-emerald-50/55 px-3.5 py-2.5">
-          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300">
+        <div
+          className={`flex flex-wrap items-center gap-2 border-b border-zinc-200/75 px-3.5 py-2.5 ${
+            isAssistant ? 'ui-kitten-card-header' : 'bg-emerald-50/55'
+          }`}
+        >
+          <span
+            className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg border ${
+              isAssistant
+                ? 'ui-kitten-icon-box'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
+            }`}
+          >
             <Check size={13} className="ui-icon-pop"/>
           </span>
           <div className="min-w-0 flex-1">
@@ -147,18 +143,35 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
               <span className="truncate text-[13px] font-semibold text-zinc-900">
                 {spec.title || plugin.name}
               </span>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
-                已响应
+              <span
+                className={`rounded-full border px-1.5 py-px text-[11px] font-medium ${
+                  isAssistant
+                    ? 'ui-kitten-chip'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
+                }`}
+              >
+                {isAssistant ? L("已代答", "Answered") : L("已响应", "Responded")}
               </span>
             </div>
           </div>
-          <InteractionSourceBadge source={answered.source} actedBy={answered.actedBy}/>
+          <InteractionSourceBadge
+            source={answered.source}
+            actorName={answered.actedBy}
+            responderName={answered.responderName}
+            dataAttr="plugin"
+          />
         </div>
         <div className="space-y-1.5 px-3.5 py-2.5 text-[12.5px] leading-5 text-zinc-700">
           {(answered.actionLabel || answered.actionValue) && (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-zinc-500">操作：</span>
-              <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200/80 bg-emerald-50/75 px-2 py-0.5 text-[12px] font-medium text-emerald-800 dark:text-emerald-300">
+              <span className="text-zinc-500">{L("操作：", "Action: ")}</span>
+              <span
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[12px] font-medium ${
+                  isAssistant
+                    ? 'ui-kitten-chip'
+                    : 'border-emerald-200/80 bg-emerald-50/75 text-emerald-800 dark:text-emerald-300'
+                }`}
+              >
                 <Check size={11} className="shrink-0"/>
                 <span>{answered.actionLabel || answered.actionValue}</span>
               </span>
@@ -206,7 +219,7 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
     }
     void onInteract({
       actionValue: 'submit',
-      actionLabel: spec.submitLabel || '提交',
+      actionLabel: spec.submitLabel || L("提交", "Submit"),
       fields
     });
   };
@@ -283,8 +296,8 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
             disabled={disabled || submitting}
             value={note}
             onChange={event => setNote(event.target.value)}
-            aria-label={`${spec.title || plugin.name} - 补充说明`}
-            placeholder={spec.notePlaceholder || '可选：输入补充说明或审批备注…'}
+            aria-label={L(`${spec.title || plugin.name} - 补充说明`, `${spec.title || plugin.name} - Note`)}
+            placeholder={spec.notePlaceholder || L("可选：输入补充说明或审批备注…", "Optional: add a note or approval comment…")}
             className="ui-field w-full resize-y rounded-xl border border-zinc-200 bg-[rgb(var(--bg))] px-3 py-2 text-[13px] leading-5 text-zinc-900 placeholder:text-zinc-400 disabled:opacity-60"
           />
         )}
@@ -304,7 +317,7 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
                     onChange={event => setFormValues(prev => ({ ...prev, [field.name]: event.target.value }))}
                     className="ui-field h-9 w-full rounded-xl border border-zinc-200 bg-[rgb(var(--bg))] px-3 text-[13px] text-zinc-900 disabled:opacity-60"
                   >
-                    <option value="">{field.placeholder || `请选择${field.label}`}</option>
+                    <option value="">{field.placeholder || L(`请选择${field.label}`, `Select ${field.label}`)}</option>
                     {field.options.map(opt => (
                       <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
@@ -315,7 +328,7 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
                     disabled={disabled || submitting}
                     value={formValues[field.name] ?? ''}
                     onChange={event => setFormValues(prev => ({ ...prev, [field.name]: event.target.value }))}
-                    placeholder={field.placeholder || `请输入${field.label}`}
+                    placeholder={field.placeholder || L(`请输入${field.label}`, `Enter ${field.label}`)}
                     className="ui-field w-full resize-y rounded-xl border border-zinc-200 bg-[rgb(var(--bg))] px-3 py-2 text-[13px] leading-5 text-zinc-900 placeholder:text-zinc-400 disabled:opacity-60"
                   />
                 ) : (
@@ -324,7 +337,7 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
                     disabled={disabled || submitting}
                     value={formValues[field.name] ?? ''}
                     onChange={event => setFormValues(prev => ({ ...prev, [field.name]: event.target.value }))}
-                    placeholder={field.placeholder || `请输入${field.label}`}
+                    placeholder={field.placeholder || L(`请输入${field.label}`, `Enter ${field.label}`)}
                     className="ui-field h-9 w-full rounded-xl border border-zinc-200 bg-[rgb(var(--bg))] px-3 text-[13px] text-zinc-900 placeholder:text-zinc-400 disabled:opacity-60"
                   />
                 )}
@@ -365,7 +378,7 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
                       : 'border border-zinc-200 bg-[rgb(var(--surface))] text-zinc-800 hover:border-zinc-300 hover:bg-zinc-100'
                 }`}
               >
-                {submitting && <Spinner size={12} label="提交中"/>}
+                {submitting && <Spinner size={12} label={L("提交中", "Submitting")}/>}
                 <span>{action.label}</span>
               </button>
             ))}
@@ -376,7 +389,7 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
       {spec.kind === 'form-card' && (
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200/80 bg-zinc-50/55 px-4 py-2.5">
           <span className="min-w-0 text-[12px] text-zinc-500">
-            {disabledReason || (formReady ? '填写完成，点击提交继续对话' : '请完善必填项后提交')}
+            {disabledReason || (formReady ? L("填写完成，点击提交继续对话", "Ready — click submit to continue") : L("请完善必填项后提交", "Complete required fields before submitting"))}
           </span>
           <button
             type="button"
@@ -385,8 +398,8 @@ export const DeclarativeOutputPluginCard = memo(function DeclarativeOutputPlugin
             onClick={handleFormSubmit}
             className="ui-press ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-accent px-4 text-[13px] font-medium text-accent-fg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {submitting ? <Spinner size={13} label="正在提交"/> : <Check size={14}/>}
-            <span>{submitting ? '提交中…' : (spec.submitLabel || '提交')}</span>
+            {submitting ? <Spinner size={13} label={L("正在提交", "Submitting")}/> : <Check size={14}/>}
+            <span>{submitting ? L("提交中…", "Submitting…") : (spec.submitLabel || L("提交", "Submit"))}</span>
           </button>
         </footer>
       )}
@@ -404,6 +417,7 @@ export const DeclarativeOutputPluginInteractionCard = memo(function DeclarativeO
   payload: DeclarativeOutputPluginInteractionPayload;
   timestamp: string;
 }) {
+  const isAssistant = payload.source === 'assistant';
   return (
     <div
       data-output-plugin-interaction-card={plugin.id}
@@ -411,9 +425,19 @@ export const DeclarativeOutputPluginInteractionCard = memo(function DeclarativeO
       data-output-plugin-source={payload.source}
       className="ui-user-send-time-row group/msg ui-timeline-item relative my-6 flex flex-col items-end"
     >
-      <div className="w-full max-w-[min(100%,560px)] overflow-hidden rounded-2xl border border-sky-200/90 bg-[rgb(var(--surface))] text-left shadow-[0_2px_12px_rgba(14,165,233,0.06)]">
-        <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200/75 bg-sky-50/65 px-3.5 py-2">
-          <CheckCircle2 size={14} className="shrink-0 text-sky-600 dark:text-sky-400"/>
+      <div
+        className={`w-full max-w-[min(100%,560px)] overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] text-left ${
+          isAssistant
+            ? 'ui-kitten-card'
+            : 'border-sky-200/90 shadow-[0_2px_12px_rgba(14,165,233,0.06)]'
+        }`}
+      >
+        <div
+          className={`flex flex-wrap items-center gap-2 border-b border-zinc-200/75 px-3.5 py-2 ${
+            isAssistant ? 'ui-kitten-card-header' : 'bg-sky-50/65'
+          }`}
+        >
+          <CheckCircle2 size={14} className={`shrink-0 ${isAssistant ? 'ui-kitten-accent-icon' : 'text-sky-600 dark:text-sky-400'}`}/>
           <span className="shrink-0 text-[12px] font-semibold text-zinc-900">
             {payload.pluginName || plugin.name}
           </span>
@@ -421,14 +445,25 @@ export const DeclarativeOutputPluginInteractionCard = memo(function DeclarativeO
             <span className="min-w-0 truncate text-[12px] text-zinc-500">· {payload.title}</span>
           )}
           <div className="ml-auto flex max-w-full shrink-0 items-center">
-            <InteractionSourceBadge source={payload.source} actedBy={payload.actedBy}/>
+            <InteractionSourceBadge
+              source={payload.source}
+              actorName={payload.actedBy}
+              responderName={payload.responderName}
+              dataAttr="plugin"
+            />
           </div>
         </div>
         <div className="space-y-2 px-3.5 py-2.5 text-[13px] leading-5">
           {(payload.actionLabel || payload.actionValue) && (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="inline-flex items-center gap-1 rounded-lg border border-sky-200/90 bg-sky-50/85 px-2.5 py-0.5 font-medium text-sky-900 dark:text-sky-200">
-                <Check size={12} className="shrink-0 text-sky-600 dark:text-sky-400"/>
+              <span
+                className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-0.5 font-medium ${
+                  isAssistant
+                    ? 'ui-kitten-chip'
+                    : 'border-sky-200/90 bg-sky-50/85 text-sky-900 dark:text-sky-200'
+                }`}
+              >
+                <Check size={12} className={`shrink-0 ${isAssistant ? 'ui-kitten-accent-icon' : 'text-sky-600 dark:text-sky-400'}`}/>
                 <span>{payload.actionLabel || payload.actionValue}</span>
               </span>
             </div>

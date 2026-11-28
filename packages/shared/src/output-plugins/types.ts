@@ -39,8 +39,58 @@ export const outputPluginIconNames = [
 ] as const;
 export type OutputPluginIconName = (typeof outputPluginIconNames)[number] | (string & {});
 
-export const outputPluginInteractionSources = ['web', 'lark'] as const;
+export const outputPluginInteractionSources = ['web', 'lark', 'assistant'] as const;
 export type OutputPluginInteractionSource = (typeof outputPluginInteractionSources)[number];
+
+/** 主会话小猫向侧边会话发送自然语言回复/指示/返工轮次的 task/event origin。 */
+export const ASSISTANT_REPLY_ORIGIN = 'assistant_reply';
+/** 主会话小猫向侧边会话代答/拍板轮次的兼容 origin 别名。 */
+export const ASSISTANT_ANSWER_ORIGIN = 'assistant_answer';
+
+export interface AssistantReplyOriginMeta {
+  kind: 'reply' | 'answer';
+  responderName?: string;
+}
+
+/**
+ * 识别由主会话小猫发往侧边会话的续跑/回复轮次 origin：
+ * - 精确匹配 `assistant_reply` / `assistant_answer`
+ * - 兼容携带小猫名后缀的 `assistant_reply:<name>` / `assistant_answer:<name>`
+ */
+export function parseAssistantReplyOrigin(origin: string | null | undefined): AssistantReplyOriginMeta | null {
+  if (!origin) return null;
+  const trimmed = origin.trim();
+  if (trimmed === ASSISTANT_REPLY_ORIGIN) return { kind: 'reply' };
+  if (trimmed === ASSISTANT_ANSWER_ORIGIN) return { kind: 'answer' };
+  if (trimmed.startsWith(`${ASSISTANT_REPLY_ORIGIN}:`)) {
+    const responderName = trimmed.slice(ASSISTANT_REPLY_ORIGIN.length + 1).trim();
+    return { kind: 'reply', ...(responderName ? { responderName } : {}) };
+  }
+  if (trimmed.startsWith(`${ASSISTANT_ANSWER_ORIGIN}:`)) {
+    const responderName = trimmed.slice(ASSISTANT_ANSWER_ORIGIN.length + 1).trim();
+    return { kind: 'answer', ...(responderName ? { responderName } : {}) };
+  }
+  return null;
+}
+
+export function isAssistantReplyOrigin(origin: string | null | undefined): boolean {
+  return parseAssistantReplyOrigin(origin) !== null;
+}
+
+/** 统一格式化输出插件交互来源标签（网页端 / 飞书 / 小猫代答）。 */
+export function formatOutputPluginInteractionSourceLabel(
+  source: OutputPluginInteractionSource,
+  options: { actorName?: string; responderName?: string } = {}
+): string {
+  const actor = options.responderName?.trim() || options.actorName?.trim();
+  if (source === 'assistant') {
+    return actor ? `${actor}代答` : '小猫代答';
+  }
+  if (source === 'lark') {
+    return actor ? `飞书 · ${actor}` : '飞书';
+  }
+  return actor ? `网页端 · ${actor}` : '网页端';
+}
 
 export const declarativePluginKinds = ['action-card', 'form-card', 'info-card'] as const;
 export type DeclarativePluginKind = (typeof declarativePluginKinds)[number];

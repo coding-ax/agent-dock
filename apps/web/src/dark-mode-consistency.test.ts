@@ -63,5 +63,8 @@ describe('暗色模式一致性', () => {
     expect(css).toContain('.text-sky-900');
     expect(css).toContain('.bg-sky-600.text-white');
     expect(css).toContain('.bg-blue-600.text-white');
+    expect(css).toContain('html[data-theme="dark"] .ui-kitten-badge');
+    expect(css).toContain('html[data-theme="dark"] .ui-kitten-card');
+    expect(css).toContain('html[data-theme="dark"] .ui-kitten-reply-bubble');
   });
 });

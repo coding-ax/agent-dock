@@ -54,6 +54,8 @@ export const confirmActionInteractionPayloadSchema = z.object({
   comment: z.string().trim().max(4_000).optional(),
   source: z.enum(outputPluginInteractionSources),
   decidedBy: z.string().trim().max(200).optional(),
+  responderName: z.string().trim().max(200).optional(),
+  responderSessionId: z.string().trim().max(200).optional(),
   decidedAt: z.string().min(1)
 });
 
@@ -215,13 +217,17 @@ export function parseConfirmActionInteraction(raw: string | null | undefined): C
 }
 
 export function formatConfirmActionInteractionForAgent(payload: ConfirmActionInteractionPayload): string {
-  const sourceLabel = payload.source === 'lark' ? '飞书' : '网页端';
-  const actorSuffix = payload.decidedBy?.trim() ? ` · ${payload.decidedBy.trim()}` : '';
+  const isAssistant = payload.source === 'assistant';
+  const responder = payload.responderName?.trim() || payload.decidedBy?.trim();
+  const sourceLabel = isAssistant ? '小猫代答' : payload.source === 'lark' ? '飞书' : '网页端';
+  const actorSuffix = responder ? ` · ${responder}` : '';
   const titlePart = payload.title?.trim() ? `「${payload.title.trim()}」` : '';
   const verb = payload.decision === 'confirm' ? '确认放行' : '取消操作';
 
   const lines: string[] = [
-    `用户已对操作确认卡${titlePart}做出决定：${verb}（${payload.decisionLabel} / ${payload.decision}，来源：${sourceLabel}${actorSuffix}）。`
+    isAssistant
+      ? `主会话小猫${responder ? `（${responder}）` : ''}已代用户对操作确认卡${titlePart}做出决定：${verb}（${payload.decisionLabel} / ${payload.decision}，来源：${sourceLabel}${actorSuffix}）。`
+      : `用户已对操作确认卡${titlePart}做出决定：${verb}（${payload.decisionLabel} / ${payload.decision}，来源：${sourceLabel}${actorSuffix}）。`
   ];
   if (payload.comment?.trim()) {
     lines.push('');
@@ -230,14 +236,20 @@ export function formatConfirmActionInteractionForAgent(payload: ConfirmActionInt
   lines.push('');
   lines.push(
     payload.decision === 'confirm'
-      ? '请严格按照用户确认的范围（如有补充意见请一并遵循）立即继续执行下一步。'
-      : '用户已取消该操作，请停止执行该动作，并结合用户补充意见调整方案或等待进一步指令。'
+      ? (isAssistant
+        ? '请严格按照主会话代答确认的范围（如有补充意见请一并遵循）立即继续执行下一步。'
+        : '请严格按照用户确认的范围（如有补充意见请一并遵循）立即继续执行下一步。')
+      : (isAssistant
+        ? '主会话已代用户取消该操作，请停止执行该动作，并结合补充意见调整方案或等待进一步指令。'
+        : '用户已取消该操作，请停止执行该动作，并结合用户补充意见调整方案或等待进一步指令。')
   );
   return lines.join('\n');
 }
 
 export function summarizeConfirmActionInteraction(payload: ConfirmActionInteractionPayload): string {
-  const verb = payload.decision === 'confirm' ? '已确认' : '已取消';
+  const verb = payload.source === 'assistant'
+    ? (payload.decision === 'confirm' ? '小猫已代确认' : '小猫已代取消')
+    : (payload.decision === 'confirm' ? '已确认' : '已取消');
   const titlePart = payload.title?.trim() ? `「${payload.title.trim()}」` : '操作确认';
   const commentPart = payload.comment?.trim() ? `：${payload.comment.trim()}` : '';
   const full = `${verb}${titlePart}${commentPart}`;
@@ -258,10 +270,11 @@ export function extractConfirmActionInteractionSearchText(payload: ConfirmAction
   const parts: string[] = [
     payload.decision === 'confirm' ? '已确认执行' : '已取消操作',
     payload.decisionLabel,
-    payload.source === 'lark' ? '飞书' : '网页端'
+    payload.source === 'assistant' ? '小猫代答' : payload.source === 'lark' ? '飞书' : '网页端'
   ];
   if (payload.title) parts.push(payload.title);
-  if (payload.decidedBy) parts.push(payload.decidedBy);
+  if (payload.responderName) parts.push(payload.responderName, `${payload.responderName}代答`);
+  if (payload.decidedBy && payload.decidedBy !== payload.responderName) parts.push(payload.decidedBy);
   if (payload.comment) parts.push(payload.comment);
   return parts.join('\n');
 }
