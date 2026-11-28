@@ -138,6 +138,27 @@ describe('🐾 小猫代答与小猫回复前端渲染', () => {
     expect(echoHtml).toContain('ui-kitten-a-badge');
     expect(echoHtml).toContain('小猫代答');
     expect(echoHtml).toContain('小A同学代答');
+
+    // 飞书端回答的交互来源徽标统一渲染飞书双翼 LarkIcon 而非普通发送图标
+    const larkAnswer: AskUserQuestionAnswerPayload = {
+      ...namedAnswer,
+      source: 'lark',
+      answeredBy: '暮雪离歌',
+      responderName: undefined
+    };
+    const larkLockedHtml = renderTimelineItem({
+      event: assistantEvent,
+      final: true,
+      replay: true,
+      sessionId: 'ses_side',
+      askUserQuestionXmlEnabled: true,
+      pluginInteractionsByKey: new Map([
+        [outputPluginInstanceKey(BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, 'ask_storage_cat'), larkAnswer]
+      ])
+    });
+    expect(larkLockedHtml).toContain('data-ask-source="lark"');
+    expect(larkLockedHtml).toContain('data-lark-icon=""');
+    expect(larkLockedHtml).toContain('飞书 · 暮雪离歌');
     expect(echoHtml).toContain('代答理由');
     expect(echoHtml).toContain('SQLite');
 

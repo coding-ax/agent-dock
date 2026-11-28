@@ -1,8 +1,9 @@
-import { Globe2, Send } from 'lucide-react';
+import { Globe2 } from 'lucide-react';
 import {
   formatOutputPluginInteractionSourceLabel,
   type OutputPluginInteractionSource
 } from '@agent-dock/agent-dock-shared';
+import { LarkIcon } from '../LarkIcon';
 
 /**
  * 统一的输出插件交互来源徽标（网页端 / 飞书 / 🐾 小猫代答）：
@@ -49,7 +50,7 @@ export function InteractionSourceBadge({
           : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
       }`}
     >
-      {isLark ? <Send size={10} className="shrink-0"/> : <Globe2 size={10} className="shrink-0"/>}
+      {isLark ? <LarkIcon size={11} className="shrink-0"/> : <Globe2 size={10} className="shrink-0"/>}
       <span className="truncate">{label}</span>
     </span>
   );

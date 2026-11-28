@@ -8,7 +8,6 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
-  Send,
   ShieldCheck,
   X
 } from 'lucide-react';
@@ -19,6 +18,7 @@ import {
   type TaskRecoveryRecord
 } from '@agent-dock/agent-dock-shared';
 import { Disclosure } from './Disclosure';
+import { LarkIcon } from './LarkIcon';
 import { Spinner } from './Loaders';
 import { useBi } from './i18n';
 
@@ -37,7 +37,7 @@ function RecoverySourcePill({ source, decidedBy }: { source?: TaskRecoveryDecisi
         data-recovery-source="lark"
         className="inline-flex max-w-full shrink-0 items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-blue-700 dark:text-blue-300"
       >
-        <Send size={10} className="shrink-0"/>
+        <LarkIcon size={11} className="shrink-0"/>
         <span className="truncate">{decidedBy?.trim() ? L(`飞书 · ${decidedBy.trim()}`, `Lark · ${decidedBy.trim()}`) : L("飞书确认", "Confirmed in Lark")}</span>
       </span>
     );

@@ -20,6 +20,7 @@ export function LarkIcon({ size = 16, className = '' }: { size?: number; classNa
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
+      data-lark-icon=""
       className={`shrink-0 ${className}`}
     >
       <path d="M4.2 4.6 13.8 10.1 20.1 8.7c-1.3 6.5-4.7 10.5-8.5 10.5-4.4 0-7-5.9-7.4-14.6Z"/>

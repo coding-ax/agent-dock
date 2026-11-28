@@ -94,6 +94,7 @@ describe('TaskRecoveryTimeline components', () => {
       recoveryRecord: makeRecord({ status: 'resumed', decidedSource: 'lark', decidedBy: '暮雪离歌' })
     }));
     expect(html).toContain('data-recovery-source="lark"');
+    expect(html).toContain('data-lark-icon=""');
     expect(html).toContain('飞书 · 暮雪离歌');
   });
 
