@@ -21,6 +21,8 @@ import {
   extractTrailingXmlBlock,
   fnv1aHex,
   parseBooleanAttr,
+  parseBooleanLike,
+  parseJsonBodyCandidate,
   parseXmlAttributes
 } from './xml-utils.js';
 
@@ -172,6 +174,171 @@ export function buildDefaultDeclarativePromptInstruction(manifest: DeclarativeOu
 ${example}`;
 }
 
+function readNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function parseDeclarativeJsonSpec(
+  manifest: DeclarativeOutputPluginManifest,
+  rootAttrs: Record<string, string>,
+  json: Record<string, unknown>,
+  rawXml: string
+): DeclarativeOutputPluginSpec | null {
+  const defaults = manifest.card;
+  const fallbackTone: OutputPluginAccentTone = defaults?.accentTone ?? 'sky';
+  const title = readNonEmptyString(json.title, rootAttrs.title, defaults?.headerTitle);
+  const summary = readNonEmptyString(json.summary, json.description, rootAttrs.summary);
+  const status = readNonEmptyString(json.status, rootAttrs.status);
+  const tone = normalizeTone(readNonEmptyString(json.tone, rootAttrs.tone), fallbackTone);
+
+  const fields: DeclarativeSpecField[] = [];
+  const seenFieldNames = new Set<string>();
+  const rawFields = json.fields;
+  if (Array.isArray(rawFields)) {
+    rawFields.forEach((entry, index) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+      const rec = entry as Record<string, unknown>;
+      const label = readNonEmptyString(rec.label, rec.name, rec.key) ?? '';
+      const value = readNonEmptyString(rec.value, rec.text, rec.defaultValue);
+      if (!label && !value) return;
+      let name = readNonEmptyString(rec.name, rec.key) ?? `field_${index + 1}`;
+      if (seenFieldNames.has(name)) {
+        let suffix = 2;
+        while (seenFieldNames.has(`${name}_${suffix}`)) suffix++;
+        name = `${name}_${suffix}`;
+      }
+      seenFieldNames.add(name);
+      const rawOptions = Array.isArray(rec.options)
+        ? rec.options.flatMap((opt): DeclarativeSpecFieldOption[] => {
+            if (typeof opt === 'string') {
+              const t = opt.trim();
+              return t ? [{ value: t, label: t }] : [];
+            }
+            if (!opt || typeof opt !== 'object' || Array.isArray(opt)) return [];
+            const o = opt as Record<string, unknown>;
+            const optVal = readNonEmptyString(o.value, o.id, o.label);
+            const optLabel = readNonEmptyString(o.label, o.text, optVal);
+            return optVal && optLabel ? [{ value: optVal, label: optLabel }] : [];
+          })
+        : typeof rec.options === 'string'
+          ? parseFieldOptions(rec.options)
+          : [];
+      const placeholder = readNonEmptyString(rec.placeholder);
+      fields.push({
+        name,
+        label: label || name,
+        ...(value !== undefined ? { value } : {}),
+        type: normalizeFieldType(readNonEmptyString(rec.type)),
+        ...(placeholder ? { placeholder } : {}),
+        required: parseBooleanLike(rec.required, false),
+        options: rawOptions
+      });
+    });
+  }
+
+  const actions: DeclarativeSpecAction[] = [];
+  const seenActionValues = new Set<string>();
+  if (Array.isArray(json.actions)) {
+    for (const entry of json.actions) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const rec = entry as Record<string, unknown>;
+      const label = readNonEmptyString(rec.label, rec.text, rec.title) ?? '';
+      const rawValue = readNonEmptyString(rec.value, rec.id, label) ?? '';
+      if (!label && !rawValue) continue;
+      let value = rawValue || label;
+      if (seenActionValues.has(value)) {
+        let suffix = 2;
+        while (seenActionValues.has(`${value}_${suffix}`)) suffix++;
+        value = `${value}_${suffix}`;
+      }
+      seenActionValues.add(value);
+      const description = readNonEmptyString(rec.description, rec.desc);
+      actions.push({
+        value,
+        label: label || value,
+        style: normalizeActionStyle(readNonEmptyString(rec.style)),
+        ...(description ? { description } : {})
+      });
+    }
+  }
+  if (!actions.length && manifest.kind === 'action-card') {
+    const presets = defaults?.actions?.length
+      ? defaults.actions
+      : [
+          { value: 'confirm', label: '确认', style: 'primary' as const },
+          { value: 'cancel', label: '取消', style: 'default' as const }
+        ];
+    for (const preset of presets) {
+      actions.push({
+        value: preset.value,
+        label: preset.label,
+        style: preset.style,
+        ...(preset.description ? { description: preset.description } : {})
+      });
+    }
+  }
+
+  const links: DeclarativeSpecLink[] = [];
+  if (Array.isArray(json.links)) {
+    for (const entry of json.links) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const rec = entry as Record<string, unknown>;
+      const href = readNonEmptyString(rec.href, rec.url) ?? '';
+      const label = readNonEmptyString(rec.label, rec.title, href) ?? '';
+      if (!href || !isSafeLinkHref(href)) continue;
+      links.push({ label, href });
+    }
+  }
+
+  if (manifest.kind === 'form-card' && fields.length === 0) return null;
+  if (manifest.kind === 'action-card' && actions.length === 0) return null;
+  if (manifest.kind === 'info-card' && !title && !summary && fields.length === 0 && links.length === 0) return null;
+
+  const allowNote = parseBooleanLike(
+    json.allowNote ?? json.allow_note ?? json['allow-note'] ?? rootAttrs['allow-note'] ?? rootAttrs.allowNote,
+    defaults?.allowNote ?? false
+  );
+  const notePlaceholder = readNonEmptyString(
+    json.notePlaceholder,
+    json.note_placeholder,
+    json['note-placeholder'],
+    rootAttrs['note-placeholder'],
+    rootAttrs.notePlaceholder,
+    defaults?.notePlaceholder
+  );
+  const submitLabel = readNonEmptyString(
+    json.submitLabel,
+    json.submit_label,
+    json['submit-label'],
+    rootAttrs['submit-label'],
+    rootAttrs.submitLabel,
+    defaults?.submitLabel
+  ) ?? '提交';
+  const id = readNonEmptyString(json.id, json.instanceId, json.instance_id, rootAttrs.id)
+    ?? `${manifest.tagName}_${fnv1aHex(rawXml.trim())}`;
+
+  return {
+    id,
+    kind: manifest.kind,
+    ...(title ? { title } : {}),
+    ...(summary ? { summary } : {}),
+    ...(status ? { status } : {}),
+    tone,
+    fields,
+    actions,
+    links,
+    allowNote,
+    ...(notePlaceholder ? { notePlaceholder } : {}),
+    submitLabel
+  };
+}
+
 function parseDeclarativeSpec(
   manifest: DeclarativeOutputPluginManifest,
   rootAttrs: Record<string, string>,
@@ -254,6 +421,25 @@ function parseDeclarativeSpec(
       ...(description ? { description } : {})
     });
   }
+
+  const links: DeclarativeSpecLink[] = [];
+  const linkPattern = /<link\b([^>]*?)(?:\/>|>([\s\S]*?)<\/link>)/gi;
+  let linkMatch: RegExpExecArray | null;
+  while ((linkMatch = linkPattern.exec(innerXml)) !== null) {
+    const attrs = parseXmlAttributes(linkMatch[1] ?? '');
+    const href = (attrs.href ?? '').trim();
+    const label = (decodeXmlEntities(linkMatch[2] ?? '').trim() || attrs.label?.trim() || href);
+    if (!href || !isSafeLinkHref(href)) continue;
+    links.push({ label, href });
+  }
+
+  if (!summaryMatch && fields.length === 0 && actions.length === 0 && links.length === 0) {
+    const jsonBody = parseJsonBodyCandidate(innerXml);
+    if (jsonBody) {
+      return parseDeclarativeJsonSpec(manifest, rootAttrs, jsonBody, rawXml);
+    }
+  }
+
   if (!actions.length && manifest.kind === 'action-card') {
     const presets = defaults?.actions?.length
       ? defaults.actions
@@ -269,17 +455,6 @@ function parseDeclarativeSpec(
         ...(preset.description ? { description: preset.description } : {})
       });
     }
-  }
-
-  const links: DeclarativeSpecLink[] = [];
-  const linkPattern = /<link\b([^>]*?)(?:\/>|>([\s\S]*?)<\/link>)/gi;
-  let linkMatch: RegExpExecArray | null;
-  while ((linkMatch = linkPattern.exec(innerXml)) !== null) {
-    const attrs = parseXmlAttributes(linkMatch[1] ?? '');
-    const href = (attrs.href ?? '').trim();
-    const label = (decodeXmlEntities(linkMatch[2] ?? '').trim() || attrs.label?.trim() || href);
-    if (!href || !isSafeLinkHref(href)) continue;
-    links.push({ label, href });
   }
 
   // 基础完整性校验：避免把空标签当有效卡片

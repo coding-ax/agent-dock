@@ -266,4 +266,99 @@ describe('ask-user-question XML protocol', () => {
     expect(resolveAskUserQuestionEnabled(true, false)).toBe(true);
     expect(resolveAskUserQuestionEnabled(undefined)).toBe(true);
   });
+
+  it('reproduces 2026-11-28 20:05 CST rich_text_upgrade_plan JSON-in-XML payload and other post-compaction JSON/XML variants', () => {
+    const richTextReply = `我仔细看了这张参考图，里面的富文本渲染效果确实非常精致！请你拍板两个细节：
+
+<agentdock-ask-user-question>
+{
+  "id": "rich_text_upgrade_plan",
+  "title": "原生富文本渲染升级范围确认",
+  "description": "确认一下你想把图里哪些能力做到 AgentDock 里（全部完美适配 20 套亮/暗主题、中英双语、飞书降级可读与 390px 移动端）：",
+  "questions": [
+    {
+      "id": "scope",
+      "question": "这次落地范围选哪一档？",
+      "options": [
+        { "value": "full_rich_text_plus_prompt", "label": "全套原生富文本渲染 + 教 Agent 会主动输出（推荐）", "description": "一次做齐：无框 KPI 指标条、步进时间轴、5 级无框 Callout、荧光高亮/kbd 按键/精致任务清单、紧凑表格（复制/MD切换）、Mermaid 流程图与全屏 Lightbox，并同步接入输出语法提示（飞书同步自动优雅降级）" },
+        { "value": "render_only", "label": "只做前端全套富文本渲染器，不改 Agent 提示词", "description": "完整升级 Markdown/富文本前端渲染能力（含上述全部组件与 Lightbox），保持现有 Agent prompt 零 Token 增量" },
+        { "value": "rich_text_plus_ipad_chrome", "label": "全套富文本 + 图里的顶部任务胶囊条/底部实时进度条一起评估", "description": "先做全套富文本，同时把图里的顶部运行任务胶囊条与底部实时子任务折叠条纳入后续 UI 规划" }
+      ]
+    },
+    {
+      "id": "release_order",
+      "question": "跟本地刚验收好的飞书卡片「🕊️ 飞书发起」怎么安排发版？",
+      "options": [
+        { "value": "ship_0331_first", "label": "先发 0.3.31 上线飞书卡片来源 Tag，再干净基线开工富文本（推荐）", "description": "把已经 246/246 全绿验收完的飞书全来源 Tag 先切 0.3.31 上线，避免大改动堆叠在一个版本里" },
+        { "value": "bundle_together", "label": "不急发 0.3.31，直接接着做完富文本再合并发一版", "description": "在当前工作区直接启动富文本任务，做完验收后和飞书卡片来源 Tag 一起发版" }
+      ]
+    }
+  ]
+}
+</agentdock-ask-user-question>`;
+
+    const extracted = extractTrailingAskUserQuestion(richTextReply);
+    expect(extracted).not.toBeNull();
+    expect(extracted!.proseText).toBe('我仔细看了这张参考图，里面的富文本渲染效果确实非常精致！请你拍板两个细节：');
+    expect(extracted!.spec.id).toBe('rich_text_upgrade_plan');
+    expect(extracted!.spec.title).toBe('原生富文本渲染升级范围确认');
+    expect(extracted!.spec.description).toContain('20 套亮/暗主题');
+    expect(extracted!.spec.questions).toHaveLength(2);
+    expect(extracted!.spec.questions[0]).toMatchObject({
+      id: 'scope',
+      prompt: '这次落地范围选哪一档？',
+      multi: false,
+      allowOther: true
+    });
+    expect(extracted!.spec.questions[0]!.options).toHaveLength(3);
+    expect(extracted!.spec.questions[0]!.options[0]).toMatchObject({
+      value: 'full_rich_text_plus_prompt',
+      label: '全套原生富文本渲染 + 教 Agent 会主动输出（推荐）'
+    });
+    expect(extracted!.spec.questions[1]).toMatchObject({
+      id: 'release_order',
+      prompt: '跟本地刚验收好的飞书卡片「🕊️ 飞书发起」怎么安排发版？',
+      multi: false,
+      allowOther: true
+    });
+    expect(extracted!.spec.questions[1]!.options).toHaveLength(2);
+
+    // 流式输出 JSON-in-XML 时能提前提取 partialTitle 并隐藏原始 JSON
+    const streamingJson = `请拍板：\n\n<agentdock-ask-user-question>\n{\n  "id": "rich_text_upgrade_plan",\n  "title": "原生富文本渲染升级范围确认",\n  "questions": [`;
+    expect(splitStreamingAskUserQuestion(streamingJson, true)).toEqual({
+      kind: 'pending',
+      proseText: '请拍板：',
+      partialTitle: '原生富文本渲染升级范围确认'
+    });
+
+    // 支持外包 ```json 围栏或 CDATA、多选与单题平铺 JSON、字符串选项以及自闭合 <option label="..."/>
+    const fencedJsonInsideTag = `请确认：\n<agentdock-ask-user-question id="outer_id">\n\`\`\`json\n{\n  "title": "能力选择",\n  "questions": [\n    {\n      "id": "mods",\n      "question": "需要哪些模块？",\n      "multiSelect": true,\n      "allow_other": false,\n      "options": ["Mermaid", { "key": "katex", "text": "LaTeX 公式", "recommended": true }]\n    }\n  ]\n}\n\`\`\`\n</agentdock-ask-user-question>`;
+    const parsedFenced = extractTrailingAskUserQuestion(fencedJsonInsideTag);
+    expect(parsedFenced?.spec).toMatchObject({
+      id: 'outer_id',
+      title: '能力选择',
+      questions: [{
+        id: 'mods',
+        prompt: '需要哪些模块？',
+        multi: true,
+        allowOther: false,
+        options: [
+          { value: 'Mermaid', label: 'Mermaid' },
+          { value: 'katex', label: 'LaTeX 公式', recommended: true }
+        ]
+      }]
+    });
+
+    const selfClosingOptXml = `<agentdock-ask-user-question id="sc_1" title="快捷选">\n  <question id="q1" prompt="选一个？">\n    <option value="a" label="选项 A" recommended="true" />\n    <option value="b" label="选项 B" />\n  </question>\n</agentdock-ask-user-question>`;
+    expect(extractTrailingAskUserQuestion(selfClosingOptXml)?.spec.questions[0]?.options).toEqual([
+      { value: 'a', label: '选项 A', recommended: true },
+      { value: 'b', label: '选项 B' }
+    ]);
+
+    // 代码块内或正文中间的 JSON-in-XML 仍严格忽略，绝不误触
+    const fencedCodeExample = `示例：\n\`\`\`xml\n<agentdock-ask-user-question>\n{"id":"fake","questions":[{"id":"q1","question":"Q","options":["A"]}]}\n</agentdock-ask-user-question>\n\`\`\``;
+    expect(extractTrailingAskUserQuestion(fencedCodeExample)).toBeNull();
+    const midProseJson = `<agentdock-ask-user-question>\n{"id":"mid","questions":[{"id":"q1","question":"Q","options":["A"]}]}\n</agentdock-ask-user-question>\n\n后续说明`;
+    expect(extractTrailingAskUserQuestion(midProseJson)).toBeNull();
+  });
 });

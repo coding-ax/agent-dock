@@ -32,6 +32,7 @@ import {
   resolvePluginDisabledNotice,
   resolvePluginPromptInstruction,
   RuntimeError,
+  type AgentEvent,
   type AskUserQuestionAnswerItem,
   type AskUserQuestionAnswerPayload,
   type ChannelMappingRepository,
@@ -74,6 +75,7 @@ const NON_INTERACTIVE_TURN_ORIGINS = new Set([
 export interface OutputPluginRuntimePort {
   getSession(id: string): Promise<Session | undefined>;
   getTasks?(id: string): Promise<TaskRecord[]>;
+  getRecentEvents?(id: string, limit: number): Promise<AgentEvent[]>;
   dispatch(
     id: string,
     prompt: string,
@@ -227,9 +229,14 @@ export async function readOutputPluginsGlobalConfig(
   };
 }
 
+const CONTEXT_COMPACTION_MIN_PEAK_TOKENS = 16_000;
+const CONTEXT_COMPACTION_DROP_RATIO = 0.55;
+const RECENT_USAGE_SCAN_LIMIT = 80;
+
 export class OutputPluginService {
   readonly registry: OutputPluginRegistry;
   private readonly sessionPluginStates = new Map<string, Map<string, 'enabled' | 'disabled'>>();
+  private readonly sessionContextUsage = new Map<string, { peakUsed: number; lastSeenSeq: number }>();
   private readonly inFlightInteractions = new Set<string>();
   private readonly interactionListeners = new Set<OutputPluginInteractionListener>();
   private localDir = '';
@@ -369,6 +376,67 @@ export class OutputPluginService {
   }
 
   /**
+   * 主动使某会话已注入的插件协议缓存失效（例如上下文压缩后），下一轮交互将自动重新注入当前启用的协议说明。
+   * 仅清理 `'enabled'` 记录，保留 `'disabled'` 状态避免误发停用提醒。
+   */
+  invalidateSessionProtocol(sessionId: string): void {
+    const stateMap = this.sessionPluginStates.get(sessionId);
+    if (!stateMap) return;
+    for (const [pluginId, state] of [...stateMap.entries()]) {
+      if (state === 'enabled') {
+        stateMap.delete(pluginId);
+      }
+    }
+  }
+
+  /**
+   * 通过最近上下文用量事件（`status:usage`）识别底层 Agent CLI 发生的上下文压缩（如 520K → 21K 骤降）：
+   * 压缩发生后会冲掉早期注入的 XML 协议范例，若不重注，模型易漂移为自创格式（如 XML 包 JSON）。
+   */
+  private async detectAndResetOnCompaction(sessionId: string): Promise<boolean> {
+    if (!this.options.runtime?.getRecentEvents) return false;
+    const events = await this.options.runtime.getRecentEvents(sessionId, RECENT_USAGE_SCAN_LIMIT).catch(() => []);
+    if (!events.length) return false;
+
+    const prev = this.sessionContextUsage.get(sessionId);
+    let runningPeak = prev?.peakUsed ?? 0;
+    let lastSeenSeq = prev?.lastSeenSeq ?? -1;
+    let compacted = false;
+
+    for (const event of events) {
+      const seq = typeof event.sequence === 'number' && Number.isFinite(event.sequence) ? event.sequence : -1;
+      if (seq >= 0 && seq <= lastSeenSeq) continue;
+      if (seq > lastSeenSeq) lastSeenSeq = seq;
+      if (event.type !== 'status') continue;
+      const data = event.data as Record<string, unknown> | undefined;
+      if (!data || data.state !== 'usage') continue;
+      const used = Number(data.used);
+      if (!Number.isFinite(used) || used <= 0) continue;
+
+      if (runningPeak >= CONTEXT_COMPACTION_MIN_PEAK_TOKENS && used < runningPeak * CONTEXT_COMPACTION_DROP_RATIO) {
+        compacted = true;
+        runningPeak = used;
+      } else if (used > runningPeak) {
+        runningPeak = used;
+      }
+    }
+
+    if (runningPeak > 0 || lastSeenSeq >= 0) {
+      this.sessionContextUsage.set(sessionId, { peakUsed: runningPeak, lastSeenSeq });
+      if (this.sessionContextUsage.size > 5_000) {
+        const oldest = this.sessionContextUsage.keys().next().value;
+        if (oldest) this.sessionContextUsage.delete(oldest);
+      }
+    }
+
+    if (compacted && this.sessionPluginStates.has(sessionId)) {
+      this.invalidateSessionProtocol(sessionId);
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * 按需向交互式会话注入所有已启用插件的纯 XML 协议指导（关闭的插件零 Token 消耗）。
    * 仅作用于实际提交给 Agent 的文本，不改变用户时间线展示内容。
    */
@@ -379,6 +447,8 @@ export class OutputPluginService {
   ): Promise<string> {
     if (session.source && NON_INTERACTIVE_SESSION_SOURCES.has(session.source)) return prompt;
     if (origin && NON_INTERACTIVE_TURN_ORIGINS.has(origin)) return prompt;
+
+    await this.detectAndResetOnCompaction(session.id);
 
     const globalState = await this.globalState();
     const plugins = this.registry.list();

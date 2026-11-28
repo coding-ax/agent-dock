@@ -13,6 +13,8 @@ import {
   extractTrailingXmlBlock,
   fnv1aHex,
   parseBooleanAttr,
+  parseBooleanLike,
+  parseJsonBodyCandidate,
   parseXmlAttributes
 } from './xml-utils.js';
 
@@ -92,6 +94,89 @@ function normalizeRisk(raw: string | undefined): ConfirmActionRisk {
   return 'medium';
 }
 
+function readNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function parseConfirmActionJsonSpec(
+  rootAttrs: Record<string, string>,
+  json: Record<string, unknown>,
+  rawXml: string
+): ConfirmActionSpec | null {
+  const title = readNonEmptyString(json.title, rootAttrs.title) ?? '';
+  const summary = readNonEmptyString(json.summary, json.description, rootAttrs.summary);
+  const command = readNonEmptyString(json.command, rootAttrs.command);
+
+  const details: ConfirmActionDetailItem[] = [];
+  const rawDetails = json.details ?? json.fields;
+  if (Array.isArray(rawDetails)) {
+    for (const item of rawDetails) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const rec = item as Record<string, unknown>;
+      const label = readNonEmptyString(rec.label, rec.name, rec.key) ?? '';
+      const value = readNonEmptyString(rec.value, rec.text, rec.content) ?? '';
+      if (!label && !value) continue;
+      details.push({ label: label || '说明', value: value || '—' });
+    }
+  } else if (rawDetails && typeof rawDetails === 'object' && !Array.isArray(rawDetails)) {
+    for (const [key, val] of Object.entries(rawDetails as Record<string, unknown>)) {
+      const label = key.trim();
+      const value = typeof val === 'string' ? val.trim() : (val === null || val === undefined ? '' : String(val).trim());
+      if (!label && !value) continue;
+      details.push({ label: label || '说明', value: value || '—' });
+    }
+  }
+
+  if (!title && !summary && !command && details.length === 0) return null;
+
+  const confirmLabel = readNonEmptyString(
+    json.confirmLabel,
+    json.confirm_label,
+    json['confirm-label'],
+    rootAttrs['confirm-label'],
+    rootAttrs.confirmLabel
+  ) ?? '确认执行';
+  const cancelLabel = readNonEmptyString(
+    json.cancelLabel,
+    json.cancel_label,
+    json['cancel-label'],
+    rootAttrs['cancel-label'],
+    rootAttrs.cancelLabel
+  ) ?? '取消';
+  const allowComment = parseBooleanLike(
+    json.allowComment ?? json.allow_comment ?? json['allow-comment'] ?? rootAttrs['allow-comment'] ?? rootAttrs.allowComment,
+    true
+  );
+  const commentPlaceholder = readNonEmptyString(
+    json.commentPlaceholder,
+    json.comment_placeholder,
+    json['comment-placeholder'],
+    rootAttrs['comment-placeholder'],
+    rootAttrs.commentPlaceholder
+  );
+  const id = readNonEmptyString(json.id, json.actionId, json.action_id, rootAttrs.id)
+    ?? `confirm_${fnv1aHex(rawXml.trim())}`;
+
+  return {
+    id,
+    title: title || '确认执行操作',
+    ...(summary ? { summary } : {}),
+    risk: normalizeRisk(readNonEmptyString(json.risk, rootAttrs.risk)),
+    ...(command ? { command } : {}),
+    details,
+    confirmLabel,
+    cancelLabel,
+    allowComment,
+    ...(commentPlaceholder ? { commentPlaceholder } : {})
+  };
+}
+
 function parseConfirmActionSpec(
   rootAttrs: Record<string, string>,
   innerXml: string,
@@ -125,6 +210,13 @@ function parseConfirmActionSpec(
       label: label || '说明',
       value: value || '—'
     });
+  }
+
+  if (!summaryMatch && !commandMatch && details.length === 0) {
+    const jsonBody = parseJsonBodyCandidate(innerXml);
+    if (jsonBody) {
+      return parseConfirmActionJsonSpec(rootAttrs, jsonBody, rawXml);
+    }
   }
 
   const title = rootAttrs.title?.trim() || '';

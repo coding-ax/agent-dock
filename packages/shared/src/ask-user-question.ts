@@ -6,6 +6,8 @@ import {
   fnv1aHex,
   maskProtectedMarkdown,
   parseBooleanAttr,
+  parseBooleanLike,
+  parseJsonBodyCandidate,
   parseXmlAttributes
 } from './output-plugins/xml-utils.js';
 
@@ -123,27 +125,34 @@ export function buildAskUserQuestionDisabledNotice(): string {
   return `[AgentDock] 用户询问卡片协议已关闭，请不要再输出 <${ASK_USER_QUESTION_XML_TAG}> XML 块，直接用自然语言提问即可。`;
 }
 
-function parseQuestionBlock(attrsRaw: string, bodyRaw: string, index: number): AskUserQuestionItem | null {
-  const attrs = parseXmlAttributes(attrsRaw);
-  const promptMatch = /<prompt\b[^>]*>([\s\S]*?)<\/prompt>/i.exec(bodyRaw);
-  const prompt = decodeXmlEntities(promptMatch?.[1] ?? '').trim();
-  if (!prompt) return null;
+function readNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return undefined;
+}
 
-  const multi = parseBooleanAttr(attrs.multi, false);
-  const allowOther = parseBooleanAttr(attrs['allow-other'] ?? attrs.allowOther, true);
-  const otherPlaceholder = (attrs['other-placeholder'] ?? attrs.otherPlaceholder)?.trim() || undefined;
-  const id = attrs.id?.trim() || `q${index + 1}`;
+interface RawOptionCandidate {
+  value?: string;
+  label?: string;
+  description?: string;
+  recommended?: boolean;
+}
 
+function normalizeAskUserQuestionOptions(
+  rawOptions: ReadonlyArray<RawOptionCandidate>,
+  multi: boolean
+): AskUserQuestionOption[] {
   const options: AskUserQuestionOption[] = [];
   const seenValues = new Set<string>();
-  const optionPattern = /<option\b([^>]*)>([\s\S]*?)<\/option>/gi;
-  let optMatch: RegExpExecArray | null;
   let seenRecommended = false;
 
-  while ((optMatch = optionPattern.exec(bodyRaw)) !== null) {
-    const optAttrs = parseXmlAttributes(optMatch[1] ?? '');
-    const label = decodeXmlEntities(optMatch[2] ?? '').trim();
-    const rawValue = (optAttrs.value ?? label).trim();
+  for (const raw of rawOptions) {
+    const label = raw.label?.trim() ?? '';
+    const rawValue = (raw.value ?? label).trim();
     if (!label && !rawValue) continue;
     const resolvedLabel = label || rawValue;
     let value = rawValue || resolvedLabel;
@@ -153,8 +162,8 @@ function parseQuestionBlock(attrsRaw: string, bodyRaw: string, index: number): A
       value = `${value}_${suffix}`;
     }
     seenValues.add(value);
-    const description = optAttrs.description?.trim() || undefined;
-    let recommended = parseBooleanAttr(optAttrs.recommended, false);
+    const description = raw.description?.trim() || undefined;
+    let recommended = Boolean(raw.recommended);
     if (!multi && recommended) {
       if (seenRecommended) recommended = false;
       else seenRecommended = true;
@@ -167,6 +176,41 @@ function parseQuestionBlock(attrsRaw: string, bodyRaw: string, index: number): A
     });
   }
 
+  return options;
+}
+
+function parseQuestionBlock(attrsRaw: string, bodyRaw: string, index: number): AskUserQuestionItem | null {
+  const attrs = parseXmlAttributes(attrsRaw);
+  const promptMatch = /<prompt\b[^>]*>([\s\S]*?)<\/prompt>/i.exec(bodyRaw);
+  const prompt = decodeXmlEntities(promptMatch?.[1] ?? '').trim()
+    || attrs.prompt?.trim()
+    || attrs.question?.trim()
+    || '';
+  if (!prompt) return null;
+
+  const multi = parseBooleanAttr(attrs.multi, false);
+  const allowOther = parseBooleanAttr(attrs['allow-other'] ?? attrs.allowOther, true);
+  const otherPlaceholder = (attrs['other-placeholder'] ?? attrs.otherPlaceholder)?.trim() || undefined;
+  const id = attrs.id?.trim() || `q${index + 1}`;
+
+  const rawOptions: RawOptionCandidate[] = [];
+  const optionPattern = /<option\b([^>]*?)(?:\/>|>([\s\S]*?)<\/option>)/gi;
+  let optMatch: RegExpExecArray | null;
+
+  while ((optMatch = optionPattern.exec(bodyRaw)) !== null) {
+    const optAttrs = parseXmlAttributes(optMatch[1] ?? '');
+    const bodyLabel = decodeXmlEntities(optMatch[2] ?? '').trim();
+    const label = bodyLabel || optAttrs.label?.trim() || '';
+    const rawValue = (optAttrs.value ?? optAttrs.key ?? optAttrs.id ?? label).trim();
+    rawOptions.push({
+      value: rawValue,
+      label,
+      description: optAttrs.description?.trim() || undefined,
+      recommended: parseBooleanAttr(optAttrs.recommended, false)
+    });
+  }
+
+  const options = normalizeAskUserQuestionOptions(rawOptions, multi);
   if (!options.length && !allowOther) return null;
 
   return {
@@ -176,6 +220,101 @@ function parseQuestionBlock(attrsRaw: string, bodyRaw: string, index: number): A
     allowOther,
     ...(otherPlaceholder ? { otherPlaceholder } : {}),
     options
+  };
+}
+
+function parseAskUserQuestionJsonSpec(
+  rootAttrs: Record<string, string>,
+  json: Record<string, unknown>,
+  rawXml: string
+): AskUserQuestionSpec | null {
+  const title = readNonEmptyString(json.title, rootAttrs.title);
+  const description = readNonEmptyString(json.description, json.desc, json.summary, rootAttrs.description);
+
+  let rawQuestionEntries: unknown[] = [];
+  if (Array.isArray(json.questions)) {
+    rawQuestionEntries = json.questions;
+  } else if (Array.isArray(json.items)) {
+    rawQuestionEntries = json.items;
+  } else if (
+    readNonEmptyString(json.prompt, json.question)
+    && (Array.isArray(json.options) || Array.isArray(json.choices) || parseBooleanLike(json.allowOther ?? json.allow_other ?? json['allow-other'], false))
+  ) {
+    rawQuestionEntries = [json];
+  }
+
+  const questions: AskUserQuestionItem[] = [];
+  const seenQuestionIds = new Set<string>();
+  let idx = 0;
+
+  for (const entry of rawQuestionEntries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const rec = entry as Record<string, unknown>;
+    const prompt = readNonEmptyString(rec.prompt, rec.question, rec.title, rec.text, rec.label);
+    if (!prompt) continue;
+
+    const multi = parseBooleanLike(
+      rec.multi ?? rec.multiple ?? rec.multiSelect ?? rec.multi_select,
+      false
+    ) || (typeof rec.type === 'string' && /^(?:multi|multiple|checkbox|multi[-_]?select)$/i.test(rec.type.trim()));
+    const allowOther = parseBooleanLike(rec.allowOther ?? rec.allow_other ?? rec['allow-other'], true);
+    const otherPlaceholder = readNonEmptyString(
+      rec.otherPlaceholder,
+      rec.other_placeholder,
+      rec['other-placeholder']
+    );
+
+    const rawOptionEntries = Array.isArray(rec.options)
+      ? rec.options
+      : Array.isArray(rec.choices)
+        ? rec.choices
+        : [];
+    const rawOptions: RawOptionCandidate[] = [];
+    for (const optEntry of rawOptionEntries) {
+      if (typeof optEntry === 'string') {
+        const trimmed = optEntry.trim();
+        if (trimmed) rawOptions.push({ value: trimmed, label: trimmed });
+        continue;
+      }
+      if (!optEntry || typeof optEntry !== 'object' || Array.isArray(optEntry)) continue;
+      const opt = optEntry as Record<string, unknown>;
+      const label = readNonEmptyString(opt.label, opt.text, opt.title, opt.name);
+      const value = readNonEmptyString(opt.value, opt.id, opt.key, label);
+      const optDesc = readNonEmptyString(opt.description, opt.desc, opt.detail);
+      const recommended = parseBooleanLike(opt.recommended ?? opt.isRecommended ?? opt.is_recommended, false);
+      rawOptions.push({ value, label, description: optDesc, recommended });
+    }
+
+    const options = normalizeAskUserQuestionOptions(rawOptions, multi);
+    if (!options.length && !allowOther) continue;
+
+    let uniqueId = readNonEmptyString(rec.id, rec.key, rec.name) ?? `q${idx + 1}`;
+    if (seenQuestionIds.has(uniqueId)) {
+      let suffix = 2;
+      while (seenQuestionIds.has(`${uniqueId}_${suffix}`)) suffix++;
+      uniqueId = `${uniqueId}_${suffix}`;
+    }
+    seenQuestionIds.add(uniqueId);
+    questions.push({
+      id: uniqueId,
+      prompt,
+      multi,
+      allowOther,
+      ...(otherPlaceholder ? { otherPlaceholder } : {}),
+      options
+    });
+    idx++;
+  }
+
+  if (!questions.length) return null;
+
+  const id = readNonEmptyString(json.id, json.questionId, json.question_id, rootAttrs.id)
+    ?? `ask_${fnv1aHex(rawXml.trim())}`;
+  return {
+    id,
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
+    questions
   };
 }
 
@@ -212,7 +351,14 @@ function parseAskUserQuestionSpec(
     }
   }
 
-  if (!questions.length) return null;
+  if (!questions.length) {
+    // 容错回退：长会话上下文压缩后模型可能把 JSON 载荷包在 <agentdock-ask-user-question> 标签内
+    const jsonBody = parseJsonBodyCandidate(inner);
+    if (jsonBody) {
+      return parseAskUserQuestionJsonSpec(rootAttrs, jsonBody, rawXml);
+    }
+    return null;
+  }
 
   const id = rootAttrs.id?.trim() || `ask_${fnv1aHex(rawXml.trim())}`;
   return {

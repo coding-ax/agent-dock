@@ -55,6 +55,43 @@ export function parseBooleanAttr(value: string | undefined, defaultValue: boolea
   return defaultValue;
 }
 
+export function parseBooleanLike(value: unknown, defaultValue: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return defaultValue;
+  }
+  if (typeof value === 'string') return parseBooleanAttr(value, defaultValue);
+  return defaultValue;
+}
+
+/**
+ * 容错提取 XML 标签体内的 JSON 对象载荷：
+ * - 兼容长会话上下文压缩后模型在 `<agentdock-*>` 标签内直接输出 JSON（含可选 CDATA 或单一 Markdown 代码围栏包裹）；
+ * - 仅当剥离外层包装后以 `{` 开头且以 `}` 结尾并能合法 `JSON.parse` 为普通对象时才返回，绝不误伤普通 XML 子标签。
+ */
+export function parseJsonBodyCandidate(innerXml: string): Record<string, unknown> | null {
+  let candidate = innerXml.trim();
+  if (!candidate) return null;
+  const cdataMatch = /^<!\[CDATA\[([\s\S]*?)\]\]>$/.exec(candidate);
+  if (cdataMatch) {
+    candidate = (cdataMatch[1] ?? '').trim();
+  }
+  const fenceMatch = /^(`{3,}|~{3,})[ \t]*(?:json|json5|jsonc)?[ \t]*\r?\n([\s\S]*?)\r?\n\1[ \t]*$/i.exec(candidate);
+  if (fenceMatch) {
+    candidate = (fenceMatch[2] ?? '').trim();
+  }
+  if (!candidate.startsWith('{') || !candidate.endsWith('}')) return null;
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export function escapeRegexLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -281,7 +318,19 @@ export function detectPendingStreamingXmlTag(
       if (tagHeaderEnd > 0) {
         partialAttrs = parseXmlAttributes(openSlice.slice(openPrefix.length, tagHeaderEnd));
       }
-      const partialTitle = partialAttrs.title?.trim() || undefined;
+      let partialTitle = partialAttrs.title?.trim() || undefined;
+      if (!partialTitle && tagHeaderEnd >= 0) {
+        const bodySlice = openSlice.slice(tagHeaderEnd + 1).trimStart();
+        if (bodySlice.startsWith('{') || bodySlice.startsWith('<![CDATA[{') || /^`{3,}\s*json/i.test(bodySlice)) {
+          const jsonTitleMatch = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(bodySlice);
+          if (jsonTitleMatch?.[1]) {
+            try {
+              const decoded = JSON.parse(`"${jsonTitleMatch[1]}"`);
+              if (typeof decoded === 'string' && decoded.trim()) partialTitle = decoded.trim();
+            } catch { /* ignore incomplete escape sequence during streaming */ }
+          }
+        }
+      }
       return {
         proseText: text.slice(0, lastOpen).trimEnd(),
         startIndex: lastOpen,
