@@ -7,10 +7,8 @@ import {
   ASK_USER_QUESTION_ANSWER_ORIGIN,
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   defaultOutputPluginRegistry,
-  getSessionOutputPluginOverride,
   mergeSessionOutputPluginsPatch,
   outputPluginInstanceKey,
-  resolveOutputPluginEnabled,
   TASK_RECOVERY_ORIGIN,
   type AskUserQuestionAnswerItem,
   type DeclarativeInteractionField,
@@ -27,7 +25,11 @@ import { ActivityPanel, SystemPromptBubble, TimelineItem } from './TimelineItems
 import { shouldRenderRecoveryCard, TaskRecoveryConfirmCard } from './TaskRecoveryTimeline';
 import { TimelineTurn } from './SendTimeHint';
 import { Composer, type ComposerOutputPluginItem } from './Composer';
-import { buildFallbackOutputPluginCatalogItems } from './output-plugins/useOutputPlugins';
+import {
+  buildEffectiveGlobalPluginsConfig,
+  buildFallbackOutputPluginCatalogItems,
+  buildSessionOutputPluginItems
+} from './output-plugins/useOutputPlugins';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { elapsedText, resolveElapsed } from './elapsed';
 import { buildPrompt, commandsFromEvents, contextStatsFromEvents, getModelReadiness, parsePromptToDraft, queuedImageThumbnailUrl, resolveActiveSteeringTaskId, type ComposerReference } from './composer-utils';
@@ -66,11 +68,14 @@ import { useSessionDraftWriter } from './use-session-draft';
 import { useElapsedNow } from './useElapsedNow';
 import { SelectionQuotePopover } from './SelectionQuotePopover';
 import { normalizeQuotedText } from './selection-quote';
+import { getSessionStarterPrompts } from './prompt-templates';
+import { useBi, useLocale } from './i18n';
 
 /** 主会话输入框的占位：单独成组件，小猫改名时只重渲染这一小块，不拖着整条时间线。 */
 function CompanionPlaceholder() {
+  const L = useBi();
   const { name } = useCompanion();
-  return <><span className="hidden sm:inline">跟{name}说说要做什么，Enter 发送；它会拆成便签派出去</span><span className="sm:hidden">跟{name}说说要做什么</span></>;
+  return <><span className="hidden sm:inline">{L("跟", "Ask ")}{name}{L("说说要做什么，Enter 发送；它会拆成便签派出去", " what to do (Enter to send; it will break it into tasks)")}</span><span className="sm:hidden">{L("跟", "Ask ")}{name}{L("说说要做什么", " what to do")}</span></>;
 }
 
 type SendMode = 'queue' | 'interrupt';
@@ -82,7 +87,8 @@ const BASE_HIDDEN_QUEUE_ORIGINS: ReadonlyArray<string> = [EMOJI_TRIGGER_ORIGIN, 
  * 会话标题栏的副屏开关。空副屏里直接展示可打开的面板类型。
  */
 function PaneToggleButton({ open, onToggle }: { open: boolean; onToggle(): void }) {
-  return <IconButton label={open ? '隐藏副屏' : '显示副屏'} active={open} onClick={onToggle}><PanelRight size={15}/></IconButton>;
+  const L = useBi();
+  return <IconButton label={open ? L("隐藏副屏", "Hide Side Pane") : L("显示副屏", "Show Side Pane")} active={open} onClick={onToggle}><PanelRight size={15}/></IconButton>;
 }
 
 type SessionMenuItem = { id: string; label: string; icon: ReactNode; trailing?: ReactNode; danger?: boolean; disabled?: boolean; onSelect(): void };
@@ -96,7 +102,9 @@ const menuIndicatorDotClass: Record<MenuIndicatorTone, string> = {
 };
 
 /** 会话标题栏的 ⋯ 菜单：分组收纳所有会话级与主会话辅助操作，支持上下键、回车、Esc 与轻微状态点感知。 */
-function SessionMenu({ groups, indicator, tooltip = '更多操作' }: { groups: SessionMenuGroup[]; indicator?: MenuIndicatorTone; tooltip?: string }) {
+function SessionMenu({ groups, indicator, tooltip }: { groups: SessionMenuGroup[]; indicator?: MenuIndicatorTone; tooltip?: string }) {
+  const L = useBi();
+  const resolvedTooltip = tooltip ?? L("更多操作", "More Actions");
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -123,17 +131,17 @@ function SessionMenu({ groups, indicator, tooltip = '更多操作' }: { groups: 
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
   return <div ref={root} className="relative">
-    <HoverTooltip content={open ? undefined : tooltip} hoverOnly>
-      <button ref={trigger} type="button" aria-haspopup="menu" aria-expanded={open} aria-label={tooltip} onClick={() => setOpen(value => !value)} className={`ui-press relative grid h-8 w-8 place-items-center rounded-lg hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${open ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}>
+    <HoverTooltip content={open ? undefined : resolvedTooltip} hoverOnly>
+      <button ref={trigger} type="button" aria-haspopup="menu" aria-expanded={open} aria-label={resolvedTooltip} onClick={() => setOpen(value => !value)} className={`ui-press relative grid h-8 w-8 place-items-center rounded-lg hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${open ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500'}`}>
         <MoreHorizontal size={16}/>
         {indicator && <span aria-hidden="true" data-menu-indicator={indicator} className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full ring-2 ring-canvas ${menuIndicatorDotClass[indicator]}`}/>}
       </button>
     </HoverTooltip>
     <ExitGate open={open} ms={150}>
-      <div ref={menu} role="menu" aria-label="会话操作" data-placement="top-end" className="ui-popover absolute right-0 top-[calc(100%+6px)] z-50 w-60 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_16px_48px_rgba(0,0,0,.16)]">
+      <div ref={menu} role="menu" aria-label={L("会话操作", "Session Actions")} data-placement="top-end" className="ui-popover absolute right-0 top-[calc(100%+6px)] z-50 w-72 max-w-[calc(100vw-1.5rem)] rounded-xl border border-zinc-200 bg-white p-1.5 shadow-[0_16px_48px_rgba(0,0,0,.16)]">
         {groups.map((group, index) => <div key={index}>
           {index > 0 && <div className="my-1 border-t border-zinc-100"/>}
-          {group.items.map(item => <button key={item.id} type="button" role="menuitem" disabled={item.disabled} onClick={() => { close(); item.onSelect(); }} className={`ui-press flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[14px] disabled:cursor-not-allowed disabled:opacity-40 ${item.danger ? 'text-red-600 hover:bg-red-50' : 'text-zinc-700 hover:bg-zinc-100'}`}>
+          {group.items.map(item => <button key={item.id} type="button" role="menuitem" data-testid={`session-menu-item-${item.id}`} disabled={item.disabled} onClick={() => { close(); item.onSelect(); }} className={`ui-press flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13.5px] disabled:cursor-not-allowed disabled:opacity-40 ${item.danger ? 'text-red-600 hover:bg-red-50' : 'text-zinc-700 hover:bg-zinc-100'}`}>
             <span className={`shrink-0 ${item.danger ? 'text-red-500' : 'text-zinc-500'}`}>{item.icon}</span>
             <span className="min-w-0 flex-1 truncate">{item.label}</span>
             {item.trailing}
@@ -159,18 +167,19 @@ function MainSessionMoreMenu({
   baseIndicator?: MenuIndicatorTone;
   baseTooltip?: string;
 }) {
+  const L = useBi();
   const info = useCompanion();
   const retire = retireEntry({ isMain: true, handoff: info.lifecycle?.handoff });
   const attention = info.counts.needsUser + info.counts.planned + info.pendingDrafts;
   const retireLabel = retire.progress
-    ? (info.lifecycle?.handoff?.state === 'proposed' ? '查看交接提议' : '查看交接进度')
-    : '提前退休并交接';
+    ? (info.lifecycle?.handoff?.state === 'proposed' ? L("查看交接提议", "View Handover Proposal") : L("查看交接进度", "View Handover Progress"))
+    : L("提前退休并交接", "Retire & Hand Over Early");
 
   const mainGroup: SessionMenuGroup = {
     items: [
       {
         id: 'companion-notes',
-        label: '便签墙',
+        label: L("便签墙", "Sticky Wall"),
         icon: <StickyNote size={16}/>,
         ...(info.counts.open > 0 || info.pendingDrafts > 0
           ? {
@@ -198,11 +207,11 @@ function MainSessionMoreMenu({
       : baseIndicator;
 
   const tooltip = info.counts.needsUser > 0
-    ? `更多操作（${info.counts.needsUser} 件便签需要你）`
+    ? L(`更多操作（${info.counts.needsUser} 件便签需要你）`, `More Actions (${info.counts.needsUser} notes need you)`)
     : retire.progress
-      ? `更多操作（${retire.label}）`
+      ? L(`更多操作（${retire.label}）`, `More Actions (${retire.label})`)
       : attention > 0
-        ? `更多操作（${attention} 项待确认）`
+        ? L(`更多操作（${attention} 项待确认）`, `More Actions (${attention} pending)`)
         : baseTooltip;
 
   const allGroups = [...regularGroups, mainGroup, ...dangerGroups].filter(group => group.items.length > 0);
@@ -225,6 +234,8 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   outputPluginRegistry?: OutputPluginRegistry;
   onSideChat?(source: Session, options?: { initialPrompt?: string; fromBtw?: boolean }): Promise<void> | void;
 }) {
+  const L = useBi();
+  const locale = useLocale();
   const qc = useQueryClient();
   const { setSession, closeTab } = useDockStore();
   const secondary = pane === 'secondary';
@@ -321,44 +332,18 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     () => (outputPluginItems?.length ? outputPluginItems : buildFallbackOutputPluginCatalogItems()),
     [outputPluginItems]
   );
-  const effectiveGlobalPluginsConfig = useMemo<OutputPluginsGlobalConfig>(() => {
-    const base: Record<string, boolean> = {};
-    for (const item of effectivePluginCatalog) {
-      base[item.id] = item.globalEnabled;
-    }
-    if (outputPluginsGlobalConfig?.plugins) {
-      Object.assign(base, outputPluginsGlobalConfig.plugins);
-    } else {
-      base[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] = askUserQuestionXmlEnabled;
-    }
-    return { plugins: base };
-  }, [effectivePluginCatalog, outputPluginsGlobalConfig, askUserQuestionXmlEnabled]);
+  const effectiveGlobalPluginsConfig = useMemo<OutputPluginsGlobalConfig>(
+    () => buildEffectiveGlobalPluginsConfig(effectivePluginCatalog, outputPluginsGlobalConfig, askUserQuestionXmlEnabled),
+    [effectivePluginCatalog, outputPluginsGlobalConfig, askUserQuestionXmlEnabled]
+  );
 
   const composerOutputPlugins = useMemo<ComposerOutputPluginItem[]>(
-    () => effectivePluginCatalog.map(plugin => {
-      const globalEnabled = resolveOutputPluginEnabled(plugin.id, {
-        defaultEnabled: plugin.globalEnabled,
-        globalConfig: effectiveGlobalPluginsConfig
-      });
-      const override = getSessionOutputPluginOverride(plugin.id, session.outputPlugins, session.askUserQuestionEnabled);
-      const enabled = resolveOutputPluginEnabled(plugin.id, {
-        defaultEnabled: globalEnabled,
-        globalConfig: effectiveGlobalPluginsConfig,
-        sessionOverrides: session.outputPlugins,
-        legacySessionAskEnabled: session.askUserQuestionEnabled
-      });
-      return {
-        id: plugin.id,
-        name: plugin.name,
-        description: plugin.description,
-        icon: plugin.icon,
-        tagName: plugin.tagName,
-        builtin: plugin.builtin,
-        enabled,
-        globalEnabled,
-        override
-      };
-    }),
+    () => buildSessionOutputPluginItems(
+      effectivePluginCatalog,
+      effectiveGlobalPluginsConfig,
+      session.outputPlugins,
+      session.askUserQuestionEnabled
+    ),
     [effectivePluginCatalog, effectiveGlobalPluginsConfig, session.outputPlugins, session.askUserQuestionEnabled]
   );
 
@@ -472,7 +457,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     } catch (error) {
       setRecoveryErrors(current => ({
         ...current,
-        [recoveryId]: error instanceof Error ? error.message : '操作失败，请稍后重试'
+        [recoveryId]: error instanceof Error ? error.message : L("操作失败，请稍后重试", "Action failed. Please try again.")
       }));
     } finally {
       setSubmittingRecovery(current => (current?.id === recoveryId ? null : current));
@@ -846,7 +831,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
         setPendingModel(undefined);
         qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, model: previousValue } : item));
         setActionError(message);
-        syncToastRef.current.show(`切换模型失败：${message}`, 'error');
+        syncToastRef.current.show(L(`切换模型失败：${message}`, `Failed to switch model: ${message}`), 'error');
       }
     });
   }, [qc, session.agentId, session.id, session.model, session.sshHost]);
@@ -883,7 +868,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
         setPendingReasoningEffort(undefined);
         qc.setQueryData<Session[]>(['sessions'], current => current?.map(item => item.id === session.id ? { ...item, reasoningEffort: previousValue } : item));
         setActionError(message);
-        syncToastRef.current.show(`切换思考深度失败：${message}`, 'error');
+        syncToastRef.current.show(L(`切换思考深度失败：${message}`, `Failed to switch reasoning effort: ${message}`), 'error');
       }
     });
   }, [qc, session.agentId, session.id, session.reasoningEffort, session.sshHost]);
@@ -891,8 +876,9 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const handlePatchOutputPlugins = useCallback((patch: Record<string, boolean | null>, activePluginId?: string) => {
     if (session.archivedAt) return;
     if (!Object.keys(patch).length) return;
-    const previousPlugins = session.outputPlugins;
-    const previousAsk = typeof session.askUserQuestionEnabled === 'boolean' ? session.askUserQuestionEnabled : null;
+    const latestSession = qc.getQueryData<Session[]>(['sessions'])?.find(item => item.id === session.id) ?? session;
+    const previousPlugins = latestSession.outputPlugins;
+    const previousAsk = typeof latestSession.askUserQuestionEnabled === 'boolean' ? latestSession.askUserQuestionEnabled : null;
     const merged = mergeSessionOutputPluginsPatch(previousPlugins, patch, previousAsk);
     const nextAsk = typeof merged[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] === 'boolean'
       ? merged[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID]
@@ -933,7 +919,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       )));
       const message = error instanceof Error ? error.message : String(error);
       setActionError(message);
-      syncToastRef.current.show(`切换交互插件失败：${message}`, 'error');
+      syncToastRef.current.show(L(`切换交互插件失败：${message}`, `Failed to toggle output plugin: ${message}`), 'error');
     });
   }, [qc, session.archivedAt, session.askUserQuestionEnabled, session.id, session.outputPlugins]);
 
@@ -1065,7 +1051,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       });
       if ('alreadySubmitted' in result) {
         setOptimisticPluginInteractions(current => ({ ...current, [key]: result.existing }));
-        syncToastRef.current.show('该交互卡片已在其他端完成响应，已同步最新结果', 'info');
+        syncToastRef.current.show(L("该交互卡片已在其他端完成响应，已同步最新结果", "Already responded from another client; synced latest result"), 'info');
         void events.refetch();
         void tasks.refetch();
         return;
@@ -1076,7 +1062,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       void events.refetch();
       void tasks.refetch();
     } catch (error) {
-      const message = error instanceof Error ? error.message : '提交操作失败，请重试';
+      const message = error instanceof Error ? error.message : L("提交操作失败，请重试", "Failed to submit action. Please retry.");
       setPluginSubmitErrors(current => ({ ...current, [key]: message }));
     } finally {
       setSubmittingPluginKey(current => (current === key ? undefined : current));
@@ -1142,9 +1128,9 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   const syncExternal = useMutation({
     mutationFn: () => api.syncExternal(session.id),
     onSuccess: async result => {
-      const summary = result.added ? `已从 ${externalName} 同步 ${result.added} 轮新消息` : `${externalName} 里没有新消息`;
+      const summary = result.added ? L(`已从 ${externalName} 同步 ${result.added} 轮新消息`, `Synced ${result.added} new turn(s) from ${externalName}`) : L(`${externalName} 里没有新消息`, `No new messages in ${externalName}`);
       // 两边交替聊时夹在中间的外部轮次放不进时间线中间，只提示数量。
-      syncToast.show(result.skipped ? `${summary}；另有 ${result.skipped} 轮是在本会话消息之间发的，无法插入时间线，需要完整历史请重新导入` : summary, 'info');
+      syncToast.show(result.skipped ? L(`${summary}；另有 ${result.skipped} 轮是在本会话消息之间发的，无法插入时间线，需要完整历史请重新导入`, `${summary}; ${result.skipped} interleaved turn(s) could not be inserted — re-import for full history`) : summary, 'info');
       // 新轮次已经经 SSE 推过来；再自愈重拉一次兜底（新轮次都在末尾，从最后一轮重拉即可覆盖），避免流断过时漏条。
       healNextFetch.current = true;
       await Promise.all([events.refetch(), tasks.refetch(), qc.invalidateQueries({ queryKey: ['sessions'] })]);
@@ -1197,18 +1183,18 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       cwd: session.cwd,
       ...(session.model ? { model: session.model } : {}),
       ...(recentMessages.length ? { recentMessages } : {}),
-      ...(session.systemPrompt?.trim() ? { extra: `会话 System Prompt 摘要：${session.systemPrompt.trim().slice(0, 260)}` } : {})
+      ...(session.systemPrompt?.trim() ? { extra: L(`会话 System Prompt 摘要：${session.systemPrompt.trim().slice(0, 260)}`, `Session System Prompt: ${session.systemPrompt.trim().slice(0, 260)}`) } : {})
     };
   }, [timeline, session, agent?.name]);
 
   const buildTitleAiContext = useCallback((): LlmAssistContext => ({
     ...buildSessionAiContext(),
-    field: '会话标题',
-    purpose: '根据会话消息与工作区提炼一个简短直观的中文会话标题',
+    field: L("会话标题", "Session Title"),
+    purpose: L("根据会话消息与工作区提炼一个简短直观的中文会话标题", "Summarize a short, clear English session title from the conversation and workspace"),
     maxChars: 20
   }), [buildSessionAiContext]);
 
-  // ⋯ 菜单：统一收纳会话级操作（交互插件中心、定时任务、系统提示词、飞书托管、同步、归档等），
+  // ⋯ 菜单：统一收纳当前会话级操作（交互插件、定时任务、系统提示词、飞书托管、同步、归档等），
   // 顶栏只保留搜索、副屏与「更多」，零重复、高呼吸感。
   const enabledPluginsCount = enabledOutputPluginIds.size;
   const totalPluginsCount = composerOutputPlugins.length;
@@ -1219,55 +1205,55 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
         ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
         : 'border-zinc-200 bg-zinc-100 text-zinc-500'
     }`}>
-      {larkTurnSyncEnabled ? '已开启' : '已关闭'}
+      {larkTurnSyncEnabled ? L("已开启", "Enabled") : L("已关闭", "Disabled")}
     </span>
   ) : undefined;
   const regularMenuGroups: SessionMenuGroup[] = [
     { items: [
       ...(!session.archivedAt && totalPluginsCount > 0 ? [{
-        id: 'output-plugins-center',
-        label: '交互插件',
+        id: 'session-output-plugins',
+        label: L("交互插件", "Output Plugins"),
         icon: <Puzzle size={16} className={enabledPluginsCount > 0 ? 'text-sky-600 dark:text-sky-400' : undefined}/>,
         trailing: (
-          <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[11px] font-medium tabular-nums ${
-            enabledPluginsCount > 0
-              ? 'border-sky-200 bg-sky-50 text-sky-700 dark:text-sky-300'
-              : 'border-zinc-200 bg-zinc-100 text-zinc-500'
-          }`}>
-            {enabledPluginsCount}/{totalPluginsCount} 启用
+          <span
+            data-testid="session-menu-output-plugins-badge"
+            data-override={hasPluginOverrides ? 'true' : 'false'}
+            className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[11px] font-medium tabular-nums ${
+              hasPluginOverrides
+                ? 'border-amber-200 bg-amber-50 text-amber-700 dark:text-amber-300'
+                : enabledPluginsCount > 0
+                  ? 'border-sky-200 bg-sky-50 text-sky-700 dark:text-sky-300'
+                  : 'border-zinc-200 bg-zinc-100 text-zinc-500'
+            }`}
+          >
+            {L(`${enabledPluginsCount}/${totalPluginsCount} 启用`, `${enabledPluginsCount}/${totalPluginsCount} On`)}{hasPluginOverrides ? L(" · 覆写", " · Custom") : ''}
           </span>
         ),
-        onSelect: () => openAppDialog('output-plugins')
-      } satisfies SessionMenuItem] : []),
-      ...(!session.archivedAt && hasPluginOverrides ? [{
-        id: 'output-plugins-reset-all',
-        label: '插件恢复跟随全局',
-        icon: <RotateCcw size={15}/>,
-        onSelect: handleResetAllOutputPlugins
+        onSelect: () => openAppDialog('session-output-plugins', { sessionId: session.id })
       } satisfies SessionMenuItem] : []),
       ...(!session.archivedAt ? [{
-        id: 'schedules', label: '定时任务', icon: <AlarmClock size={16}/>,
+        id: 'schedules', label: L("定时任务", "Schedules"), icon: <AlarmClock size={16}/>,
         ...(activeSchedules ? { trailing: <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-zinc-500">{activeSchedules}</span> } : {}),
         onSelect: () => openAppDialog('schedule', { sessionId: session.id })
       } satisfies SessionMenuItem] : []),
-      ...(session.systemPrompt ? [{ id: 'system-prompt', label: '查看系统提示词', icon: <BookOpen size={16}/>, onSelect: () => openAppDialog('system-prompt', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
-      ...(secondary && onOpenRawLog ? [{ id: 'raw-log', label: '原始日志', icon: <ScrollText size={16}/>, onSelect: () => onOpenRawLog(session.id) } satisfies SessionMenuItem] : [])
+      ...(session.systemPrompt ? [{ id: 'system-prompt', label: L("查看系统提示词", "View System Prompt"), icon: <BookOpen size={16}/>, onSelect: () => openAppDialog('system-prompt', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
+      ...(secondary && onOpenRawLog ? [{ id: 'raw-log', label: L("原始日志", "Raw Logs"), icon: <ScrollText size={16}/>, onSelect: () => onOpenRawLog(session.id) } satisfies SessionMenuItem] : [])
     ] },
     { items: [
       ...(handoverInfo ? [
-        { id: 'handover-open', label: `已托管：${handoverInfo.name}`, icon: <Bot size={16} className="text-emerald-600"/>, onSelect: () => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem,
-        { id: 'handover-settings', label: '飞书同步设置', icon: <SlidersHorizontal size={16}/>, ...(larkSyncStatusBadge ? { trailing: larkSyncStatusBadge } : {}), onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem
+        { id: 'handover-open', label: L(`已托管：${handoverInfo.name}`, `Hosted: ${handoverInfo.name}`), icon: <Bot size={16} className="text-emerald-600"/>, onSelect: () => window.open(handoverInfo.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem,
+        { id: 'handover-settings', label: L("飞书同步设置", "Lark Sync Settings"), icon: <SlidersHorizontal size={16}/>, ...(larkSyncStatusBadge ? { trailing: larkSyncStatusBadge } : {}), onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem
       ] : []),
-      ...(!session.archivedAt && !handoverInfo && session.source !== 'lark' ? [{ id: 'handover', label: '托管到飞书机器人', icon: <Bot size={16}/>, onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
-      ...(!handoverInfo && larkLink ? [{ id: 'lark-open', label: larkLink.exact ? '在飞书中打开' : '在飞书中打开该话题', icon: <ExternalLink size={16}/>, onSelect: () => window.open(larkLink.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem] : []),
-      ...(!handoverInfo && larkBinding ? [{ id: 'lark-sync-settings', label: '飞书同步设置', icon: <SlidersHorizontal size={16}/>, ...(larkSyncStatusBadge ? { trailing: larkSyncStatusBadge } : {}), onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
-      ...(!session.archivedAt && session.source === 'import' ? [{ id: 'sync', label: syncExternal.isPending ? `正在从 ${externalName} 同步…` : `从 ${externalName} 同步新消息`, icon: <RefreshCw size={16}/>, disabled: syncExternal.isPending || busyStates.has(session.state), onSelect: () => syncExternal.mutate() } satisfies SessionMenuItem] : [])
+      ...(!session.archivedAt && !handoverInfo && session.source !== 'lark' ? [{ id: 'handover', label: L("托管到飞书机器人", "Host in Lark Bot"), icon: <Bot size={16}/>, onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
+      ...(!handoverInfo && larkLink ? [{ id: 'lark-open', label: larkLink.exact ? L("在飞书中打开", "Open in Lark") : L("在飞书中打开该话题", "Open Thread in Lark"), icon: <ExternalLink size={16}/>, onSelect: () => window.open(larkLink.url, '_blank', 'noopener,noreferrer') } satisfies SessionMenuItem] : []),
+      ...(!handoverInfo && larkBinding ? [{ id: 'lark-sync-settings', label: L("飞书同步设置", "Lark Sync Settings"), icon: <SlidersHorizontal size={16}/>, ...(larkSyncStatusBadge ? { trailing: larkSyncStatusBadge } : {}), onSelect: () => openAppDialog('handover', { sessionId: session.id }) } satisfies SessionMenuItem] : []),
+      ...(!session.archivedAt && session.source === 'import' ? [{ id: 'sync', label: syncExternal.isPending ? L(`正在从 ${externalName} 同步…`, `Syncing from ${externalName}…`) : L(`从 ${externalName} 同步新消息`, `Sync from ${externalName}`), icon: <RefreshCw size={16}/>, disabled: syncExternal.isPending || busyStates.has(session.state), onSelect: () => syncExternal.mutate() } satisfies SessionMenuItem] : [])
     ] }
   ];
   const dangerMenuGroups: SessionMenuGroup[] = !session.archivedAt ? [{ items: [{
     id: 'archive',
     // 主会话在岗时后端会硬拦；这里先把文案改掉，点开给解释和直达交接的入口。
-    label: isMain ? '归档会话（主会话需先交接）' : '归档会话',
+    label: isMain ? L("归档会话（主会话需先交接）", "Archive Session (Hand over main first)") : L("归档会话", "Archive Session"),
     icon: <Archive size={16}/>, danger: !isMain, disabled: archive.isPending,
     onSelect: () => { archive.reset(); if (isMain) setMainArchiveBlocked(true); else setArchiveConfirm(true); }
   } satisfies SessionMenuItem] }] : [];
@@ -1280,12 +1266,12 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
         ? 'active'
         : undefined;
   const baseMenuTooltip = handoverInfo
-    ? `更多操作（已托管：${handoverInfo.name}）`
+    ? L(`更多操作（已托管：${handoverInfo.name}）`, `More Actions (Hosted: ${handoverInfo.name})`)
     : larkBinding
-      ? `更多操作（已绑定${larkBinding.chatType === 'p2p' ? '飞书私聊' : '飞书群聊'}${larkTurnSyncEnabled ? ' · 同步已开启' : ''}）`
+      ? L(`更多操作（已绑定${larkBinding.chatType === 'p2p' ? '飞书私聊' : '飞书群聊'}${larkTurnSyncEnabled ? ' · 同步已开启' : ''}）`, `More Actions (Bound to ${larkBinding.chatType === 'p2p' ? 'Lark DM' : 'Lark Group'}${larkTurnSyncEnabled ? ' · Sync On' : ''})`)
       : activeSchedules > 0
-        ? `更多操作（${activeSchedules} 个定时任务启用中）`
-        : '更多操作';
+        ? L(`更多操作（${activeSchedules} 个定时任务启用中）`, `More Actions (${activeSchedules} active schedule(s))`)
+        : L("更多操作", "More Actions");
 
   const agentUsageTrigger = (
     <SessionAgentUsagePopover
@@ -1305,7 +1291,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   return <div ref={paneRootRef} data-session-pane={pane} className={`flex h-full min-w-0 w-full ${secondary ? 'border-l border-zinc-200' : ''}`}>
     <section className="flex min-w-0 flex-1 flex-col">
       <header className="ui-session-topbar flex shrink-0 items-center gap-1.5 border-b border-zinc-200 bg-canvas px-3 sm:px-4">
-        <span className="mr-0.5 md:hidden"><IconButton label="打开会话列表" onClick={onOpenSidebar}><Menu size={16}/></IconButton></span>
+        <span className="mr-0.5 md:hidden"><IconButton label={L("打开会话列表", "Open Session List")} onClick={onOpenSidebar}><Menu size={16}/></IconButton></span>
         {isMain ? <CompanionHeader agentId={session.agentId} agentName={agent?.name} agentSlot={agentUsageTrigger}/> : <div className="min-w-0 flex-1 overflow-hidden">
           <div className="flex min-w-0 items-center gap-1.5">
             {editingHeaderTitle ? (
@@ -1321,7 +1307,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
                   else if (event.key === 'Escape') { event.preventDefault(); setEditingHeaderTitle(false); }
                 }}
                 placeholder={sessionLabel(session, agent?.name)}
-                aria-label="编辑会话标题"
+                aria-label={L("编辑会话标题", "Edit Session Title")}
                 className={`ui-field h-6 min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 text-[13px] font-semibold text-zinc-900 ${titleFlash.flashClass}`}
               />
             ) : (
@@ -1366,11 +1352,11 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
               resetKey={session.id}
               onFlash={titleFlash.triggerFlash}
               disabled={saveHeaderTitle.isPending}
-              ariaLabel="AI 生成会话标题"
-              tooltip="AI 根据会话内容生成标题（生成后可一键撤销）"
+              ariaLabel={L("AI 生成会话标题", "Generate Title with AI")}
+              tooltip={L("AI 根据会话内容生成标题（生成后可一键撤销）", "Generate a title from conversation context (one-click undo)")}
               testId="session-title-ai-assist"
             />
-            {session.sshHost && <HoverTooltip content={`通过 SSH 在 ${session.sshHost} 上运行`}><span className="shrink-0 rounded border border-sky-200 bg-sky-50 px-1 py-px text-[11px] font-medium leading-4 text-sky-700 max-sm:hidden">SSH · {session.sshHost}</span></HoverTooltip>}
+            {session.sshHost && <HoverTooltip content={L(`通过 SSH 在 ${session.sshHost} 上运行`, `Running over SSH on ${session.sshHost}`)}><span className="shrink-0 rounded border border-sky-200 bg-sky-50 px-1 py-px text-[11px] font-medium leading-4 text-sky-700 max-sm:hidden">SSH · {session.sshHost}</span></HoverTooltip>}
           </div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] leading-4 text-zinc-500">
             {agentUsageTrigger}
@@ -1379,7 +1365,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             <span className="shrink-0">{sessionStateLabel(session.state, session.interruptIntent)}</span>
             {headerElapsed && <span className="hidden shrink-0 items-center gap-1.5 sm:inline-flex">
               <span className="text-zinc-300">·</span>
-              <HoverTooltip content="本轮执行耗时；刷新或重连后按服务端时间重新计算"><span className="tabular-nums">{headerElapsed}</span></HoverTooltip>
+              <HoverTooltip content={L("本轮执行耗时；刷新或重连后按服务端时间重新计算", "Current turn duration; recalculated from server timestamps after refresh or reconnect")}><span className="tabular-nums">{headerElapsed}</span></HoverTooltip>
             </span>}
             <span className="hidden min-w-0 items-center gap-1.5 md:inline-flex">
               <span className="shrink-0 text-zinc-300">·</span>
@@ -1388,14 +1374,14 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
           </div>
         </div>}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <IconButton label={`搜索对话内容（${shortcutLabel('f')}）`} active={searchOpen} onClick={() => { if (searchOpen) closeTimelineSearch(); else openTimelineSearch(); }}><Search size={15}/></IconButton>
+          <IconButton label={L(`搜索对话内容（${shortcutLabel('f')}）`, `Search conversation (${shortcutLabel('f')})`)} active={searchOpen} onClick={() => { if (searchOpen) closeTimelineSearch(); else openTimelineSearch(); }}><Search size={15}/></IconButton>
           {!secondary && onTogglePane && <PaneToggleButton open={Boolean(paneOpen)} onToggle={onTogglePane}/>}
           {isMain
             ? <MainSessionMoreMenu regularGroups={regularMenuGroups} dangerGroups={dangerMenuGroups} baseIndicator={baseMenuIndicator} baseTooltip={baseMenuTooltip}/>
             : <SessionMenu groups={menuGroups.filter(group => group.items.length)} indicator={baseMenuIndicator} tooltip={baseMenuTooltip}/>}
         </div>
       </header>
-      {actionError && <div className="flex items-center border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700"><span className="min-w-0 truncate">{actionError}</span><button className="ml-2 shrink-0" onClick={() => setActionError(undefined)} aria-label="关闭错误提示"><X size={13}/></button></div>}
+      {actionError && <div className="flex items-center border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700"><span className="min-w-0 truncate">{actionError}</span><button className="ml-2 shrink-0" onClick={() => setActionError(undefined)} aria-label={L("关闭错误提示", "Dismiss error")}><X size={13}/></button></div>}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
       <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`ui-view-fade mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
@@ -1406,7 +1392,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
               key={rec.id}
               record={rec}
               disabled={Boolean(session.archivedAt) || mainNeedsRestart}
-              disabledReason={session.archivedAt ? '该会话已归档，无法操作' : mainNeedsRestart ? '请先恢复主会话后再操作' : undefined}
+              disabledReason={session.archivedAt ? L("该会话已归档，无法操作", "This session is archived and read-only") : mainNeedsRestart ? L("请先恢复主会话后再操作", "Please restore the main session first") : undefined}
               submittingDecision={submittingRecovery?.id === rec.id ? submittingRecovery.decision : null}
               error={recoveryErrors[rec.id]}
               onDecide={handleDecideRecovery}
@@ -1447,7 +1433,7 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
                           submittingPluginKey={submittingPluginKey}
                           pluginSubmitErrors={pluginSubmitErrors}
                           askDisabled={Boolean(session.archivedAt) || mainNeedsRestart}
-                          askDisabledReason={session.archivedAt ? '该会话已归档，无法提交操作' : mainNeedsRestart ? '请先恢复主会话后再操作' : undefined}
+                          askDisabledReason={session.archivedAt ? L("该会话已归档，无法提交操作", "This session is archived and cannot accept actions") : mainNeedsRestart ? L("请先恢复主会话后再操作", "Please restore the main session first") : undefined}
                           onInteractOutputPlugin={handleInteractOutputPlugin}
                         />
                       </div>;
@@ -1463,27 +1449,27 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
             })}
             {visibleRecoveryCards.filter(rec => !matchedRecoveryIds.has(rec.id)).map(renderRecoveryCard)}
           </>;
-        })()}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
-        </div></div><ExitGate open={searchOpen} ms={150}><TimelineSearchBar inputRef={searchInputRef} query={searchQuery} hasQuery={Boolean(normalizeSearchQuery(searchQuery))} activeIndex={clampedSearchIndex} total={searchMatches.length} onQueryChange={next => { setSearchQuery(next); setSearchIndex(0); }} onNext={goToNextMatch} onPrev={goToPrevMatch} onClear={() => { setSearchQuery(''); setSearchIndex(0); }} onClose={closeTimelineSearch}/></ExitGate><ExitGate open={showScrollToBottom} ms={150}><div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-fab-in ui-press pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_6px_18px_rgba(0,0,0,.13)] hover:-translate-y-0.5 hover:border-zinc-300 hover:text-zinc-900 active:scale-95" aria-label="回到最新消息"><ArrowDown size={15}/></button></div></ExitGate><SelectionQuotePopover containerRef={timelineScroll.containerRef} enabled={!session.archivedAt && !mainNeedsRestart} onQuote={handleQuoteReply}/></div>
-      {!session.archivedAt && prompt.length > MAX_DRAFT_CHARS && <div role="status" className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-center text-[12px] text-amber-700">草稿超过 {MAX_DRAFT_CHARS.toLocaleString()} 字符，超出部分不会保存，刷新后会丢失。</div>}
+        })()}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">{L("工作区已就绪", "Workspace Ready")}</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">{L("从一个问题开始", "Start with a question")}</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">{L("让 Agent 检查代码、实现改动或讲解当前项目。", "Ask the Agent to inspect code, implement changes, or explain this project.")}</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{getSessionStarterPrompts(locale).map(suggestion => <button key={suggestion.id} type="button" onClick={() => { if (composerTextarea.current) composerTextarea.current.setValue(suggestion.prompt); else setPrompt(suggestion.prompt); requestAnimationFrame(() => composerTextarea.current?.focus()); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion.label}</button>)}</div></div>}
+        </div></div><ExitGate open={searchOpen} ms={150}><TimelineSearchBar inputRef={searchInputRef} query={searchQuery} hasQuery={Boolean(normalizeSearchQuery(searchQuery))} activeIndex={clampedSearchIndex} total={searchMatches.length} onQueryChange={next => { setSearchQuery(next); setSearchIndex(0); }} onNext={goToNextMatch} onPrev={goToPrevMatch} onClear={() => { setSearchQuery(''); setSearchIndex(0); }} onClose={closeTimelineSearch}/></ExitGate><ExitGate open={showScrollToBottom} ms={150}><div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-fab-in ui-press pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_6px_18px_rgba(0,0,0,.13)] hover:-translate-y-0.5 hover:border-zinc-300 hover:text-zinc-900 active:scale-95" aria-label={L("回到最新消息", "Jump to latest")}><ArrowDown size={15}/></button></div></ExitGate><SelectionQuotePopover containerRef={timelineScroll.containerRef} enabled={!session.archivedAt && !mainNeedsRestart} onQuote={handleQuoteReply}/></div>
+      {!session.archivedAt && prompt.length > MAX_DRAFT_CHARS && <div role="status" className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-center text-[12px] text-amber-700">{L("草稿超过", "Draft exceeds ")} {MAX_DRAFT_CHARS.toLocaleString()}  {L("字符，超出部分不会保存，刷新后会丢失。", " chars; the excess will not be saved across refresh.")}</div>}
       {session.archivedAt || mainNeedsRestart
         ? mainNeedsRestart
           ? <div className="flex flex-wrap items-center justify-center gap-2 border-t border-amber-200 bg-amber-50/80 px-4 py-3 text-center text-xs text-amber-800">
-            <span>{session.archivedAt ? '当前主会话被归档了：现在既不能继续对话，也不能发起交接。' : '主会话已停止，输入框不可用；重新启动后可以继续对话。'}</span>
+            <span>{session.archivedAt ? L("当前主会话被归档了：现在既不能继续对话，也不能发起交接。", "The current main session is archived: you cannot continue chatting or initiate a handover.") : L("主会话已停止，输入框不可用；重新启动后可以继续对话。", "The main session is stopped. Restart it to continue chatting.")}</span>
             <button type="button" disabled={restoreMain.isPending} onClick={() => restoreMain.mutate()} className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-300 bg-white px-2.5 text-[12px] font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50">
-              <RotateCcw size={12} className={restoreMain.isPending ? 'animate-spin' : ''}/>{restoreMain.isPending ? '正在恢复…' : session.archivedAt ? '恢复主会话' : '重新启动'}
+              <RotateCcw size={12} className={restoreMain.isPending ? 'animate-spin' : ''}/>{restoreMain.isPending ? L("正在恢复…", "Restoring…") : session.archivedAt ? L("恢复主会话", "Restore Main Session") : L("重新启动", "Restart")}
             </button>
           </div>
-          : <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">该会话已归档，仅支持查看。</div>
-        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} quotedText={quotedText} onClearQuote={() => setQuotedText(undefined)} sending={send.isPending} sendingMode={send.isPending ? send.variables?.mode : undefined} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={activeSteeringTaskId} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchingModel} switchingReasoningEffort={switchingReasoningEffort} pendingModel={pendingModel} pendingReasoningEffort={pendingReasoningEffort} modelJustSwitched={modelJustSwitched} reasoningJustSwitched={reasoningJustSwitched} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} aiContext={buildSessionAiContext} outputPlugins={composerOutputPlugins} switchingOutputPluginId={switchingPluginId} outputPluginsJustSwitched={pluginsJustSwitched} onSetOutputPlugin={handleSetOutputPlugin} onResetAllOutputPlugins={handleResetAllOutputPlugins} onOpenOutputPluginsCenter={() => openAppDialog('output-plugins')} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={handleSteerQueued} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={handleModelChange} onReasoningEffortChange={handleReasoningEffortChange} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
+          : <div className="border-t border-zinc-200 bg-white/75 px-4 py-3 text-center text-xs text-zinc-500">{L("该会话已归档，仅支持查看。", "This session is archived and read-only.")}</div>
+        : <Composer sessionId={session.id} state={session.state} {...(isMain ? { placeholder: <CompanionPlaceholder/> } : {})} homeDirectory={systemCapabilities.data?.homeDirectory} value={prompt} references={composerReferences} quotedText={quotedText} onClearQuote={() => setQuotedText(undefined)} sending={send.isPending} sendingMode={send.isPending ? send.variables?.mode : undefined} mode={sendMode} queuedTasks={queuedTasks} cancellingTaskId={cancelQueued.isPending ? cancelQueued.variables : undefined} steeringTaskId={activeSteeringTaskId} editingTaskId={editQueued.isPending ? editQueued.variables : undefined} skills={skills.data ?? []} models={models.data?.models ?? []} reasoningEfforts={models.data?.reasoningEfforts ?? []} currentModel={session.model ?? models.data?.defaultModel} currentReasoningEffort={session.reasoningEffort ?? models.data?.defaultReasoningEffort} advertisedCommands={advertisedCommands} builtinCommands={btwEnabled && onSideChat ? (sideChatBuiltinCommand(btwTriggerPrefix) ? [sideChatBuiltinCommand(btwTriggerPrefix)!] : []) : []} modelReadiness={modelReadiness} switchingModel={switchingModel} switchingReasoningEffort={switchingReasoningEffort} pendingModel={pendingModel} pendingReasoningEffort={pendingReasoningEffort} modelJustSwitched={modelJustSwitched} reasoningJustSwitched={reasoningJustSwitched} refreshingModels={models.isFetching || refreshModels.isPending} editorRef={composerTextarea} aiContext={buildSessionAiContext} outputPlugins={composerOutputPlugins} outputPluginsScope="session" switchingOutputPluginId={switchingPluginId} outputPluginsJustSwitched={pluginsJustSwitched} onSetOutputPlugin={handleSetOutputPlugin} onResetAllOutputPlugins={handleResetAllOutputPlugins} onOpenOutputPluginsCenter={() => openAppDialog('output-plugins')} onChange={setPrompt} onReferencesChange={setComposerReferences} onModeChange={setSendMode} onSubmit={submit} onInterrupt={() => void act('interrupt')} onCancelQueued={taskId => cancelQueued.mutate(taskId)} onSteerQueued={handleSteerQueued} onEditQueued={task => editQueued.mutate(task.id)} onModelChange={handleModelChange} onReasoningEffortChange={handleReasoningEffortChange} onRefreshModels={() => refreshModels.mutate({ agentId: session.agentId, currentModel: session.model })}/>}
         </div>
       </div>
     </section>
 
     {syncToast.toast}
-    <ConfirmDialog open={archiveConfirm} tone="danger" title="归档此会话？" description="归档后会话将变为只读且无法恢复。历史消息和执行记录会保留在归档列表中。" confirmLabel="确认归档" busy={archive.isPending} error={archive.error?.message} onCancel={() => { if (!archive.isPending) setArchiveConfirm(false); }} onConfirm={() => archive.mutate()}/>
-    <ConfirmDialog open={mainArchiveBlocked} tone="warning" title="主会话不能直接归档" description="主会话还在岗，归档后会停掉对话，也不能再发起交接。请先「退休并交接」：交接完成后旧主会话会自动归档，新主会话会收到完整交接包。如果只是想暂时停下，可以在设置里「让它休息」。"
-      confirmLabel="去交接 / 退休"
+    <ConfirmDialog open={archiveConfirm} tone="danger" title={L("归档此会话？", "Archive this session?")} description={L("归档后会话将变为只读且无法恢复。历史消息和执行记录会保留在归档列表中。", "Archived sessions become read-only and cannot be unarchived. History remains in the Archive list.")} confirmLabel={L("确认归档", "Archive")} busy={archive.isPending} error={archive.error?.message} onCancel={() => { if (!archive.isPending) setArchiveConfirm(false); }} onConfirm={() => archive.mutate()}/>
+    <ConfirmDialog open={mainArchiveBlocked} tone="warning" title={L("主会话不能直接归档", "Main Session Cannot Be Archived Directly")} description={L("主会话还在岗，归档后会停掉对话，也不能再发起交接。请先「退休并交接」：交接完成后旧主会话会自动归档，新主会话会收到完整交接包。如果只是想暂时停下，可以在设置里「让它休息」。", "The main session is active. Please use \"Retire & Hand Over\" first so the previous main session archives automatically once the new one receives the full handover package. To pause temporarily, use \"Put to rest\" in Settings.")}
+      confirmLabel={L("去交接 / 退休", "Retire / Hand Over")}
       onCancel={() => setMainArchiveBlocked(false)}
       onConfirm={() => { setMainArchiveBlocked(false); useCompanionStore.getState().openCeremony(); }}/>
   </div>;

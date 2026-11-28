@@ -5,17 +5,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   DEFAULT_ASK_USER_QUESTION_CONFIG,
-  getSessionOutputPluginOverride,
   mergeSessionOutputPluginsPatch,
-  resolveOutputPluginEnabled,
   type OutputPluginCatalogItem,
   type OutputPluginsGlobalConfig
 } from '@agent-dock/agent-dock-shared';
 import { api, type Agent, type Session } from './api';
 import { Composer, type ComposerOutputPluginItem } from './Composer';
 import { openAppDialog } from './dialog-store';
-import { buildFallbackOutputPluginCatalogItems } from './output-plugins/useOutputPlugins';
+import {
+  buildEffectiveGlobalPluginsConfig,
+  buildFallbackOutputPluginCatalogItems,
+  buildSessionOutputPluginItems
+} from './output-plugins/useOutputPlugins';
 import { PromptTemplates } from './PromptTemplates';
+import { translateUnmodifiedBuiltinPrompt } from './prompt-templates';
 import type { ComposerEditorHandle } from './ComposerEditor';
 import { buildPrompt, getModelReadiness, referenceFromUpload, uploadSessionFile, type ComposerReference } from './composer-utils';
 import { agentModelsQueryKey, loadAgentModels, readCachedAgentModels, readInitialAgentModels } from './model-cache';
@@ -44,6 +47,7 @@ import {
 import { createClientMessageId } from './client-message-id';
 import { clearSessionDraft, getBrowserDraftStorage, MAX_DRAFT_CHARS, saveSessionDraft } from './session-drafts';
 import { useSessionDraftWriter } from './use-session-draft';
+import { useBi, useLocale } from './i18n';
 
 /**
  * 空态草稿 Composer：还不存在 Session 时，把输入框、Agent、工作目录、模型、思考强度和
@@ -70,6 +74,9 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   /** 全局默认插件开关配置。 */
   outputPluginsGlobalConfig?: OutputPluginsGlobalConfig;
 }) {
+  const L = useBi();
+  const locale = useLocale();
+  const prevLocaleRef = useRef(locale);
   const qc = useQueryClient();
   const [prompt, setPrompt] = useState('');
   const [references, setReferences] = useState<ComposerReference[]>([]);
@@ -215,7 +222,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
 
   const attach = async (file: File | Blob): Promise<ComposerReference> => {
     const id = `draft-${++seq.current}`;
-    const name = 'name' in file ? file.name : '（未命名文件）';
+    const name = 'name' in file ? file.name : L("（未命名文件）", "(Untitled file)");
     const isImage = file.type.startsWith('image/');
     if (file instanceof File) stashed.current.set(id, file);
     const url = isImage ? URL.createObjectURL(file) : undefined;
@@ -229,8 +236,34 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     stashed.current.clear();
   };
 
+  const lastTemplateInsertRef = useRef<{ raw: string; editorText: string } | null>(null);
+
+  useEffect(() => {
+    const prevLocale = prevLocaleRef.current;
+    prevLocaleRef.current = locale;
+    if (prevLocale === locale) return;
+    const live = readLiveDraft();
+    const lastInsert = lastTemplateInsertRef.current;
+    const candidate = lastInsert && live === lastInsert.editorText ? lastInsert.raw : live;
+    const translated = translateUnmodifiedBuiltinPrompt(candidate, prevLocale, locale);
+    if (!translated) return;
+    if (editorRef?.current) {
+      editorRef.current.setValue(translated);
+      lastTemplateInsertRef.current = { raw: translated, editorText: editorRef.current.getValue() };
+    } else {
+      setPrompt(translated);
+      lastTemplateInsertRef.current = { raw: translated, editorText: translated };
+    }
+  }, [locale]);
+
   const useTemplate = (text: string) => {
-    setPrompt(text);
+    if (editorRef?.current) {
+      editorRef.current.setValue(text);
+      lastTemplateInsertRef.current = { raw: text, editorText: editorRef.current.getValue() };
+    } else {
+      setPrompt(text);
+      lastTemplateInsertRef.current = { raw: text, editorText: text };
+    }
     // 填入后把焦点送回编辑器，用户可以直接改内容或按 Enter 发送。
     requestAnimationFrame(() => editorRef?.current?.focus());
   };
@@ -281,18 +314,10 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     () => (outputPluginItems?.length ? outputPluginItems : buildFallbackOutputPluginCatalogItems()),
     [outputPluginItems]
   );
-  const effectiveGlobalPluginsConfig = useMemo<OutputPluginsGlobalConfig>(() => {
-    const base: Record<string, boolean> = {};
-    for (const item of effectivePluginCatalog) {
-      base[item.id] = item.globalEnabled;
-    }
-    if (outputPluginsGlobalConfig?.plugins) {
-      Object.assign(base, outputPluginsGlobalConfig.plugins);
-    } else {
-      base[BUILTIN_ASK_USER_QUESTION_PLUGIN_ID] = askUserQuestionXmlEnabled;
-    }
-    return { plugins: base };
-  }, [effectivePluginCatalog, outputPluginsGlobalConfig, askUserQuestionXmlEnabled]);
+  const effectiveGlobalPluginsConfig = useMemo<OutputPluginsGlobalConfig>(
+    () => buildEffectiveGlobalPluginsConfig(effectivePluginCatalog, outputPluginsGlobalConfig, askUserQuestionXmlEnabled),
+    [effectivePluginCatalog, outputPluginsGlobalConfig, askUserQuestionXmlEnabled]
+  );
 
   const draftOutputPluginOverrides: Record<string, boolean | null> = useMemo(() => {
     if (companion) {
@@ -310,34 +335,12 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   }, [companion, companionSession?.outputPlugins, companionSession?.askUserQuestionEnabled, prefs.outputPlugins, prefs.askUserQuestionEnabled]);
 
   const composerOutputPlugins = useMemo<ComposerOutputPluginItem[]>(
-    () => effectivePluginCatalog.map(plugin => {
-      const globalEnabled = resolveOutputPluginEnabled(plugin.id, {
-        defaultEnabled: plugin.globalEnabled,
-        globalConfig: effectiveGlobalPluginsConfig
-      });
-      const override = getSessionOutputPluginOverride(
-        plugin.id,
-        draftOutputPluginOverrides,
-        companion ? companionSession?.askUserQuestionEnabled : prefs.askUserQuestionEnabled
-      );
-      const enabled = resolveOutputPluginEnabled(plugin.id, {
-        defaultEnabled: globalEnabled,
-        globalConfig: effectiveGlobalPluginsConfig,
-        sessionOverrides: draftOutputPluginOverrides,
-        legacySessionAskEnabled: companion ? companionSession?.askUserQuestionEnabled : prefs.askUserQuestionEnabled
-      });
-      return {
-        id: plugin.id,
-        name: plugin.name,
-        description: plugin.description,
-        icon: plugin.icon,
-        tagName: plugin.tagName,
-        builtin: plugin.builtin,
-        enabled,
-        globalEnabled,
-        override
-      };
-    }),
+    () => buildSessionOutputPluginItems(
+      effectivePluginCatalog,
+      effectiveGlobalPluginsConfig,
+      draftOutputPluginOverrides,
+      companion ? companionSession?.askUserQuestionEnabled : prefs.askUserQuestionEnabled
+    ),
     [effectivePluginCatalog, effectiveGlobalPluginsConfig, draftOutputPluginOverrides, companion, companionSession?.askUserQuestionEnabled, prefs.askUserQuestionEnabled]
   );
 
@@ -348,7 +351,7 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     window.clearTimeout(askSavedTimerRef.current);
     askSavedTimerRef.current = window.setTimeout(() => setAskJustSwitched(false), 900);
     if (companion) {
-      const previousSession = companionSession;
+      const previousSession = qc.getQueryData<Session[]>(['sessions'])?.find(item => item.id === companion.sessionId) ?? companionSession;
       const merged = mergeSessionOutputPluginsPatch(
         previousSession?.outputPlugins,
         { [pluginId]: next },
@@ -501,16 +504,16 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
   return <div className="relative my-auto w-full min-w-0 max-w-[720px]">
     {hero ?? <div className="flex flex-col items-center text-center">
       <DockMascot size={88}/>
-      <h1 className="ui-empty-state ui-hero-title mt-4 text-[22px] font-semibold tracking-[-.02em]">有什么要做的？</h1>
+      <h1 className="ui-empty-state ui-hero-title mt-4 text-[22px] font-semibold tracking-[-.02em]">{L("有什么要做的？", "What would you like to build?")}</h1>
     </div>}
     <div className="ui-collapse" data-collapsed={collapsed || undefined} aria-hidden={collapsed || undefined} inert={collapsed}><div className="min-w-0">
     <div className="mt-6">
     <Composer
       draft
       {...(companion ? {
-        placeholder: <><span className="hidden sm:inline">跟{companion.name}说说要做什么，Enter 发送；它会派侧边会话去办</span><span className="sm:hidden">跟{companion.name}说说要做什么</span></>,
-        sendLabel: `交给${companion.name}`,
-        lockedTarget: <span title={`消息会发进主会话，由${companion.name}安排`} className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-zinc-100 px-2.5 text-[12px] font-medium text-zinc-700"><PawPrint size={12}/>{companion.name} · 主会话</span>
+        placeholder: <><span className="hidden sm:inline">{L("跟", "Ask ")}{companion.name}{L("说说要做什么，Enter 发送；它会派侧边会话去办", " what to do (Enter to send; it will dispatch side sessions)")}</span><span className="sm:hidden">{L("跟", "Ask ")}{companion.name}{L("说说要做什么", " what to do")}</span></>,
+        sendLabel: L(`交给${companion.name}`, `Send to ${companion.name}`),
+        lockedTarget: <span title={L(`消息会发进主会话，由${companion.name}安排`, `Sent to main session for ${companion.name} to coordinate`)} className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-zinc-100 px-2.5 text-[12px] font-medium text-zinc-700"><PawPrint size={12}/>{companion.name}  {L("· 主会话", "· Main")}</span>
       } : {})}
       editorRef={editorRef}
       sessionId=""
@@ -551,6 +554,8 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
       onAttachFile={attach}
       {...(!companion ? { systemPrompt, onSystemPromptChange: setSystemPrompt } : {})}
       outputPlugins={composerOutputPlugins}
+      outputPluginsScope={companion ? 'companion' : 'draft'}
+      outputPluginsScopeName={companion?.name}
       switchingOutputPluginId={switchingCompanionPluginId}
       switchingAskUserQuestion={switchingCompanionAsk}
       outputPluginsJustSwitched={askJustSwitched}
@@ -558,11 +563,11 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
       onResetAllOutputPlugins={handleResetAllDraftOutputPlugins}
       onOpenOutputPluginsCenter={() => openAppDialog('output-plugins')}
       aiContext={() => ({
-        field: companion ? `发给主小猫「${companion.name}」的指令` : '新建会话首条消息',
+        field: companion ? L(`发给主小猫「${companion.name}」的指令`, `Instructions for ${companion.name}`) : L("新建会话首条消息", "First message for new session"),
         ...(selectedAgent?.name ? { agentName: selectedAgent.name } : {}),
         ...(effectiveCwd || defaultWorkspace ? { cwd: effectiveCwd || defaultWorkspace } : {}),
         ...(effectiveModel || models.data?.defaultModel ? { model: effectiveModel || models.data?.defaultModel } : {}),
-        ...(systemPrompt.trim() ? { extra: `会话 System Prompt 摘要：${systemPrompt.trim().slice(0, 300)}` } : {})
+        ...(systemPrompt.trim() ? { extra: L(`会话 System Prompt 摘要：${systemPrompt.trim().slice(0, 300)}`, `Session System Prompt: ${systemPrompt.trim().slice(0, 300)}`) } : {})
       })}
       onChange={setPrompt}
       onReferencesChange={setReferences}
@@ -599,9 +604,9 @@ export function DraftComposer({ agents, sessions, onCreated, editorRef, hero, co
     />
     </div>
     {!companion && <PromptTemplates onUse={useTemplate}/>}
-    {prompt.length > MAX_DRAFT_CHARS && <p role="status" className="mt-2 text-center text-[12px] text-amber-600">草稿超过 {MAX_DRAFT_CHARS.toLocaleString()} 字符，超出部分不会保存，刷新后会丢失。</p>}
+    {prompt.length > MAX_DRAFT_CHARS && <p role="status" className="mt-2 text-center text-[12px] text-amber-600">{L("草稿超过", "Draft exceeds ")} {MAX_DRAFT_CHARS.toLocaleString()}  {L("字符，超出部分不会保存，刷新后会丢失。", " chars; the excess will not be saved across refresh.")}</p>}
     {error && <p role="alert" className="mt-2 text-center text-[12px] text-red-600">{error}</p>}
-    {references.length > 0 && <p className="mt-2 text-center text-[12px] text-zinc-400">{references.length} 个附件会在{companion ? '发送' : '会话创建'}后上传</p>}
+    {references.length > 0 && <p className="mt-2 text-center text-[12px] text-zinc-400">{references.length}  {L("个附件会在", " attachment(s) will upload after ")}{companion ? L("发送", "sending") : L("会话创建", "session creation")}{L("后上传", "")}</p>}
     </div></div>
   </div>;
 }
