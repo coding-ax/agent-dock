@@ -1,3 +1,4 @@
+import { bi } from './i18n';
 export interface FilePreviewTarget {
   path: string;
   startLine?: number;
@@ -157,7 +158,7 @@ export function buildDirectoryBreadcrumbs(displayPath: string, cwd: string): Dir
     return crumbs;
   }
   const normalizedCwd = cwd.replace(/\\/g, '/').replace(/\/+$/, '');
-  const rootLabel = normalizedCwd.split('/').at(-1) || '工作区';
+  const rootLabel = normalizedCwd.split('/').at(-1) || bi("工作区", "Workspace");
   const parts = normalized.split('/').filter(Boolean);
   const crumbs: DirectoryBreadcrumb[] = [{ label: rootLabel, path: normalizedCwd || '.' }];
   let acc = '';

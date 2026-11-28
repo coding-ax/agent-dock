@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import type { NotificationEventKind, NotificationServerConfig, NotificationStreamPayload, WebhookPreset } from './api';
+import { bi } from './i18n';
 
 export const LOCAL_NOTIFICATION_PREFS_KEY = 'agentdock:notifications-local';
 export const MASKED_SECRET_SENTINEL = '__AGENTDOCK_KEEP_SECRET__';
@@ -422,77 +423,124 @@ export const useUnreadNotificationsStore = create<UnreadStore>(set => ({
 
 export function formatClientNotificationText(payload: NotificationStreamPayload): { title: string; body: string } {
   const kindLabel = payload.kind === 'waiting_approval'
-    ? (payload.ask ? '请你拍板' : '等待授权')
+    ? (payload.ask ? bi('请你拍板', 'Needs Input') : bi('等待授权', 'Approval Needed'))
     : payload.kind === 'failed'
-      ? '运行失败'
+      ? bi('运行失败', 'Failed')
       : payload.kind === 'notify'
-        ? '发来提醒'
-        : '已完成';
+        ? bi('发来提醒', 'Notification')
+        : bi('已完成', 'Completed');
   const title = payload.batchCount && payload.batchCount > 1
-    ? `AgentDock · ${payload.batchCount} 项任务${kindLabel}`
+    ? bi(`AgentDock · ${payload.batchCount} 项任务${kindLabel}`, `AgentDock · ${payload.batchCount} tasks ${kindLabel}`)
     : `${payload.sessionTitle || 'AgentDock'} · ${kindLabel}`;
-  const elapsed = payload.durationMs && payload.durationMs >= 1000
-    ? `（用时 ${payload.durationMs < 60_000 ? `${Math.round(payload.durationMs / 1000)}s` : `${Math.floor(payload.durationMs / 60_000)}m ${Math.round((payload.durationMs % 60_000) / 1000)}s`}）`
+  const dur = payload.durationMs && payload.durationMs >= 1000
+    ? (payload.durationMs < 60_000 ? `${Math.round(payload.durationMs / 1000)}s` : `${Math.floor(payload.durationMs / 60_000)}m ${Math.round((payload.durationMs % 60_000) / 1000)}s`)
     : '';
-  const content = payload.error || payload.summary || `${payload.agentId} 本轮已结束`;
+  const elapsed = dur ? bi(`（用时 ${dur}）`, ` (${dur})`) : '';
+  const content = payload.error || payload.summary || bi(`${payload.agentId} 本轮已结束`, `${payload.agentId} finished this turn`);
   return {
     title,
     body: `${content}${elapsed}`
   };
 }
 
+interface RawWebhookPresetMeta {
+  label: string;
+  labelEn: string;
+  shortLabel: string;
+  shortLabelEn: string;
+  placeholderUrl: string;
+  hint: string;
+  hintEn: string;
+}
+
+const RAW_WEBHOOK_PRESET_META: Record<WebhookPreset, RawWebhookPresetMeta> = {
+  generic: {
+    label: '自定义 JSON',
+    labelEn: 'Custom JSON',
+    shortLabel: 'JSON',
+    shortLabelEn: 'JSON',
+    placeholderUrl: 'https://example.com/hooks/agentdock',
+    hint: '发送标准 JSON（含 event、sessionId、sessionTitle、summary、durationMs、sessionUrl）。',
+    hintEn: 'Sends standard JSON (event, sessionId, sessionTitle, summary, durationMs, sessionUrl).'
+  },
+  lark_webhook: {
+    label: '飞书群机器人',
+    labelEn: 'Lark Group Bot',
+    shortLabel: '飞书 Webhook',
+    shortLabelEn: 'Lark Webhook',
+    placeholderUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx',
+    hint: '无需自建应用，在飞书群设置中添加「自定义机器人」复制 Webhook 地址即可。',
+    hintEn: 'No app setup required: add a Custom Bot in Lark group settings and paste its webhook URL.'
+  },
+  dingtalk: {
+    label: '钉钉群机器人',
+    labelEn: 'DingTalk Bot',
+    shortLabel: '钉钉',
+    shortLabelEn: 'DingTalk',
+    placeholderUrl: 'https://oapi.dingtalk.com/robot/send?access_token=xxxx',
+    hint: '发送 Markdown 格式卡片；若群机器人配置了关键词安全设置，请包含「AgentDock」。',
+    hintEn: 'Sends Markdown cards; include "AgentDock" if keyword verification is enabled.'
+  },
+  wecom: {
+    label: '企业微信机器人',
+    labelEn: 'WeCom Bot',
+    shortLabel: '企微',
+    shortLabelEn: 'WeCom',
+    placeholderUrl: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx',
+    hint: '在企业微信群添加群机器人后粘贴 Webhook 地址，自动发送 Markdown 摘要。',
+    hintEn: 'Add a group bot in WeCom and paste the webhook URL to receive Markdown summaries.'
+  },
+  bark: {
+    label: 'Bark (iOS)',
+    labelEn: 'Bark (iOS)',
+    shortLabel: 'Bark',
+    shortLabelEn: 'Bark',
+    placeholderUrl: 'https://api.day.app/<your-device-key>',
+    hint: '直接推送到 iPhone / iPad，点击通知可跳转至 AgentDock 会话链接。',
+    hintEn: 'Push directly to iPhone/iPad with a clickable link to the AgentDock session.'
+  },
+  ntfy: {
+    label: 'ntfy',
+    labelEn: 'ntfy',
+    shortLabel: 'ntfy',
+    shortLabelEn: 'ntfy',
+    placeholderUrl: 'https://ntfy.sh/<your-topic>',
+    hint: '支持自建或官方 ntfy 服务，按事件紧急度自动设置 Priority 与图标标签。',
+    hintEn: 'Works with official or self-hosted ntfy; sets priority and tags automatically.'
+  },
+  slack: {
+    label: 'Slack',
+    labelEn: 'Slack',
+    shortLabel: 'Slack',
+    shortLabelEn: 'Slack',
+    placeholderUrl: 'https://hooks.slack.com/services/T000/B000/XXXX',
+    hint: '发送 Slack Incoming Webhook Block Kit 消息卡片。',
+    hintEn: 'Sends Slack Incoming Webhook Block Kit cards.'
+  },
+  discord: {
+    label: 'Discord',
+    labelEn: 'Discord',
+    shortLabel: 'Discord',
+    shortLabelEn: 'Discord',
+    placeholderUrl: 'https://discord.com/api/webhooks/000000/xxxxxx',
+    hint: '发送带状态色条与耗时角标的 Discord Embed 卡片。',
+    hintEn: 'Sends Discord Embed cards with status color bars and duration badges.'
+  }
+};
+
 export const WEBHOOK_PRESET_META: Record<WebhookPreset, {
   label: string;
   shortLabel: string;
   placeholderUrl: string;
   hint: string;
-}> = {
-  generic: {
-    label: '自定义 JSON',
-    shortLabel: 'JSON',
-    placeholderUrl: 'https://example.com/hooks/agentdock',
-    hint: '发送标准 JSON（含 event、sessionId、sessionTitle、summary、durationMs、sessionUrl）。'
-  },
-  lark_webhook: {
-    label: '飞书群机器人',
-    shortLabel: '飞书 Webhook',
-    placeholderUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx',
-    hint: '无需自建应用，在飞书群设置中添加「自定义机器人」复制 Webhook 地址即可。'
-  },
-  dingtalk: {
-    label: '钉钉群机器人',
-    shortLabel: '钉钉',
-    placeholderUrl: 'https://oapi.dingtalk.com/robot/send?access_token=xxxx',
-    hint: '发送 Markdown 格式卡片；若群机器人配置了关键词安全设置，请包含「AgentDock」。'
-  },
-  wecom: {
-    label: '企业微信机器人',
-    shortLabel: '企微',
-    placeholderUrl: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx',
-    hint: '在企业微信群添加群机器人后粘贴 Webhook 地址，自动发送 Markdown 摘要。'
-  },
-  bark: {
-    label: 'Bark (iOS)',
-    shortLabel: 'Bark',
-    placeholderUrl: 'https://api.day.app/<your-device-key>',
-    hint: '直接推送到 iPhone / iPad，点击通知可跳转至 AgentDock 会话链接。'
-  },
-  ntfy: {
-    label: 'ntfy',
-    shortLabel: 'ntfy',
-    placeholderUrl: 'https://ntfy.sh/<your-topic>',
-    hint: '支持自建或官方 ntfy 服务，按事件紧急度自动设置 Priority 与图标标签。'
-  },
-  slack: {
-    label: 'Slack',
-    shortLabel: 'Slack',
-    placeholderUrl: 'https://hooks.slack.com/services/T000/B000/XXXX',
-    hint: '发送 Slack Incoming Webhook Block Kit 消息卡片。'
-  },
-  discord: {
-    label: 'Discord',
-    shortLabel: 'Discord',
-    placeholderUrl: 'https://discord.com/api/webhooks/000000/xxxxxx',
-    hint: '发送带状态色条与耗时角标的 Discord Embed 卡片。'
-  }
-};
+}> = Object.fromEntries(
+  (Object.entries(RAW_WEBHOOK_PRESET_META) as Array<[WebhookPreset, RawWebhookPresetMeta]>).map(([key, item]) => [
+    key,
+    {
+      placeholderUrl: item.placeholderUrl,
+      get label() { return bi(item.label, item.labelEn); },
+      get shortLabel() { return bi(item.shortLabel, item.shortLabelEn); },
+      get hint() { return bi(item.hint, item.hintEn); }
+    }
+  ])
+) as Record<WebhookPreset, { label: string; shortLabel: string; placeholderUrl: string; hint: string }>;

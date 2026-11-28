@@ -20,11 +20,12 @@ import { AiTextAssistControl, AiUndoCapsule, useAiFlash } from '../AiTextAssist'
 import { useBoardStore } from './board-store';
 import {
   QUICK_KITTEN_ACTIONS,
-  VISUAL_STATE_META,
   deriveBoardKittenMood,
+  getVisualStateMeta,
   toMentionedCard,
   type MentionedBoardCard
 } from './board-utils';
+import { useBi, useLocale } from '../i18n';
 
 export const KITTEN_DOCK_DROPPABLE_ID = 'kitten-dock';
 
@@ -36,6 +37,8 @@ interface KittenBoardDockProps {
 }
 
 export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }: KittenBoardDockProps) {
+  const L = useBi();
+  const locale = useLocale();
   const companion = useCompanion();
   const nav = useCompanionNav();
   const kittenRef = useRef<KittenHandle>(null);
@@ -125,11 +128,11 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
       kittenRef.current?.hop();
       const el = kittenRef.current?.element;
       if (el) burst(el.getBoundingClientRect(), 'sparkles', 6);
-      flashKitten('delegating', `${companion.name}已接手处理`, 3_800);
+      flashKitten('delegating', L(`${companion.name}已接手处理`, `${companion.name} is on it`), 3_800);
       onNotice(
         vars.cards.length
-          ? `已将 ${vars.cards.length} 张卡片交给${companion.name}处理`
-          : `已发送指令给${companion.name}`,
+          ? L(`已将 ${vars.cards.length} 张卡片交给${companion.name}处理`, `Sent ${vars.cards.length} card(s) to ${companion.name}`)
+          : L(`已发送指令给${companion.name}`, `Instruction sent to ${companion.name}`),
         'info'
       );
       setMobileExpanded(false);
@@ -163,15 +166,15 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
   );
 
   const liveStatusText = isDraggingCard && isOver
-    ? `松手把卡片喂给${companion.name} ✨`
+    ? L(`松手把卡片喂给${companion.name} ✨`, `Drop to feed card to ${companion.name} ✨`)
     : isDraggingCard
-      ? `拖到这里交给${companion.name}督办或验收`
+      ? L(`拖到这里交给${companion.name}督办或验收`, `Drag here to ask ${companion.name} to supervise or review`)
       : transientKitten?.message
         || (hydrated?.summary
           ? [
-              hydrated.summary.needsAttention ? `${hydrated.summary.needsAttention} 待拍板` : '',
-              hydrated.summary.running ? `${hydrated.summary.running} 运行中` : '',
-              hydrated.summary.review ? `${hydrated.summary.review} 待验收` : ''
+              hydrated.summary.needsAttention ? L(`${hydrated.summary.needsAttention} 待拍板`, `${hydrated.summary.needsAttention} needs input`) : '',
+              hydrated.summary.running ? L(`${hydrated.summary.running} 运行中`, `${hydrated.summary.running} running`) : '',
+              hydrated.summary.review ? L(`${hydrated.summary.review} 待验收`, `${hydrated.summary.review} review`) : ''
             ].filter(Boolean).join(' · ') || moodMeta.label
           : moodMeta.label);
 
@@ -185,8 +188,8 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
         >
           <Kitten ref={kittenRef} variant="face" size={34} mood="curious" track interactive={false}/>
           <div className="min-w-0">
-            <div className="text-[13px] font-medium text-zinc-900">认领一只主小猫，帮你盯看板和验收卡片</div>
-            <div className="text-[11.5px] text-zinc-500">支持拖卡片喂给小猫，也可以让它用 CLI 自动理看板</div>
+            <div className="text-[13px] font-medium text-zinc-900">{L("认领一只主小猫，帮你盯看板和验收卡片", "Adopt a Companion to watch your board and review cards")}</div>
+            <div className="text-[11.5px] text-zinc-500">{L("支持拖卡片喂给小猫，也可以让它用 CLI 自动理看板", "Drag cards to your companion or let it organize the board via CLI")}</div>
           </div>
           <button
             type="button"
@@ -194,7 +197,8 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
             className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-zinc-900 px-3.5 text-[12.5px] font-medium text-white transition-transform hover:bg-zinc-700 active:scale-95"
           >
             <PawPrint size={13}/>
-            去认领
+            
+            {L("去认领", "Adopt")}
           </button>
         </div>
       </div>
@@ -218,12 +222,12 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
               {isDraggingCard && activeCards.length === 0 ? (
                 <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-amber-700 dark:text-amber-300">
                   <Sparkles size={13}/>
-                  {isOver ? `松手！${companion.name}立刻接住这张卡` : `把卡片拖到此处，直接 @${companion.name} 督办 / 验收 / 整理`}
+                  {isOver ? L(`松手！${companion.name}立刻接住这张卡`, `Drop now! ${companion.name} will catch it`) : L(`把卡片拖到此处，直接 @${companion.name} 督办 / 验收 / 整理`, `Drop cards here to @${companion.name} for review or triage`)}
                 </span>
               ) : (
                 <>
                   {activeCards.map(card => {
-                    const meta = VISUAL_STATE_META[card.visualState] ?? VISUAL_STATE_META.idle;
+                    const meta = getVisualStateMeta(card.visualState, locale);
                     return (
                       <span
                         key={card.id}
@@ -233,7 +237,7 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
                         <span className="truncate">@{card.title}</span>
                         <button
                           type="button"
-                          aria-label={`移除卡片 ${card.title}`}
+                          aria-label={L(`移除卡片 ${card.title}`, `Remove card ${card.title}`)}
                           onClick={() => {
                             removeDockMentionCard(card.id);
                             if (selectedCardIds.includes(card.id)) {
@@ -318,10 +322,10 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
                 onKeyDown={onKeyDown}
                 placeholder={
                   activeCards.length
-                    ? `对这 ${activeCards.length} 张卡下达指令，Enter 交给${companion.name}…`
-                    : `拖卡片喂给${companion.name}，或直接说「帮我理一下看板」…`
+                    ? L(`对这 ${activeCards.length} 张卡下达指令，Enter 交给${companion.name}…`, `Instruct ${companion.name} on these ${activeCards.length} card(s) (Enter)…`)
+                    : L(`拖卡片喂给${companion.name}，或直接说「帮我理一下看板」…`, `Drag cards to ${companion.name}, or ask to organize the board…`)
                 }
-                aria-label={`向${companion.name}下达看板指令`}
+                aria-label={L(`向${companion.name}下达看板指令`, `Send board command to ${companion.name}`)}
                 className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-zinc-900 placeholder:text-zinc-400"
               />
               {activeCards.length === 0 && !prompt.trim() && (
@@ -332,7 +336,8 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
                   className="ui-press hidden h-6 shrink-0 items-center gap-1 rounded-md bg-zinc-100 px-2 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-amber-50 hover:text-amber-800 lg:inline-flex"
                 >
                   <Sparkles size={11}/>
-                  理看板
+                  
+                  {L("理看板", "Organize")}
                 </button>
               )}
               <AiTextAssistControl
@@ -348,20 +353,20 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
                 onUndoStateChange={setDockUndo}
                 resetKey={`${boardId}:${sendEpoch}`}
                 disabled={askMutation.isPending}
-                ariaLabel={`AI 润色发给${companion.name}的指令`}
+                ariaLabel={L(`AI 润色发给${companion.name}的指令`, `AI polish instruction for ${companion.name}`)}
                 context={() => ({
-                  field: `看板主小猫「${companion.name}」指令输入框`,
-                  purpose: '向任务看板的主小猫下达清晰具体的督办、验收、整理或拆解指令',
+                  field: L(`看板主小猫「${companion.name}」指令输入框`, `Command input for ${companion.name}`),
+                  purpose: L("向任务看板的主小猫下达清晰具体的督办、验收、整理或拆解指令", "Give clear instructions to your companion to review, organize, or break down board cards"),
                   ...(hydrated?.board.name ? { boardName: hydrated.board.name } : {}),
                   ...(activeCards.length ? { cards: activeCards.map(c => c.title) } : {}),
                   extra: liveStatusText
                 })}
                 testId="board-kitten-dock-ai"
               />
-              <HoverTooltip content="发送给主小猫（Enter）">
+              <HoverTooltip content={L("发送给主小猫（Enter）", "Send to companion (Enter)")}>
                 <button
                   type="button"
-                  aria-label="发送给主小猫"
+                  aria-label={L("发送给主小猫", "Send to companion")}
                   disabled={!prompt.trim() || askMutation.isPending}
                   onClick={() => submitPrompt()}
                   className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-zinc-900 text-white transition-all hover:bg-zinc-700 active:scale-95 disabled:opacity-35"
@@ -371,10 +376,10 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
               </HoverTooltip>
             </div>
 
-            <HoverTooltip content={kittenChatOpen ? '收起小猫对话抽屉' : `并排打开${companion.name}对话`}>
+            <HoverTooltip content={kittenChatOpen ? L("收起小猫对话抽屉", "Close companion chat drawer") : L(`并排打开${companion.name}对话`, `Open ${companion.name} side chat`)}>
               <button
                 type="button"
-                aria-label={kittenChatOpen ? '收起小猫对话抽屉' : `并排打开${companion.name}对话`}
+                aria-label={kittenChatOpen ? L("收起小猫对话抽屉", "Close companion chat drawer") : L(`并排打开${companion.name}对话`, `Open ${companion.name} side chat`)}
                 aria-pressed={kittenChatOpen}
                 onClick={toggleKittenChat}
                 className={`ui-press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-[12px] font-medium transition-colors ${
@@ -384,7 +389,7 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
                 }`}
               >
                 <MessageSquare size={13.5}/>
-                <span className="hidden lg:inline">对话</span>
+                <span className="hidden lg:inline">{L("对话", "Chat")}</span>
               </button>
             </HoverTooltip>
           </div>
@@ -406,7 +411,7 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
               </div>
               <button
                 type="button"
-                aria-label="收起小猫指令面板"
+                aria-label={L("收起小猫指令面板", "Collapse companion bar")}
                 onClick={() => setMobileExpanded(false)}
                 className="grid h-7 w-7 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100"
               >
@@ -418,7 +423,7 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
                 {activeCards.map(card => (
                   <span key={card.id} className="inline-flex h-6 max-w-full items-center gap-1 rounded-full bg-amber-50 px-2 text-[11px] font-medium text-amber-800">
                     <span className="truncate">@{card.title}</span>
-                    <button type="button" aria-label={`移除 ${card.title}`} onClick={() => removeDockMentionCard(card.id)}><X size={10}/></button>
+                    <button type="button" aria-label={L(`移除 ${card.title}`, `Remove ${card.title}`)} onClick={() => removeDockMentionCard(card.id)}><X size={10}/></button>
                   </span>
                 ))}
               </div>
@@ -453,7 +458,7 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
                 value={prompt}
                 onChange={e => setPrompt(e.target.value)}
                 onKeyDown={onKeyDown}
-                placeholder={`让${companion.name}督办、验收或整理看板…`}
+                placeholder={L(`让${companion.name}督办、验收或整理看板…`, `Ask ${companion.name} to review or organize the board…`)}
                 className={`h-10 min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white px-3 text-[14px] text-zinc-900 ${dockFlash.flashClass}`}
               />
               <AiTextAssistControl
@@ -469,10 +474,10 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
                 onUndoStateChange={setDockUndo}
                 resetKey={`${boardId}:${sendEpoch}`}
                 disabled={askMutation.isPending}
-                ariaLabel={`AI 润色发给${companion.name}的指令`}
+                ariaLabel={L(`AI 润色发给${companion.name}的指令`, `AI polish instruction for ${companion.name}`)}
                 context={() => ({
-                  field: `看板主小猫「${companion.name}」指令输入框`,
-                  purpose: '向任务看板的主小猫下达清晰具体的督办、验收、整理或拆解指令',
+                  field: L(`看板主小猫「${companion.name}」指令输入框`, `Command input for ${companion.name}`),
+                  purpose: L("向任务看板的主小猫下达清晰具体的督办、验收、整理或拆解指令", "Give clear instructions to your companion to review, organize, or break down board cards"),
                   ...(hydrated?.board.name ? { boardName: hydrated.board.name } : {}),
                   ...(activeCards.length ? { cards: activeCards.map(c => c.title) } : {}),
                   extra: liveStatusText
@@ -481,7 +486,7 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
               />
               <button
                 type="button"
-                aria-label="发送"
+                aria-label={L("发送", "Send")}
                 disabled={!prompt.trim() || askMutation.isPending}
                 onClick={() => submitPrompt()}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-zinc-900 text-white disabled:opacity-40"
@@ -503,7 +508,8 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
                   <span className="truncate text-[12.5px] font-semibold text-zinc-900">{companion.name}</span>
                   {activeCards.length > 0 && (
                     <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                      已选 {activeCards.length} 卡
+                      
+                      {L("已选", "Selected ")} {activeCards.length}  {L("卡", " card(s)")}
                     </span>
                   )}
                 </div>
@@ -517,7 +523,8 @@ export function KittenBoardDock({ boardId, hydrated, isDraggingCard, onNotice }:
               className="ui-press inline-flex h-8 shrink-0 items-center gap-1 rounded-full bg-zinc-900 px-3 text-[12px] font-medium text-white"
             >
               <MessageSquare size={12}/>
-              对话
+              
+              {L("对话", "Chat")}
             </button>
           </div>
         )}

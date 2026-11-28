@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useMemoizedFn, useUnmount } from 'ahooks';
 import { registerLarkBot, type RegistrationProgress, type RegistrationResult } from './lark-registration';
+import { bi } from './i18n';
 
 export type RegistrationState = RegistrationProgress | { kind: 'idle' } | { kind: 'success'; result: RegistrationResult } | { kind: 'error'; message: string };
 
@@ -19,7 +20,7 @@ export function useLarkRegistration() {
       });
       if (active.current === controller) setState({ kind: 'success', result });
     } catch (error) {
-      if (active.current === controller && !controller.signal.aborted) setState({ kind: 'error', message: error instanceof Error ? error.message : '创建失败，请重试。' });
+      if (active.current === controller && !controller.signal.aborted) setState({ kind: 'error', message: error instanceof Error ? error.message : bi("创建失败，请重试。", "Creation failed. Please retry.") });
     } finally {
       if (active.current === controller) active.current = undefined;
     }

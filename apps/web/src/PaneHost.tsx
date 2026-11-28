@@ -5,6 +5,7 @@ import { HoverTooltip } from './HoverTooltip';
 import { paneTypeOptions } from './PaneTypeMenu';
 import type { PaneTab } from './store';
 import type { Shortcut } from './useShortcuts';
+import { bi, useBi } from './i18n';
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 900;
@@ -14,11 +15,11 @@ const DEFAULT_WIDTH = 480;
 const widthStorageKey = 'agentdock:pane-host-width';
 
 const paneDescriptions: Record<PaneTab['kind'], string> = {
-  session: '查看会话内容',
-  terminal: '在当前工作目录运行命令',
-  'side-chat': '新建对话，与主会话并排协作',
-  files: '浏览和预览工作目录里的文件',
-  raw: '查看完整输出与运行细节',
+  get session() { return bi("查看会话内容", "View session content"); },
+  get terminal() { return bi("在当前工作目录运行命令", "Run commands in the workspace directory"); },
+  get 'side-chat'() { return bi("新建对话，与主会话并排协作", "Open a side chat alongside this session"); },
+  get files() { return bi("浏览和预览工作目录里的文件", "Browse and preview workspace files"); },
+  get raw() { return bi("查看完整输出与运行细节", "Inspect full output and raw execution logs"); },
 };
 
 export const paneTabIcon = (kind: PaneTab['kind'], size = 12): ReactNode => {
@@ -55,6 +56,7 @@ export function PaneHost({ tabs, mountedTabs, activeTabId, visible, shortcuts, a
   onHide(): void;
   children: Record<string, ReactNode>;
 }) {
+  const L = useBi();
   const [width, setWidth] = useLocalStorageState<number>(widthStorageKey, { defaultValue: DEFAULT_WIDTH });
   const [dragging, setDragging] = useState(false);
   const addButtonRef = useRef<HTMLButtonElement>(null);
@@ -71,21 +73,21 @@ export function PaneHost({ tabs, mountedTabs, activeTabId, visible, shortcuts, a
   useEventListener('pointerup', () => dragging && setDragging(false), { target: () => document, enable: dragging });
 
   return <div className={`ui-side-panel fixed inset-0 z-30 min-h-0 flex-col border-l border-zinc-200 bg-white shadow-[-12px_0_36px_rgba(24,24,27,.1)] lg:static lg:z-auto lg:w-[var(--pane-w)] lg:shrink-0 lg:shadow-none ${visible ? 'flex' : 'hidden'}`} style={{ ['--pane-w' as string]: `${clampedWidth}px` }}>
-    <div onPointerDown={event => { event.preventDefault(); startX.current = event.clientX; startWidth.current = clampedWidth; setDragging(true); }} className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent hover:bg-blue-400/30 lg:block" title="拖拽调整宽度"/>
+    <div onPointerDown={event => { event.preventDefault(); startX.current = event.clientX; startWidth.current = clampedWidth; setDragging(true); }} className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent hover:bg-blue-400/30 lg:block" title={L("拖拽调整宽度", "Drag to resize")}/>
 
     <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-zinc-200 px-1.5">
       <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-        {tabs.length === 0 && <span className="pl-2 text-[12px] font-medium text-zinc-500">副屏</span>}
+        {tabs.length === 0 && <span className="pl-2 text-[12px] font-medium text-zinc-500">{L("副屏", "Side Pane")}</span>}
         {tabs.map(tab => <div key={tab.id} className={`group flex h-7 min-w-0 max-w-[180px] shrink-0 items-center rounded-md pl-2 pr-0.5 text-[12px] font-medium transition-colors ${activeTabId === tab.id ? 'bg-zinc-900 text-white' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900'}`}>
           <button type="button" onClick={() => onActivate(tab.id)} title={tab.title} className="flex min-w-0 flex-1 items-center gap-1.5">
             {paneTabIcon(tab.kind)}
             <span className="min-w-0 truncate">{tab.title}</span>
           </button>
-          <HoverTooltip content={`关闭 ${tab.title ?? '面板'}`}><button type="button" onClick={() => onClose(tab.id)} aria-label={`关闭 ${tab.title ?? '面板'}`} className={`grid h-5 w-5 shrink-0 place-items-center rounded transition-opacity ${activeTabId === tab.id ? 'text-white/60 hover:bg-white/15 hover:text-white' : 'text-zinc-400 opacity-0 hover:bg-zinc-200 hover:text-zinc-800 group-hover:opacity-100'}`}><X size={11}/></button></HoverTooltip>
+          <HoverTooltip content={L(`关闭 ${tab.title ?? '面板'}`, `Close ${tab.title ?? 'Panel'}`)}><button type="button" onClick={() => onClose(tab.id)} aria-label={L(`关闭 ${tab.title ?? '面板'}`, `Close ${tab.title ?? 'Panel'}`)} className={`grid h-5 w-5 shrink-0 place-items-center rounded transition-opacity ${activeTabId === tab.id ? 'text-white/60 hover:bg-white/15 hover:text-white' : 'text-zinc-400 opacity-0 hover:bg-zinc-200 hover:text-zinc-800 group-hover:opacity-100'}`}><X size={11}/></button></HoverTooltip>
         </div>)}
       </div>
-      {tabs.length > 0 && <HoverTooltip content="新建面板（终端 / 侧边聊天 / 文件 / 原始日志）"><button ref={addButtonRef} type="button" onClick={() => onAdd(addButtonRef.current ?? undefined)} aria-label="新建面板" className="ml-auto grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><PlusGlyph/></button></HoverTooltip>}
-      <HoverTooltip content="隐藏副屏"><button type="button" onClick={onHide} aria-label="隐藏副屏" className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={14}/></button></HoverTooltip>
+      {tabs.length > 0 && <HoverTooltip content={L("新建面板（终端 / 侧边聊天 / 文件 / 原始日志）", "New panel (Terminal / Side Chat / Files / Raw Logs)")}><button ref={addButtonRef} type="button" onClick={() => onAdd(addButtonRef.current ?? undefined)} aria-label={L("新建面板", "New Panel")} className="ml-auto grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><PlusGlyph/></button></HoverTooltip>}
+      <HoverTooltip content={L("隐藏副屏", "Hide Side Pane")}><button type="button" onClick={onHide} aria-label={L("隐藏副屏", "Hide Side Pane")} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={14}/></button></HoverTooltip>
     </div>
 
     <div className="relative min-h-0 flex-1">
@@ -93,10 +95,10 @@ export function PaneHost({ tabs, mountedTabs, activeTabId, visible, shortcuts, a
         <div className="mx-auto flex min-h-full w-full max-w-[380px] flex-col justify-center">
           <div className="mb-8 text-center">
             <span className="mx-auto mb-4 grid h-10 w-10 place-items-center rounded-xl border border-zinc-200 bg-zinc-50 text-zinc-600"><PanelRight size={19} strokeWidth={1.7}/></span>
-            <h2 className="text-[15px] font-semibold text-zinc-900">把需要的工具放在右边</h2>
-            <p className="mt-1.5 text-[12px] leading-5 text-zinc-500">选择一个面板，和当前会话并排使用。</p>
+            <h2 className="text-[15px] font-semibold text-zinc-900">{L("把需要的工具放在右边", "Keep tools side by side")}</h2>
+            <p className="mt-1.5 text-[12px] leading-5 text-zinc-500">{L("选择一个面板，和当前会话并排使用。", "Pick a panel to open alongside the current session.")}</p>
           </div>
-          {(['继续工作', '查看上下文'] as const).map((group, groupIndex) => <section key={group} className={groupIndex === 0 ? '' : 'mt-6'}>
+          {([L("继续工作", "Continue"), L("查看上下文", "View Context")] as const).map((group, groupIndex) => <section key={group} className={groupIndex === 0 ? '' : 'mt-6'}>
             <h3 className="mb-2 px-1 text-[12px] font-semibold tracking-[.12em] text-zinc-400">{group}</h3>
             <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-[0_2px_8px_rgba(24,24,27,.03)]">
               {paneTypeOptions(shortcuts).slice(groupIndex * 2, groupIndex * 2 + 2).map((option, index) => <button key={option.kind} type="button" onClick={() => onPick(option.kind)} className={`group flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-zinc-50 focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 ${index > 0 ? 'border-t border-zinc-100' : ''}`}>
@@ -113,7 +115,7 @@ export function PaneHost({ tabs, mountedTabs, activeTabId, visible, shortcuts, a
       {mountedTabs.map(tab => <div key={tab.id} className={`absolute inset-0 ${tabs.includes(tab) && activeTabId === tab.id ? '' : 'hidden'}`}>{children[tab.id]}</div>)}
       {/* 落点铺在内容区之上（不是整个面板）：拖拽时标签栏仍可点。onDragOver 必须 preventDefault 才收得到 drop。 */}
       {acceptsDrop && <div onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); onDropSession(); }} className="absolute inset-0 z-20 grid place-items-center border-2 border-dashed border-zinc-400 bg-zinc-900/5">
-        <span className="rounded-lg bg-white px-3 py-1.5 text-[12px] font-medium text-zinc-700 shadow-[0_2px_8px_rgba(24,24,27,.08)]">放到这里，在副屏打开</span>
+        <span className="rounded-lg bg-white px-3 py-1.5 text-[12px] font-medium text-zinc-700 shadow-[0_2px_8px_rgba(24,24,27,.08)]">{L("放到这里，在副屏打开", "Drop here to open in Side Pane")}</span>
       </div>}
     </div>
   </div>;

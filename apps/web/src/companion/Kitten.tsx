@@ -10,6 +10,7 @@ import {
 import type { LifeStage } from '../api';
 import './companion.css';
 import './lifecycle.css';
+import { useBi } from '../i18n';
 
 /**
  * 小猫：首页、主会话头像、侧栏卡片、右缘把手共用的一只。
@@ -62,6 +63,7 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
   size = 96, variant = 'full', mood = 'idle', stage, retired = false, track = false, typingAware = false,
   interactive = true, celebrateKey, viewTransitionName, label, className = '', style, onClick
 }, ref) {
+  const L = useBi();
   const root = useRef<HTMLDivElement>(null);
   const [sparkling, setSparkling] = useState(false);
   const [fallbackFor, setFallbackFor] = useState<string | null>(null);
@@ -196,7 +198,7 @@ export const Kitten = forwardRef<KittenHandle, KittenProps>(function Kitten({
   const rootStyle: CSSProperties = { width: size, height: size, ...(viewTransitionName ? { viewTransitionName } as CSSProperties : {}), ...style };
   return <div ref={root} className={classes} data-mood={mood} data-sprite={spriteKey} data-stage={stage} data-retired={retired || undefined} style={rootStyle}>
     {interactive
-      ? <button type="button" tabIndex={onClick ? 0 : -1} aria-label={label ?? '小猫'} onClick={handleClick} className="ui-cat-stage" style={{ width: size, height: size }}>{artwork}</button>
+      ? <button type="button" tabIndex={onClick ? 0 : -1} aria-label={label ?? L("小猫", "Companion")} onClick={handleClick} className="ui-cat-stage" style={{ width: size, height: size }}>{artwork}</button>
       : <span className="ui-cat-stage" role={label ? 'img' : undefined} aria-label={label} style={{ width: size, height: size }}>{artwork}</span>}
   </div>;
 });

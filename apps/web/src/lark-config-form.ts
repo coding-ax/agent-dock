@@ -1,4 +1,6 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
 import type { LarkTurnSyncConfig, LarkTurnSyncConfigInput } from './api';
+import { bi, getCurrentLocale } from './i18n';
 
 export const DEFAULT_LARK_TURN_SYNC: LarkTurnSyncConfig = {
   enabled: true,
@@ -92,8 +94,12 @@ export function resolveReasoningEffort(
 }
 
 /** 保留已保存但暂未发现的选项，避免加载/降级时显示空白或静默清空。 */
-export function withSavedOption(options: Array<{ id: string; name: string }>, selected: string) {
+export function withSavedOption(
+  options: Array<{ id: string; name: string }>,
+  selected: string,
+  locale: Locale = getCurrentLocale()
+) {
   return selected && !options.some(option => option.id === selected)
-    ? [{ id: selected, name: `${selected}（已保存）` }, ...options]
+    ? [{ id: selected, name: bi(`${selected}（已保存）`, `${selected} (Saved)`, locale) }, ...options]
     : options;
 }

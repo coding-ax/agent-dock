@@ -1,3 +1,5 @@
+import { bi, getCurrentLocale } from './i18n';
+
 /**
  * 「友好的周期」↔ cron / 固定间隔。表单里只让用户点选，cron 由这里生成；反向解析用于列表里的人话描述。
  * 只覆盖常见形态，其余表达式走「自定义 cron」，合法性仍由服务端 croner 判定。
@@ -20,24 +22,40 @@ export type Recurrence = {
   cron: string;
 };
 
-export const recurrenceKinds: Array<{ kind: RecurrenceKind; label: string }> = [
-  { kind: 'daily', label: '每天' },
-  { kind: 'weekdays', label: '工作日' },
-  { kind: 'weekly', label: '每周' },
-  { kind: 'hourly', label: '每小时' },
-  { kind: 'interval', label: '固定间隔' },
-  { kind: 'custom', label: '自定义' }
+const RECURRENCE_KINDS_RAW: Array<{ kind: RecurrenceKind; label: string; labelEn: string }> = [
+  { kind: 'daily', label: '每天', labelEn: 'Daily' },
+  { kind: 'weekdays', label: '工作日', labelEn: 'Weekdays' },
+  { kind: 'weekly', label: '每周', labelEn: 'Weekly' },
+  { kind: 'hourly', label: '每小时', labelEn: 'Hourly' },
+  { kind: 'interval', label: '固定间隔', labelEn: 'Interval' },
+  { kind: 'custom', label: '自定义', labelEn: 'Custom' }
 ];
+export const recurrenceKinds: Array<{ kind: RecurrenceKind; label: string }> = RECURRENCE_KINDS_RAW.map(item => ({
+  kind: item.kind,
+  get label() { return bi(item.label, item.labelEn); }
+}));
 
-export const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六'];
+const WEEKDAYS_ZH = ['日', '一', '二', '三', '四', '五', '六'];
+const WEEKDAYS_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+export const weekdayLabels: string[] = new Proxy(WEEKDAYS_ZH, {
+  get(_target, prop) {
+    const arr = getCurrentLocale() === 'en-US' ? WEEKDAYS_EN : WEEKDAYS_ZH;
+    return Reflect.get(arr, prop);
+  }
+});
 /** 周一在前：中文习惯。 */
 export const weekdayOrder = [1, 2, 3, 4, 5, 6, 0];
 export type IntervalUnit = 'minute' | 'hour' | 'day';
-export const intervalUnits: Array<{ unit: IntervalUnit; label: string; minutes: number }> = [
-  { unit: 'minute', label: '分钟', minutes: 1 },
-  { unit: 'hour', label: '小时', minutes: 60 },
-  { unit: 'day', label: '天', minutes: 1440 }
+const INTERVAL_UNITS_RAW: Array<{ unit: IntervalUnit; label: string; labelEn: string; minutes: number }> = [
+  { unit: 'minute', label: '分钟', labelEn: 'min', minutes: 1 },
+  { unit: 'hour', label: '小时', labelEn: 'hr', minutes: 60 },
+  { unit: 'day', label: '天', labelEn: 'day', minutes: 1440 }
 ];
+export const intervalUnits: Array<{ unit: IntervalUnit; label: string; minutes: number }> = INTERVAL_UNITS_RAW.map(item => ({
+  unit: item.unit,
+  minutes: item.minutes,
+  get label() { return bi(item.label, item.labelEn); }
+}));
 /** 与服务端 MIN/MAX_INTERVAL_MINUTES 一致。 */
 export const MAX_INTERVAL_MINUTES = 30 * 24 * 60;
 
@@ -61,12 +79,12 @@ function parseTime(time: string): { hour: number; minute: number } | undefined {
 export function recurrenceToTrigger(value: Recurrence): { trigger?: Trigger; error?: string } {
   if (value.kind === 'interval') {
     const minutes = intervalMinutes(value);
-    if (!minutes) return { error: '间隔需要是大于 0 的整数。' };
-    if (minutes > MAX_INTERVAL_MINUTES) return { error: '间隔最长 30 天；更长的用自定义 cron 或单次。' };
+    if (!minutes) return { error: bi('间隔需要是大于 0 的整数。', 'Interval must be a positive integer.') };
+    if (minutes > MAX_INTERVAL_MINUTES) return { error: bi('间隔最长 30 天；更长的用自定义 cron 或单次。', 'Interval cannot exceed 30 days; use custom cron or one-time instead.') };
     return { trigger: { intervalMinutes: minutes } };
   }
   const built = recurrenceToCron(value);
-  return built.cron ? { trigger: { cron: built.cron } } : { error: built.error ?? '周期未填完整。' };
+  return built.cron ? { trigger: { cron: built.cron } } : { error: built.error ?? bi('周期未填完整。', 'Incomplete schedule recurrence.') };
 }
 
 export function intervalMinutes(value: Pick<Recurrence, 'every' | 'everyUnit'>): number | undefined {
@@ -76,9 +94,11 @@ export function intervalMinutes(value: Pick<Recurrence, 'every' | 'everyUnit'>):
 
 /** 间隔的人话：能整除就用大单位。 */
 export function describeInterval(minutes: number): string {
-  if (minutes % 1440 === 0) return `每 ${minutes / 1440} 天`;
-  if (minutes % 60 === 0) return `每 ${minutes / 60} 小时`;
-  return minutes > 60 ? `每 ${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟` : `每 ${minutes} 分钟`;
+  if (minutes % 1440 === 0) return bi(`每 ${minutes / 1440} 天`, `Every ${minutes / 1440}d`);
+  if (minutes % 60 === 0) return bi(`每 ${minutes / 60} 小时`, `Every ${minutes / 60}h`);
+  return minutes > 60
+    ? bi(`每 ${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`, `Every ${Math.floor(minutes / 60)}h ${minutes % 60}m`)
+    : bi(`每 ${minutes} 分钟`, `Every ${minutes}m`);
 }
 
 /** 固定间隔的预览：注册时从现在起算。 */
@@ -91,19 +111,19 @@ export function recurrenceToCron(value: Recurrence): { cron?: string; error?: st
   if (value.kind === 'custom') {
     const cron = value.cron.trim().replace(/\s+/g, ' ');
     const parts = cron ? cron.split(' ').length : 0;
-    return parts >= 5 && parts <= 7 ? { cron } : { error: '自定义 cron 需要 5 段，例如「0 9 * * 1-5」。' };
+    return parts >= 5 && parts <= 7 ? { cron } : { error: bi('自定义 cron 需要 5 段，例如「0 9 * * 1-5」。', 'Custom cron needs 5 fields, e.g., "0 9 * * 1-5".') };
   }
   if (value.kind === 'hourly') {
-    return Number.isInteger(value.minute) && value.minute >= 0 && value.minute < 60 ? { cron: `${value.minute} * * * *` } : { error: '分钟需要在 0–59 之间。' };
+    return Number.isInteger(value.minute) && value.minute >= 0 && value.minute < 60 ? { cron: `${value.minute} * * * *` } : { error: bi('分钟需要在 0–59 之间。', 'Minute must be between 0 and 59.') };
   }
-  if (value.kind === 'interval') return { error: '固定间隔不生成 cron。' };
+  if (value.kind === 'interval') return { error: bi('固定间隔不生成 cron。', 'Fixed intervals do not generate cron expressions.') };
   const time = parseTime(value.time);
-  if (!time) return { error: '请选择触发时间。' };
+  if (!time) return { error: bi('请选择触发时间。', 'Please choose a trigger time.') };
   const head = `${time.minute} ${time.hour}`;
   if (value.kind === 'daily') return { cron: `${head} * * *` };
   if (value.kind === 'weekdays') return { cron: `${head} * * 1-5` };
   const days = [...new Set(value.weekdays)].filter(day => day >= 0 && day <= 6).sort((a, b) => a - b);
-  return days.length ? { cron: `${head} * * ${days.join(',')}` } : { error: '至少选一天。' };
+  return days.length ? { cron: `${head} * * ${days.join(',')}` } : { error: bi('至少选一天。', 'Select at least one day.') };
 }
 
 /** 反向解析成人话；识别不了就原样显示 cron。 */
@@ -115,15 +135,18 @@ export function describeCron(cron: string): string {
   const fixedHour = /^\d{1,2}$/.test(hour) ? Number(hour) : undefined;
   if (dom !== '*' || month !== '*') return `cron ${cron}`;
   const interval = /^\*\/(\d+)$/.exec(minute);
-  if (interval && hour === '*' && dow === '*') return `每 ${interval[1]} 分钟`;
-  if (fixedMinute !== undefined && hour === '*' && dow === '*') return fixedMinute === 0 ? '每小时整点' : `每小时第 ${fixedMinute} 分`;
+  if (interval && hour === '*' && dow === '*') return bi(`每 ${interval[1]} 分钟`, `Every ${interval[1]}m`);
+  if (fixedMinute !== undefined && hour === '*' && dow === '*') return fixedMinute === 0 ? bi('每小时整点', 'Hourly on the hour') : bi(`每小时第 ${fixedMinute} 分`, `Hourly at :${pad(fixedMinute)}`);
   if (fixedMinute === undefined || fixedHour === undefined) return `cron ${cron}`;
   const at = `${pad(fixedHour)}:${pad(fixedMinute)}`;
-  if (dow === '*') return `每天 ${at}`;
-  if (dow === '1-5') return `工作日 ${at}`;
+  if (dow === '*') return bi(`每天 ${at}`, `Daily at ${at}`);
+  if (dow === '1-5') return bi(`工作日 ${at}`, `Weekdays at ${at}`);
   if (/^[0-7](,[0-7])*$/.test(dow)) {
     const days = [...new Set(dow.split(',').map(day => Number(day) % 7))];
-    return `每周${weekdayOrder.filter(day => days.includes(day)).map(day => weekdayLabels[day]).join('、')} ${at}`;
+    return bi(
+      `每周${weekdayOrder.filter(day => days.includes(day)).map(day => WEEKDAYS_ZH[day]).join('、')} ${at}`,
+      `Weekly ${weekdayOrder.filter(day => days.includes(day)).map(day => WEEKDAYS_EN[day]).join(', ')} ${at}`
+    );
   }
   return `cron ${cron}`;
 }
@@ -171,12 +194,16 @@ export function describeRunTime(at: Date, now: Date): string {
   const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
   const day = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   const diff = Math.round((day(at) - day(now)) / 86_400_000);
-  if (diff === 0) return `今天 ${time}`;
-  if (diff === 1) return `明天 ${time}`;
-  if (diff === 2) return `后天 ${time}`;
-  const date = `${at.getMonth() + 1}月${at.getDate()}日`;
-  if (diff > 0 && diff < 7) return `周${weekdayLabels[at.getDay()]}（${date}）${time}`;
-  return `${at.getFullYear() === now.getFullYear() ? '' : `${at.getFullYear()}年`}${date} ${time}`;
+  if (diff === 0) return bi(`今天 ${time}`, `Today ${time}`);
+  if (diff === 1) return bi(`明天 ${time}`, `Tomorrow ${time}`);
+  if (diff === 2) return bi(`后天 ${time}`, `${WEEKDAYS_EN[at.getDay()]} ${time}`);
+  const dateZh = `${at.getMonth() + 1}月${at.getDate()}日`;
+  const dateEn = `${at.getMonth() + 1}/${at.getDate()}`;
+  if (diff > 0 && diff < 7) return bi(`周${WEEKDAYS_ZH[at.getDay()]}（${dateZh}）${time}`, `${WEEKDAYS_EN[at.getDay()]} (${dateEn}) ${time}`);
+  return bi(
+    `${at.getFullYear() === now.getFullYear() ? '' : `${at.getFullYear()}年`}${dateZh} ${time}`,
+    `${at.getFullYear() === now.getFullYear() ? '' : `${at.getFullYear()}/`}${dateEn} ${time}`
+  );
 }
 
 /** 单次任务的快捷时间。返回 datetime-local 需要的本地时间字符串。 */
@@ -189,9 +216,9 @@ export function oncePresets(now: Date): Array<{ label: string; value: string }> 
   const inMinutes = (minutes: number) => { const date = new Date(now.getTime() + minutes * 60_000); date.setSeconds(0, 0); return date; };
   const tonight = at(0, 20);
   return [
-    { label: '30 分钟后', value: toLocalInput(inMinutes(30)) },
-    { label: '1 小时后', value: toLocalInput(inMinutes(60)) },
-    ...(tonight.getTime() > now.getTime() + 10 * 60_000 ? [{ label: '今晚 20:00', value: toLocalInput(tonight) }] : []),
-    { label: '明早 09:00', value: toLocalInput(at(1, 9)) }
+    { label: bi('30 分钟后', 'In 30m'), value: toLocalInput(inMinutes(30)) },
+    { label: bi('1 小时后', 'In 1h'), value: toLocalInput(inMinutes(60)) },
+    ...(tonight.getTime() > now.getTime() + 10 * 60_000 ? [{ label: bi('今晚 20:00', 'Tonight 20:00'), value: toLocalInput(tonight) }] : []),
+    { label: bi('明早 09:00', 'Tomorrow 09:00'), value: toLocalInput(at(1, 9)) }
   ];
 }

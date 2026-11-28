@@ -1,5 +1,6 @@
 import {
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+  tShared,
   type AskUserQuestionAnswerPayload,
   type AskUserQuestionSpec
 } from '@agent-dock/agent-dock-shared';
@@ -19,33 +20,37 @@ export const askUserQuestionLarkAdapter: LarkOutputPluginAdapter<
 > = {
   pluginId: BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   trailingHintMarkdown: "<font color='grey'>👇 请在下方交互卡片中确认并作答</font>",
+  getTrailingHintMarkdown: locale => `<font color='grey'>${tShared(locale, 'lark.ask.trailingHint')}</font>`,
   streamingPlaceholderText: '⏳ 正在生成选项卡片…',
+  getStreamingPlaceholderText: locale => tShared(locale, 'lark.ask.streamingPlaceholder'),
   handlesAction(action: string): boolean {
     return isLarkAskUserQuestionAction(action);
   },
   isPreviewAction(action: string): boolean {
     return action === LARK_ASK_ACTION_PREVIEW;
   },
-  buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode }) {
+  buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, locale }) {
     return buildLarkAskUserQuestionCard({
       cardId,
       spec,
       sessionId,
       webBaseUrl,
       previewBanner,
-      previewMode
+      previewMode,
+      locale
     });
   },
-  buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner }) {
+  buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner, locale }) {
     return buildLarkAskUserQuestionAnsweredCard({
       payload,
       sessionId,
       webBaseUrl,
-      previewBanner
+      previewBanner,
+      locale
     });
   },
-  parseAction(spec, action, value, formValue) {
-    const parsed = parseLarkAskUserQuestionAction(spec, action, value, formValue);
+  parseAction(spec, action, value, formValue, locale) {
+    const parsed = parseLarkAskUserQuestionAction(spec, action, value, formValue, locale);
     if (!parsed.ok) return parsed;
     return {
       ok: true,

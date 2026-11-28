@@ -5,6 +5,7 @@ import { searchSessions, sessionLabel } from './session-groups';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { AgentIcon } from './AgentIcon';
+import { useBi } from './i18n';
 
 /**
  * ⌘K 搜索会话：只负责定位并打开已有会话，不再承担新建——新建统一走首页输入框（DraftComposer）。
@@ -15,6 +16,7 @@ export function SessionSearchDialog({ agents, sessions, onClose, onOpen }: {
   onClose(): void;
   onOpen(session: Session): void;
 }) {
+  const L = useBi();
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
@@ -32,15 +34,15 @@ export function SessionSearchDialog({ agents, sessions, onClose, onOpen }: {
   useModalFocusTrap({ panel: panelRef, initial: inputRef, dismissible: true, onDismiss: onClose });
 
   return <div className="ui-overlay fixed inset-0 z-[60] grid place-items-center bg-zinc-950/25 p-3 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="搜索会话" className="ui-dialog flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-[0_28px_90px_rgba(24,24,27,.24)] sm:max-h-[calc(100dvh-2rem)]">
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label={L("搜索会话", "Search Sessions")} className="ui-dialog flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-[14px] border border-zinc-200 bg-white shadow-[0_28px_90px_rgba(24,24,27,.24)] sm:max-h-[calc(100dvh-2rem)]">
       <div className="ui-palette-field flex items-center gap-2.5 border-b border-zinc-100 px-4">
         <Search size={15} className="shrink-0 text-zinc-400"/>
-        <input ref={inputRef} value={query} onChange={event => { setQuery(event.target.value); setCursor(0); }} onKeyDown={onKeyDown} placeholder="搜索会话标题、Agent 或工作目录…" className="h-12 min-w-0 flex-1 border-0 bg-transparent text-[13px] text-zinc-900 outline-none placeholder:text-zinc-400"/>
+        <input ref={inputRef} value={query} onChange={event => { setQuery(event.target.value); setCursor(0); }} onKeyDown={onKeyDown} placeholder={L("搜索会话标题、Agent 或工作目录…", "Search title, Agent, or workspace…")} className="h-12 min-w-0 flex-1 border-0 bg-transparent text-[13px] text-zinc-900 outline-none placeholder:text-zinc-400"/>
       </div>
       {/* pb-6 是给底部渐隐留的安全区（见 index.css 的 .ui-scroll-fade）。 */}
       <DeferredMount placeholder={<div className="min-h-0 max-h-[46dvh] overflow-hidden px-4 pt-3"><DeferredSkeleton/></div>}>
       <div role="listbox" className="ui-scroll-fade min-h-0 max-h-[46dvh] overflow-y-auto px-1.5 pt-1.5 pb-6">
-        {!hits.length && <div className="px-3 py-6 text-center text-[12px] text-zinc-400">{query.trim() ? '没有匹配的会话' : '还没有会话'}</div>}
+        {!hits.length && <div className="px-3 py-6 text-center text-[12px] text-zinc-400">{query.trim() ? L("没有匹配的会话", "No matching sessions") : L("还没有会话", "No sessions yet")}</div>}
         {hits.map(({ session, agentName }, index) => {
           const selected = index === cursor;
           return <button key={session.id} type="button" role="option" aria-selected={selected} onMouseEnter={() => setCursor(index)} onClick={() => onOpen(session)} className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-colors ${selected ? 'bg-zinc-100' : 'hover:bg-zinc-50'}`}>
@@ -54,7 +56,7 @@ export function SessionSearchDialog({ agents, sessions, onClose, onOpen }: {
         })}
       </div>
       </DeferredMount>
-      <div className="hidden items-center border-t border-zinc-100 bg-zinc-50/70 px-4 py-2 text-[12px] text-zinc-400 md:flex">↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+      <div className="hidden items-center border-t border-zinc-100 bg-zinc-50/70 px-4 py-2 text-[12px] text-zinc-400 md:flex">{L("↑↓ 选择 · Enter 打开 · Esc 关闭", "↑↓ Select · Enter Open · Esc Close")}</div>
     </div>
   </div>;
 }

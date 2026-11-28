@@ -1,5 +1,6 @@
 import type { AgentModel, DockEvent } from './api';
 import { formatQuoteBlock } from './selection-quote';
+import { bi } from './i18n';
 
 export type ComposerReference = { id: string; kind: 'file' | 'skill' | 'image'; label: string; value: string; url?: string };
 export type ContextStats = { used?: number; size?: number; compacted?: number; percentage?: number };
@@ -24,11 +25,11 @@ export type ModelReadiness =
  * 表现就是输入框被无限锁死。现在失败只降级显示，不阻塞发送。
  */
 export function getModelReadiness({ loaded, loading, switching, failed }: { loaded: boolean; loading: boolean; switching: boolean; failed: boolean }): ModelReadiness {
-  if (switching) return { kind: 'blocked', label: '模型切换中…', reason: '模型切换完成后才能发送消息' };
+  if (switching) return { kind: 'blocked', label: bi("模型切换中…", "Switching model…"), reason: bi("模型切换完成后才能发送消息", "Wait for model switch to finish before sending") };
   if (loaded) return { kind: 'ready' };
-  if (loading) return { kind: 'loading', label: '模型加载中…', reason: '正在读取可切换的模型列表，不影响发送消息' };
-  if (failed) return { kind: 'loading', label: '模型列表不可用', reason: '读取模型列表失败，仍可使用当前模型发送消息' };
-  return { kind: 'loading', label: '默认模型', reason: '正在读取可切换的模型列表，不影响发送消息' };
+  if (loading) return { kind: 'loading', label: bi("模型加载中…", "Loading models…"), reason: bi("正在读取可切换的模型列表，不影响发送消息", "Loading available models; you can still send messages") };
+  if (failed) return { kind: 'loading', label: bi("模型列表不可用", "Model list unavailable"), reason: bi("读取模型列表失败，仍可使用当前模型发送消息", "Failed to load model list; you can still use the current model") };
+  return { kind: 'loading', label: bi("默认模型", "Default Model"), reason: bi("正在读取可切换的模型列表，不影响发送消息", "Loading available models; you can still send messages") };
 }
 
 export function shouldDismissComposerPanel({ insidePopover, onPanelTrigger }: { insidePopover: boolean; onPanelTrigger: boolean }): boolean {
@@ -237,7 +238,7 @@ export function commandsFromEvents(events: DockEvent[] = []): Array<{ name: stri
 }
 
 export function formatTokens(value?: number) {
-  if (value === undefined) return '等待数据';
+  if (value === undefined) return bi("等待数据", "Waiting for data");
   if (value < 1_000) return String(value);
   if (value < 1_000_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k`;
   return `${(value / 1_000_000).toFixed(1)}m`;
@@ -248,7 +249,7 @@ export function formatTokens(value?: number) {
  * 共用这一段，避免两处各写一遍 fetch 与错误解析。
  */
 export async function uploadSessionFile(sessionId: string, file: File | Blob): Promise<{ path: string; url: string; filename: string; originalName?: string }> {
-  const name = 'name' in file ? file.name : '（未命名文件）';
+  const name = 'name' in file ? file.name : bi("（未命名文件）", "(Untitled file)");
   const response = await fetch(`/api/sessions/${sessionId}/uploads`, {
     method: 'POST',
     headers: {
@@ -260,7 +261,7 @@ export async function uploadSessionFile(sessionId: string, file: File | Blob): P
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => undefined) as { error?: { message?: string } } | undefined;
-    throw new Error(detail?.error?.message ?? `上传失败（HTTP ${response.status}）`);
+    throw new Error(detail?.error?.message ?? bi(`上传失败（HTTP ${response.status}）`, `Upload failed (HTTP ${response.status})`));
   }
   return await response.json() as { path: string; url: string; filename: string; originalName?: string };
 }
@@ -284,8 +285,8 @@ export function isHomeDirectory(path: string, homeDirectory?: string): boolean {
 }
 
 export function workspaceLabel(path: string, homeDirectory?: string): string {
-  if (!path) return '工作目录';
-  return isHomeDirectory(path, homeDirectory) ? '主目录' : workspaceBasename(path);
+  if (!path) return bi("工作目录", "Workspace");
+  return isHomeDirectory(path, homeDirectory) ? bi("主目录", "Home") : workspaceBasename(path);
 }
 
 /**

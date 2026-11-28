@@ -30,7 +30,7 @@ describe('frontend theme engine & ThemeStudioDialog', () => {
     expect(html).toContain('AI 定制');
     expect(html).toContain('VS Code');
     expect(html).toContain('调色板');
-    expect(html).toContain('筛选主题名称或风格');
+    expect(html).toContain('筛选主题…');
     expect(html).toContain('极光青松');
     expect(html).toContain('樱夜黑曜');
     expect(html).toContain('樱雾晨晓');

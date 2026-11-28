@@ -1,4 +1,6 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
 import type { DockEvent, SessionRecord, Task, TurnRange } from './api';
+import { getCurrentLocale } from './i18n';
 import { buildTimeline, buildTimelineSections, type TimelineActivityGroup, type TimelineEvent, type TimelineSection } from './timeline';
 
 /** 一轮实际下发给 Agent 的文本，以及它与用户可见文本的关系。 */

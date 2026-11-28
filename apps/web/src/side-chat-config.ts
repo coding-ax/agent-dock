@@ -2,6 +2,7 @@ import type { Agent, Session, SideChatConfig } from './api';
 import { sideChatParentId, sideChatSource } from './side-chat-link';
 import { buildSideSessionSeed } from './side-session';
 import type { PaneTab } from './store';
+import { bi } from './i18n';
 
 export const DEFAULT_SIDE_CHAT_TRIGGER_PREFIX = '/btw';
 
@@ -15,7 +16,7 @@ export const DEFAULT_SIDE_CHAT_CONFIG: SideChatConfig = {
 
 export const BTW_COMMAND = {
   name: 'btw',
-  description: '按侧边对话配置发起侧边对话（支持 /btw <问题>）'
+  get description() { return bi("按侧边对话配置发起侧边对话（支持 /btw <问题>）", "Start a side chat with current settings (supports /btw <question>)"); }
 } as const;
 
 export function sideChatBuiltinCommand(triggerPrefix = DEFAULT_SIDE_CHAT_TRIGGER_PREFIX): { name: string; description: string } | undefined {
@@ -25,7 +26,7 @@ export function sideChatBuiltinCommand(triggerPrefix = DEFAULT_SIDE_CHAT_TRIGGER
   if (!name || /\s/.test(name)) return undefined;
   return {
     name,
-    description: `按侧边对话配置发起侧边对话（支持 ${prefix} <问题>）`
+    description: bi(`按侧边对话配置发起侧边对话（支持 ${prefix} <问题>）`, `Start a side chat with current settings (supports ${prefix} <question>)`)
   };
 }
 

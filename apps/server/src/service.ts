@@ -28,6 +28,7 @@ import { createLarkNotifier } from './assistant/notify.js';
 import { defaultSessionTokenTtlMs, initWebAccess, issueMasterToken, loadOrCreateWebAccessSecret } from './web-access.js';
 import { ShareLinkService } from './share-link.js';
 import { TaskRecoveryService } from './task-recovery/service.js';
+import { initServerLocale, LocaleService } from './locale-service.js';
 
 export interface StartLocalServerOptions { env?: NodeJS.ProcessEnv; webRoot?: string; groupToolsCommand?: string; /** 当前 CLI 入口，给界面一键升级跑 `agent-dock update`；不传则不挂升级路由。 */ cliEntrypoint?: string }
 export interface LocalServer {
@@ -95,6 +96,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
   let themes: ThemeService | undefined;
   let larkAvatar: LarkAvatarService | undefined;
   let keepAwake: KeepAwakeService | undefined;
+  let localeService: LocaleService | undefined;
   let taskRecovery: TaskRecoveryService | undefined;
   let closed = false;
   let webAuth: { enabled: boolean; secret?: string; sessionTokenTtlMs?: number } = { enabled: false };
@@ -156,7 +158,8 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
           event: 'task.updated',
           data: { taskId: task.id, sessionId: task.sessionId, state: task.state, timestamp: task.updatedAt }
         });
-      }
+      },
+      outputPlugins
     });
     await assistant.initialize();
     boards = new BoardService({ repos, runtime, assistant });
@@ -194,6 +197,9 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     // 偏好存库：daemon 重启后按上次的选择恢复；caffeinate 用 -w 绑定本进程，异常退出时不会留孤儿。
     keepAwake = new KeepAwakeService({ config: repos.config });
     await keepAwake.restore();
+    localeService = new LocaleService({ config: repos.config });
+    await localeService.load();
+    initServerLocale(localeService);
     // 分享链接接口始终挂载：访问防护关闭时 build() 会返回可操作的 409，
     // 界面据此提示用户开启局域网访问，而不是显示一个 404「接口不存在」。
     const shareLinks = new ShareLinkService({ host: config.host, port: config.port, secret: webAuth.secret ?? '', config: repos.config, env });
@@ -208,7 +214,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
         return false;
       }
     });
-    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, outputPlugins, askUserQuestion, notifications, boards, themes, taskRecovery, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, turnTracker: larkTurnTracker, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
+    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, locale: localeService, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, outputPlugins, askUserQuestion, notifications, boards, themes, taskRecovery, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, turnTracker: larkTurnTracker, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
     await app.listen(listenOptions(config));
     // 听到端口后再开始扫描：启动失败时不会先投递出去一半。
     notifications.start();
@@ -219,6 +225,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     taskRecovery.start();
   } catch (error) {
     keepAwake?.close();
+    localeService?.close();
     boards?.close();
     themes?.close();
     const results = await Promise.allSettled([
@@ -245,6 +252,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       closed = true;
       // 先停调度（等当前一轮扫完），再关 runtime：避免关到一半时还在往里投递。
       keepAwake?.close();
+      localeService?.close();
       boards?.close();
       themes?.close();
       await taskRecovery?.close();

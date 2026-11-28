@@ -1,4 +1,5 @@
 import type { Agent } from './api';
+import { bi } from './i18n';
 
 /**
  * Agent 表单的草稿与校验。
@@ -64,8 +65,8 @@ export function uniqueAgentId(name: string, taken: Iterable<string>): string {
 
 export function validateDraft(draft: AgentFormDraft): FormError[] {
   const errors: FormError[] = [];
-  if (!draft.name.trim()) errors.push({ field: 'name', message: '名称不能为空' });
-  if (!draft.command.trim()) errors.push({ field: 'command', message: '启动命令不能为空' });
+  if (!draft.name.trim()) errors.push({ field: 'name', message: bi("名称不能为空", "Name is required") });
+  if (!draft.command.trim()) errors.push({ field: 'command', message: bi("启动命令不能为空", "Launch command is required") });
   return errors;
 }
 

@@ -1,4 +1,6 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
 import type { Session } from './api';
+import { bi, getCurrentLocale } from './i18n';
 import { modelBadge, modelBadgeText } from './model-label';
 import { absoluteActivityTime, sessionStatusLabel } from './session-details';
 import { sessionLabel } from './session-groups';

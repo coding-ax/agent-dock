@@ -5,7 +5,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import type { AgentConfig, AgentEvent, AskUserQuestionAnswerItem, AskUserQuestionAnswerPayload, AskUserQuestionSpec, ConfirmActionInteractionPayload, ConfirmActionSpec, ConfigRepository, ChannelMappingRepository, PermissionMode, Session, TaskRecord, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
+import type { AgentConfig, AgentEvent, AskUserQuestionAnswerItem, AskUserQuestionAnswerPayload, AskUserQuestionSpec, ConfirmActionInteractionPayload, ConfirmActionSpec, ConfigRepository, ChannelMappingRepository, Locale, PermissionMode, Session, TaskRecord, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
+import { tShared } from '@agent-dock/agent-dock-shared';
+import { getActiveServerLocale } from '../locale-service.js';
 import { defaultHighRiskPattern, defaultLarkTraceLimit, readLarkConfig, type StoredLarkConfig } from './config.js';
 import { parseLarkMessageContent, type LarkMessageResource } from './message-content.js';
 import { boundLarkCardElements, createLarkCardService, larkIdentityPermissionHelp, LarkServiceError, type LarkCardActionButton, type LarkCardService } from './service.js';
@@ -777,10 +779,53 @@ const larkShellProgram = (rawCommand: string): { program: string; args: string[]
   return { program: primary?.program ?? '', args: primary?.args ?? [], hasGroup, hasWriteRedirect: primary?.hasWriteRedirect ?? false };
 };
 
-const toolPresentation = (entry: TraceEntry) => {
+const LARK_TOOL_ACTION_EN: Record<string, string> = {
+  'Agent 群协作': 'Agent Group Sync',
+  '应用补丁': 'Apply Patch',
+  '操作浏览器': 'Browser Action',
+  '运行测试': 'Run Tests',
+  'Git 操作': 'Git Operation',
+  '查询数据': 'Query Data',
+  '读取网页': 'Fetch Web Page',
+  '查看目录': 'List Directory',
+  '查找文件': 'Find Files',
+  '搜索内容': 'Search Content',
+  '读取文件': 'Read File',
+  '执行命令': 'Run Command',
+  '调用 MCP': 'Call MCP',
+  '修改文件': 'Edit File',
+  '写入文件': 'Write File',
+  '删除文件': 'Delete File',
+  '移动文件': 'Move File',
+  '查看代码结构': 'Inspect Code Outline',
+  '查看图片': 'View Image',
+  '搜索网页': 'Search Web',
+  '查看命令输出': 'Check Command Output',
+  '向命令发送输入': 'Send Command Input',
+  '生成图片': 'Generate Image',
+  '定义子 Agent': 'Define Subagent',
+  '管理子 Agent': 'Manage Subagents',
+  '发送消息': 'Send Message',
+  '多 Agent 协作': 'Multi-Agent Swarm',
+  '运行工作流': 'Run Workflow',
+  '调用子 Agent': 'Invoke Subagent',
+  '发起提问': 'Ask Question',
+  '更新待办': 'Update TODOs',
+  '更新计划': 'Update Plan',
+  '管理后台任务': 'Manage Background Task',
+  '停止后台任务': 'Stop Background Task',
+  '设置定时任务': 'Schedule Task',
+  '加载技能': 'Load Skill',
+  '压缩上下文': 'Compact Context'
+};
+
+const localizeLarkToolAction = (action: string, locale: Locale): string =>
+  locale === 'en-US' ? (LARK_TOOL_ACTION_EN[action] ?? action) : action;
+
+const toolPresentation = (entry: TraceEntry, locale: Locale = getActiveServerLocale()) => {
   const data = entry.data;
   const inputRecord = data.input && typeof data.input === 'object' && !Array.isArray(data.input) ? data.input as Record<string, unknown> : undefined;
-  const name = String(data.name ?? data.title ?? '工具').trim();
+  const name = String(data.name ?? data.title ?? (locale === 'en-US' ? 'Tool' : '工具')).trim();
   const stripped = name.replace(/^Run\s+([A-Za-z0-9_.:-]+)$/, '$1').replace(/^default_api:([A-Za-z0-9_.:-]+)$/, '$1');
   const toolKey = stripped.toLowerCase();
   const acpKind = typeof data.kind === 'string' ? data.kind.trim().toLowerCase() : undefined;
@@ -902,17 +947,20 @@ const toolPresentation = (entry: TraceEntry) => {
     else if (acpKind === 'execute') { action = '执行命令'; kind = 'command'; }
   }
 
+  const localizedAction = localizeLarkToolAction(action, locale);
   const fullDetail = command ?? extractedDetail ?? url ?? path ?? query ?? (isGeneric ? '' : name);
-  const detail = truncateInline(fullDetail === action ? '' : fullDetail);
+  const detail = truncateInline(fullDetail === action || fullDetail === localizedAction ? '' : fullDetail);
   const status = String(data.status ?? (entry.type === 'tool_result' ? 'completed' : 'running')).toLowerCase();
   const failed = /fail|error|reject|cancel/.test(status);
   const running = /running|pending|started|in_progress/.test(status);
+  const statusKind: 'failed' | 'running' | 'completed' = failed ? 'failed' : running ? 'running' : 'completed';
   return {
     kind,
-    action,
+    action: localizedAction,
     description,
     detail,
-    statusLabel: failed ? '失败' : running ? '执行中' : '已完成',
+    statusKind,
+    statusLabel: failed ? tShared(locale, 'lark.card.status.failed') : running ? tShared(locale, 'lark.card.status.running') : tShared(locale, 'lark.card.status.completed'),
     statusColor: failed ? 'yellow' : running ? 'orange' : 'green',
     indicatorColor: failed ? 'trace_failure' : running ? 'trace_running' : 'trace_success',
     elapsed: traceElapsed(data.startedAt ?? entry.timestamp, running ? undefined : data.completedAt ?? entry.timestamp),
@@ -929,17 +977,17 @@ const toolPresentation = (entry: TraceEntry) => {
 // 作答并给出了回答，据此判失败会和 runtime 的结论打架（卡片说失败、控制台说完成）。
 const hasUnresolvedToolCalls = (events: AgentEvent[]) => unresolvedToolCallsAfterAnswer(compactTrace(events)).length > 0;
 
-const toolPanel = (entry: TraceEntry, index: string | number): LarkCardElement => {
-  const tool = toolPresentation(entry);
+const toolPanel = (entry: TraceEntry, index: string | number, locale: Locale = getActiveServerLocale()): LarkCardElement => {
+  const tool = toolPresentation(entry, locale);
   const description = escapeCardInline(truncateInline(tool.description || tool.action, 72));
   const detail = escapeCardInline(tool.detail || '');
   const detailSuffix = detail && detail !== description ? `　<font color='grey'>${detail}</font>` : '';
   const elapsedSuffix = tool.elapsed ? `　<font color='grey'>${tool.elapsed}</font>` : '';
   const stateLamp = `<font color='${tool.indicatorColor}'>●</font>　`;
   const sections = [
-    tool.fullDetail && tool.fullDetail !== tool.detail && !tool.input ? `**完整内容**\n\n\`\`\`text\n${tool.fullDetail.replaceAll('```', '``\\`')}\n\`\`\`` : '',
-    tool.input ? `**输入**\n\n\`\`\`text\n${tool.input.replaceAll('```', '``\\`')}\n\`\`\`` : '',
-    tool.output ? `**结果**\n\n\`\`\`text\n${tool.output.replaceAll('```', '``\\`')}\n\`\`\`` : ''
+    tool.fullDetail && tool.fullDetail !== tool.detail && !tool.input ? `**${tShared(locale, 'lark.card.tool.fullContent')}**\n\n\`\`\`text\n${tool.fullDetail.replaceAll('```', '``\\`')}\n\`\`\`` : '',
+    tool.input ? `**${tShared(locale, 'lark.card.tool.input')}**\n\n\`\`\`text\n${tool.input.replaceAll('```', '``\\`')}\n\`\`\`` : '',
+    tool.output ? `**${tShared(locale, 'lark.card.tool.output')}**\n\n\`\`\`text\n${tool.output.replaceAll('```', '``\\`')}\n\`\`\`` : ''
   ].filter(Boolean);
   return {
     tag: 'collapsible_panel', element_id: `trace_tool_${index}`, expanded: false,
@@ -951,7 +999,7 @@ const toolPanel = (entry: TraceEntry, index: string | number): LarkCardElement =
     },
     elements: sections.length
       ? sections.map(content => ({ tag: 'markdown', content, text_size: 'notation', margin: '0px' }))
-      : [{ tag: 'markdown', content: '<font color=\'grey\'>暂无可展示的输入或结果</font>', text_size: 'notation', margin: '0px' }]
+      : [{ tag: 'markdown', content: `<font color='grey'>${tShared(locale, 'lark.card.tool.empty')}</font>`, text_size: 'notation', margin: '0px' }]
   };
 };
 
@@ -976,53 +1024,53 @@ const traceGroups = (entries: TraceEntry[]): TraceGroup[] => {
   return groups;
 };
 
-const groupDescription = (group: TraceGroup) => {
+const groupDescription = (group: TraceGroup, locale: Locale = getActiveServerLocale()) => {
   const narrative = [...group.narratives].reverse().find(entry => entry.type === 'text') ?? group.narratives.at(-1);
   const assistantNarrative = [...group.narratives].reverse().find(entry => entry.type === 'text');
   const narrativeText = String(assistantNarrative?.data.text ?? '').trim();
   if (narrativeText) return narrativeText;
   const tool = group.actions.find(entry => entry.type === 'tool_call' || entry.type === 'tool_result');
   if (tool) {
-    const presentation = toolPresentation(tool);
+    const presentation = toolPresentation(tool, locale);
     return presentation.description || presentation.fullDetail || presentation.action;
   }
-  return narrative ? '思考过程' : '执行过程';
+  return narrative ? tShared(locale, 'lark.card.thinkingTitle') : tShared(locale, 'lark.card.executionTitle');
 };
 
-const groupPanel = (group: TraceGroup, index: number, terminal = false): LarkCardElement => {
+const groupPanel = (group: TraceGroup, index: number, terminal = false, locale: Locale = getActiveServerLocale()): LarkCardElement => {
   const visibleActions = group.actions;
   const tools = visibleActions.filter(entry => entry.type === 'tool_call' || entry.type === 'tool_result');
-  const statuses = tools.map(entry => toolPresentation(entry));
-  const failedCount = statuses.filter(item => item.statusLabel === '失败').length;
-  const succeededCount = statuses.filter(item => item.statusLabel === '已完成').length;
+  const statuses = tools.map(entry => toolPresentation(entry, locale));
+  const failedCount = statuses.filter(item => item.statusKind === 'failed').length;
+  const succeededCount = statuses.filter(item => item.statusKind === 'completed').length;
   const hasErrorEvent = visibleActions.some(entry => entry.type === 'error');
   const status = hasErrorEvent || (failedCount > 0 && succeededCount > 0)
-    ? { label: '有失败', color: 'trace_failure' }
-    : failedCount > 0 ? { label: '失败', color: 'trace_failure' }
-    : statuses.some(item => item.statusLabel === '执行中') ? { label: '执行中', color: 'trace_running' }
-      : tools.length ? { label: '已完成', color: 'green' } : terminal ? { label: '已完成', color: 'green' } : { label: '执行中', color: 'trace_running' };
+    ? { label: tShared(locale, 'lark.card.status.partialFailed'), color: 'trace_failure' }
+    : failedCount > 0 ? { label: tShared(locale, 'lark.card.status.failed'), color: 'trace_failure' }
+    : statuses.some(item => item.statusKind === 'running') ? { label: tShared(locale, 'lark.card.status.running'), color: 'trace_running' }
+      : tools.length ? { label: tShared(locale, 'lark.card.status.completed'), color: 'green' } : terminal ? { label: tShared(locale, 'lark.card.status.completed'), color: 'green' } : { label: tShared(locale, 'lark.card.status.running'), color: 'trace_running' };
   const thinkingEntries = group.narratives.filter(entry => entry.type === 'thinking' && String(entry.data.text ?? '').trim());
   const actionElements = visibleActions.flatMap((entry, actionIndex): LarkCardElement[] => {
-    if (entry.type === 'tool_call' || entry.type === 'tool_result') return [toolPanel(entry, `${index}_${actionIndex}`)];
-    if (entry.type === 'permission_request') return [{ tag: 'markdown', content: `**权限请求**　<text_tag color='orange'>${entry.data.status ?? '待处理'}</text_tag>\n\n${truncate(entry.data.title, 800)}`, text_size: 'x-small', margin: '0px' }];
-    if (entry.type === 'error') return [{ tag: 'markdown', content: `<text_tag color='yellow'>有错误</text_tag>\n\n${truncate(entry.data.message ?? 'Agent 执行未完全成功', 1_500)}`, text_size: 'x-small', margin: '0px' }];
-    if (entry.type === 'raw_terminal') return [toolPanel({ ...entry, type: 'tool_result', data: { ...entry.data, name: 'terminal', output: entry.data.text, status: 'completed' } }, `${index}_${actionIndex}`)];
+    if (entry.type === 'tool_call' || entry.type === 'tool_result') return [toolPanel(entry, `${index}_${actionIndex}`, locale)];
+    if (entry.type === 'permission_request') return [{ tag: 'markdown', content: `**${tShared(locale, 'lark.card.permission.title')}**　<text_tag color='orange'>${entry.data.status ?? tShared(locale, 'lark.card.permission.pending')}</text_tag>\n\n${truncate(entry.data.title, 800)}`, text_size: 'x-small', margin: '0px' }];
+    if (entry.type === 'error') return [{ tag: 'markdown', content: `<text_tag color='yellow'>${tShared(locale, 'lark.card.error.tag')}</text_tag>\n\n${truncate(entry.data.message ?? tShared(locale, 'lark.card.error.fallback'), 1_500)}`, text_size: 'x-small', margin: '0px' }];
+    if (entry.type === 'raw_terminal') return [toolPanel({ ...entry, type: 'tool_result', data: { ...entry.data, name: 'terminal', output: entry.data.text, status: 'completed' } }, `${index}_${actionIndex}`, locale)];
     return [];
   });
-  const preview = escapeCardInline(truncateInline(groupDescription(group), 92));
+  const preview = escapeCardInline(truncateInline(groupDescription(group, locale), 92));
   const first = group.narratives[0] ?? group.actions[0];
   const last = group.actions.at(-1) ?? group.narratives.at(-1);
   const elapsed = traceElapsed(first?.data.startedAt ?? first?.timestamp, last?.data.completedAt ?? last?.timestamp);
   const elapsedSuffix = elapsed ? `　<font color='grey'>${elapsed}</font>` : '';
   const stateSuffix = `　<font color='${status.color}'>● ${status.label}</font>`;
-  const countParts = [thinkingEntries.length ? `${thinkingEntries.length} 段思考` : '', tools.length ? `${tools.length} 次工具调用` : ''].filter(Boolean);
+  const countParts = [thinkingEntries.length ? tShared(locale, 'lark.card.count.thinking', { count: thinkingEntries.length }) : '', tools.length ? tShared(locale, 'lark.card.count.tools', { count: tools.length }) : ''].filter(Boolean);
   const summaryElements: LarkCardElement[] = countParts.length ? [{
     tag: 'div', width: 'auto', margin: '0px 0px 2px 0px',
     text: { tag: 'plain_text', content: countParts.join(' · '), text_size: 'notation', text_color: 'grey' },
     icon: { tag: 'standard_icon', token: 'setting_outlined', color: 'grey' }
   }] : [];
   const thinkingElements: LarkCardElement[] = thinkingEntries.map(entry => ({
-    tag: 'markdown', content: `**思考过程**　<font color='grey'>${truncate(entry.data.text, 500)}</font>`, text_size: 'notation', margin: '0px 0px 2px 20px',
+    tag: 'markdown', content: `**${tShared(locale, 'lark.card.thinkingTitle')}**　<font color='grey'>${truncate(entry.data.text, 500)}</font>`, text_size: 'notation', margin: '0px 0px 2px 20px',
     icon: { tag: 'standard_icon', token: 'mindnote_outlined', color: 'grey' }
   }));
   return {
@@ -1063,8 +1111,10 @@ export function renderLarkCardElements(
     outputPluginRegistry?: OutputPluginRegistry;
     enabledOutputPluginIds?: ReadonlySet<string>;
     larkPluginAdapters?: LarkOutputPluginAdapterRegistry;
+    locale?: Locale;
   }
 ): LarkCardElement[] {
+  const locale = options?.locale ?? getActiveServerLocale();
   const pluginRegistry = options?.outputPluginRegistry ?? defaultOutputPluginRegistry;
   const pluginAdapters = options?.larkPluginAdapters ?? defaultLarkOutputPluginAdapterRegistry;
   const enabledPluginIds = options?.enabledOutputPluginIds
@@ -1082,12 +1132,14 @@ export function renderLarkCardElements(
     if (extracted) {
       const plugin = pluginRegistry.get(extracted.pluginId);
       const adapter = plugin ? pluginAdapters.resolve(plugin) : undefined;
-      const hintMd = adapter?.trailingHintMarkdown || "<font color='grey'>👇 请在下方交互卡片中确认并作答</font>";
+      const hintMd = adapter?.getTrailingHintMarkdown?.(locale)
+        ?? adapter?.trailingHintMarkdown
+        ?? `<font color='grey'>${tShared(locale, 'lark.ask.trailingHint')}</font>`;
       finalText = extracted.proseText
         ? `${truncate(extracted.proseText, 5_800)}\n\n${hintMd}`
         : plugin?.capabilities.interactive === false
-          ? `请在下方查看「${plugin.name}」卡片。`
-          : '请在下方交互卡片中确认并作答。';
+          ? tShared(locale, 'lark.declarative.trailingInfoFallback', { name: plugin.name })
+          : tShared(locale, 'lark.ask.trailingFallback');
     } else {
       finalText = truncate(rawText, 6_000);
     }
@@ -1106,7 +1158,9 @@ export function renderLarkCardElements(
       if (split.kind !== 'none') {
         const plugin = pluginRegistry.get(split.pluginId);
         const adapter = plugin ? pluginAdapters.resolve(plugin) : undefined;
-        const placeholder = adapter?.streamingPlaceholderText || '⏳ 正在生成选项卡片…';
+        const placeholder = adapter?.getStreamingPlaceholderText?.(locale)
+          ?? adapter?.streamingPlaceholderText
+          ?? tShared(locale, 'lark.ask.streamingPlaceholder');
         const sanitized = split.proseText
           ? `${split.proseText}\n\n${placeholder}`
           : placeholder;
@@ -1126,28 +1180,28 @@ export function renderLarkCardElements(
   const elements: LarkCardElement[] = [];
 
   if (compensation) {
-    elements.push({ tag: 'markdown', content: "<font color='orange'>原运行卡片未能更新，AgentDock 已补发终态结果。</font>", text_size: 'notation', margin: '0px 0px 8px 0px' });
+    elements.push({ tag: 'markdown', content: `<font color='orange'>${tShared(locale, 'lark.card.compensation')}</font>`, text_size: 'notation', margin: '0px 0px 8px 0px' });
   }
   if (finalText) {
-    elements.push({ tag: 'markdown', element_id: 'final_output', content: completed ? finalText : `**当前进展**\n\n${finalText}`, text_align: 'left', text_size: 'normal_v2', margin: '0px' });
+    elements.push({ tag: 'markdown', element_id: 'final_output', content: completed ? finalText : `**${tShared(locale, 'lark.card.currentProgress')}**\n\n${finalText}`, text_align: 'left', text_size: 'normal_v2', margin: '0px' });
   } else if (completed) {
-    elements.push({ tag: 'markdown', content: "<font color='orange'>Agent 未返回最终输出</font>", text_size: 'notation', margin: '0px' });
+    elements.push({ tag: 'markdown', content: `<font color='orange'>${tShared(locale, 'lark.card.noFinalOutput')}</font>`, text_size: 'notation', margin: '0px' });
   }
   if (groups.length) {
-    elements.push(...groups.map((group, index) => groupPanel(group, index, completed)));
+    elements.push(...groups.map((group, index) => groupPanel(group, index, completed, locale)));
   }
-  if (!elements.length) elements.push({ tag: 'markdown', content: '正在思考中…', text_size: 'normal', margin: '0px' });
+  if (!elements.length) elements.push({ tag: 'markdown', content: tShared(locale, 'lark.card.thinkingPlaceholder'), text_size: 'normal', margin: '0px' });
   return elements;
 }
 
-export function renderLarkTrace(events: AgentEvent[], config: Pick<StoredLarkConfig, 'traceLimit'>, _completed = false) {
+export function renderLarkTrace(events: AgentEvent[], config: Pick<StoredLarkConfig, 'traceLimit'>, _completed = false, locale: Locale = getActiveServerLocale()) {
   let entries = compactTrace(events);
   if (config.traceLimit) entries = entries.slice(-config.traceLimit);
-  if (!entries.length) return '正在思考中…';
+  if (!entries.length) return tShared(locale, 'lark.card.thinkingPlaceholder');
   return entries.map(entry => {
     const data = entry.data;
     if (entry.type === 'text') return `**Agent**\n\n${data.text ?? ''}`;
-    if (entry.type === 'thinking') return `**思考**\n\n> ${String(data.text ?? '').replaceAll('\n', '\n> ')}`;
+    if (entry.type === 'thinking') return `**${tShared(locale, 'lark.card.thinkingShort')}**\n\n> ${String(data.text ?? '').replaceAll('\n', '\n> ')}`;
     if (entry.type === 'tool_call' || entry.type === 'tool_result') return `**工具 · ${data.name ?? 'tool'}** · ${data.status ?? (entry.type === 'tool_result' ? 'completed' : 'running')}${fenced(data.output ?? data.input)}`;
     if (entry.type === 'permission_request') return `**权限请求** · ${data.status ?? 'pending'}\n\n${data.title ?? ''}`;
     if (entry.type === 'error') return `**错误**\n\n${data.message ?? 'Agent 执行失败'}`;
@@ -2239,50 +2293,51 @@ export class LarkMessageCoordinator {
   }
 
   async handleAction(value: unknown, operatorOpenId?: string, context?: LarkCardActionContext) {
+    const locale = getActiveServerLocale();
     let parsed = value;
     if (typeof parsed === 'string') {
-      try { parsed = JSON.parse(parsed); } catch { return { type: 'error', content: '无法识别卡片操作' }; }
+      try { parsed = JSON.parse(parsed); } catch { return { type: 'error', content: tShared(locale, 'lark.action.error.unknownCard') }; }
     }
-    if (!parsed || typeof parsed !== 'object') return { type: 'error', content: '无法识别卡片操作' };
+    if (!parsed || typeof parsed !== 'object') return { type: 'error', content: tShared(locale, 'lark.action.error.unknownCard') };
     const action = String((parsed as any).action ?? '');
     if (this.larkPluginAdapters.isPluginCardAction(action, parsed as Record<string, unknown>)) {
       return this.handleOutputPluginAction(action, parsed as Record<string, unknown>, operatorOpenId, context);
     }
     const taskId = String((parsed as any).task_id ?? (parsed as any).taskId ?? '');
     const task = this.tasks.get(taskId);
-    if (!task) return { type: 'warning', content: '任务已过期，请重新发送消息' };
+    if (!task) return { type: 'warning', content: tShared(locale, 'lark.action.warning.taskExpired') };
 
     // 访问权限：操作人必须在机器人白名单中，与「谁可以使用 Agent」的配置一致。
     // 白名单内的成员均可取消 / 中断 / 重试任意任务，不再限制为任务发起人本人，
     // 避免 AI 协作链（上游 AI 触发下游 AI 任务）中人类无法干预的问题。
     const allowed = await this.isOperatorAllowed(task.config, operatorOpenId, task.event.chatId);
     if (!allowed) {
-      return { type: 'warning', content: '当前账号不在机器人白名单中，无法执行此操作' };
+      return { type: 'warning', content: tShared(locale, 'lark.action.warning.notAllowed') };
     }
 
     // 会话/ACP 已失效时的自愈出口：归档旧会话并放掉 group 绑定，
     // 下一条消息走 sessionFor 重新创建会话，自然带上最新配置。
     if (action === 'archive_reopen') {
-      if (task.state !== 'failed') return { type: 'warning', content: '只有失败的任务可以归档并重开会话' };
-      if (!task.sessionId) return { type: 'warning', content: '当前任务没有可归档的会话' };
-      if (!this.runtime.archive) return { type: 'warning', content: '当前运行时不支持归档会话' };
+      if (task.state !== 'failed') return { type: 'warning', content: tShared(locale, 'lark.action.warning.onlyFailedReopen') };
+      if (!task.sessionId) return { type: 'warning', content: tShared(locale, 'lark.action.warning.noSessionToArchive') };
+      if (!this.runtime.archive) return { type: 'warning', content: tShared(locale, 'lark.action.warning.archiveUnsupported') };
       const sessionId = task.sessionId;
       try {
         await this.runtime.archive(sessionId);
       } catch (error) {
         this.log.warn({ error, taskId, sessionId }, '归档飞书失效会话失败');
-        return { type: 'error', content: `归档会话失败：${error instanceof Error ? error.message : String(error)}` };
+        return { type: 'error', content: tShared(locale, 'lark.action.error.archiveFailed', { message: error instanceof Error ? error.message : String(error) }) };
       }
       task.reopenOffered = true;
       if (task.group.sessionId === sessionId) { task.group.sessionId = undefined; task.group.sessionConfigKey = undefined; }
       this.log.info({ taskId, sessionId, appId: task.config.appId, chatId: task.event.chatId }, '已归档飞书失效会话，下一条消息将按最新配置重新创建');
-      return { type: 'success', content: '已归档旧会话，下一条消息将按最新配置重新创建' };
+      return { type: 'success', content: tShared(locale, 'lark.action.success.archiveReopened') };
     }
 
     // 旧版排队卡片会发 interrupt，仍按安全的单轮次取消处理，不中断当前运行任务。
     if (action === 'cancel' || (action === 'interrupt' && task.state === 'queued')) {
-      if (task.state !== 'queued') return { type: 'warning', content: '任务已不在排队中' };
-      if (!task.sessionId || !task.runtimeTaskId || !this.runtime.cancelQueued) return { type: 'warning', content: '排队任务当前不可取消' };
+      if (task.state !== 'queued') return { type: 'warning', content: tShared(locale, 'lark.action.warning.notQueued') };
+      if (!task.sessionId || !task.runtimeTaskId || !this.runtime.cancelQueued) return { type: 'warning', content: tShared(locale, 'lark.action.warning.cancelQueuedUnsupported') };
       task.state = 'interrupting';
       const sessionId = task.sessionId;
       const runtimeTaskId = task.runtimeTaskId;
@@ -2296,15 +2351,15 @@ export class LarkMessageCoordinator {
           // 排队任务可能在点击时已转为运行态；绝不回退中断 Session，交由任务事件流对账实际状态。
           if (task.state === 'interrupting') task.state = 'queued';
           this.log.warn({ error, taskId, sessionId, runtimeTaskId }, '取消飞书排队任务失败');
-          this.pushTaskError(task, `取消排队任务失败：${error instanceof Error ? error.message : String(error)}`);
+          this.pushTaskError(task, tShared(getActiveServerLocale(), 'lark.action.error.cancelQueuedFailed', { message: error instanceof Error ? error.message : String(error) }));
           await task.requestUpdate?.('queued', false).catch(() => undefined);
         }
       })();
-      return { type: 'success', content: '正在取消排队任务' };
+      return { type: 'success', content: tShared(locale, 'lark.action.success.cancellingQueued') };
     }
 
     if (action === 'interrupt') {
-      if (!task.sessionId || task.state !== 'running') return { type: 'warning', content: '任务当前不可中断' };
+      if (!task.sessionId || task.state !== 'running') return { type: 'warning', content: tShared(locale, 'lark.action.warning.cannotInterrupt') };
       task.state = 'interrupting';
       task.interruptRequested = true;
       const sessionId = task.sessionId;
@@ -2317,26 +2372,26 @@ export class LarkMessageCoordinator {
           task.state = 'running';
           task.interruptRequested = false;
           this.log.warn({ error, taskId, sessionId }, '中断飞书任务失败');
-          this.pushTaskError(task, `中断任务失败：${error instanceof Error ? error.message : String(error)}`);
+          this.pushTaskError(task, tShared(getActiveServerLocale(), 'lark.action.error.interruptFailed', { message: error instanceof Error ? error.message : String(error) }));
           await task.requestUpdate?.('running', false).catch(() => undefined);
         }
       })();
-      return { type: 'success', content: '正在取消任务' };
+      return { type: 'success', content: tShared(locale, 'lark.action.success.cancelling') };
     }
 
     if (action === 'retry') {
-      if (task.state !== 'failed' && task.state !== 'interrupted') return { type: 'warning', content: '只有失败或已中断的任务可以重试' };
+      if (task.state !== 'failed' && task.state !== 'interrupted') return { type: 'warning', content: tShared(locale, 'lark.action.warning.onlyFailedOrInterruptedRetry') };
       task.state = 'queued';
       task.group.tail = task.group.tail.then(() => this.runTurn(task)).catch(error => {
         this.log.error({ error, chatId: task.event.chatId, messageId: task.event.messageId }, '重试飞书任务失败');
-        this.pushTaskError(task, `重试任务失败：${error instanceof Error ? error.message : String(error)}`);
+        this.pushTaskError(task, tShared(getActiveServerLocale(), 'lark.action.error.retryFailed', { message: error instanceof Error ? error.message : String(error) }));
         task.state = 'failed';
         task.requestUpdate?.('failed', false).catch(() => undefined);
       });
-      return { type: 'success', content: '已开始重试' };
+      return { type: 'success', content: tShared(locale, 'lark.action.success.retrying') };
     }
 
-    return { type: 'error', content: '不支持的卡片操作' };
+    return { type: 'error', content: tShared(locale, 'lark.action.error.unsupported') };
   }
 
   private async handleOutputPluginAction(
@@ -2345,31 +2400,32 @@ export class LarkMessageCoordinator {
     operatorOpenId?: string,
     context?: LarkCardActionContext
   ): Promise<{ type: 'success' | 'warning' | 'error' | 'info'; content: string }> {
+    const locale = getActiveServerLocale();
     const hintedPluginId = typeof value.plugin_id === 'string' && value.plugin_id.trim()
       ? normalizeOutputPluginId(value.plugin_id)
       : undefined;
 
     if (action === 'ask_user_question_preview') {
-      return { type: 'info', content: '这是 AskUserQuestion 样式预览卡片；实际对话中点击将提交回答并驱动 Agent 继续执行' };
+      return { type: 'info', content: tShared(locale, 'lark.plugin.preview.ask') };
     }
     if (action === 'confirm_action_preview') {
-      return { type: 'info', content: '这是操作确认样式预览卡片；实际对话中点击将提交决定并驱动 Agent 继续执行' };
+      return { type: 'info', content: tShared(locale, 'lark.plugin.preview.confirm') };
     }
     if (action === 'output_plugin_preview') {
-      return { type: 'info', content: '这是交互插件样式预览卡片；实际对话中点击将提交响应并驱动 Agent 继续执行' };
+      return { type: 'info', content: tShared(locale, 'lark.plugin.preview.generic') };
     }
 
     const cardId = String(value.card_id ?? value.cardId ?? '').trim();
-    if (!cardId) return { type: 'error', content: '交互卡片缺少标识，无法提交' };
+    if (!cardId) return { type: 'error', content: tShared(locale, 'lark.plugin.error.missingCardId') };
 
     const record = await this.lookupPluginCard(cardId, hintedPluginId);
-    if (!record) return { type: 'warning', content: '交互卡片已失效，请在会话中直接回复' };
+    if (!record) return { type: 'warning', content: tShared(locale, 'lark.plugin.warning.cardExpired') };
 
     const plugin = this.resolvedPluginRegistry.get(record.pluginId);
-    if (!plugin) return { type: 'warning', content: `对应交互插件（${record.pluginId}）当前未加载` };
+    if (!plugin) return { type: 'warning', content: tShared(locale, 'lark.plugin.warning.notLoaded', { pluginId: record.pluginId }) };
     const adapter = this.larkPluginAdapters.resolve(plugin);
     if (!adapter || !adapter.parseAction) {
-      return { type: 'error', content: '当前插件暂不支持飞书交互回调' };
+      return { type: 'error', content: tShared(locale, 'lark.plugin.error.callbackUnsupported') };
     }
 
     const botConfig = (this.reconcileConfig?.appId === record.appId ? this.reconcileConfig : undefined)
@@ -2401,10 +2457,10 @@ export class LarkMessageCoordinator {
 
     const allowed = await this.isOperatorAllowed(botConfig, operatorOpenId, record.chatId);
     if (!allowed) {
-      return { type: 'warning', content: '当前账号不在机器人白名单中，无法提交操作' };
+      return { type: 'warning', content: tShared(locale, 'lark.plugin.warning.notAllowed') };
     }
 
-    const parsedAction = adapter.parseAction(record.spec, action, value, context?.formValue);
+    const parsedAction = adapter.parseAction(record.spec, action, value, context?.formValue, locale);
     if (!parsedAction.ok) {
       return { type: 'warning', content: parsedAction.error };
     }
@@ -2426,7 +2482,8 @@ export class LarkMessageCoordinator {
             plugin,
             payload,
             sessionId: record.sessionId,
-            webBaseUrl
+            webBaseUrl,
+            locale
           })
         });
       } catch (error) {
@@ -2452,7 +2509,7 @@ export class LarkMessageCoordinator {
 
       const displaySummary = plugin.summarizeInteraction
         ? plugin.summarizeInteraction(params.payload)
-        : `已响应「${plugin.name}」`;
+        : tShared(locale, 'lark.plugin.respondedSummary', { name: plugin.name });
 
       const syntheticEvent: LarkMessageEvent = {
         messageId: record.replyToMessageId || record.messageId || `outp-reply-${record.cardId}`,
@@ -2517,10 +2574,10 @@ export class LarkMessageCoordinator {
         });
         if (result.status === 'already_submitted') {
           await updateCardToAnswered(result.existing);
-          return { type: 'info', content: isAsk ? '该询问已作答，无需重复提交' : '该卡片已响应，无需重复提交' };
+          return { type: 'info', content: tShared(locale, isAsk ? 'lark.plugin.info.alreadyAnsweredAsk' : 'lark.plugin.info.alreadyResponded') };
         }
         await updateCardToAnswered(result.payload);
-        return { type: 'success', content: isAsk ? '已提交回答，Agent 正在继续处理' : '已提交操作，Agent 正在继续处理' };
+        return { type: 'success', content: tShared(locale, isAsk ? 'lark.plugin.success.submittedAsk' : 'lark.plugin.success.submittedGeneric') };
       }
 
       // 独立单测 / 未注入 OutputPluginService 时的本地幂等兜底
@@ -2528,7 +2585,7 @@ export class LarkMessageCoordinator {
       const existing = this.localAnsweredPlugins.get(localKey);
       if (existing) {
         await updateCardToAnswered(existing);
-        return { type: 'info', content: isAsk ? '该询问已作答，无需重复提交' : '该卡片已响应，无需重复提交' };
+        return { type: 'info', content: tShared(locale, isAsk ? 'lark.plugin.info.alreadyAnsweredAsk' : 'lark.plugin.info.alreadyResponded') };
       }
 
       if (isAsk) {
@@ -2550,7 +2607,7 @@ export class LarkMessageCoordinator {
           payload
         });
         await updateCardToAnswered(payload);
-        return { type: 'success', content: '已提交回答，Agent 正在继续处理' };
+        return { type: 'success', content: tShared(locale, 'lark.plugin.success.submittedAsk') };
       }
 
       if (plugin.id === BUILTIN_CONFIRM_ACTION_PLUGIN_ID) {
@@ -2558,7 +2615,7 @@ export class LarkMessageCoordinator {
         const decision = parsedAction.interaction.decision ?? 'confirm';
         const decisionLabel = parsedAction.interaction.decisionLabel?.trim()
           || (decision === 'confirm' ? confirmSpec.confirmLabel : confirmSpec.cancelLabel)
-          || (decision === 'confirm' ? '确认执行' : '取消');
+          || tShared(locale, decision === 'confirm' ? 'lark.plugin.confirmDefaultLabel' : 'lark.plugin.cancelDefaultLabel');
         const comment = parsedAction.interaction.comment?.trim() || undefined;
         const payload: ConfirmActionInteractionPayload = {
           version: 1,
@@ -2582,7 +2639,7 @@ export class LarkMessageCoordinator {
           payload
         });
         await updateCardToAnswered(payload);
-        return { type: 'success', content: '已提交操作决定，Agent 正在继续处理' };
+        return { type: 'success', content: tShared(locale, 'lark.plugin.success.submittedConfirm') };
       }
 
       const fallbackPayload = {
@@ -2608,10 +2665,10 @@ export class LarkMessageCoordinator {
         payload: fallbackPayload
       });
       await updateCardToAnswered(fallbackPayload);
-      return { type: 'success', content: '已提交操作，Agent 正在继续处理' };
+      return { type: 'success', content: tShared(locale, 'lark.plugin.success.submittedGeneric') };
     } catch (error) {
       this.log.error({ error, cardId, pluginId: plugin.id, sessionId: record.sessionId }, '处理飞书交互插件提交失败');
-      return { type: 'error', content: `提交失败：${error instanceof Error ? error.message : String(error)}` };
+      return { type: 'error', content: tShared(locale, 'lark.plugin.error.submitFailed', { message: error instanceof Error ? error.message : String(error) }) };
     }
   }
 

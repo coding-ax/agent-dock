@@ -6,6 +6,7 @@ import { buildRoundActivity, processSummary, type RequestPayload, type RequestRo
 import { ActivityPanel, TimelineItem } from './TimelineItems';
 import { useRoundProcess } from './useRoundProcess';
 import type { TimelineEvent } from './timeline';
+import { bi, useBi } from './i18n';
 
 /** 折叠阈值：超过这个字数的文本默认收起来，避免长提示词把轨迹刷屏。 */
 const COLLAPSE_THRESHOLD = 240;
@@ -19,12 +20,12 @@ const COLLAPSE_THRESHOLD = 240;
 export type RequestTrajectoryContext = { sessionId: string; turns: TurnRange[]; eventsSaved: boolean };
 
 const taskStatusLabels: Record<string, string> = {
-  queued: '排队中',
-  running: '执行中',
-  completed: '已完成',
-  failed: '失败',
-  interrupted: '已打断',
-  cancelled: '已取消'
+  get queued() { return bi("排队中", "Queued"); },
+  get running() { return bi("执行中", "Running"); },
+  get completed() { return bi("已完成", "Completed"); },
+  get failed() { return bi("失败", "Failed"); },
+  get interrupted() { return bi("已打断", "Interrupted"); },
+  get cancelled() { return bi("已取消", "Cancelled"); }
 };
 
 const taskStatusTones: Record<string, string> = {
@@ -35,6 +36,7 @@ const taskStatusTones: Record<string, string> = {
 
 /** 每轮实际发送给 Agent 的请求，按轮次排成一条竖向轨迹。 */
 export function RequestTrajectoryView({ trajectory, context, wrap }: { trajectory: RequestTrajectory; context: RequestTrajectoryContext; wrap: boolean }) {
+  const L = useBi();
   const { rounds } = trajectory;
   const [status, setStatus] = useState('all');
   const counts = useMemo(() => {
@@ -45,14 +47,14 @@ export function RequestTrajectoryView({ trajectory, context, wrap }: { trajector
   const shown = status === 'all' ? rounds : rounds.filter(round => round.status === status);
   return <div className="font-sans">
     <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-zinc-500">
-      <span className="tabular-nums">{rounds.length} 轮</span>
+      <span className="tabular-nums">{rounds.length}  {L("轮", " turns")}</span>
       <span aria-hidden className="text-zinc-300">·</span>
-      <span className="tabular-nums">{trajectory.sentRounds} 轮保存了实际请求</span>
+      <span className="tabular-nums">{trajectory.sentRounds}  {L("轮保存了实际请求", " turns saved actual prompt")}</span>
       <span aria-hidden className="text-zinc-300">·</span>
-      <span>旧任务未保存的请求无法还原</span>
+      <span>{L("旧任务未保存的请求无法还原", "Unsaved legacy task requests cannot be reconstructed")}</span>
     </div>
     {counts.size > 1 && <div className="mb-3 flex flex-wrap items-center gap-1">
-      <FilterChip active={status === 'all'} count={rounds.length} onClick={() => setStatus('all')}>全部</FilterChip>
+      <FilterChip active={status === 'all'} count={rounds.length} onClick={() => setStatus('all')}>{L("全部", "All")}</FilterChip>
       {[...counts].map(([key, count]) => <FilterChip key={key} active={status === key} count={count} onClick={() => setStatus(key)}>{taskStatusLabels[key] ?? key}</FilterChip>)}
     </div>}
     <ol className="m-0 list-none p-0">
@@ -61,8 +63,8 @@ export function RequestTrajectoryView({ trajectory, context, wrap }: { trajector
         <RoundCard round={round} context={context} modelLabel={trajectory.scope.modelLabel} wrap={wrap}/>
       </TrajectoryNode>)}
     </ol>
-    {rounds.length === 0 && <div className="pl-5 text-zinc-500">当前会话还没有任务。</div>}
-    {rounds.length > 0 && shown.length === 0 && <div className="pl-5 text-zinc-500">当前筛选下没有轮次。</div>}
+    {rounds.length === 0 && <div className="pl-5 text-zinc-500">{L("当前会话还没有任务。", "No tasks in this session yet.")}</div>}
+    {rounds.length > 0 && shown.length === 0 && <div className="pl-5 text-zinc-500">{L("当前筛选下没有轮次。", "No turns match the current filter.")}</div>}
   </div>;
 }
 
@@ -81,19 +83,21 @@ function TrajectoryNode({ tone, last, children }: { tone: string; last: boolean;
 }
 
 function ScopeCard({ scope, wrap }: { scope: RequestScope; wrap: boolean }) {
+  const L = useBi();
   return <section>
-    <NodeHeader title="会话创建" meta={scope.systemPrompt ? `${scope.systemPrompt.length} 字 System Prompt` : undefined}/>
+    <NodeHeader title={L("会话创建", "Session Created")} meta={scope.systemPrompt ? L(`${scope.systemPrompt.length} 字 System Prompt`, `${scope.systemPrompt.length}-char System Prompt`) : undefined}/>
     {scope.systemPrompt
-      ? <TextBlock label="会话级 System Prompt" text={scope.systemPrompt} wrap={wrap}/>
-      : <p className="m-0 text-[12px] text-zinc-500">未设置或旧会话未保存 System Prompt。</p>}
+      ? <TextBlock label={L("会话级 System Prompt", "Session System Prompt")} text={scope.systemPrompt} wrap={wrap}/>
+      : <p className="m-0 text-[12px] text-zinc-500">{L("未设置或旧会话未保存 System Prompt。", "Not configured or unsaved in legacy session.")}</p>}
   </section>;
 }
 
 function RoundCard({ round, context, modelLabel, wrap }: { round: RequestRound; context: RequestTrajectoryContext; modelLabel: string; wrap: boolean }) {
+  const L = useBi();
   const { payload } = round;
   return <section className="rounded-lg border border-zinc-200 bg-white">
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-zinc-100 px-2.5 py-1.5">
-      <span className="text-[12px] font-medium text-zinc-800">第 {round.index} 轮</span>
+      <span className="text-[12px] font-medium text-zinc-800">{L("第", "Turn #")} {round.index}  {L("轮", " turns")}</span>
       <span className="tabular-nums text-[12px] text-zinc-400" title={round.createdAt}>{formatClock(round.createdAt)}</span>
       <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[12px] text-zinc-600">{taskStatusLabels[round.status] ?? round.status}</span>
       {payloadBadge(payload)}
@@ -101,13 +105,13 @@ function RoundCard({ round, context, modelLabel, wrap }: { round: RequestRound; 
     </div>
     <div className="flex flex-col gap-2 px-2.5 py-2">
       {payload.state === 'sent' && payload.form === 'injected' ? <>
-        <Caption>实际发送 = 注入内容 + 用户可见，按此顺序拼接，共 {payload.text.length} 字。</Caption>
-        <TextBlock label="注入内容" text={payload.prefix} wrap={wrap} tone="injected" forceCollapsed/>
-        <TextBlock label="用户可见" text={round.visiblePrompt} wrap={wrap}/>
+        <Caption>{L("实际发送 = 注入内容 + 用户可见，按此顺序拼接，共", "Actual prompt = Injected + User-visible, concatenated in order (")} {payload.text.length}  {L("字。", " chars).")}</Caption>
+        <TextBlock label={L("注入内容", "Injected")} text={payload.prefix} wrap={wrap} tone="injected" forceCollapsed/>
+        <TextBlock label={L("用户可见", "User Visible")} text={round.visiblePrompt} wrap={wrap}/>
       </> : payload.state === 'sent' && payload.form === 'identical'
-        ? <TextBlock label="实际发送 = 用户可见" text={payload.text} wrap={wrap}/>
+        ? <TextBlock label={L("实际发送 = 用户可见", "Actual prompt = User visible")} text={payload.text} wrap={wrap}/>
         : <>
-          <TextBlock label="用户可见" text={round.visiblePrompt} wrap={wrap}/>
+          <TextBlock label={L("用户可见", "User Visible")} text={round.visiblePrompt} wrap={wrap}/>
           <PayloadDetail payload={payload} wrap={wrap}/>
         </>}
     </div>
@@ -117,9 +121,9 @@ function RoundCard({ round, context, modelLabel, wrap }: { round: RequestRound; 
 
 /** 「为什么没有过程」的三种说法。用户要能据此判断是数据没了、还是这一轮本来就空。 */
 const gapCopy: Record<RoundActivityGap, string> = {
-  'no-events-saved': '这个会话没有保存事件，无法还原这一轮的过程。',
-  'no-anchor': '这一轮早于轮次锚点，无法确定它的事件范围。',
-  'no-events-this-round': '这一轮没有留下过程事件。'
+  get 'no-events-saved'() { return bi("这个会话没有保存事件，无法还原这一轮的过程。", "No events saved for this session; trace unavailable."); },
+  get 'no-anchor'() { return bi("这一轮早于轮次锚点，无法确定它的事件范围。", "This turn predates turn anchoring; event range cannot be determined."); },
+  get 'no-events-this-round'() { return bi("这一轮没有留下过程事件。", "No trace events recorded for this turn."); }
 };
 
 /**
@@ -128,6 +132,7 @@ const gapCopy: Record<RoundActivityGap, string> = {
  * 思考与工具调用要用户点开才请求：一轮可能有几十万行事件，面板打开时不该逐个拉。
  */
 function RoundActivity({ round, context, modelLabel }: { round: RequestRound; context: RequestTrajectoryContext; modelLabel: string }) {
+  const L = useBi();
   const bounds = useMemo(() => context.turns.find(turn => turn.taskId === round.id), [context.turns, round.id]);
   // 排队/取消的轮次没交给 Agent，不显示过程入口；请求未保存的历史任务照样有过程可看。
   const hasProcess = round.payload.state !== 'not-sent' && round.processEvents > 0;
@@ -150,32 +155,32 @@ function RoundActivity({ round, context, modelLabel }: { round: RequestRound; co
     : undefined, [finalText, round.id, round.updatedAt]);
   const missingFinal = finalEvent || round.payload.state === 'not-sent'
     ? undefined
-    : activity.state === 'available' ? '本轮没有产生最终输出。'
+    : activity.state === 'available' ? L("本轮没有产生最终输出。", "No final output produced in this turn.")
       // 两种缺法分开说：没有最终输出是记录里就没有，过程缺失另有原因，不能混成一句。
       // 过程还在的轮次（没自动拉的那些）要告诉用户去哪儿找，否则「没有最终输出」看着像丢了。
-      : activity.state === 'unavailable' ? `没有存下这一轮的最终输出；${gapCopy[activity.reason]}${hasProcess ? '展开下面的过程可以看到它。' : ''}`
+      : activity.state === 'unavailable' ? L(`没有存下这一轮的最终输出；${gapCopy[activity.reason]}${hasProcess ? '展开下面的过程可以看到它。' : ''}`, `No saved final output for this turn; ${gapCopy[activity.reason]}${hasProcess ? ' Expand the trace below to inspect it.' : ''}`)
         : undefined;
 
   return <div className="border-t border-zinc-100 px-2.5 py-2">
     {finalEvent
       ? <TimelineItem event={finalEvent} final sessionId={context.sessionId} assistantLabel={modelLabel}/>
       : missingFinal && <p className="m-0 text-[12px] text-zinc-500">{missingFinal}</p>}
-    {recoveredFinal && <p className="m-0 mt-1 text-[12px] text-zinc-400">最终输出取自本轮过程事件，记录里没有单独保存。</p>}
+    {recoveredFinal && <p className="m-0 mt-1 text-[12px] text-zinc-400">{L("最终输出取自本轮过程事件，记录里没有单独保存。", "Final output derived from turn events (not separately persisted).")}</p>}
     {hasProcess && <details open={process.open} className="mt-2 border-t border-zinc-100">
       <summary onClick={event => { event.preventDefault(); process.toggle(); }} className="flex cursor-pointer select-none items-center gap-1.5 py-1.5 text-[12px] font-medium text-zinc-600 outline-none transition-colors hover:text-zinc-800">
-        <Wrench size={12} className="shrink-0 text-zinc-400"/><span>思考与工具调用</span>
+        <Wrench size={12} className="shrink-0 text-zinc-400"/><span>{L("思考与工具调用", "Thinking & Tool Calls")}</span>
         {summary && <span className="tabular-nums text-[12px] font-normal text-zinc-400">{summary}</span>}
         {process.open ? <ChevronDown size={12} className="ml-auto shrink-0 text-zinc-400"/> : <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-400"/>}
       </summary>
       {process.open && <div className="pt-1">
         {process.error && <p role="alert" className="m-0 mb-1 flex items-center gap-2 text-[12px] text-red-600">{process.error}
-          {!process.loaded && <button type="button" onClick={process.retry} className="rounded border border-red-200 px-1.5 py-0.5 text-[12px] hover:bg-red-50">重试</button>}
+          {!process.loaded && <button type="button" onClick={process.retry} className="rounded border border-red-200 px-1.5 py-0.5 text-[12px] hover:bg-red-50">{L("重试", "Retry")}</button>}
         </p>}
-        {!process.loaded && process.loading && <p className="m-0 flex items-center gap-1.5 text-[12px] text-zinc-500"><Spinner size={12}/>读取这一轮的事件…</p>}
+        {!process.loaded && process.loading && <p className="m-0 flex items-center gap-1.5 text-[12px] text-zinc-500"><Spinner size={12}/>{L("读取这一轮的事件…", "Loading turn events…")}</p>}
         {activity.state === 'available'
           ? <ActivityPanel groups={activity.groups} ongoing={false} sessionId={context.sessionId} hasAnswer={activity.hasAnswer} taskStatus={activity.taskStatus} modelLabel={modelLabel} startedAt={activity.startedAt} completedAt={activity.completedAt}/>
           : process.loaded && activity.state === 'unavailable' && <p className="m-0 text-[12px] text-zinc-500">{gapCopy[activity.reason]}</p>}
-        {process.truncated && <button type="button" disabled={process.loading} onClick={process.loadMore} className="mt-1 rounded border border-zinc-300 px-1.5 py-0.5 text-[12px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-50">{process.loading ? '读取中…' : '加载剩余事件'}</button>}
+        {process.truncated && <button type="button" disabled={process.loading} onClick={process.loadMore} className="mt-1 rounded border border-zinc-300 px-1.5 py-0.5 text-[12px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-50">{process.loading ? L("读取中…", "Loading…") : L("加载剩余事件", "Load remaining events")}</button>}
       </div>}
     </details>}
   </div>;
@@ -194,20 +199,21 @@ function unfetchedReason(context: RequestTrajectoryContext, round: RequestRound)
 }
 
 function PayloadDetail({ payload, wrap }: { payload: RequestPayload; wrap: boolean }) {
-  if (payload.state === 'not-sent') return <p className="m-0 text-[12px] text-zinc-500">未发送给 Agent：任务还在排队，或已被取消。</p>;
-  if (payload.state === 'unavailable') return <p className="m-0 text-[12px] text-zinc-500">历史任务未保存实际请求，无法还原。</p>;
+  const L = useBi();
+  if (payload.state === 'not-sent') return <p className="m-0 text-[12px] text-zinc-500">{L("未发送给 Agent：任务还在排队，或已被取消。", "Not sent to Agent: task is still queued or was cancelled.")}</p>;
+  if (payload.state === 'unavailable') return <p className="m-0 text-[12px] text-zinc-500">{L("历史任务未保存实际请求，无法还原。", "Historical task did not save actual prompt.")}</p>;
   if (payload.form === 'unrelated') return <div className="flex flex-col gap-1.5">
-    <p className="m-0 flex items-start gap-1 text-[12px] text-red-600"><AlertTriangle size={12} className="mt-0.5 shrink-0"/>保存的实际请求与可见文本没有包含关系，无法把差异归因成注入，下面原样展示。</p>
-    <TextBlock label="实际发送（原文）" text={payload.text} wrap={wrap}/>
+    <p className="m-0 flex items-start gap-1 text-[12px] text-red-600"><AlertTriangle size={12} className="mt-0.5 shrink-0"/>{L("保存的实际请求与可见文本没有包含关系，无法把差异归因成注入，下面原样展示。", "Saved prompt does not contain the visible text; showing raw prompt below.")}</p>
+    <TextBlock label={L("实际发送（原文）", "Actual Prompt (Raw)")} text={payload.text} wrap={wrap}/>
   </div>;
   return undefined;
 }
 
 function payloadBadge(payload: RequestPayload) {
-  if (payload.state === 'not-sent') return <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[12px] text-zinc-500">未发送</span>;
-  if (payload.state === 'unavailable') return <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[12px] text-zinc-500">请求未保存</span>;
-  if (payload.form === 'injected') return <span className="inline-flex items-center gap-0.5 rounded bg-sky-50 px-1.5 py-0.5 text-[12px] text-sky-700"><Sparkles size={10}/>注入 {payload.prefix.length} 字</span>;
-  if (payload.form === 'unrelated') return <span className="inline-flex items-center gap-0.5 rounded bg-red-50 px-1.5 py-0.5 text-[12px] text-red-600"><AlertTriangle size={10}/>正文不一致</span>;
+  if (payload.state === 'not-sent') return <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[12px] text-zinc-500">{bi("未发送", "Not Sent")}</span>;
+  if (payload.state === 'unavailable') return <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[12px] text-zinc-500">{bi("请求未保存", "Prompt Unsaved")}</span>;
+  if (payload.form === 'injected') return <span className="inline-flex items-center gap-0.5 rounded bg-sky-50 px-1.5 py-0.5 text-[12px] text-sky-700"><Sparkles size={10}/>{bi("注入", "Injected")} {payload.prefix.length}  {bi("字", " chars")}</span>;
+  if (payload.form === 'unrelated') return <span className="inline-flex items-center gap-0.5 rounded bg-red-50 px-1.5 py-0.5 text-[12px] text-red-600"><AlertTriangle size={10}/>{bi("正文不一致", "Content Differs")}</span>;
   return undefined;
 }
 
@@ -225,6 +231,7 @@ function Caption({ children }: { children: ReactNode }) {
 // tone：injected 表示这段是 AgentDock 自己拼进去的（与「会话创建」节点同色系），
 // plain 是用户自己写的原文。两者必须一眼能分开，否则看不出哪部分不是人写的。
 function TextBlock({ label, text, wrap, tone = 'plain', forceCollapsed = false }: { label: string; text: string; wrap: boolean; tone?: 'plain' | 'injected'; forceCollapsed?: boolean }) {
+  const L = useBi();
   const long = text.length > COLLAPSE_THRESHOLD;
   const [expanded, setExpanded] = useState(!long && !forceCollapsed);
   const shown = expanded ? text : text.slice(0, COLLAPSE_THRESHOLD);
@@ -233,9 +240,9 @@ function TextBlock({ label, text, wrap, tone = 'plain', forceCollapsed = false }
     <div className={`flex items-center gap-2 border-b px-2 py-1 ${injected ? 'border-sky-100' : 'border-zinc-200/80'}`}>
       {injected && <Sparkles size={10} className="shrink-0 text-sky-500"/>}
       <span className={`text-[12px] ${injected ? 'text-sky-700' : 'text-zinc-500'}`}>{label}</span>
-      <span className={`tabular-nums text-[12px] ${injected ? 'text-sky-600/70' : 'text-zinc-400'}`}>{text.length} 字</span>
+      <span className={`tabular-nums text-[12px] ${injected ? 'text-sky-600/70' : 'text-zinc-400'}`}>{text.length}  {L("字", " chars")}</span>
       {(long || forceCollapsed) && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} className={`ml-auto inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[12px] ${injected ? 'text-sky-700 hover:bg-sky-100' : 'text-zinc-500 hover:bg-zinc-200/60 hover:text-zinc-900'}`}>
-        {expanded ? <ChevronDown size={11}/> : <ChevronRight size={11}/>}{expanded ? '收起' : '展开'}
+        {expanded ? <ChevronDown size={11}/> : <ChevronRight size={11}/>}{expanded ? L("收起", "Collapse") : L("展开", "Expand")}
       </button>}
     </div>
     <pre className={`m-0 px-2 py-1.5 font-mono text-[12px] leading-5 ${injected ? 'text-zinc-600' : 'text-zinc-700'} ${wrap ? 'whitespace-pre-wrap break-words' : 'overflow-x-auto whitespace-pre'}`}>{shown}{!expanded && '…'}</pre>

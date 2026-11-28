@@ -32,7 +32,8 @@ import { AiFieldHeader, AiTextAssistControl, useAiFlash } from '../AiTextAssist'
 import { ExitGate } from '../ExitGate';
 import { SlidingSegmented } from '../ui-controls';
 import { sessionLabel } from '../session-groups';
-import { BOARD_COLUMN_COLOR_OPTIONS, RULE_PRESETS } from './board-utils';
+import { getBoardColumnColorOptions, localizeBoardColumnName, RULE_PRESETS } from './board-utils';
+import { useBi, useLocale } from '../i18n';
 
 /* ---------- 新建 / 导入看板弹窗 ---------- */
 
@@ -58,6 +59,7 @@ export function CreateBoardModal({
   onCreate(payload: CreateBoardPayload): void;
   onImport(template: BoardTemplatePayload, name?: string, isDefault?: boolean): void;
 }) {
+  const L = useBi();
   const [tab, setTab] = useState<'create' | 'import'>('create');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -106,13 +108,13 @@ export function CreateBoardModal({
     try {
       const parsed = JSON.parse(importJson) as BoardTemplatePayload;
       if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.columns)) {
-        setImportError('模板 JSON 缺少 columns 数组，请粘贴由看板导出的模板。');
+        setImportError(L("模板 JSON 缺少 columns 数组，请粘贴由看板导出的模板。", "Template JSON is missing the columns array. Please paste an exported board template."));
         return;
       }
       setImportError(undefined);
       onImport(parsed, name.trim() || undefined, isDefault);
     } catch (err) {
-      setImportError(`JSON 解析失败：${err instanceof Error ? err.message : String(err)}`);
+      setImportError(L(`JSON 解析失败：${err instanceof Error ? err.message : String(err)}`, `JSON parse failed: ${err instanceof Error ? err.message : String(err)}`));
     }
   };
 
@@ -120,24 +122,25 @@ export function CreateBoardModal({
     <ExitGate open={open}>
       {open ? (
         <div className="ui-overlay fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/35 p-4">
-          <div role="dialog" aria-modal="true" aria-label="新建看板" className="ui-dialog w-full max-w-[520px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,.22)]">
+          <div role="dialog" aria-modal="true" aria-label={L("新建看板", "New Board")} className="ui-dialog w-full max-w-[520px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,.22)]">
             <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3.5">
               <div className="flex items-center gap-2">
-                <h2 className="text-[15px] font-semibold text-zinc-900">新建看板</h2>
+                <h2 className="text-[15px] font-semibold text-zinc-900">{L("新建看板", "New Board")}</h2>
                 <SlidingSegmented
                   role="tablist"
-                  ariaLabel="创建方式"
+                  ariaLabel={L("创建方式", "Creation Mode")}
                   size="xs"
                   value={tab}
                   onChange={setTab}
                   options={[
-                    { value: 'create' as const, label: '从模板创建' },
+                    { value: 'create' as const, label: L("从模板创建", "From Template") },
                     {
                       value: 'import' as const,
                       label: (
                         <>
                           <Upload size={11}/>
-                          导入 JSON
+                          
+                          {L("导入 JSON", "Import JSON")}
                         </>
                       )
                     }
@@ -146,7 +149,7 @@ export function CreateBoardModal({
               </div>
               <button
                 type="button"
-                aria-label="关闭"
+                aria-label={L("关闭", "Close")}
                 onClick={onClose}
                 className="ui-press grid h-7 w-7 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"
               >
@@ -157,9 +160,9 @@ export function CreateBoardModal({
         <div className="max-h-[75vh] space-y-4 overflow-y-auto px-5 py-4">
           <div>
             <AiFieldHeader
-              label="看板名称"
+              label={L("看板名称", "Board Name")}
               htmlFor="create-board-name"
-              hint={tab === 'import' ? '（留空沿用模板名）' : undefined}
+              hint={tab === 'import' ? L("（留空沿用模板名）", " (optional, defaults to template name)") : undefined}
               assist={
                 <AiTextAssistControl
                   mode="title_generate"
@@ -172,10 +175,10 @@ export function CreateBoardModal({
                   onFlash={nameFlash.triggerFlash}
                   resetKey={openSeq}
                   context={() => ({
-                    field: '任务看板名称',
-                    purpose: '简短直观的看板名称（4–16 字），体现跟踪的主题或周期',
+                    field: L("任务看板名称", "Board name"),
+                    purpose: L("简短直观的看板名称（4–16 字），体现跟踪的主题或周期", "Short, clear board name (4–24 chars) describing the focus or sprint"),
                     maxChars: 18,
-                    extra: `模板类型：${template}${description.trim() ? `；看板说明：${description.trim()}` : ''}`
+                    extra: L(`模板类型：${template}${description.trim() ? `；看板说明：${description.trim()}` : ''}`, `Template: ${template}${description.trim() ? `; Description: ${description.trim()}` : ''}`)
                   })}
                   testId="board-create-name-ai"
                 />
@@ -188,7 +191,7 @@ export function CreateBoardModal({
               value={name}
               onChange={e => setName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && tab === 'create') submitCreate(); }}
-              placeholder="例如：本周发布冲刺 / 重点项目盯盘 / 个人待办"
+              placeholder={L("例如：本周发布冲刺 / 重点项目盯盘 / 个人待办", "e.g., Release Sprint / Active Projects / Personal TODOs")}
               className={`ui-field mt-1.5 h-9 w-full rounded-xl border border-zinc-200 bg-white px-3 text-[13px] text-zinc-900 ${nameFlash.flashClass}`}
             />
           </div>
@@ -196,12 +199,12 @@ export function CreateBoardModal({
           {tab === 'create' ? (
             <>
               <div>
-                <div className="text-[12.5px] font-medium text-zinc-700">排布模板</div>
+                <div className="text-[12.5px] font-medium text-zinc-700">{L("排布模板", "Layout Template")}</div>
                 <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
                   {[
-                    { key: 'blank' as const, icon: Columns3, title: '自由定制', desc: '手动拖入任意任务与会话，完全按你喜好编排' },
-                    { key: 'status' as const, icon: Sparkles, title: '运行状态', desc: '智能规则自动按待拍板 / 进行中 / 待验收分列' },
-                    { key: 'project' as const, icon: FolderKanban, title: '按项目排布', desc: '自动按当前活跃工作区生成多项目盯盘列' }
+                    { key: 'blank' as const, icon: Columns3, title: L("自由定制", "Custom"), desc: L("手动拖入任意任务与会话，完全按你喜好编排", "Manually drag any tasks and sessions into custom columns") },
+                    { key: 'status' as const, icon: Sparkles, title: L("运行状态", "Live Status"), desc: L("智能规则自动按待拍板 / 进行中 / 待验收分列", "Smart rules auto-sort by Needs Input / Running / Review") },
+                    { key: 'project' as const, icon: FolderKanban, title: L("按项目排布", "By Project"), desc: L("自动按当前活跃工作区生成多项目盯盘列", "Auto-generate columns for each active workspace directory") }
                   ].map(opt => {
                     const active = template === opt.key;
                     const Icon = opt.icon;
@@ -227,32 +230,32 @@ export function CreateBoardModal({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <div className="text-[12px] font-medium text-zinc-600">默认视图</div>
+                  <div className="text-[12px] font-medium text-zinc-600">{L("默认视图", "Default View")}</div>
                   <SlidingSegmented
-                    ariaLabel="默认视图"
+                    ariaLabel={L("默认视图", "Default View")}
                     size="md"
                     className="mt-1.5"
                     itemClassName="px-2"
                     value={viewMode}
                     onChange={setViewMode}
                     options={[
-                      { value: 'lanes' as const, label: <><Columns3 size={12}/>列视图</> },
-                      { value: 'grid' as const, label: <><LayoutGrid size={12}/>盯盘矩阵</> }
+                      { value: 'lanes' as const, label: <><Columns3 size={12}/>{L("列视图", "Columns")}</> },
+                      { value: 'grid' as const, label: <><LayoutGrid size={12}/>{L("盯盘矩阵", "Matrix")}</> }
                     ]}
                   />
                 </div>
                 <div>
-                  <div className="text-[12px] font-medium text-zinc-600">卡片密度</div>
+                  <div className="text-[12px] font-medium text-zinc-600">{L("卡片密度", "Card Density")}</div>
                   <SlidingSegmented
-                    ariaLabel="卡片密度"
+                    ariaLabel={L("卡片密度", "Card Density")}
                     size="md"
                     className="mt-1.5"
                     itemClassName="px-2"
                     value={density}
                     onChange={setDensity}
                     options={[
-                      { value: 'compact' as const, label: '紧凑盯盘' },
-                      { value: 'comfortable' as const, label: '舒适展开' }
+                      { value: 'compact' as const, label: L("紧凑盯盘", "Compact") },
+                      { value: 'comfortable' as const, label: L("舒适展开", "Comfortable") }
                     ]}
                   />
                 </div>
@@ -260,9 +263,9 @@ export function CreateBoardModal({
 
               <div>
                 <AiFieldHeader
-                  label="简短说明"
+                  label={L("简短说明", "Description")}
                   htmlFor="create-board-desc"
-                  hint="（可选）"
+                  hint={L("（可选）", " (Optional)")}
                   assist={
                     <AiTextAssistControl
                       mode="description_polish"
@@ -275,11 +278,11 @@ export function CreateBoardModal({
                       onFlash={descFlash.triggerFlash}
                       resetKey={openSeq}
                       context={() => ({
-                        field: '看板简短说明',
-                        purpose: '用一句话说明这个看板用来跟踪哪些任务或目标，不超过 50 字',
+                        field: L("看板简短说明", "Board description"),
+                        purpose: L("用一句话说明这个看板用来跟踪哪些任务或目标，不超过 50 字", "Brief one-sentence summary of what this board tracks"),
                         maxChars: 50,
                         ...(name.trim() ? { boardName: name.trim() } : {}),
-                        extra: `排布模板：${template}`
+                        extra: L(`排布模板：${template}`, `Layout template: ${template}`)
                       })}
                       testId="board-create-desc-ai"
                     />
@@ -290,19 +293,19 @@ export function CreateBoardModal({
                   type="text"
                   value={description}
                   onChange={e => setDescription(e.target.value)}
-                  placeholder="记录这个看板用于盯哪些事项…"
+                  placeholder={L("记录这个看板用于盯哪些事项…", "Describe what this board tracks…")}
                   className={`ui-field mt-1 h-8 w-full rounded-lg border border-zinc-200 bg-white px-2.5 text-[12.5px] text-zinc-900 ${descFlash.flashClass}`}
                 />
               </div>
             </>
           ) : (
             <div>
-              <label className="block text-[12.5px] font-medium text-zinc-700">粘贴看板模板 JSON</label>
+              <label className="block text-[12.5px] font-medium text-zinc-700">{L("粘贴看板模板 JSON", "Paste Board Template JSON")}</label>
               <textarea
                 rows={7}
                 value={importJson}
                 onChange={e => setImportJson(e.target.value)}
-                placeholder={'{\n  "version": 1,\n  "board": { "name": "我的模板", ... },\n  "columns": [ ... ]\n}'}
+                placeholder={L("{\n  \"version\": 1,\n  \"board\": { \"name\": \"我的模板\", ... },\n  \"columns\": [ ... ]\n}", "{\n  \"version\": 1,\n  \"board\": { \"name\": \"My Template\", ... },\n  \"columns\": [ ... ]\n}")}
                 className="ui-field mt-1.5 w-full rounded-xl border border-zinc-200 bg-zinc-50 p-3 font-mono text-[12px] text-zinc-800"
               />
               {importError && <p className="mt-1.5 text-[12px] text-red-600">{importError}</p>}
@@ -316,7 +319,8 @@ export function CreateBoardModal({
               onChange={e => setIsDefault(e.target.checked)}
               className="h-4 w-4 rounded border-zinc-300"
             />
-            创建后立即切换到此看板并记忆为默认视角
+            
+            {L("创建后立即切换到此看板并记忆为默认视角", "Switch to this board immediately and remember as default")}
           </label>
         </div>
 
@@ -326,7 +330,8 @@ export function CreateBoardModal({
             onClick={onClose}
             className="ui-press h-8 rounded-lg px-3 text-[12.5px] font-medium text-zinc-600 hover:bg-zinc-200/60"
           >
-            取消
+            
+            {L("取消", "Cancel")}
           </button>
           <button
             type="button"
@@ -335,7 +340,7 @@ export function CreateBoardModal({
             className="ui-press inline-flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-4 text-[12.5px] font-medium text-white hover:bg-zinc-700 disabled:opacity-45"
           >
             {busy && <LoaderCircle size={13} className="animate-spin"/>}
-            {tab === 'create' ? '创建看板' : '导入并打开'}
+            {tab === 'create' ? L("创建看板", "Create Board") : L("导入并打开", "Import & Open")}
           </button>
         </div>
       </div>
@@ -368,6 +373,8 @@ export function ColumnEditorModal({
   onClose(): void;
   onSave(payload: ColumnEditorPayload): void;
 }) {
+  const L = useBi();
+  const locale = useLocale();
   const [name, setName] = useState('');
   const [color, setColor] = useState<BoardColumnColor>('zinc');
   const [wipText, setWipText] = useState('');
@@ -427,10 +434,10 @@ export function ColumnEditorModal({
     <ExitGate open={open}>
       {open ? (
         <div className="ui-overlay fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/35 p-4">
-          <div role="dialog" aria-modal="true" aria-label={editing ? '编辑列' : '新建列'} className="ui-dialog w-full max-w-[480px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,.22)]">
+          <div role="dialog" aria-modal="true" aria-label={editing ? L("编辑列", "Edit Column") : L("新建列", "Add Column")} className="ui-dialog w-full max-w-[480px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,.22)]">
             <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3.5">
-              <h2 className="text-[15px] font-semibold text-zinc-900">{editing ? `编辑列「${editing.name}」` : '新建自定义列'}</h2>
-              <button type="button" aria-label="关闭" onClick={onClose} className="ui-press grid h-7 w-7 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800">
+              <h2 className="text-[15px] font-semibold text-zinc-900">{editing ? L(`编辑列「${editing.name}」`, `Edit Column "${editing.name}"`) : L("新建自定义列", "New Custom Column")}</h2>
+              <button type="button" aria-label={L("关闭", "Close")} onClick={onClose} className="ui-press grid h-7 w-7 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800">
                 <X size={16}/>
               </button>
             </div>
@@ -438,34 +445,34 @@ export function ColumnEditorModal({
         <div className="max-h-[75vh] space-y-4 overflow-y-auto px-5 py-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_110px]">
             <div>
-              <label className="block text-[12px] font-medium text-zinc-600">列名称</label>
+              <label className="block text-[12px] font-medium text-zinc-600">{L("列名称", "Column Name")}</label>
               <input
                 type="text"
                 autoFocus
                 value={name}
                 onChange={e => setName(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') submit(); }}
-                placeholder="例如：高优阻塞 / 待回归 / 前端联调"
+                placeholder={L("例如：高优阻塞 / 待回归 / 前端联调", "e.g., Blockers / Regression / Frontend Sync")}
                 className="ui-field mt-1 h-9 w-full rounded-xl border border-zinc-200 bg-white px-3 text-[13px] text-zinc-900"
               />
             </div>
             <div>
-              <label className="block text-[12px] font-medium text-zinc-600">WIP 上限</label>
+              <label className="block text-[12px] font-medium text-zinc-600">{L("WIP 上限", "WIP Limit")}</label>
               <input
                 type="number"
                 min={0}
                 value={wipText}
                 onChange={e => setWipText(e.target.value)}
-                placeholder="不限"
+                placeholder={L("不限", "None")}
                 className="ui-field mt-1 h-9 w-full rounded-xl border border-zinc-200 bg-white px-3 text-[13px] text-zinc-900"
               />
             </div>
           </div>
 
           <div>
-            <div className="text-[12px] font-medium text-zinc-600">列色标</div>
+            <div className="text-[12px] font-medium text-zinc-600">{L("列色标", "Color")}</div>
             <div className="mt-1.5 flex flex-wrap gap-2">
-              {BOARD_COLUMN_COLOR_OPTIONS.map(opt => (
+              {getBoardColumnColorOptions(locale).map(opt => (
                 <button
                   key={opt.value}
                   type="button"
@@ -484,7 +491,7 @@ export function ColumnEditorModal({
           </div>
 
           <div>
-            <div className="text-[12px] font-medium text-zinc-600">汇聚方式（手动列 / 智能规则列）</div>
+            <div className="text-[12px] font-medium text-zinc-600">{L("汇聚方式（手动列 / 智能规则列）", "Card Routing (Manual / Smart Rule)")}</div>
             <div className="mt-1.5 space-y-1.5">
               {RULE_PRESETS.map(preset => {
                 const active = presetId === preset.id;
@@ -522,8 +529,8 @@ export function ColumnEditorModal({
                   {presetId === 'cwd' && <Check size={10} strokeWidth={3}/>}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12.5px] font-medium text-zinc-900">按项目工作目录自动汇聚</div>
-                  <div className="text-[11px] text-zinc-500">自动收入指定路径前缀下的全部任务与会话</div>
+                  <div className="text-[12.5px] font-medium text-zinc-900">{L("按项目工作目录自动汇聚", "Auto-group by Workspace Path")}</div>
+                  <div className="text-[11px] text-zinc-500">{L("自动收入指定路径前缀下的全部任务与会话", "Automatically include all tasks and sessions matching this path prefix")}</div>
                 </div>
               </button>
               {presetId === 'cwd' && (
@@ -539,23 +546,24 @@ export function ColumnEditorModal({
           </div>
 
           <div>
-            <label className="block text-[12px] font-medium text-zinc-600">拖入此列时联动动作</label>
+            <label className="block text-[12px] font-medium text-zinc-600">{L("拖入此列时联动动作", "Action on Card Drop")}</label>
             <select
               value={onDropAction}
               onChange={e => setOnDropAction(e.target.value as BoardDropAction)}
               className="ui-field mt-1 h-9 w-full rounded-xl border border-zinc-200 bg-white px-3 text-[12.5px] text-zinc-800"
             >
-              <option value="none">无副作用（纯视觉归类，最安全）</option>
-              <option value="start_plan">拖入计划中便签时自动开始执行</option>
-              <option value="prompt_kitten">通知主小猫关注此列的新卡片</option>
-              <option value="archive_session">拖入普通会话时同步归档</option>
+              <option value="none">{L("无副作用（纯视觉归类，最安全）", "None (visual grouping only, safest)")}</option>
+              <option value="start_plan">{L("拖入计划中便签时自动开始执行", "Auto-start planned notes dropped here")}</option>
+              <option value="prompt_kitten">{L("通知主小猫关注此列的新卡片", "Notify companion about new cards here")}</option>
+              <option value="archive_session">{L("拖入普通会话时同步归档", "Archive regular sessions dropped here")}</option>
             </select>
           </div>
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-zinc-200 bg-zinc-50/70 px-5 py-3">
           <button type="button" onClick={onClose} className="ui-press h-8 rounded-lg px-3 text-[12.5px] font-medium text-zinc-600 hover:bg-zinc-200/60">
-            取消
+            
+            {L("取消", "Cancel")}
           </button>
           <button
             type="button"
@@ -564,7 +572,7 @@ export function ColumnEditorModal({
             className="ui-press inline-flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-4 text-[12.5px] font-medium text-white hover:bg-zinc-700 disabled:opacity-45"
           >
             {busy && <LoaderCircle size={13} className="animate-spin"/>}
-            {editing ? '保存列设置' : '添加列'}
+            {editing ? L("保存列设置", "Save Column") : L("添加列", "Add Column")}
           </button>
         </div>
       </div>
@@ -597,6 +605,8 @@ export function AddCardModal({
   onAddNote(input: { columnId: string; title: string; tags: string[]; pinned: boolean }): void;
   onAddEntity(input: { columnId: string; entityKind: 'task' | 'session'; entityId: string }): void;
 }) {
+  const L = useBi();
+  const locale = useLocale();
   const [tab, setTab] = useState<'note' | 'task' | 'session'>('note');
   const [noteTitle, setNoteTitle] = useState('');
   const [tagsText, setTagsText] = useState('');
@@ -649,10 +659,10 @@ export function AddCardModal({
     <ExitGate open={open && Boolean(column)}>
       {open && column ? (
         <div className="ui-overlay fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/35 p-4">
-          <div role="dialog" aria-modal="true" aria-label={`向「${column.name}」添加卡片`} className="ui-dialog w-full max-w-[480px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,.22)]">
+          <div role="dialog" aria-modal="true" aria-label={L(`向「${localizeBoardColumnName(column.name, locale)}」添加卡片`, `Add card to "${localizeBoardColumnName(column.name, locale)}"`)} className="ui-dialog w-full max-w-[480px] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,.22)]">
             <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3.5">
-              <h2 className="truncate text-[14.5px] font-semibold text-zinc-900">添加到「{column.name}」</h2>
-              <button type="button" aria-label="关闭" onClick={onClose} className="ui-press grid h-7 w-7 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800">
+              <h2 className="truncate text-[14.5px] font-semibold text-zinc-900">{L(`添加到「${localizeBoardColumnName(column.name, locale)}」`, `Add to "${localizeBoardColumnName(column.name, locale)}"`)}</h2>
+              <button type="button" aria-label={L("关闭", "Close")} onClick={onClose} className="ui-press grid h-7 w-7 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800">
                 <X size={16}/>
               </button>
             </div>
@@ -660,15 +670,15 @@ export function AddCardModal({
             <div className="border-b border-zinc-200 px-5 py-2.5">
               <SlidingSegmented
                 role="tablist"
-                ariaLabel="卡片来源"
+                ariaLabel={L("卡片来源", "Card Source")}
                 size="md"
                 value={tab}
                 onChange={setTab}
                 itemClassName="px-2"
                 options={[
-                  { value: 'note' as const, label: <><FileText size={12}/>快速文字卡</> },
-                  { value: 'task' as const, label: <><StickyNote size={12}/>小猫便签</> },
-                  { value: 'session' as const, label: <><MessageSquare size={12}/>普通会话</> }
+                  { value: 'note' as const, label: <><FileText size={12}/>{L("快速文字卡", "Quick Note")}</> },
+                  { value: 'task' as const, label: <><StickyNote size={12}/>{L("小猫便签", "Sticky Note")}</> },
+                  { value: 'session' as const, label: <><MessageSquare size={12}/>{L("普通会话", "Session")}</> }
                 ]}
               />
             </div>
@@ -678,7 +688,7 @@ export function AddCardModal({
             <div className="space-y-3">
               <div>
                 <AiFieldHeader
-                  label="卡片内容"
+                  label={L("卡片内容", "Card Content")}
                   htmlFor="add-board-card-note"
                   assist={
                     <AiTextAssistControl
@@ -692,10 +702,10 @@ export function AddCardModal({
                       onFlash={noteFlash.triggerFlash}
                       resetKey={`${column.id}:${addOpenSeq}`}
                       context={() => ({
-                        field: '看板快速文字卡内容',
-                        purpose: '清晰具体地记录一个想法、待办事项或验收要点，后续可直接拖给主小猫执行',
+                        field: L("看板快速文字卡内容", "Quick card content"),
+                        purpose: L("清晰具体地记录一个想法、待办事项或验收要点，后续可直接拖给主小猫执行", "Capture a clear idea, TODO, or acceptance item you can drag to the companion later"),
                         columnName: column.name,
-                        ...(tagsText.trim() ? { extra: `标签：${tagsText.trim()}` } : {})
+                        ...(tagsText.trim() ? { extra: L(`标签：${tagsText.trim()}`, `Tags: ${tagsText.trim()}`) } : {})
                       })}
                       testId="board-add-card-note-ai"
                     />
@@ -708,23 +718,24 @@ export function AddCardModal({
                   value={noteTitle}
                   onChange={e => setNoteTitle(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitNote(); }}
-                  placeholder="记一个想法、待办或临时追踪项（后续可随时拖给主小猫执行）…"
+                  placeholder={L("记一个想法、待办或临时追踪项（后续可随时拖给主小猫执行）…", "Capture an idea, TODO, or item to track (drag to companion anytime)…")}
                   className={`ui-field mt-1 w-full rounded-xl border border-zinc-200 bg-white p-2.5 text-[13px] text-zinc-900 ${noteFlash.flashClass}`}
                 />
               </div>
               <div>
-                <label className="block text-[12px] font-medium text-zinc-600">标签（逗号或空格分隔，可选）</label>
+                <label className="block text-[12px] font-medium text-zinc-600">{L("标签（逗号或空格分隔，可选）", "Tags (comma or space separated, optional)")}</label>
                 <input
                   type="text"
                   value={tagsText}
                   onChange={e => setTagsText(e.target.value)}
-                  placeholder="例如：P0 发布 前端"
+                  placeholder={L("例如：P0 发布 前端", "e.g., P0 release frontend")}
                   className="ui-field mt-1 h-8 w-full rounded-lg border border-zinc-200 bg-white px-2.5 text-[12.5px] text-zinc-900"
                 />
               </div>
               <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-zinc-600">
                 <input type="checkbox" checked={pinned} onChange={e => setPinned(e.target.checked)} className="h-4 w-4 rounded border-zinc-300"/>
-                置顶到列首
+                
+                {L("置顶到列首", "Pin to top")}
               </label>
               <div className="flex justify-end pt-1">
                 <button
@@ -734,7 +745,8 @@ export function AddCardModal({
                   className="ui-press inline-flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-4 text-[12.5px] font-medium text-white hover:bg-zinc-700 disabled:opacity-45"
                 >
                   {busy && <LoaderCircle size={13} className="animate-spin"/>}
-                  添加卡片
+                  
+                  {L("添加卡片", "Add Card")}
                 </button>
               </div>
             </div>
@@ -747,7 +759,7 @@ export function AddCardModal({
                   autoFocus
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  placeholder={tab === 'task' ? '搜索主小猫便签标题…' : '搜索会话标题或工作区…'}
+                  placeholder={tab === 'task' ? L("搜索主小猫便签标题…", "Search sticky notes…") : L("搜索会话标题或工作区…", "Search sessions or workspaces…")}
                   className="h-full min-w-0 flex-1 bg-transparent text-[12.5px] text-zinc-900 placeholder:text-zinc-400"
                 />
               </div>
@@ -772,7 +784,7 @@ export function AddCardModal({
                     ))}
                   </div>
                 ) : (
-                  <p className="py-6 text-center text-[12.5px] text-zinc-400">暂无可添加的便签</p>
+                  <p className="py-6 text-center text-[12.5px] text-zinc-400">{L("暂无可添加的便签", "No sticky notes available")}</p>
                 )
               ) : (
                 filteredSessions.length ? (
@@ -797,7 +809,7 @@ export function AddCardModal({
                     })}
                   </div>
                 ) : (
-                  <p className="py-6 text-center text-[12.5px] text-zinc-400">暂无可添加的会话</p>
+                  <p className="py-6 text-center text-[12.5px] text-zinc-400">{L("暂无可添加的会话", "No sessions available")}</p>
                 )
               )}
             </div>

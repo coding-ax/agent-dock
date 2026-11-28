@@ -36,6 +36,7 @@ import {
 } from './file-preview-link';
 import { MarkdownContent } from './MarkdownContent';
 import { useResolvedTheme } from './theme';
+import { useBi } from './i18n';
 
 const ImageLightbox = lazy(() => import('./ImageLightbox'));
 
@@ -177,6 +178,7 @@ export function FileExplorerPanel({
   /** 移动端返回会话回调（通常绑定隐藏副屏）。 */
   onClose?: () => void;
 }) {
+  const L = useBi();
   const previewPath = initialPath ? filePreviewPath(initialPath, cwd) : undefined;
   const workspacePath = initialPath ? workspacePreviewPath(initialPath, cwd) : undefined;
   const [path, setPath] = useState(workspacePath ? splitPath(workspacePath).slice(0, -1).join('/') : '');
@@ -282,15 +284,15 @@ export function FileExplorerPanel({
           className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 lg:hidden"
         >
           <ArrowLeft size={14} />
-          <span>{treeOpen && selected ? '返回预览' : '返回'}</span>
+          <span>{treeOpen && selected ? L("返回预览", "Back to preview") : L("返回", "Back")}</span>
         </button>
       )}
-      <HoverTooltip content={treeOpen ? '收起文件树' : '展开文件树'}>
+      <HoverTooltip content={treeOpen ? L("收起文件树", "Collapse file tree") : L("展开文件树", "Expand file tree")}>
         <button
           type="button"
           disabled={Boolean(disabledReason)}
           onClick={() => setTreeOpen(open => !open)}
-          aria-label={treeOpen ? '收起文件树' : '展开文件树'}
+          aria-label={treeOpen ? L("收起文件树", "Collapse file tree") : L("展开文件树", "Expand file tree")}
           aria-pressed={treeOpen}
           className={`grid h-7 w-7 shrink-0 place-items-center rounded-md transition-colors disabled:opacity-40 ${treeOpen ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900'}`}
         >
@@ -326,12 +328,12 @@ export function FileExplorerPanel({
               className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-1.5 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
             >
               <ArrowLeft size={11} />
-              <span>目录</span>
+              <span>{L("目录", "Files")}</span>
             </button>
           )}
           {isDirectory && <FolderIcon size={13} className="shrink-0 text-amber-500" />}
-          <span className="truncate font-mono text-[12px] font-medium text-zinc-700" title={selected ?? '文件预览'}>
-            {selectedName ?? '文件预览'}
+          <span className="truncate font-mono text-[12px] font-medium text-zinc-700" title={selected ?? L("文件预览", "File Preview")}>
+            {selectedName ?? L("文件预览", "File Preview")}
           </span>
           {lineBadge && (
             <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-800">
@@ -344,7 +346,7 @@ export function FileExplorerPanel({
       {/* 右侧操作：Markdown/SVG 渲染与源码切换、下载、刷新 */}
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {canToggleMode && (
-          <div className="flex rounded-md border border-zinc-200 bg-zinc-50 p-0.5" role="group" aria-label="视图模式">
+          <div className="flex rounded-md border border-zinc-200 bg-zinc-50 p-0.5" role="group" aria-label={L("视图模式", "View mode")}>
             <button
               type="button"
               onClick={() => setViewMode('preview')}
@@ -352,7 +354,7 @@ export function FileExplorerPanel({
               className={`inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors ${viewMode === 'preview' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-800'}`}
             >
               <Eye size={11} />
-              <span>{selectedIsMarkdown ? '渲染' : '预览'}</span>
+              <span>{selectedIsMarkdown ? L("渲染", "Rendered") : L("预览", "Preview")}</span>
             </button>
             <button
               type="button"
@@ -361,23 +363,23 @@ export function FileExplorerPanel({
               className={`inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors ${viewMode === 'source' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-800'}`}
             >
               <Code2 size={11} />
-              <span>源码</span>
+              <span>{L("源码", "Source")}</span>
             </button>
           </div>
         )}
         {downloadUrl && !disabledReason && (
-          <HoverTooltip content="下载文件">
+          <HoverTooltip content={L("下载文件", "Download file")}>
             <a
               href={downloadUrl}
               download={selectedName ?? 'file'}
-              aria-label="下载文件"
+              aria-label={L("下载文件", "Download file")}
               className="grid h-7 w-7 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
             >
               <Download size={13} />
             </a>
           </HoverTooltip>
         )}
-        <HoverTooltip content="刷新">
+        <HoverTooltip content={L("刷新", "Refresh")}>
           <button
             type="button"
             disabled={Boolean(disabledReason)}
@@ -385,7 +387,7 @@ export function FileExplorerPanel({
               if (treeOpen) void listing.refetch();
               if (shouldFetchText) void file.refetch();
             }}
-            aria-label="刷新文件"
+            aria-label={L("刷新文件", "Refresh files")}
             className="grid h-7 w-7 place-items-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-40"
           >
             <RefreshCw size={13} />
@@ -403,9 +405,9 @@ export function FileExplorerPanel({
         {/* 文件树：桌面端在左侧并排；移动端展开时单栏全屏，选文件后自动切回预览 */}
         {treeOpen && (
           <div className="min-h-0 overflow-y-auto border-r border-zinc-200 bg-zinc-50/50 py-1" data-testid="file-tree-pane">
-            {listing.isLoading && <div className="flex items-center gap-2 px-3 py-2 text-[12px] text-zinc-400"><Spinner size={12} />读取中…</div>}
+            {listing.isLoading && <div className="flex items-center gap-2 px-3 py-2 text-[12px] text-zinc-400"><Spinner size={12} />{L("读取中…", "Loading…")}</div>}
             {listing.error && <div className="px-3 py-2 text-[12px] leading-4 text-red-600">{listing.error.message}</div>}
-            {listing.data && !listing.data.entries.length && <div className="px-3 py-2 text-[12px] text-zinc-400">空目录</div>}
+            {listing.data && !listing.data.entries.length && <div className="px-3 py-2 text-[12px] text-zinc-400">{L("空目录", "Empty directory")}</div>}
             {listing.data?.entries.map(entry => (
               <FileRow
                 key={entry.name}
@@ -436,10 +438,10 @@ export function FileExplorerPanel({
         {/* 预览区：移动端当 treeOpen=true 时隐藏，避免被 160px 文件树挤压 */}
         <div className={`min-h-0 flex-col overflow-auto bg-white ${treeOpen ? 'hidden md:flex' : 'flex'}`} data-testid="file-preview-pane">
           {initialPath && !previewPath ? (
-            <div className="p-4 text-[12px] leading-5 text-red-600">文件不在当前会话可预览范围内：{initialPath}</div>
+            <div className="p-4 text-[12px] leading-5 text-red-600">{L("文件不在当前会话可预览范围内：", "File is outside this session's previewable scope:")}{initialPath}</div>
           ) : !selected ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-[12px] text-zinc-400">
-              <span>选择文件预览（文本 ≤1MB / 图片、SVG、PDF ≤20MB / 音视频）</span>
+              <span>{L("选择文件预览（文本 ≤1MB / 图片、SVG、PDF ≤20MB / 音视频）", "Select a file to preview (Text ≤1MB / Image, SVG, PDF ≤20MB / Audio & Video)")}</span>
               {!treeOpen && (
                 <button
                   type="button"
@@ -447,7 +449,7 @@ export function FileExplorerPanel({
                   className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50"
                 >
                   <PanelLeftOpen size={13} />
-                  <span>展开文件树</span>
+                  <span>{L("展开文件树", "Expand file tree")}</span>
                 </button>
               )}
             </div>
@@ -469,7 +471,7 @@ export function FileExplorerPanel({
               )}
             </div>
           ) : selectedIsPdf ? (
-            <iframe src={rawUrl} title={selectedName ?? 'PDF 预览'} className="h-full w-full border-0" />
+            <iframe src={rawUrl} title={selectedName ?? L("PDF 预览", "PDF Preview")} className="h-full w-full border-0" />
           ) : selectedIsVideo ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 overflow-auto p-4">
               <video
@@ -488,7 +490,7 @@ export function FileExplorerPanel({
               <div className="font-mono text-[12px] text-zinc-500">{selected}</div>
             </div>
           ) : file.isLoading ? (
-            <div className="flex items-center gap-2 p-4 text-[12px] text-zinc-400"><Spinner size={12} />读取中…</div>
+            <div className="flex items-center gap-2 p-4 text-[12px] text-zinc-400"><Spinner size={12} />{L("读取中…", "Loading…")}</div>
           ) : file.error ? (
             <div className="m-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-700">
               {file.error.message}
@@ -567,6 +569,7 @@ function DirectoryPreviewView({
   onOpenDirectory(path: string): void;
   onOpenFile(path: string): void;
 }) {
+  const L = useBi();
   const crumbs = useMemo(() => buildDirectoryBreadcrumbs(dir.path, cwd), [dir.path, cwd]);
 
   return (
@@ -574,11 +577,11 @@ function DirectoryPreviewView({
       {/* 路径面包屑 + 返回上级 */}
       <div className="flex shrink-0 items-center gap-1.5 border-b border-zinc-200 bg-zinc-50/70 px-3 py-2">
         {dir.parentPath && (
-          <HoverTooltip content="返回上级目录">
+          <HoverTooltip content={L("返回上级目录", "Parent directory")}>
             <button
               type="button"
               onClick={() => onOpenDirectory(dir.parentPath!)}
-              aria-label="返回上级目录"
+              aria-label={L("返回上级目录", "Parent directory")}
               data-testid="directory-parent-btn"
               className="grid h-6 w-6 shrink-0 place-items-center rounded-md border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
             >
@@ -587,7 +590,7 @@ function DirectoryPreviewView({
           </HoverTooltip>
         )}
         <nav
-          aria-label="目录路径"
+          aria-label={L("目录路径", "Directory path")}
           data-testid="directory-breadcrumbs"
           className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto whitespace-nowrap text-[12px] text-zinc-500"
         >
@@ -619,7 +622,7 @@ function DirectoryPreviewView({
       {/* 统计栏 + 隐藏文件开关 */}
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-3 py-1.5 text-[11px] text-zinc-500">
         <span className="tabular-nums">
-          {dir.truncated ? `已展示 ${dir.entries.length} / ${dir.totalCount} 项` : `共 ${dir.totalCount} 项`}
+          {dir.truncated ? L(`已展示 ${dir.entries.length} / ${dir.totalCount} 项`, `Showing ${dir.entries.length} / ${dir.totalCount} items`) : L(`共 ${dir.totalCount} 项`, `${dir.totalCount} items`)}
         </span>
         {dir.hiddenCount > 0 && (
           <button
@@ -629,14 +632,14 @@ function DirectoryPreviewView({
             className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800"
           >
             {showHidden ? <EyeOff size={11} /> : <Eye size={11} />}
-            <span>{showHidden ? '隐藏点文件' : `显示隐藏文件 (${dir.hiddenCount})`}</span>
+            <span>{showHidden ? L("隐藏点文件", "Hide dotfiles") : L(`显示隐藏文件 (${dir.hiddenCount})`, `Show hidden files (${dir.hiddenCount})`)}</span>
           </button>
         )}
       </div>
 
       {dir.truncated && (
         <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800">
-          目录条目较多，仅展示前 {dir.entries.length} 项（共 {dir.totalCount} 项）
+          {L(`目录条目较多，仅展示前 ${dir.entries.length} 项（共 ${dir.totalCount} 项）`, `Large directory: showing first ${dir.entries.length} of ${dir.totalCount} items`)}
         </div>
       )}
 
@@ -644,14 +647,15 @@ function DirectoryPreviewView({
       <div className="min-h-0 flex-1 overflow-y-auto">
         {dir.entries.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 px-4 py-10 text-center text-[12px] text-zinc-400">
-            <span>空目录</span>
+            <span>{L("空目录", "Empty directory")}</span>
             {dir.hiddenCount > 0 && !showHidden && (
               <button
                 type="button"
                 onClick={onToggleHidden}
                 className="rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
               >
-                显示 {dir.hiddenCount} 个隐藏项
+                
+                {L("显示", "Show ")} {dir.hiddenCount}  {L("个隐藏项", " hidden item(s)")}
               </button>
             )}
           </div>

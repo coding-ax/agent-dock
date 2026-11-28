@@ -1,3 +1,6 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
+import { bi, getCurrentLocale } from './i18n';
+
 export const DEFAULT_INBOX_MAX_ITEMS = 60;
 export const DEFAULT_INBOX_CLEANUP_WARN_THRESHOLD = 200;
 export const MAX_CONFIGURABLE_INBOX_ITEMS = 100_000;
@@ -10,17 +13,36 @@ export type RetentionInputResult =
  * 校验并解析消息记录保留上限 / 清理提醒阈值输入。
  * 允许 0 到 MAX_CONFIGURABLE_INBOX_ITEMS 的非负整数；拒绝空字符串、负数、小数或越界值。
  */
-export function parseRetentionInput(raw: string, label: string, zeroHint: string): RetentionInputResult {
+export function parseRetentionInput(
+  raw: string,
+  label: string,
+  zeroHint: string,
+  locale: Locale = getCurrentLocale()
+): RetentionInputResult {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { ok: false, error: `请填写${label}（${zeroHint}）` };
+    return { ok: false, error: bi(`请填写${label}（${zeroHint}）`, `Please enter ${label} (${zeroHint})`, locale) };
   }
   if (!/^\d+$/.test(trimmed)) {
-    return { ok: false, error: `${label}必须是 0 到 ${MAX_CONFIGURABLE_INBOX_ITEMS} 之间的整数（${zeroHint}）` };
+    return {
+      ok: false,
+      error: bi(
+        `${label}必须是 0 到 ${MAX_CONFIGURABLE_INBOX_ITEMS} 之间的整数（${zeroHint}）`,
+        `${label} must be an integer between 0 and ${MAX_CONFIGURABLE_INBOX_ITEMS} (${zeroHint})`,
+        locale
+      )
+    };
   }
   const value = Number(trimmed);
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_CONFIGURABLE_INBOX_ITEMS) {
-    return { ok: false, error: `${label}必须是 0 到 ${MAX_CONFIGURABLE_INBOX_ITEMS} 之间的整数（${zeroHint}）` };
+    return {
+      ok: false,
+      error: bi(
+        `${label}必须是 0 到 ${MAX_CONFIGURABLE_INBOX_ITEMS} 之间的整数（${zeroHint}）`,
+        `${label} must be an integer between 0 and ${MAX_CONFIGURABLE_INBOX_ITEMS} (${zeroHint})`,
+        locale
+      )
+    };
   }
   return { ok: true, value };
 }
@@ -72,16 +94,27 @@ export function resolveQuickKeepLatest(input: {
   return target;
 }
 
-export function formatRetentionSummary(inboxMaxItems: number): string {
-  return inboxMaxItems <= 0 ? '不限制' : `上限 ${inboxMaxItems} 条`;
+export function formatRetentionSummary(inboxMaxItems: number, locale: Locale = getCurrentLocale()): string {
+  return inboxMaxItems <= 0
+    ? bi('不限制', 'Unlimited', locale)
+    : bi(`上限 ${inboxMaxItems} 条`, `Limit ${inboxMaxItems}`, locale);
 }
 
-export function formatCleanupSuccessMessage(result: {
-  deleted: number;
-  remaining: number;
-  keepLatest: number;
-}): string {
-  if (result.deleted <= 0) return '当前没有需要清理的消息记录';
-  if (result.keepLatest <= 0) return `已清空 ${result.deleted} 条消息记录`;
-  return `已清理 ${result.deleted} 条旧消息，保留最近 ${result.remaining} 条`;
+export function formatCleanupSuccessMessage(
+  result: {
+    deleted: number;
+    remaining: number;
+    keepLatest: number;
+  },
+  locale: Locale = getCurrentLocale()
+): string {
+  if (result.deleted <= 0) return bi('当前没有需要清理的消息记录', 'No message records need cleanup', locale);
+  if (result.keepLatest <= 0) {
+    return bi(`已清空 ${result.deleted} 条消息记录`, `Cleared ${result.deleted} message records`, locale);
+  }
+  return bi(
+    `已清理 ${result.deleted} 条旧消息，保留最近 ${result.remaining} 条`,
+    `Cleaned up ${result.deleted} older messages; kept the latest ${result.remaining}`,
+    locale
+  );
 }

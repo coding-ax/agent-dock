@@ -1,3 +1,4 @@
+import { useBi } from './i18n';
 /**
  * 全站统一为三种 loading 语言（见界面规格），不再有全局顶部进度条：
  * - Spinner：14px 细线圆环，表示按钮或控件在等待
@@ -6,6 +7,8 @@
  */
 
 /** 按钮 / 控件等待：14px 细线圆环。 */
-export function Spinner({ size = 14, className = '', label = '加载中' }: { size?: number; className?: string; label?: string }) {
-  return <span role="status" aria-label={label} className={`inline-block shrink-0 animate-spin rounded-full border-[1.5px] border-current border-r-transparent opacity-70 ${className}`} style={{ width: size, height: size }}/>;
+export function Spinner({ size = 14, className = '', label }: { size?: number; className?: string; label?: string }) {
+  const L = useBi();
+  const resolvedLabel = label ?? L("加载中", "Loading");
+  return <span role="status" aria-label={resolvedLabel} className={`inline-block shrink-0 animate-spin rounded-full border-[1.5px] border-current border-r-transparent opacity-70 ${className}`} style={{ width: size, height: size }}/>;
 }

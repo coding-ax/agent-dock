@@ -33,6 +33,9 @@ import type {
   HydratedBoard,
   HydratedBoardColumn,
   HydratedBoardItem,
+  Locale,
+  LocalePreference,
+  LocaleStateSnapshot,
   TaskRecoveryConfig,
   TaskRecoveryConfigInput,
   TaskRecoveryDecisionSource,
@@ -85,6 +88,9 @@ export type {
   HydratedBoard,
   HydratedBoardColumn,
   HydratedBoardItem,
+  Locale,
+  LocalePreference,
+  LocaleStateSnapshot,
   TaskRecoveryConfig,
   TaskRecoveryConfigInput,
   TaskRecoveryDecisionSource,
@@ -1112,12 +1118,15 @@ export const api = {
     const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) });
     if (response.ok) return;
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.error?.message ?? '登录失败');
+    throw new Error(data.error?.message ?? (typeof document !== 'undefined' && document.documentElement.lang === 'en-US' ? 'Sign in failed' : '登录失败'));
   },
   autostartStatus: () => json<AutostartStatus>('/api/system/autostart', undefined, true),
   setAutostart: (enabled: boolean) => json<AutostartStatus>('/api/system/autostart', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) }),
   keepAwakeStatus: () => json<KeepAwakeStatus>('/api/system/keep-awake', undefined, true),
   setKeepAwake: (body: { enabled?: boolean; keepDisplay?: boolean }) => json<KeepAwakeStatus>('/api/system/keep-awake', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  systemLocale: () => json<LocaleStateSnapshot>('/api/system/locale', undefined, true),
+  setSystemLocale: (body: { preference: LocalePreference; locale?: Locale }) =>
+    json<LocaleStateSnapshot>('/api/system/locale', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   sideChatConfig: () => json<SideChatConfigState>('/api/side-chat/config', undefined, true),
   saveSideChatConfig: (body: SideChatConfig) => json<SideChatConfigState>('/api/side-chat/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   resetSideChatConfig: () => json<SideChatConfigState>('/api/side-chat/config', { method: 'DELETE' }),
@@ -1156,7 +1165,7 @@ export const api = {
       return { alreadySubmitted: true, existing: data.existing };
     }
     if (!response.ok) {
-      throw new Error(data?.error?.message ?? `交互提交失败（HTTP ${response.status}）`);
+      throw new Error(data?.error?.message ?? (typeof document !== 'undefined' && document.documentElement.lang === 'en-US' ? `Failed to submit interaction (HTTP ${response.status})` : `交互提交失败（HTTP ${response.status}）`));
     }
     return data as { accepted: true; pluginId: string; instanceId: string; payload: unknown; task: Task & { queuedAhead?: number } };
   },
@@ -1185,7 +1194,7 @@ export const api = {
       return { alreadyAnswered: true, existing: data.existing as AskUserQuestionAnswerPayload };
     }
     if (!response.ok) {
-      throw new Error(data?.error?.message ?? `提交回答失败（HTTP ${response.status}）`);
+      throw new Error(data?.error?.message ?? (typeof document !== 'undefined' && document.documentElement.lang === 'en-US' ? `Failed to submit answer (HTTP ${response.status})` : `提交回答失败（HTTP ${response.status}）`));
     }
     return data as { accepted: true; payload: AskUserQuestionAnswerPayload; task: Task & { queuedAhead?: number } };
   },

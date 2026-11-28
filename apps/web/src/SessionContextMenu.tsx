@@ -4,6 +4,7 @@ import { Archive, ClipboardList, Fingerprint, Link2, Pencil, Pin, Type } from 'l
 import type { Session } from './api';
 import { copyText, placeContextMenu, sessionContextMenuEntries, CONTEXT_MENU_HEIGHT, CONTEXT_MENU_WIDTH, type ContextMenuPoint, type SessionContextMenuItem } from './session-context-menu';
 import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
+import { useBi } from './i18n';
 
 const icons = {
   rename: Pencil,
@@ -34,6 +35,7 @@ export function SessionContextMenu({ session, agentName, point, origin, anchor, 
   onTogglePin(): void;
   onNotice(text: string): void;
 }) {
+  const L = useBi();
   const root = useRef<HTMLDivElement>(null);
   const manualRef = useRef<HTMLTextAreaElement>(null);
   const [manual, setManual] = useState<{ label: string; value: string }>();
@@ -104,7 +106,7 @@ export function SessionContextMenu({ session, agentName, point, origin, anchor, 
     if (!item.value) return;
     const result = await copyText(item.value);
     if (result.ok) {
-      onNotice(`已复制${item.label.replace(/^复制/, '')}`);
+      onNotice(L(`已复制${item.label.replace(/^复制/, '')}`, `Copied ${item.label.replace(/^Copy\s+/i, '')}`));
       close();
       return;
     }
@@ -139,7 +141,7 @@ export function SessionContextMenu({ session, agentName, point, origin, anchor, 
   return createPortal(<div
     ref={root}
     role="menu"
-    aria-label={`${session.title || session.id} 的会话操作`}
+    aria-label={L(`${session.title || session.id} 的会话操作`, `Session actions for ${session.title || session.id}`)}
     data-placement={placement}
     style={{ top: position.top, left: position.left, width: CONTEXT_MENU_WIDTH }}
     onContextMenu={event => event.preventDefault()}
@@ -161,8 +163,8 @@ export function SessionContextMenu({ session, agentName, point, origin, anchor, 
       </button>;
     })}
     {manual && <div className="mt-1 border-t border-zinc-100 px-1 pb-1 pt-2">
-      <div className="mb-1.5 text-[12px] text-red-600">{manual.label}失败，请手动复制：</div>
-      <textarea ref={manualRef} readOnly value={manual.value} rows={4} aria-label={`手动复制${manual.label.replace(/^复制/, '')}`} className="w-full resize-none rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1.5 font-mono text-[12px] leading-4 text-zinc-700 outline-none"/>
+      <div className="mb-1.5 text-[12px] text-red-600">{manual.label}{L("失败，请手动复制：", " failed. Copy manually:")}</div>
+      <textarea ref={manualRef} readOnly value={manual.value} rows={4} aria-label={L(`手动复制${manual.label.replace(/^复制/, '')}`, `Copy ${manual.label.replace(/^Copy\s+/i, '')} manually`)} className="w-full resize-none rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1.5 font-mono text-[12px] leading-4 text-zinc-700 outline-none"/>
     </div>}
   </div>, document.body);
 }

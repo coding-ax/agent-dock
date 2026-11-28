@@ -1,9 +1,13 @@
 import {
+  formatInteractionSourceBadge,
+  tShared,
   type AskUserQuestionAnswerItem,
   type AskUserQuestionAnswerPayload,
   type AskUserQuestionOption,
-  type AskUserQuestionSpec
+  type AskUserQuestionSpec,
+  type Locale
 } from '@agent-dock/agent-dock-shared';
+import { getActiveServerLocale } from '../locale-service.js';
 import { webAccessSessionToken } from '../web-access.js';
 
 export const LARK_ASK_CARD_CHANNEL = 'ask-user-question:lark-card';
@@ -50,6 +54,7 @@ export interface BuildLarkAskCardInput {
   /** 仅用于样式预览卡（如 "【AskUserQuestion 样式预览】"）。 */
   previewBanner?: string;
   previewMode?: boolean;
+  locale?: Locale;
 }
 
 export interface BuildLarkAskAnsweredCardInput {
@@ -57,6 +62,7 @@ export interface BuildLarkAskAnsweredCardInput {
   sessionId?: string;
   webBaseUrl?: string;
   previewBanner?: string;
+  locale?: Locale;
 }
 
 export const formSelectFieldName = (index: number) => `q_${index}_sel`;
@@ -75,17 +81,17 @@ function escapeLarkInlineMd(value: string): string {
     .trim();
 }
 
-function escapeLarkTagText(value: string): string {
-  return truncatePlain(value.replace(/[<>&'"]/g, ''), 40) || '已选';
+function escapeLarkTagText(value: string, locale: Locale): string {
+  return truncatePlain(value.replace(/[<>&'"]/g, ''), 40) || tShared(locale, 'lark.ask.selectedFallback');
 }
 
-function formatOptionLabel(option: AskUserQuestionOption): string {
+function formatOptionLabel(option: AskUserQuestionOption, locale: Locale): string {
   const label = truncatePlain(option.label, 38);
   if (!option.recommended) return label;
-  return /推荐/.test(label) ? `★ ${label}` : `★ ${label}（推荐）`;
+  return /推荐|recommended/i.test(label) ? `★ ${label}` : tShared(locale, 'lark.ask.recommendedSuffix', { label });
 }
 
-function buildWebSessionFooter(sessionId?: string, webBaseUrl?: string): Array<Record<string, unknown>> {
+function buildWebSessionFooter(locale: Locale, sessionId?: string, webBaseUrl?: string): Array<Record<string, unknown>> {
   if (!webBaseUrl) return [];
   const base = webBaseUrl.replace(/\/$/, '');
   let url = sessionId ? `${base}/sessions/${sessionId}` : `${base}/sessions`;
@@ -93,18 +99,19 @@ function buildWebSessionFooter(sessionId?: string, webBaseUrl?: string): Array<R
   if (token) url += `?t=${token}`;
   return [{
     tag: 'markdown',
-    content: `<font color='grey'>[在 AgentDock 查看会话](${url})</font>`,
+    content: `<font color='grey'>[${tShared(locale, 'lark.card.footer.viewSession')}](${url})</font>`,
     text_size: 'x-small',
     margin: '6px 0px 0px 0px'
   }];
 }
 
-function buildOptionDescriptionsMarkdown(options: AskUserQuestionOption[]): string | undefined {
+function buildOptionDescriptionsMarkdown(options: AskUserQuestionOption[], locale: Locale): string | undefined {
   const described = options.filter(opt => Boolean(opt.description?.trim()));
   if (!described.length) return undefined;
+  const sep = locale === 'en-US' ? ': ' : '：';
   return described.map(opt => {
-    const rec = opt.recommended ? " <text_tag color='blue'>推荐</text_tag>" : '';
-    return `• **${escapeLarkInlineMd(opt.label)}**${rec}：<font color='grey'>${escapeLarkInlineMd(opt.description!)}</font>`;
+    const rec = opt.recommended ? ` <text_tag color='blue'>${tShared(locale, 'lark.ask.recommendedTag')}</text_tag>` : '';
+    return `• **${escapeLarkInlineMd(opt.label)}**${rec}${sep}<font color='grey'>${escapeLarkInlineMd(opt.description!)}</font>`;
   }).join('\n');
 }
 
@@ -116,22 +123,24 @@ function buildOptionDescriptionsMarkdown(options: AskUserQuestionOption[]): stri
  */
 export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Record<string, unknown> {
   const { cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode } = input;
+  const locale = input.locale ?? getActiveServerLocale();
   const isSingleQuickPick = spec.questions.length === 1
     && !spec.questions[0]!.multi
     && spec.questions[0]!.options.length > 0;
 
-  const baseTitle = spec.title?.trim() || (isSingleQuickPick ? '需要你的确认' : '请完成以下确认');
+  const baseTitle = spec.title?.trim() || (isSingleQuickPick ? tShared(locale, 'lark.ask.defaultTitleSingle') : tShared(locale, 'lark.ask.defaultTitleMulti'));
   const title = previewBanner ? `${previewBanner} ${baseTitle}` : baseTitle;
   const subtitle = previewMode
-    ? 'AgentDock · AskUserQuestion 飞书卡片预览'
+    ? tShared(locale, 'lark.ask.subtitlePreview')
     : isSingleQuickPick
-      ? 'AgentDock · 点击选项即可直接作答'
+      ? tShared(locale, 'lark.ask.subtitleSingle')
       : spec.questions.length > 1
-        ? `AgentDock · 共 ${spec.questions.length} 题，填写后统一提交`
-        : 'AgentDock · 支持多选与自定义回答';
+        ? tShared(locale, 'lark.ask.subtitleMulti', { count: spec.questions.length })
+        : tShared(locale, 'lark.ask.subtitleCustom');
 
+  const summarySep = locale === 'en-US' ? ': ' : '：';
   const summary = truncatePlain(
-    `${title}：${spec.questions[0]?.prompt ?? '等待你的回复'}`,
+    `${title}${summarySep}${spec.questions[0]?.prompt ?? tShared(locale, 'lark.ask.summaryFallback')}`,
     110
   );
 
@@ -155,7 +164,7 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
       margin: '0px 0px 4px 0px'
     });
 
-    const descMd = buildOptionDescriptionsMarkdown(question.options);
+    const descMd = buildOptionDescriptionsMarkdown(question.options, locale);
     if (descMd) {
       elements.push({
         tag: 'markdown',
@@ -169,7 +178,7 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
       elements.push({
         tag: 'button',
         element_id: `askq_opt_${optIdx}`,
-        text: { tag: 'plain_text', content: formatOptionLabel(option) },
+        text: { tag: 'plain_text', content: formatOptionLabel(option, locale) },
         type: option.recommended ? 'primary' : 'default',
         width: 'fill',
         margin: optIdx === 0 ? '4px 0px 0px 0px' : '6px 0px 0px 0px',
@@ -198,11 +207,11 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
             tag: 'input',
             name: 'other_text',
             width: 'fill',
-            label: { tag: 'plain_text', content: '其他回答' },
+            label: { tag: 'plain_text', content: tShared(locale, 'lark.ask.otherLabel') },
             label_position: 'top',
             placeholder: {
               tag: 'plain_text',
-              content: truncatePlain(question.otherPlaceholder || '或输入你的自定义回答…', 60)
+              content: truncatePlain(question.otherPlaceholder || tShared(locale, 'lark.ask.otherPlaceholder'), 60)
             },
             required: true
           },
@@ -212,7 +221,7 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
             form_action_type: 'submit',
             type: 'default',
             width: 'fill',
-            text: { tag: 'plain_text', content: '提交自定义回答' },
+            text: { tag: 'plain_text', content: tShared(locale, 'lark.ask.otherSubmit') },
             behaviors: [{
               type: 'callback',
               value: {
@@ -234,9 +243,9 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
       }
       const prefix = spec.questions.length > 1 ? `${index + 1}. ` : '';
       const modeTag = question.multi
-        ? " <text_tag color='wathet'>多选</text_tag>"
+        ? ` <text_tag color='wathet'>${tShared(locale, 'lark.ask.tagMulti')}</text_tag>`
         : question.options.length > 0
-          ? " <text_tag color='neutral'>单选</text_tag>"
+          ? ` <text_tag color='neutral'>${tShared(locale, 'lark.ask.tagSingle')}</text_tag>`
           : '';
       formElements.push({
         tag: 'markdown',
@@ -245,7 +254,7 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
         margin: '0px'
       });
 
-      const descMd = buildOptionDescriptionsMarkdown(question.options);
+      const descMd = buildOptionDescriptionsMarkdown(question.options, locale);
       if (descMd) {
         formElements.push({
           tag: 'markdown',
@@ -262,9 +271,9 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
             tag: 'multi_select_static',
             name: formSelectFieldName(index),
             width: 'fill',
-            placeholder: { tag: 'plain_text', content: '请选择一个或多个选项' },
+            placeholder: { tag: 'plain_text', content: tShared(locale, 'lark.ask.placeholderMulti') },
             options: question.options.map(opt => ({
-              text: { tag: 'plain_text', content: formatOptionLabel(opt) },
+              text: { tag: 'plain_text', content: formatOptionLabel(opt, locale) },
               value: opt.value
             })),
             required: !question.allowOther
@@ -274,9 +283,9 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
             tag: 'select_static',
             name: formSelectFieldName(index),
             width: 'fill',
-            placeholder: { tag: 'plain_text', content: '请选择一项' },
+            placeholder: { tag: 'plain_text', content: tShared(locale, 'lark.ask.placeholderSingle') },
             options: question.options.map(opt => ({
-              text: { tag: 'plain_text', content: formatOptionLabel(opt) },
+              text: { tag: 'plain_text', content: formatOptionLabel(opt, locale) },
               value: opt.value
             })),
             ...(recommendedOption ? { initial_option: recommendedOption.value } : {}),
@@ -293,7 +302,7 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
           placeholder: {
             tag: 'plain_text',
             content: truncatePlain(
-              question.otherPlaceholder || (question.options.length ? '其他补充 / 自定义回答（可选）' : '请输入你的回答…'),
+              question.otherPlaceholder || (question.options.length ? tShared(locale, 'lark.ask.placeholderOptionalOther') : tShared(locale, 'lark.ask.placeholderFreeText')),
               60
             )
           },
@@ -309,7 +318,7 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
       type: 'primary',
       width: 'fill',
       margin: '4px 0px 0px 0px',
-      text: { tag: 'plain_text', content: '提交回答' },
+      text: { tag: 'plain_text', content: tShared(locale, 'lark.ask.submitButton') },
       behaviors: [{
         type: 'callback',
         value: {
@@ -329,7 +338,7 @@ export function buildLarkAskUserQuestionCard(input: BuildLarkAskCardInput): Reco
     });
   }
 
-  elements.push(...buildWebSessionFooter(sessionId, webBaseUrl));
+  elements.push(...buildWebSessionFooter(locale, sessionId, webBaseUrl));
 
   return {
     schema: '2.0',
@@ -364,33 +373,41 @@ function formatAnsweredTimestamp(iso: string): string {
  */
 export function buildLarkAskUserQuestionAnsweredCard(input: BuildLarkAskAnsweredCardInput): Record<string, unknown> {
   const { payload, sessionId, webBaseUrl, previewBanner } = input;
-  const sourceLabel = payload.source === 'web' ? '网页端' : '飞书';
-  const actorPart = payload.answeredBy?.trim() ? ` · 作答人：${payload.answeredBy.trim()}` : '';
-  const baseTitle = payload.title?.trim() ? `✅ ${payload.title.trim()}（已回答）` : '✅ 询问已回答';
+  const locale = input.locale ?? getActiveServerLocale();
+  const responder = payload.responderName?.trim() || payload.answeredBy?.trim();
+  const sourceLabel = formatInteractionSourceBadge(payload.source, locale, { responderName: responder, variant: 'lark' });
+  const actorPart = payload.source === 'assistant'
+    ? ''
+    : (payload.answeredBy?.trim() ? tShared(locale, 'lark.ask.answeredActor', { name: payload.answeredBy.trim() }) : '');
+  const baseTitle = payload.title?.trim()
+    ? tShared(locale, 'lark.ask.answeredTitleWithName', { title: payload.title.trim() })
+    : tShared(locale, 'lark.ask.answeredTitleDefault');
   const title = previewBanner ? `${previewBanner} ${baseTitle}` : baseTitle;
-  const subtitle = `来源：${sourceLabel}${actorPart}`;
+  const subtitle = tShared(locale, 'lark.ask.answeredSubtitle', { source: sourceLabel, actor: actorPart });
 
   const elements: Array<Record<string, unknown>> = [];
   const multiQuestion = payload.answers.length > 1;
+  const colon = locale === 'en-US' ? ':' : '：';
+  const answerLabel = tShared(locale, 'lark.ask.answerLabel');
 
   payload.answers.forEach((item, index) => {
     if (index > 0) elements.push({ tag: 'hr', margin: '4px 0px' });
-    const qPrefix = multiQuestion ? `Q${index + 1}` : '问题';
+    const qPrefix = multiQuestion ? `Q${index + 1}` : tShared(locale, 'lark.ask.questionLabel');
     const tags = item.selectedLabels
-      .map(label => `<text_tag color='green'>${escapeLarkTagText(label)}</text_tag>`)
+      .map(label => `<text_tag color='green'>${escapeLarkTagText(label, locale)}</text_tag>`)
       .join(' ');
     const lines: string[] = [
-      `**${qPrefix}：** ${escapeLarkInlineMd(item.prompt)}`
+      `**${qPrefix}${colon}** ${escapeLarkInlineMd(item.prompt)}`
     ];
     if (tags && item.otherText?.trim()) {
-      lines.push(`**回答：** ${tags}`);
-      lines.push(`> 自定义补充：${escapeLarkInlineMd(item.otherText)}`);
+      lines.push(`**${answerLabel}${colon}** ${tags}`);
+      lines.push(`> ${tShared(locale, 'lark.ask.customSupplement', { text: escapeLarkInlineMd(item.otherText) })}`);
     } else if (tags) {
-      lines.push(`**回答：** ${tags}`);
+      lines.push(`**${answerLabel}${colon}** ${tags}`);
     } else if (item.otherText?.trim()) {
-      lines.push(`**回答：** ${escapeLarkInlineMd(item.otherText)}`);
+      lines.push(`**${answerLabel}${colon}** ${escapeLarkInlineMd(item.otherText)}`);
     } else {
-      lines.push("**回答：** <font color='grey'>（未作答）</font>");
+      lines.push(`**${answerLabel}${colon}** <font color='grey'>${tShared(locale, 'lark.ask.unanswered')}</font>`);
     }
     elements.push({
       tag: 'markdown',
@@ -402,18 +419,18 @@ export function buildLarkAskUserQuestionAnsweredCard(input: BuildLarkAskAnswered
 
   elements.push({
     tag: 'markdown',
-    content: `<font color='grey'>已同步至 AgentDock 会话并继续执行 · ${formatAnsweredTimestamp(payload.answeredAt)}</font>`,
+    content: `<font color='grey'>${tShared(locale, 'lark.ask.syncedContinue', { time: formatAnsweredTimestamp(payload.answeredAt) })}</font>`,
     text_size: 'x-small',
     margin: '6px 0px 0px 0px'
   });
-  elements.push(...buildWebSessionFooter(sessionId, webBaseUrl));
+  elements.push(...buildWebSessionFooter(locale, sessionId, webBaseUrl));
 
   return {
     schema: '2.0',
     config: {
       update_multi: true,
       width_mode: 'default',
-      summary: { content: truncatePlain(`${title}（${sourceLabel}）`, 110) }
+      summary: { content: truncatePlain(locale === 'en-US' ? `${title} (${sourceLabel})` : `${title}（${sourceLabel}）`, 110) }
     },
     header: {
       template: 'green',
@@ -458,15 +475,16 @@ export function parseLarkAskUserQuestionAction(
   spec: AskUserQuestionSpec,
   action: string,
   value: Record<string, unknown>,
-  formValue?: Record<string, unknown>
+  formValue?: Record<string, unknown>,
+  locale: Locale = getActiveServerLocale()
 ): ParsedLarkAskAction {
   if (action === LARK_ASK_ACTION_PICK) {
     const qId = String(value.question_id ?? '').trim();
     const optVal = String(value.option_value ?? '').trim();
     const question = spec.questions.find(item => item.id === qId) ?? spec.questions[0];
-    if (!question) return { ok: false, error: '未找到对应的问题项' };
+    if (!question) return { ok: false, error: tShared(locale, 'lark.ask.error.questionNotFound') };
     const option = question.options.find(opt => opt.value === optVal);
-    if (!option) return { ok: false, error: '未找到对应的选项' };
+    if (!option) return { ok: false, error: tShared(locale, 'lark.ask.error.optionNotFound') };
     return {
       ok: true,
       answers: [{
@@ -481,9 +499,9 @@ export function parseLarkAskUserQuestionAction(
   if (action === LARK_ASK_ACTION_OTHER) {
     const qId = String(value.question_id ?? '').trim();
     const question = spec.questions.find(item => item.id === qId) ?? spec.questions[0];
-    if (!question) return { ok: false, error: '未找到对应的问题项' };
+    if (!question) return { ok: false, error: tShared(locale, 'lark.ask.error.questionNotFound') };
     const otherText = String(formValue?.other_text ?? '').trim();
-    if (!otherText) return { ok: false, error: '请先输入自定义回答再提交' };
+    if (!otherText) return { ok: false, error: tShared(locale, 'lark.ask.error.emptyOther') };
     return {
       ok: true,
       answers: [{
@@ -510,8 +528,12 @@ export function parseLarkAskUserQuestionAction(
       const selectedLabels = validValues.map(val => optionByValue.get(val)!.label);
 
       if (!validValues.length && !otherText) {
-        const label = spec.questions.length > 1 ? `第 ${index + 1} 题` : '该问题';
-        return { ok: false, error: `请先完成${label}的选择或填写自定义回答` };
+        return {
+          ok: false,
+          error: spec.questions.length > 1
+            ? tShared(locale, 'lark.ask.error.missingAnswerNth', { index: index + 1 })
+            : tShared(locale, 'lark.ask.error.missingAnswerSingle')
+        };
       }
 
       answers.push({
@@ -525,5 +547,5 @@ export function parseLarkAskUserQuestionAction(
     return { ok: true, answers };
   }
 
-  return { ok: false, error: '不支持的询问卡片操作' };
+  return { ok: false, error: tShared(locale, 'lark.ask.error.unsupported') };
 }

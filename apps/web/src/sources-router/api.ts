@@ -1,3 +1,4 @@
+import { bi } from '../i18n';
 export type Source = {
   id: string; name: string; kind: string; enabled: boolean; status: string;
   lastEventAt?: string | null; lastSeenAt?: string | null; lastError?: string | null;
@@ -30,7 +31,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { ...(init?.body ? { 'content-type': 'application/json' } : {}), ...(init?.headers ?? {}) }
   });
   const body = await response.json() as T & { error?: { code?: string; message?: string } };
-  if (!response.ok) throw new ApiError(body.error?.code ?? 'REQUEST_FAILED', body.error?.message ?? `请求失败：HTTP ${response.status}`);
+  if (!response.ok) throw new ApiError(body.error?.code ?? 'REQUEST_FAILED', body.error?.message ?? bi(`请求失败：HTTP ${response.status}`, `Request failed: HTTP ${response.status}`));
   return body;
 }
 

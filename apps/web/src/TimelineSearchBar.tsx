@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react';
 import { type KeyboardEvent, type RefObject } from 'react';
 import { HoverTooltip } from './HoverTooltip';
+import { useBi } from './i18n';
 
 export interface TimelineSearchBarProps {
   inputRef: RefObject<HTMLInputElement | null>;
@@ -27,6 +28,7 @@ export function TimelineSearchBar({
   onClear,
   onClose
 }: TimelineSearchBarProps) {
+  const L = useBi();
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === 'Escape') {
@@ -47,12 +49,12 @@ export function TimelineSearchBar({
     ? null
     : total > 0
       ? `${activeIndex + 1} / ${total}`
-      : '无结果';
+      : L("无结果", "No results");
 
   return (
     <div
       role="search"
-      aria-label="对话内容搜索"
+      aria-label={L("对话内容搜索", "Search conversation")}
       data-testid="timeline-search-bar"
       data-placement="top-end"
       className="ui-popover absolute right-3 top-2.5 z-20 flex w-[min(360px,calc(100%-24px))] max-sm:left-3 max-sm:right-3 max-sm:top-2 max-sm:w-auto items-center gap-1 rounded-xl border border-zinc-200 bg-white/95 px-2.5 py-1.5 shadow-[0_10px_30px_rgba(0,0,0,.12)] backdrop-blur-md"
@@ -64,17 +66,17 @@ export function TimelineSearchBar({
         value={query}
         onChange={event => onQueryChange(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="搜索当前对话…"
-        aria-label="搜索当前对话"
+        placeholder={L("搜索当前对话…", "Search this conversation…")}
+        aria-label={L("搜索当前对话", "Search conversation")}
         autoComplete="off"
         spellCheck={false}
         className="min-w-0 flex-1 bg-transparent px-1 py-0.5 text-[13px] text-zinc-900 placeholder:text-zinc-400"
       />
       {query.length > 0 && (
-        <HoverTooltip content="清空关键词">
+        <HoverTooltip content={L("清空关键词", "Clear query")}>
           <button
             type="button"
-            aria-label="清空关键词"
+            aria-label={L("清空关键词", "Clear query")}
             onClick={() => {
               onClear();
               inputRef.current?.focus();
@@ -96,10 +98,10 @@ export function TimelineSearchBar({
         </span>
       )}
       <span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-zinc-200" />
-      <HoverTooltip content="上一条匹配 (Shift+Enter)">
+      <HoverTooltip content={L("上一条匹配 (Shift+Enter)", "Previous match (Shift+Enter)")}>
         <button
           type="button"
-          aria-label="上一条匹配"
+          aria-label={L("上一条匹配", "Previous match")}
           disabled={total <= 0}
           onClick={onPrev}
           className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 disabled:pointer-events-none disabled:opacity-35"
@@ -107,10 +109,10 @@ export function TimelineSearchBar({
           <ChevronUp size={15} />
         </button>
       </HoverTooltip>
-      <HoverTooltip content="下一条匹配 (Enter)">
+      <HoverTooltip content={L("下一条匹配 (Enter)", "Next match (Enter)")}>
         <button
           type="button"
-          aria-label="下一条匹配"
+          aria-label={L("下一条匹配", "Next match")}
           disabled={total <= 0}
           onClick={onNext}
           className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 disabled:pointer-events-none disabled:opacity-35"
@@ -118,10 +120,10 @@ export function TimelineSearchBar({
           <ChevronDown size={15} />
         </button>
       </HoverTooltip>
-      <HoverTooltip content="关闭搜索 (Esc)">
+      <HoverTooltip content={L("关闭搜索 (Esc)", "Close search (Esc)")}>
         <button
           type="button"
-          aria-label="关闭搜索"
+          aria-label={L("关闭搜索", "Close search")}
           onClick={onClose}
           className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
         >

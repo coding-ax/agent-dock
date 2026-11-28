@@ -10,6 +10,7 @@ import {
   RuntimeError,
   TASK_RECOVERY_CONFIG_KEY,
   TASK_RECOVERY_ORIGIN,
+  tShared,
   type DaemonRestartInterruptedCandidate,
   type RepositoryBundle,
   type Session,
@@ -26,6 +27,7 @@ import {
   buildTaskRecoveryResolvedCard,
   parseTaskRecoveryCardAction
 } from './lark-card.js';
+import { getActiveServerLocale } from '../locale-service.js';
 
 /** 内部临时会话（runOnce 替身分析等）绝不纳入普通会话自动恢复。 */
 const EPHEMERAL_SESSION_SOURCES = new Set(['lark-avatar', 'lark-avatar-reaction']);
@@ -691,15 +693,22 @@ export class TaskRecoveryService {
         source: 'lark',
         decidedBy: input.operatorName?.trim() || input.operatorOpenId?.trim() || undefined
       });
+      const locale = getActiveServerLocale();
       if (result.alreadyDecided) {
-        const statusText = result.record.status === 'resumed' ? '已确认继续执行' : '已放弃续跑';
-        const via = result.record.decidedSource === 'web' ? '（网页端）' : result.record.decidedSource === 'lark' ? '（飞书）' : '';
+        const statusText = result.record.status === 'resumed'
+          ? tShared(locale, 'lark.recovery.toast.resumedStatus')
+          : tShared(locale, 'lark.recovery.toast.dismissedStatus');
+        const via = result.record.decidedSource === 'web'
+          ? tShared(locale, 'lark.recovery.toast.viaWeb')
+          : result.record.decidedSource === 'lark'
+            ? tShared(locale, 'lark.recovery.toast.viaLark')
+            : '';
         await this.syncLarkCard(result.record);
-        return { type: 'info', content: `该任务${statusText}${via}，无需重复操作` };
+        return { type: 'info', content: tShared(locale, 'lark.recovery.toast.alreadyDecided', { status: statusText, via }) };
       }
       return parsed.decision === 'resume'
-        ? { type: 'success', content: '已触发断点自检续跑，结果将实时同步' }
-        : { type: 'info', content: '已放弃本次断点续跑' };
+        ? { type: 'success', content: tShared(locale, 'lark.recovery.toast.resumedNow') }
+        : { type: 'info', content: tShared(locale, 'lark.recovery.toast.dismissedNow') };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { type: 'warning', content: message };

@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { RefreshCw, Terminal as TerminalIcon } from 'lucide-react';
 import '@xterm/xterm/css/xterm.css';
+import { useBi } from './i18n';
 
 type ConnState = 'connecting' | 'open' | 'closed' | 'denied';
 
@@ -13,6 +14,7 @@ type ConnState = 'connecting' | 'open' | 'closed' | 'denied';
  * 访问门 401/403（全局 'agentdock:web-access-denied' 事件）后停止重连。
  */
 export function TerminalPanel({ sessionId, sshHost }: { sessionId: string; sshHost?: string }) {
+  const L = useBi();
   const hostRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<ConnState>('connecting');
   const [attempt, setAttempt] = useState(0);
@@ -73,7 +75,7 @@ export function TerminalPanel({ sessionId, sshHost }: { sessionId: string; sshHo
         let frame: { type?: string; data?: string; exitCode?: number };
         try { frame = JSON.parse(event.data); } catch { return; }
         if (frame.type === 'output' && typeof frame.data === 'string') term.write(frame.data);
-        else if (frame.type === 'exit') term.write(`\r\n\x1b[90m[进程已退出，code=${frame.exitCode ?? 0}；关闭后重开可重新启动 shell]\x1b[0m\r\n`);
+        else if (frame.type === 'exit') term.write(L(`\r\n\x1b[90m[进程已退出，code=${frame.exitCode ?? 0}；关闭后重开可重新启动 shell]\x1b[0m\r\n`, `\r\n\x1b[90m[Process exited with code=${frame.exitCode ?? 0}; close and reopen to restart shell]\x1b[0m\r\n`));
       };
       ws.onclose = () => {
         if (closedByUser || disposed) return;
@@ -105,16 +107,16 @@ export function TerminalPanel({ sessionId, sshHost }: { sessionId: string; sshHo
   return <div className="flex h-full min-h-0 flex-col bg-[#18181b]">
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-zinc-800 px-3 text-[12px] text-zinc-400">
       <TerminalIcon size={13} className="text-zinc-300"/>
-      <span className="font-medium text-zinc-300">终端</span>
-      <span className="truncate font-mono text-[12px] text-zinc-500">{sshHost ? `ssh ${sshHost} · 会话工作目录` : '$SHELL -l · 会话工作目录'}</span>
+      <span className="font-medium text-zinc-300">{L("终端", "Terminal")}</span>
+      <span className="truncate font-mono text-[12px] text-zinc-500">{sshHost ? L(`ssh ${sshHost} · 会话工作目录`, `ssh ${sshHost} · Session Workspace`) : L("$SHELL -l · 会话工作目录", "$SHELL -l · Session Workspace")}</span>
       <span className="ml-2 flex shrink-0 items-center gap-1 text-[12px]">
-        {state === 'connecting' && <><Spinner size={11} className="text-blue-400"/>连接中…</>}
-        {state === 'open' && <><span className="h-1.5 w-1.5 rounded-full bg-emerald-400"/>已连接</>}
-        {state === 'closed' && <><span className="h-1.5 w-1.5 rounded-full bg-amber-400"/>已断开{attempt > 0 && `（第 ${attempt} 次重连）`}</>}
-        {state === 'denied' && <><span className="h-1.5 w-1.5 rounded-full bg-red-400"/>访问凭证失效，不再重连</>}
+        {state === 'connecting' && <><Spinner size={11} className="text-blue-400"/>{L("连接中…", "Connecting…")}</>}
+        {state === 'open' && <><span className="h-1.5 w-1.5 rounded-full bg-emerald-400"/>{L("已连接", "Connected")}</>}
+        {state === 'closed' && <><span className="h-1.5 w-1.5 rounded-full bg-amber-400"/>{L("已断开", "Disconnected")}{attempt > 0 && L(`（第 ${attempt} 次重连）`, ` (reconnect #${attempt})`)}</>}
+        {state === 'denied' && <><span className="h-1.5 w-1.5 rounded-full bg-red-400"/>{L("访问凭证失效，不再重连", "Access token expired; reconnection stopped")}</>}
       </span>
       <span className="ml-auto flex shrink-0 items-center gap-0.5">
-        {state !== 'open' && state !== 'connecting' && state !== 'denied' && <button type="button" onClick={() => setEpoch(value => value + 1)} aria-label="立即重连" className="grid h-7 w-7 place-items-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"><RefreshCw size={13}/></button>}
+        {state !== 'open' && state !== 'connecting' && state !== 'denied' && <button type="button" onClick={() => setEpoch(value => value + 1)} aria-label={L("立即重连", "Reconnect Now")} className="grid h-7 w-7 place-items-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"><RefreshCw size={13}/></button>}
       </span>
     </div>
     <div ref={hostRef} className="min-h-0 flex-1 px-2 py-1 [&_.xterm]:h-full"/>

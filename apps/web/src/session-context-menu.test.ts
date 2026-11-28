@@ -177,7 +177,7 @@ describe('菜单接线', () => {
 
   it('归档菜单项复用现有的 quickArchiveController.open，而不是第二套确认逻辑', () => {
     expect(app).toContain('onArchive={() => { setSessionMenu(undefined); quickArchiveController.open(session.id); }}');
-    expect(app.match(/title=\{`归档「/g)).toHaveLength(1);
+    expect(app.match(/title=\{L\(`归档「/g)).toHaveLength(1);
   });
 
   it('行内不再有任何操作图标；重命名/归档都从右键菜单发起', () => {

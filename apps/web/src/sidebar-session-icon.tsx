@@ -3,6 +3,7 @@ import type { Agent, Session } from './api';
 import { AgentIcon } from './AgentIcon';
 import { isScheduledSession } from './schedule-view';
 import { sideChatParentId } from './side-chat-link';
+import { useBi } from './i18n';
 
 /**
  * 决定侧边栏会话行是否展示行首 Agent 图标：
@@ -48,16 +49,17 @@ export function SessionRowLeadingIcons({
   showAgentIcon?: boolean;
   active?: boolean;
 }) {
+  const L = useBi();
   const kind = resolveSessionRowKind(session, noteOf);
   if (!showAgentIcon && !kind) return null;
 
   // 不带透明度的 text-amber-600 可在暗色模式下命中 index.css 的 .text-amber-600 提亮规则。
   if (!showAgentIcon && kind) {
     const standaloneIcon = kind === 'scheduled'
-      ? <AlarmClock size={13} aria-label="定时任务会话" className="shrink-0 text-zinc-400"/>
+      ? <AlarmClock size={13} aria-label={L("定时任务会话", "Scheduled Session")} className="shrink-0 text-zinc-400"/>
       : kind === 'note'
-        ? <StickyNote size={13} aria-label={`${noteOf}派出的便签`} className="shrink-0 text-amber-600"/>
-        : <MessageSquare size={13} aria-label="侧边会话" className="shrink-0 text-zinc-400"/>;
+        ? <StickyNote size={13} aria-label={L(`${noteOf}派出的便签`, `Task dispatched by ${noteOf}`)} className="shrink-0 text-amber-600"/>
+        : <MessageSquare size={13} aria-label={L("侧边会话", "Side Session")} className="shrink-0 text-zinc-400"/>;
     return <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
       {standaloneIcon}
     </span>;
@@ -73,18 +75,18 @@ export function SessionRowLeadingIcons({
     ? {
         shape: 'rounded-full',
         tone: 'text-zinc-500',
-        icon: <Clock size={9} strokeWidth={2.4} aria-label="定时任务会话" className="shrink-0"/>,
+        icon: <Clock size={9} strokeWidth={2.4} aria-label={L("定时任务会话", "Scheduled Session")} className="shrink-0"/>,
       }
     : kind === 'note'
       ? {
           shape: 'rounded-[3px]',
           tone: 'text-amber-600',
-          icon: <StickyNote size={9} strokeWidth={2.4} aria-label={`${noteOf}派出的便签`} className="shrink-0"/>,
+          icon: <StickyNote size={9} strokeWidth={2.4} aria-label={L(`${noteOf}派出的便签`, `Task dispatched by ${noteOf}`)} className="shrink-0"/>,
         }
       : {
           shape: 'rounded-[3px]',
           tone: 'text-zinc-500',
-          icon: <MessageSquare size={9} strokeWidth={2.4} aria-label="侧边会话" className="shrink-0"/>,
+          icon: <MessageSquare size={9} strokeWidth={2.4} aria-label={L("侧边会话", "Side Session")} className="shrink-0"/>,
         };
 
   return <span className="relative inline-flex h-5 w-5 shrink-0 items-center justify-center">

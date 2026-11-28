@@ -9,6 +9,7 @@ import { Highlight, Prism, themes } from 'prism-react-renderer';
 import { formatLineRange, isImageFilePath, localFileLink, parseFileLink } from './file-preview-link';
 import { useDockStore } from './store';
 import { useResolvedTheme } from './theme';
+import { useBi } from './i18n';
 
 // 图片放大预览只在点开图片时才需要，动态加载以免把 lightbox 及其样式计入首屏。
 const ImageLightbox = lazy(() => import('./ImageLightbox'));
@@ -209,6 +210,7 @@ export function isBlockCode(className: string | undefined, children: ReactNode) 
 }
 
 const CodeBlock = memo(function CodeBlock({ code, className }: { code: string; className?: string }) {
+  const L = useBi();
   const { language, label } = resolveCodeLanguage(className);
   const dark = useResolvedTheme() === 'dark';
   const [copied, setCopied] = useState(false);
@@ -235,8 +237,8 @@ const CodeBlock = memo(function CodeBlock({ code, className }: { code: string; c
   return <div className="code-renderer group/code my-4 overflow-hidden rounded-[10px] border border-zinc-200 bg-[rgb(var(--code-bg))] [contain:layout_paint]">
     <div className="flex h-8 items-center px-3">
       <span className="font-mono text-[12px] text-zinc-500">{label}</span>
-      <button type="button" onClick={() => void copy()} className={`ui-press ml-auto flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] font-medium hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${copied ? 'text-emerald-600' : 'text-zinc-500 hover:text-zinc-900'}`} aria-label={copied ? '代码已复制' : '复制代码'}>
-        {copied ? <Check key="check" size={12} className="ui-icon-pop"/> : <Copy key="copy" size={12}/>}<span>{copied ? '已复制' : '复制'}</span>
+      <button type="button" onClick={() => void copy()} className={`ui-press ml-auto flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] font-medium hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 ${copied ? 'text-emerald-600' : 'text-zinc-500 hover:text-zinc-900'}`} aria-label={copied ? L("代码已复制", "Code copied") : L("复制代码", "Copy code")}>
+        {copied ? <Check key="check" size={12} className="ui-icon-pop"/> : <Copy key="copy" size={12}/>}<span>{copied ? L("已复制", "Copied") : L("复制", "Copy")}</span>
       </button>
     </div>
     <Highlight theme={dark ? themes.vsDark : themes.vsLight} code={code} language={language}>
@@ -269,6 +271,7 @@ function LightboxImage({ src, alt }: { src: string; alt?: string }) {
 }
 
 function LinkedImageThumbnails({ images }: { images: LinkedImageItem[] }) {
+  const L = useBi();
   const [expanded, setExpanded] = useState(false);
   const [opened, setOpened] = useState(false);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -294,7 +297,7 @@ function LinkedImageThumbnails({ images }: { images: LinkedImageItem[] }) {
               {failed ? (
                 <div className="flex flex-col items-center justify-center gap-1 text-zinc-400">
                   <ImageOff size={18} className="text-zinc-300" />
-                  <span className="text-[11px]">图片无法加载</span>
+                  <span className="text-[11px]">{L("图片无法加载", "Image failed to load")}</span>
                 </div>
               ) : (
                 <img
@@ -318,8 +321,8 @@ function LinkedImageThumbnails({ images }: { images: LinkedImageItem[] }) {
           onClick={() => setExpanded(true)}
           className="flex h-[104px] min-w-[88px] flex-col items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50/60 px-3 text-[12px] font-medium text-zinc-600 transition-colors hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-900"
         >
-          <span>+{hiddenCount} 张</span>
-          <span className="mt-0.5 text-[11px] font-normal text-zinc-400">展开全部</span>
+          <span>{L(`+${hiddenCount} 张`, `+${hiddenCount} more`)}</span>
+          <span className="mt-0.5 text-[11px] font-normal text-zinc-400">{L("展开全部", "Expand all")}</span>
         </button>
       )}
       {expanded && images.length > MAX_AUTO_IMAGE_THUMBNAILS && (
@@ -328,7 +331,8 @@ function LinkedImageThumbnails({ images }: { images: LinkedImageItem[] }) {
           onClick={() => setExpanded(false)}
           className="self-center rounded-md px-2 py-1 text-[12px] text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
         >
-          收起
+          
+          {L("收起", "Collapse")}
         </button>
       )}
       {opened && activeIndex !== null && (

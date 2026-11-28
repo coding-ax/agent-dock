@@ -1,4 +1,6 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
 import type { Agent, Session } from './api';
+import { getCurrentLocale } from './i18n';
 import { groupSideChats } from './side-chat-link';
 
 export type SessionAgentGroup = {
@@ -87,12 +89,12 @@ export function groupSessions(sessions: Session[], agents: Agent[] = []): Worksp
 export type TimeGroupKey = 'today' | 'yesterday' | 'last7' | 'last30' | 'earlier';
 export type TimeSessionGroup = { key: TimeGroupKey; label: string; sessions: Session[] };
 
-const TIME_GROUP_LABELS: Array<{ key: TimeGroupKey; label: string }> = [
-  { key: 'today', label: '今天' },
-  { key: 'yesterday', label: '昨天' },
-  { key: 'last7', label: '过去 7 天' },
-  { key: 'last30', label: '过去 30 天' },
-  { key: 'earlier', label: '更早' }
+const TIME_GROUP_LABELS: Array<{ key: TimeGroupKey; zh: string; en: string }> = [
+  { key: 'today', zh: '今天', en: 'Today' },
+  { key: 'yesterday', zh: '昨天', en: 'Yesterday' },
+  { key: 'last7', zh: '过去 7 天', en: 'Last 7 Days' },
+  { key: 'last30', zh: '过去 30 天', en: 'Last 30 Days' },
+  { key: 'earlier', zh: '更早', en: 'Earlier' }
 ];
 
 /**
@@ -105,7 +107,7 @@ const localDayOrdinal = (date: Date) => Math.floor(Date.UTC(date.getFullYear(), 
  * 按活跃时间把会话分到「今天 / 昨天 / 过去 7 天 / 过去 30 天 / 更早」。
  * 输入已按时间倒序时组内顺序保持不变；空组不输出。
  */
-export function groupSessionsByTime(sessions: Session[], now: Date = new Date()): TimeSessionGroup[] {
+export function groupSessionsByTime(sessions: Session[], now: Date = new Date(), locale: Locale = getCurrentLocale()): TimeSessionGroup[] {
   const today = localDayOrdinal(now);
   const buckets = new Map<TimeGroupKey, Session[]>();
   for (const session of sessions) {
@@ -116,17 +118,24 @@ export function groupSessionsByTime(sessions: Session[], now: Date = new Date())
     const bucket = buckets.get(key);
     if (bucket) bucket.push(session); else buckets.set(key, [session]);
   }
-  return TIME_GROUP_LABELS.flatMap(({ key, label }) => {
+  return TIME_GROUP_LABELS.flatMap(({ key, zh, en }) => {
     const list = buckets.get(key);
-    return list?.length ? [{ key, label, sessions: list }] : [];
+    return list?.length ? [{ key, label: locale === 'en-US' ? en : zh, sessions: list }] : [];
   });
 }
 
-/** 会话行悬停时显示的相对时间，如「3 分钟」「2 小时」「5 天」。 */
-export function relativeTimeLabel(iso: string, now: number = Date.now()) {
+/** 会话行悬停时显示的相对时间，如「3 分钟」「2 小时」「5 天」或 "3m" / "2h" / "5d"。 */
+export function relativeTimeLabel(iso: string, now: number = Date.now(), locale: Locale = getCurrentLocale()) {
   const time = Date.parse(iso);
   if (!Number.isFinite(time)) return '';
   const minutes = Math.max(0, Math.floor((now - time) / 60_000));
+  if (locale === 'en-US') {
+    if (minutes < 1) return 'now';
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h`;
+    return `${Math.floor(hours / 24)}d`;
+  }
   if (minutes < 1) return '刚刚';
   if (minutes < 60) return `${minutes} 分钟`;
   const hours = Math.floor(minutes / 60);

@@ -4,6 +4,7 @@ import { useMutation, useQuery, type Query } from '@tanstack/react-query';
 import { KeyRound, Lock } from 'lucide-react';
 import { api, type WebAccessDeniedError } from './api';
 import { BrandLogo } from './BrandLogo';
+import { useBi } from './i18n';
 
 export const AUTH_STATUS_QUERY_KEY = ['auth-status'] as const;
 
@@ -29,6 +30,7 @@ export function localBypassUrl(port: string): string {
  * 会话链接越权（403）也给密码框：用户是机器所有者时，输密码即可升级为全权访问。
  */
 export function WebAccessDeniedPanel({ denied }: { denied: WebAccessDeniedError }) {
+  const L = useBi();
   const [password, setPassword] = useState('');
   const status = useQuery({ queryKey: AUTH_STATUS_QUERY_KEY, queryFn: api.authStatus, retry: false });
   const login = useMutation({ mutationFn: api.login, onSuccess: () => window.location.reload() });
@@ -43,22 +45,23 @@ export function WebAccessDeniedPanel({ denied }: { denied: WebAccessDeniedError 
     <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-[0_24px_80px_rgba(24,24,27,.08)]">
       <div className="mb-4 flex justify-center"><BrandLogo iconSize={30} wordmarkHeight={15}/></div>
       <div className="mx-auto mb-3 grid h-10 w-10 place-items-center rounded-full bg-amber-50 text-amber-600"><Lock size={20}/></div>
-      <h1 className="text-[15px] font-semibold text-zinc-900">{denied.status === 403 ? '该链接无权访问此资源' : '访问凭证缺失或已过期'}</h1>
-      <p className="mt-2 text-[12px] leading-5 text-zinc-500">{denied.message || '请从飞书卡片上的「查看详情」重新打开；本机使用请用 agent-dock 启动输出的带凭证控制台地址。'}</p>
+      <h1 className="text-[15px] font-semibold text-zinc-900">{denied.status === 403 ? L("该链接无权访问此资源", "This link does not have access to this resource") : L("访问凭证缺失或已过期", "Access token missing or expired")}</h1>
+      <p className="mt-2 text-[12px] leading-5 text-zinc-500">{denied.message || L("请从飞书卡片上的「查看详情」重新打开；本机使用请用 agent-dock 启动输出的带凭证控制台地址。", "Reopen from \"View Details\" on the Lark card, or use the tokenized console URL printed when starting agent-dock.")}</p>
       {passwordEnabled && <form onSubmit={submit} className="mt-5 text-left">
-        <label htmlFor="agentdock-password" className="text-[12px] font-medium text-zinc-600">或输入访问密码进入控制台</label>
+        <label htmlFor="agentdock-password" className="text-[12px] font-medium text-zinc-600">{L("或输入访问密码进入控制台", "Or enter your access password to open the console")}</label>
         <div className="mt-1.5 flex gap-2">
-          <input id="agentdock-password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event => { setPassword(event.target.value); login.reset(); }} placeholder="访问密码" className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-3 text-[13px] text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-500"/>
-          <button type="submit" disabled={!password || login.isPending} className="flex h-9 min-w-16 items-center justify-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[12px] font-medium text-white hover:bg-zinc-700 disabled:opacity-40">{login.isPending ? <Spinner size={14}/> : <><KeyRound size={13}/>进入</>}</button>
+          <input id="agentdock-password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event => { setPassword(event.target.value); login.reset(); }} placeholder={L("访问密码", "Access Password")} className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-3 text-[13px] text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-zinc-500"/>
+          <button type="submit" disabled={!password || login.isPending} className="flex h-9 min-w-16 items-center justify-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[12px] font-medium text-white hover:bg-zinc-700 disabled:opacity-40">{login.isPending ? <Spinner size={14}/> : <><KeyRound size={13}/>{L("进入", "Sign In")}</>}</button>
         </div>
         {login.error && <p role="alert" className="mt-1.5 text-[12px] text-red-600">{login.error.message}</p>}
       </form>}
       {/* 最常见的误用就是拿局域网 IP / 转发端口打开：那种 Host 永远不会被当成「本机」，
           cookie 又绑死在那个字面 IP 上，换个网段就得重输一次。这里直接给出该换的地址。 */}
       <p className="mt-4 border-t border-zinc-100 pt-3 text-[12px] leading-5 text-zinc-400">
-        若浏览器与 daemon 同机，或这条地址是你自己用 SSH 隧道 / 端口转发出来的，改用 <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[12px] text-zinc-600">{localUrl}</code> 打开即可免密进入，且换网段也不用重输。
+        
+        {L("若浏览器与 daemon 同机，或这条地址是你自己用 SSH 隧道 / 端口转发出来的，改用", "If your browser runs on the same machine as the daemon or via SSH port-forwarding, open")} <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[12px] text-zinc-600">{localUrl}</code>  {L("打开即可免密进入，且换网段也不用重输。", "to sign in password-free without re-authenticating on network changes.")}
       </p>
-      {status.isSuccess && !passwordEnabled && <p className="mt-3 border-t border-zinc-100 pt-3 text-[12px] leading-5 text-zinc-400">也可以在本机终端运行 <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[12px] text-zinc-600">agent-dock password set</code> 设置访问密码，之后在这里输入密码即可进入。</p>}
+      {status.isSuccess && !passwordEnabled && <p className="mt-3 border-t border-zinc-100 pt-3 text-[12px] leading-5 text-zinc-400">{L("也可以在本机终端运行", "You can also run")} <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[12px] text-zinc-600">agent-dock password set</code>  {L("设置访问密码，之后在这里输入密码即可进入。", "in your local terminal to set a password and sign in here.")}</p>}
     </div>
   </div>;
 }

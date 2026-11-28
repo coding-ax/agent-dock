@@ -1,23 +1,25 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { StyleProvider } from '@ant-design/cssinjs';
 import { ConfigProvider, theme as antdTheme } from 'antd';
 import { isAchromatic, mixHex, hexToRgb } from '@agent-dock/agent-dock-shared';
 import { useActiveTheme } from './themes';
+import { useLocale } from './i18n';
 import zhCN from 'antd/locale/zh_CN';
+import enUS from 'antd/locale/en_US';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
-
-dayjs.locale('zh-cn');
+import 'dayjs/locale/en';
 
 /**
  * 全局 antd 主题：基础交互组件（下拉、输入、开关、日期、分段、按钮……）实时同步
- * 当前激活的语义化 CustomTheme，与全站 Tailwind / CSS 变量视觉浑然一体。
+ * 当前激活的语义化 CustomTheme 与当前界面语言（zh-CN / en-US），与全站 Tailwind / CSS 变量视觉浑然一体。
  *
  * hashPriority="high" 去掉 antd 样式外层的 :where()，把优先级抬到两个类；否则 Tailwind preflight 的
  * `button, [type='button'] { background-color: transparent }` 会把 Switch 等按钮类组件的底色刷掉。
  */
 export function AntdScope({ children }: { children: ReactNode }) {
   const active = useActiveTheme();
+  const locale = useLocale();
   const dark = active.mode === 'dark';
   const t = active.tokens;
   const linkColor = isAchromatic(t.accent) ? t.info : t.accent;
@@ -25,8 +27,12 @@ export function AntdScope({ children }: { children: ReactNode }) {
   const [ar, ag, ab] = hexToRgb(t.accent);
   const controlOutline = `rgba(${ar}, ${ag}, ${ab}, ${dark ? 0.28 : 0.2})`;
 
+  useEffect(() => {
+    dayjs.locale(locale === 'en-US' ? 'en' : 'zh-cn');
+  }, [locale]);
+
   return <StyleProvider hashPriority="high">
-    <ConfigProvider locale={zhCN} button={{ autoInsertSpace: false }} theme={{
+    <ConfigProvider locale={locale === 'en-US' ? enUS : zhCN} button={{ autoInsertSpace: false }} theme={{
       algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
       token: {
         colorPrimary: t.accent,

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useBi } from './i18n';
 
 /** 单行字符串预览上限：更长的值折叠起来，点开才看全。 */
 const STRING_PREVIEW = 120;
@@ -12,6 +13,7 @@ export function JsonTreeView({ value, wrap }: { value: unknown; wrap: boolean })
 }
 
 function JsonNode({ label, value, depth, wrap }: { label: string | undefined; value: unknown; depth: number; wrap: boolean }) {
+  const L = useBi();
   const [open, setOpen] = useState(depth < 1);
   const entries = isBranch(value) ? Object.entries(value as Record<string, unknown>) : undefined;
   if (!entries) return <div className={`flex gap-1 ${wrap ? 'break-words' : 'whitespace-pre'}`}><KeyName label={label}/><Primitive value={value}/></div>;
@@ -21,7 +23,7 @@ function JsonNode({ label, value, depth, wrap }: { label: string | undefined; va
     <button type="button" aria-expanded={open} onClick={() => setOpen(current => !current)} className="flex max-w-full items-center gap-1 rounded text-left hover:bg-zinc-100">
       {open ? <ChevronDown size={11} className="shrink-0 text-zinc-400"/> : <ChevronRight size={11} className="shrink-0 text-zinc-400"/>}
       <KeyName label={label}/>
-      <span className="shrink-0 text-zinc-400">{array ? '[' : '{'}{entries.length} 项{open ? '' : (array ? ']' : '}')}</span>
+      <span className="shrink-0 text-zinc-400">{array ? '[' : '{'}{entries.length}  {L("项", " items")}{open ? '' : (array ? ']' : '}')}</span>
     </button>
     {open && <div className="ml-[5px] border-l border-zinc-200 pl-3">
       {entries.map(([key, child]) => <JsonNode key={key} label={array ? `[${key}]` : key} value={child} depth={depth + 1} wrap={wrap}/>)}
@@ -34,6 +36,7 @@ function KeyName({ label }: { label?: string }) {
 }
 
 function Primitive({ value }: { value: unknown }) {
+  const L = useBi();
   if (value === null) return <span className="text-zinc-400">null</span>;
   if (value === undefined) return <span className="text-zinc-400">undefined</span>;
   if (typeof value === 'boolean') return <span className="text-amber-700">{String(value)}</span>;
@@ -41,7 +44,7 @@ function Primitive({ value }: { value: unknown }) {
   const text = String(value);
   if (text.length <= STRING_PREVIEW) return <span className="text-emerald-700">{text}</span>;
   return <details className="m-0">
-    <summary className="cursor-pointer list-none text-emerald-700">{text.slice(0, STRING_PREVIEW)}…<span className="ml-1 text-[12px] text-zinc-400">共 {text.length} 字</span></summary>
+    <summary className="cursor-pointer list-none text-emerald-700">{text.slice(0, STRING_PREVIEW)}…<span className="ml-1 text-[12px] text-zinc-400">{L("共", "Total ")} {text.length}  {L("字", " chars")}</span></summary>
     <span className="text-emerald-700">{text}</span>
   </details>;
 }

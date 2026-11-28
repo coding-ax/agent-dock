@@ -36,6 +36,7 @@ import {
   type AiTextUndoEntry,
   type AiTextUndoState
 } from './ai-text-assist-state';
+import { useBi } from './i18n';
 
 export {
   LLM_UNCONFIGURED_TOOLTIP,
@@ -238,10 +239,11 @@ export function AiUndoCapsule({
   onDismiss,
   className = ''
 }: AiUndoCapsuleProps) {
+  const L = useBi();
   if (undoDepth <= 0) return null;
   const tooltip = undoDepth > 1
-    ? `撤销最近一次 AI 写入，恢复上一步原文（共 ${undoDepth} 步可回撤）`
-    : '撤销本次 AI 写入，无损恢复原文本';
+    ? L(`撤销最近一次 AI 写入，恢复上一步原文（共 ${undoDepth} 步可回撤）`, `Undo last AI edit (${undoDepth} step(s) available)`)
+    : L("撤销本次 AI 写入，无损恢复原文本", "Undo this AI edit and restore the original text");
 
   return (
     <span
@@ -251,7 +253,7 @@ export function AiUndoCapsule({
       {!compact && (
         <span className="inline-flex items-center gap-1 text-amber-700/90">
           <Sparkles size={10} className="shrink-0"/>
-          <span>{lastLabel || '已生成'}</span>
+          <span>{lastLabel || L("已生成", "Generated")}</span>
           <span aria-hidden="true" className="text-amber-300">·</span>
         </span>
       )}
@@ -260,19 +262,19 @@ export function AiUndoCapsule({
           type="button"
           disabled={undoing}
           onClick={event => { event.stopPropagation(); onUndo(); }}
-          aria-label={undoDepth > 1 ? `撤销 AI 写入（剩余 ${undoDepth} 步）` : '撤销 AI 写入'}
+          aria-label={undoDepth > 1 ? L(`撤销 AI 写入（剩余 ${undoDepth} 步）`, `Undo AI edit (${undoDepth} left)`) : L("撤销 AI 写入", "Undo AI edit")}
           className="inline-flex items-center gap-1 rounded-full px-1 py-0.5 text-[11px] font-semibold text-amber-900 transition-colors hover:bg-amber-200/60 disabled:opacity-50"
         >
           <Undo2 size={11} className="shrink-0"/>
-          <span>撤销{undoDepth > 1 ? ` (${undoDepth})` : ''}</span>
+          <span>{L("撤销", "Undo")}{undoDepth > 1 ? ` (${undoDepth})` : ''}</span>
         </button>
       </HoverTooltip>
       {onDismiss && (
-        <HoverTooltip content="保留当前结果并隐藏撤销提示" side="top">
+        <HoverTooltip content={L("保留当前结果并隐藏撤销提示", "Keep result and dismiss undo bar")} side="top">
           <button
             type="button"
             onClick={event => { event.stopPropagation(); onDismiss(); }}
-            aria-label="隐藏撤销提示"
+            aria-label={L("隐藏撤销提示", "Dismiss undo bar")}
             className="grid h-4 w-4 shrink-0 place-items-center rounded-full text-amber-600/75 transition-colors hover:bg-amber-200/60 hover:text-amber-900"
           >
             <X size={10}/>
@@ -391,6 +393,7 @@ export function AiTextAssistControl({
   className = '',
   testId
 }: AiTextAssistProps) {
+  const L = useBi();
   const availability = useLlmAvailability();
   const [open, setOpen] = useState(false);
   const [activeMode, setActiveMode] = useState<LlmAssistMode>(mode);
@@ -558,7 +561,7 @@ export function AiTextAssistControl({
 
       undoable.applyAiText(appliedText, {
         previousValue: currentText,
-        label: params.resultLabel || '已生成',
+        label: params.resultLabel || L("已生成", "Generated"),
         skipOnChange: manualApply
       });
       await onResult?.(result, currentText);
@@ -605,7 +608,7 @@ export function AiTextAssistControl({
       void executeAssist({
         runMode: mode,
         action: instantAction ?? (mode === 'title_generate' ? 'generate' : hasText ? 'optimize' : 'write'),
-        resultLabel: mode === 'title_generate' ? '已生成标题' : '已生成'
+        resultLabel: mode === 'title_generate' ? L("已生成标题", "Title generated") : L("已生成", "Generated")
       });
       return;
     }
@@ -630,7 +633,7 @@ export function AiTextAssistControl({
       runMode: activeMode,
       action,
       customInstruction: trimmed,
-      resultLabel: trimmed ? '已按需求生成' : '已生成'
+      resultLabel: trimmed ? L("已按需求生成", "Generated as requested") : L("已生成", "Generated")
     });
   };
 
@@ -666,7 +669,7 @@ export function AiTextAssistControl({
               type="button"
               disabled
               aria-disabled="true"
-              aria-label={`${resolvedAriaLabel}（需先配置 LLM 模型端点）`}
+              aria-label={L(`${resolvedAriaLabel}（需先配置 LLM 模型端点）`, `${resolvedAriaLabel} (Configure LLM endpoint first)`)}
               className={`pointer-events-none inline-flex shrink-0 items-center justify-center border border-zinc-200/80 bg-zinc-50/70 font-medium text-zinc-400 opacity-60 ${triggerSizing}`}
             >
               <Sparkles size={iconSize} className="shrink-0"/>
@@ -689,12 +692,12 @@ export function AiTextAssistControl({
           className="ui-ai-trigger-busy inline-flex h-6.5 shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium text-amber-800"
         >
           <Sparkles size={11} className="ui-ai-sparkle-busy shrink-0 text-amber-600"/>
-          <span className="ui-shimmer-text max-w-[116px] truncate">{busyLabel || '生成中…'}</span>
-          <HoverTooltip content="取消本次 AI 生成" side="top">
+          <span className="ui-shimmer-text max-w-[116px] truncate">{busyLabel || L("生成中…", "Generating…")}</span>
+          <HoverTooltip content={L("取消本次 AI 生成", "Cancel AI generation")} side="top">
             <button
               type="button"
               onClick={event => { event.stopPropagation(); cancel(); }}
-              aria-label="取消 AI 生成"
+              aria-label={L("取消 AI 生成", "Cancel AI generation")}
               className="grid h-4 w-4 shrink-0 place-items-center rounded-full text-amber-700 transition-colors hover:bg-amber-200/60 hover:text-amber-900"
             >
               <X size={10}/>
@@ -749,7 +752,7 @@ export function AiTextAssistControl({
           <span className="truncate">{error}</span>
           <button
             type="button"
-            aria-label="关闭错误提示"
+            aria-label={L("关闭错误提示", "Dismiss error")}
             onClick={event => { event.stopPropagation(); setError(undefined); }}
             className="shrink-0 text-red-500 hover:text-red-800"
           >
@@ -789,10 +792,10 @@ export function AiTextAssistControl({
                   <div className="truncate font-mono text-[10.5px] leading-4 text-zinc-400">{availability.model}</div>
                 )}
               </div>
-              <HoverTooltip content="关闭面板（Esc）" side="top">
+              <HoverTooltip content={L("关闭面板（Esc）", "Close panel (Esc)")} side="top">
                 <button
                   type="button"
-                  aria-label="关闭 AI 辅助面板"
+                  aria-label={L("关闭 AI 辅助面板", "Close AI assist panel")}
                   onClick={() => setOpen(false)}
                   className="ui-press grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"
                 >
@@ -806,7 +809,7 @@ export function AiTextAssistControl({
               {modeMeta.switchableModes && modeMeta.switchableModes.length > 1 && (
                 <SlidingSegmented
                   size="xs"
-                  ariaLabel="AI 辅助模式"
+                  ariaLabel={L("AI 辅助模式", "AI Assist Mode")}
                   value={activeMode}
                   onChange={nextMode => { setActiveMode(nextMode); setError(undefined); }}
                   options={modeMeta.switchableModes.map(option => ({
@@ -828,7 +831,7 @@ export function AiTextAssistControl({
                         onClick={() => void executeAssist({
                           runMode: preset.mode,
                           action: preset.action,
-                          resultLabel: `已${preset.label.replace(/^按上下文/, '').replace(/^按场景/, '')}`
+                          resultLabel: L(`已${preset.label.replace(/^按上下文/, '').replace(/^按场景/, '')}`, `Applied: ${preset.label}`)
                         })}
                         className="ui-press inline-flex h-7 items-center gap-1 rounded-lg border border-zinc-200/90 bg-zinc-50/70 px-2.5 text-[11.5px] font-medium text-zinc-700 hover:border-amber-200 hover:bg-amber-50/80 hover:text-amber-800 disabled:opacity-45"
                       >
@@ -852,7 +855,7 @@ export function AiTextAssistControl({
                         runMode: activeMode,
                         action: hasText ? 'optimize' : 'write',
                         customInstruction: item.instruction,
-                        resultLabel: `已${item.label}`
+                        resultLabel: L(`已${item.label}`, `Applied: ${item.label}`)
                       })}
                       className="ui-press rounded-md border border-zinc-200/70 bg-white px-2 py-0.5 text-[11px] text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900 disabled:opacity-45"
                     >
@@ -872,15 +875,15 @@ export function AiTextAssistControl({
                   onChange={event => { setInstruction(event.target.value); setError(undefined); }}
                   onKeyDown={handleInstructionKeyDown}
                   placeholder={instructionPlaceholder ?? modeMeta.placeholder}
-                  aria-label="输入 AI 写作或优化需求"
+                  aria-label={L("输入 AI 写作或优化需求", "Describe what to write or refine")}
                   className="h-7 min-w-0 flex-1 bg-transparent text-[12px] text-zinc-900 outline-none placeholder:text-zinc-400 disabled:opacity-50"
                 />
-                <HoverTooltip content="生成并写入（Enter）" side="top">
+                <HoverTooltip content={L("生成并写入（Enter）", "Generate & Apply (Enter)")} side="top">
                   <button
                     type="button"
                     disabled={busy || !canSubmitInstruction}
                     onClick={handleInstructionSubmit}
-                    aria-label="执行 AI 生成"
+                    aria-label={L("执行 AI 生成", "Run AI generation")}
                     className="ui-press grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-zinc-900 text-white hover:bg-zinc-700 active:scale-95 disabled:opacity-35"
                   >
                     <ArrowUp size={13} strokeWidth={2.2}/>
@@ -902,7 +905,8 @@ export function AiTextAssistControl({
                       onClick={cancel}
                       className="ui-press shrink-0 rounded-md border border-amber-200 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100/70"
                     >
-                      取消
+                      
+                      {L("取消", "Cancel")}
                     </button>
                   </div>
                 </div>
@@ -926,21 +930,21 @@ export function AiTextAssistControl({
                     onClick={handleInstructionSubmit}
                     className="ui-press inline-flex shrink-0 items-center gap-1 rounded-md border border-red-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-50"
                   >
-                    <RotateCcw size={10}/>重试
+                    <RotateCcw size={10}/>{L("重试", "Retry")}
                   </button>
                 </div>
               )}
 
               {/* 底部安全回撤提示 */}
               <div className="flex items-center justify-between gap-2 pt-0.5 text-[10.5px] text-zinc-400">
-                <span>写入后可随时一键撤销恢复原文</span>
+                <span>{L("写入后可随时一键撤销恢复原文", "One-click undo restores original text anytime")}</span>
                 {undoable.canUndo && (
                   <button
                     type="button"
                     onClick={handleUndo}
                     className="ui-press inline-flex shrink-0 items-center gap-1 font-medium text-amber-700 hover:text-amber-900"
                   >
-                    <Undo2 size={10.5}/>撤销上一步{undoable.undoDepth > 1 ? ` (${undoable.undoDepth})` : ''}
+                    <Undo2 size={10.5}/>{L("撤销上一步", "Undo last")}{undoable.undoDepth > 1 ? ` (${undoable.undoDepth})` : ''}
                   </button>
                 )}
               </div>

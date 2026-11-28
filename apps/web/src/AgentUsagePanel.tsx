@@ -20,6 +20,7 @@ import {
   type QuotaTone,
   type UsageSourcePreference
 } from './agent-usage-cache';
+import { bi, useBi } from './i18n';
 
 const barToneClass: Record<QuotaTone, string> = {
   normal: 'bg-emerald-500',
@@ -35,7 +36,7 @@ const remainingToneClass: Record<QuotaTone, string> = {
 
 function defaultQuotaSourceLabel(agentId: string): string {
   switch (agentId.trim().toLowerCase()) {
-    case 'codex': return '本机 Codex CLI';
+    case 'codex': return bi("本机 Codex CLI", "Local Codex CLI");
     case 'claude': return 'Claude statusline';
     case 'cursor': return 'cursor.com';
     case 'antigravity': return 'Antigravity CLI';
@@ -47,9 +48,9 @@ function defaultQuotaSourceLabel(agentId: string): string {
 
 function quotaErrorMessage(error: unknown): string {
   if (error instanceof WebAccessDeniedError && error.status === 403) {
-    return '当前会话链接无权查看账号额度，请使用控制台地址。';
+    return bi("当前会话链接无权查看账号额度，请使用控制台地址。", "Session links cannot view account quotas; open the admin console URL.");
   }
-  return '额度读取失败，请点击刷新重试。';
+  return bi("额度读取失败，请点击刷新重试。", "Failed to load quota; click refresh to retry.");
 }
 
 function formatUsd(costUsd?: number): string | undefined {
@@ -59,11 +60,12 @@ function formatUsd(costUsd?: number): string | undefined {
 
 function cacheHintText(cacheTtlMs?: number): string {
   const ttl = cacheTtlMs && cacheTtlMs > 0 ? cacheTtlMs : AGENT_USAGE_CACHE_TTL_MS;
-  if (ttl < 60_000) return `${Math.round(ttl / 1000)} 秒后可自动重试`;
-  return `自动缓存 ${Math.round(ttl / 60_000)} 分钟`;
+  if (ttl < 60_000) return bi(`${Math.round(ttl / 1000)} 秒后可自动重试`, `Auto-retry in ${Math.round(ttl / 1000)}s`);
+  return bi(`自动缓存 ${Math.round(ttl / 60_000)} 分钟`, `Cached for ${Math.round(ttl / 60_000)}m`);
 }
 
 function GatewayStatsBlock({ stats }: { stats: UsageGatewayStats }) {
+  const L = useBi();
   const costText = formatUsd(stats.costUsd);
   return (
     <div
@@ -72,12 +74,12 @@ function GatewayStatsBlock({ stats }: { stats: UsageGatewayStats }) {
     >
       <div className="flex items-center gap-1 text-[11px] font-medium text-zinc-600">
         <Activity size={11} className="shrink-0 text-sky-600"/>
-        <span>Magpie 今日网关统计</span>
+        <span>{L("Magpie 今日网关统计", "Magpie Today's Gateway Stats")}</span>
       </div>
       <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] tabular-nums">
         <div className="flex items-center justify-between gap-1 text-zinc-500">
-          <span>请求</span>
-          <span className="font-medium text-zinc-800">{stats.calls} 次</span>
+          <span>{L("请求", "Requests")}</span>
+          <span className="font-medium text-zinc-800">{L(`${stats.calls} 次`, `${stats.calls}`)}</span>
         </div>
         <div className="flex items-center justify-between gap-1 text-zinc-500">
           <span>Token</span>
@@ -85,20 +87,20 @@ function GatewayStatsBlock({ stats }: { stats: UsageGatewayStats }) {
         </div>
         {costText && (
           <div className="flex items-center justify-between gap-1 text-zinc-500">
-            <span>费用</span>
+            <span>{L("费用", "Cost")}</span>
             <span className="font-medium text-zinc-800">{costText}</span>
           </div>
         )}
         {stats.credits !== undefined && stats.credits > 0 && (
           <div className="flex items-center justify-between gap-1 text-zinc-500">
-            <span>积分</span>
+            <span>{L("积分", "Credits")}</span>
             <span className="font-medium text-zinc-800">{stats.credits.toFixed(1)}</span>
           </div>
         )}
         <div className="flex items-center justify-between gap-1 text-zinc-500">
-          <span>异常</span>
+          <span>{L("异常", "Errors")}</span>
           <span className={`font-medium ${stats.errors > 0 ? 'text-amber-600' : 'text-zinc-700'}`}>
-            {stats.errors} 次
+            {L(`${stats.errors} 次`, `${stats.errors}`)}
           </span>
         </div>
       </div>
@@ -107,6 +109,7 @@ function GatewayStatsBlock({ stats }: { stats: UsageGatewayStats }) {
 }
 
 function AccountDetailRow({ account, now }: { account: UsageAccountSummary; now: number }) {
+  const L = useBi();
   const primaryWindows = account.windows.length
     ? (account.windows.some(w => /^total\s+credits$/i.test(w.label))
       ? account.windows.filter(w => !/^(credits|extra\s+credits)$/i.test(w.label))
@@ -122,7 +125,8 @@ function AccountDetailRow({ account, now }: { account: UsageAccountSummary; now:
         <span className="min-w-0 truncate text-[11.5px] font-medium text-zinc-800">{account.label}</span>
         {account.active && (
           <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[10px] font-medium leading-3.5 text-sky-700">
-            当前活跃
+            
+            {L("当前活跃", "Active")}
           </span>
         )}
         {account.plan && (
@@ -132,7 +136,7 @@ function AccountDetailRow({ account, now }: { account: UsageAccountSummary; now:
 
       {account.balance && (
         <div className="mt-1 flex items-baseline justify-between text-[11px] tabular-nums">
-          <span className="text-zinc-500">余额</span>
+          <span className="text-zinc-500">{L("余额", "Balance")}</span>
           <span className="font-semibold text-zinc-800">{account.balance.display}</span>
         </div>
       )}
@@ -150,7 +154,8 @@ function AccountDetailRow({ account, now }: { account: UsageAccountSummary; now:
                 <div className="flex items-baseline justify-between gap-2 text-[11px]">
                   <span className="min-w-0 truncate text-zinc-600">{win.label}</span>
                   <span className={`shrink-0 font-medium tabular-nums ${remainingToneClass[tone]}`}>
-                    剩余 {remaining}%
+                    
+                    {L("剩余", "left")} {remaining}%
                   </span>
                 </div>
                 <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-zinc-200">
@@ -161,7 +166,7 @@ function AccountDetailRow({ account, now }: { account: UsageAccountSummary; now:
                 </div>
                 {(win.display || runsOut) && (
                   <div className="mt-0.5 flex items-center justify-between gap-2 text-[10.5px] tabular-nums text-zinc-400">
-                    <span className="min-w-0 truncate">{win.display ?? `已用 ${Math.round(used)}%`}</span>
+                    <span className="min-w-0 truncate">{win.display ?? L(`已用 ${Math.round(used)}%`, `Used ${Math.round(used)}%`)}</span>
                     {runsOut && <span className="shrink-0 text-amber-600">{runsOut}</span>}
                   </div>
                 )}
@@ -205,11 +210,12 @@ export function AgentQuotaView({
   onSourceChange,
   onRefresh
 }: AgentQuotaViewProps) {
+  const L = useBi();
   const [accountsExpanded, setAccountsExpanded] = useState(false);
 
   const embedded = variant === 'embedded';
   const displayName = quotaAgentDisplayName(agentId);
-  const title = embedded ? '账号额度' : `${displayName} 账号额度`;
+  const title = embedded ? L("账号额度", "Account Quota") : L(`${displayName} 账号额度`, `${displayName} Account Quota`);
   const stale = Boolean(data && 'stale' in data && data.stale);
   const source = (data && 'source' in data && data.source) || defaultQuotaSourceLabel(agentId);
   const sourceMeta = data?.sourceMeta;
@@ -234,8 +240,8 @@ export function AgentQuotaView({
     ? (alternate.kind === 'magpie' && sourcePreference === 'official' ? 'auto' : alternate.kind)
     : 'auto';
   const switchLabel = alternate
-    ? (alternate.kind === 'official' ? '查看官方' : '切回 Magpie')
-    : '恢复自动识别';
+    ? (alternate.kind === 'official' ? L("查看官方", "View Official") : L("切回 Magpie", "Switch to Magpie"))
+    : L("恢复自动识别", "Auto-Detect");
 
   const content = <>
     <div className="flex items-center gap-1.5">
@@ -251,12 +257,12 @@ export function AgentQuotaView({
         {updatedText && (
           <span className="text-[11px] tabular-nums text-zinc-400">{updatedText}</span>
         )}
-        <HoverTooltip content={isRefreshing ? '正在刷新账号额度…' : '手动刷新账号额度'}>
+        <HoverTooltip content={isRefreshing ? L("正在刷新账号额度…", "Refreshing account quota…") : L("手动刷新账号额度", "Refresh account quota")}>
           <button
             type="button"
             onClick={onRefresh}
             disabled={isRefreshing}
-            aria-label={`刷新 ${displayName} 额度`}
+            aria-label={L(`刷新 ${displayName} 额度`, `Refresh ${displayName} quota`)}
             className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-wait disabled:opacity-50"
           >
             <RefreshCw size={12} className={isRefreshing ? 'animate-spin' : ''}/>
@@ -275,7 +281,7 @@ export function AgentQuotaView({
           fallbackSourceLabel={source}
         />
         {canSwitchSource && (
-          <HoverTooltip content={alternate?.label ?? '恢复按当前代理配置自动识别来源'}>
+          <HoverTooltip content={alternate?.label ?? L("恢复按当前代理配置自动识别来源", "Reset to automatic source detection")}>
             <button
               type="button"
               onClick={() => onSourceChange?.(nextSourceTarget)}
@@ -293,12 +299,12 @@ export function AgentQuotaView({
     {Boolean(error) && Boolean(data) && (
       <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-1.5 text-[11px] text-amber-700">
         <AlertCircle size={12} className="shrink-0"/>
-        <span>刷新失败，当前展示最近一次缓存</span>
+        <span>{L("刷新失败，当前展示最近一次缓存", "Refresh failed; showing cached snapshot")}</span>
       </div>
     )}
 
     {isLoading ? (
-      <div className="mt-2.5 space-y-2" aria-label="正在读取账号额度">
+      <div className="mt-2.5 space-y-2" aria-label={L("正在读取账号额度", "Loading account quota")}>
         <div className={`rounded-xl border border-zinc-200/80 ${cardSurface} px-3 py-2.5`}>
           <div className="flex items-center justify-between">
             <div className="ui-skeleton h-3 w-16 rounded bg-zinc-200/80"/>
@@ -321,7 +327,8 @@ export function AgentQuotaView({
       </div>
     ) : !data ? (
       <div className={`mt-2.5 rounded-xl border border-dashed border-zinc-200 ${cardSurface} px-3 py-2.5 text-[12px] leading-5 text-zinc-500`}>
-        点击右上角刷新按钮读取 {displayName} 账号额度。
+        
+        {L("点击右上角刷新按钮读取", "Click the refresh button above to load")} {displayName}  {L("账号额度。", " account quota.")}
       </div>
     ) : isMagpieIssue ? (
       <div
@@ -330,7 +337,7 @@ export function AgentQuotaView({
       >
         <AlertTriangle size={13} className="mt-0.5 shrink-0 text-amber-600"/>
         <div className="min-w-0 flex-1">
-          <div>{data.reason || 'Magpie 网关暂不可用。'}</div>
+          <div>{data.reason || L("Magpie 网关暂不可用。", "Magpie gateway is currently unavailable.")}</div>
           <button
             type="button"
             onClick={onRefresh}
@@ -338,7 +345,7 @@ export function AgentQuotaView({
             className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-amber-200 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-800 transition-colors hover:bg-amber-50 disabled:opacity-50"
           >
             <RefreshCw size={10} className={isRefreshing ? 'animate-spin' : ''}/>
-            <span>重新检测</span>
+            <span>{L("重新检测", "Re-detect")}</span>
           </button>
         </div>
       </div>
@@ -347,12 +354,12 @@ export function AgentQuotaView({
         data-magpie-no-quota=""
         className={`mt-2.5 rounded-xl border border-zinc-200/80 ${cardSurface} px-3 py-2.5 text-[12px] leading-5 text-zinc-600`}
       >
-        <div>{data.reason || '该供应商未提供上游额度/余额查询。'}</div>
+        <div>{data.reason || L("该供应商未提供上游额度/余额查询。", "This provider does not expose upstream quota or balance queries.")}</div>
         {data.gatewayStats && <GatewayStatsBlock stats={data.gatewayStats}/>}
       </div>
     ) : data.status === 'unavailable' ? (
       <div className={`mt-2.5 rounded-xl border border-dashed border-zinc-200 ${cardSurface} px-3 py-2.5 text-[12px] leading-5 text-zinc-500`}>
-        {data.reason || '当前暂无法获取账号额度。'}
+        {data.reason || L("当前暂无法获取账号额度。", "Unable to fetch account quota right now.")}
       </div>
     ) : (
       <div className={`${embedded ? 'mt-2' : 'mt-2.5'} space-y-2`}>
@@ -365,10 +372,10 @@ export function AgentQuotaView({
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 text-[12px] font-medium text-zinc-700">
                 <Wallet size={12} className="shrink-0 text-sky-600"/>
-                <span>账户余额</span>
+                <span>{L("账户余额", "Account Balance")}</span>
               </div>
               <div className="mt-0.5 text-[11px] text-zinc-400">
-                {sourceMeta?.providerName ? `${sourceMeta.providerName} API 余额` : 'API Key 余额'}
+                {sourceMeta?.providerName ? L(`${sourceMeta.providerName} API 余额`, `${sourceMeta.providerName} API Balance`) : L("API Key 余额", "API Key Balance")}
               </div>
             </div>
             <div className="shrink-0 text-[16px] font-semibold tabular-nums text-zinc-900">
@@ -400,17 +407,19 @@ export function AgentQuotaView({
                       <span className="min-w-0 truncate text-[12px] font-medium text-zinc-800">{window.label}</span>
                       {window.aggregated && sourceMeta?.accountCount && sourceMeta.accountCount > 1 && (
                         <span className="shrink-0 rounded bg-zinc-200/70 px-1 py-px text-[10px] font-medium text-zinc-600">
-                          {sourceMeta.accountCount} 账号汇总
+                          {L(`${sourceMeta.accountCount} 账号汇总`, `${sourceMeta.accountCount} accounts`)}
                         </span>
                       )}
                       {window.status === 'cooldown' && (
                         <span className="shrink-0 rounded bg-amber-100 px-1 py-px text-[10px] font-medium text-amber-700">
-                          冷却中
+                          
+                          {L("冷却中", "Cooldown")}
                         </span>
                       )}
                     </div>
                     <span className={`shrink-0 text-[12px] font-semibold tabular-nums ${remainingToneClass[tone]}`}>
-                      剩余 {remaining}%
+                      
+                      {L("剩余", "left")} {remaining}%
                     </span>
                   </div>
                   <div className={`${embedded ? 'mt-1.5' : 'mt-2'} h-1.5 w-full overflow-hidden rounded-full bg-zinc-200`}>
@@ -421,11 +430,12 @@ export function AgentQuotaView({
                   </div>
                   <div className={`${embedded ? 'mt-1' : 'mt-1.5'} flex items-center justify-between gap-2 text-[11px] tabular-nums text-zinc-500`}>
                     <span className="min-w-0 truncate">
-                      已用 {Math.round(used)}%{window.display ? ` · ${window.display}` : ''}
+                      
+                      {L("已用", "Used")} {Math.round(used)}%{window.display ? ` · ${window.display}` : ''}
                     </span>
                     {countdown && (
                       <HoverTooltipText
-                        content={exactClock ? `将于 ${exactClock} 重置` : undefined}
+                        content={exactClock ? L(`将于 ${exactClock} 重置`, `Resets at ${exactClock}`) : undefined}
                         className="inline-flex shrink-0 items-center gap-1 text-zinc-400"
                       >
                         <Clock size={10} className="shrink-0"/>
@@ -437,7 +447,7 @@ export function AgentQuotaView({
                     <div className="mt-1 flex items-center gap-1 text-[10.5px] tabular-nums text-amber-600">
                       <AlertTriangle size={10} className="shrink-0"/>
                       <HoverTooltipText
-                        content={runsOutClock ? `按当前速率预计 ${runsOutClock} 耗尽` : undefined}
+                        content={runsOutClock ? L(`按当前速率预计 ${runsOutClock} 耗尽`, `Est. depletion at ${runsOutClock}`) : undefined}
                         className="truncate"
                       >
                         {runsOut}
@@ -462,7 +472,7 @@ export function AgentQuotaView({
             >
               <span className="inline-flex items-center gap-1.5">
                 <Users size={11} className="shrink-0 text-zinc-400"/>
-                <span>{accountsExpanded ? `收起 ${accounts.length} 个账号明细` : `查看 ${accounts.length} 个账号明细`}</span>
+                <span>{accountsExpanded ? L(`收起 ${accounts.length} 个账号明细`, `Hide ${accounts.length} account(s)`) : L(`查看 ${accounts.length} 个账号明细`, `View ${accounts.length} account(s)`)}</span>
               </span>
               <ChevronDown
                 size={12}
@@ -490,23 +500,23 @@ export function AgentQuotaView({
     <div className={`${embedded ? 'mt-2' : 'mt-2.5'} flex items-center justify-between gap-2 text-[11px] leading-4 text-zinc-400`}>
       <span className="min-w-0 truncate">
         {stale
-          ? '快照超过 5 分钟，数据可能较旧'
+          ? L("快照超过 5 分钟，数据可能较旧", "Snapshot is over 5 minutes old")
           : isMagpie
-            ? (sourceMeta?.providerName ? `由 Magpie 同步 · ${sourceMeta.providerName}` : '由本机 Magpie 同步')
-            : `来源：${source}`}
+            ? (sourceMeta?.providerName ? L(`由 Magpie 同步 · ${sourceMeta.providerName}`, `Synced via Magpie · ${sourceMeta.providerName}`) : L("由本机 Magpie 同步", "Synced via local Magpie"))
+            : L(`来源：${source}`, `Source: ${source}`)}
       </span>
       <span className="shrink-0">{cacheHintText(data?.cacheTtlMs)}</span>
     </div>
   </>;
 
   if (embedded) {
-    return <section aria-label={`${displayName} 账号额度`}>{content}</section>;
+    return <section aria-label={L(`${displayName} 账号额度`, `${displayName} Account Quota`)}>{content}</section>;
   }
 
   return (
     <section
       className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-3.5"
-      aria-label={`${displayName} 账号额度`}
+      aria-label={L(`${displayName} 账号额度`, `${displayName} Account Quota`)}
     >
       {content}
     </section>

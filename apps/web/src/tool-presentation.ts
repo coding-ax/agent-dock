@@ -1,5 +1,6 @@
 import type { TimelineEvent } from './timeline';
 import { toolCommand, toolDescription, toolDisplayName } from './timeline';
+import { bi, getCurrentLocale, localizedRecord } from './i18n';
 export { toolDescription } from './timeline';
 
 export type ToolKind =
@@ -117,8 +118,14 @@ function flagValue(command: string, name: string): string | undefined {
   return value?.replace(/\\(["\\])/g, '$1').trim() || undefined;
 }
 
-const reviewLabels: Record<string, string> = { accepted: '验收通过', rework: '打回返工', needs_user: '请你拍板', cancelled: '撕掉便签' };
-const reportLabels: Record<string, string> = { done: '汇报完成', question: '提出疑问', blocked: '汇报受阻' };
+const reviewLabels: Record<string, string> = localizedRecord(
+  { accepted: '验收通过', rework: '打回返工', needs_user: '请你拍板', cancelled: '撕掉便签' },
+  { accepted: 'Approved Note', rework: 'Sent for Rework', needs_user: 'Needs Your Input', cancelled: 'Cancelled Note' }
+);
+const reportLabels: Record<string, string> = localizedRecord(
+  { done: '汇报完成', question: '提出疑问', blocked: '汇报受阻' },
+  { done: 'Reported Done', question: 'Asked Question', blocked: 'Reported Blocked' }
+);
 
 /**
  * 主会话（小猫）和侧边会话操作便签的 CLI：执行面板里说人话（「派出便签：梳理仓库」），
@@ -136,16 +143,16 @@ export function noteCommandPresentation(command: string | undefined): { label: s
   const argument = positional?.[1] ?? positional?.[2] ?? positional?.[3];
   if (group === 'task') {
     const title = flagValue(command, 'title');
-    if (sub === 'start') return { label: title ? '派出便签' : '便签开工', detail: title ?? argument };
-    if (sub === 'plan') return { label: '写计划便签', detail: title };
-    if (sub === 'review') return { label: reviewLabels[flagValue(command, 'verdict') ?? ''] ?? '验收便签', detail: argument };
-    if (sub === 'cancel') return { label: '撕掉便签', detail: argument };
-    if (sub === 'report') return { label: reportLabels[flagValue(command, 'kind') ?? ''] ?? '汇报进度', detail: flagValue(command, 'text') };
-    return { label: '翻看便签', detail: argument };
+    if (sub === 'start') return { label: title ? bi('派出便签', 'Dispatched Note') : bi('便签开工', 'Started Note'), detail: title ?? argument };
+    if (sub === 'plan') return { label: bi('写计划便签', 'Planned Note'), detail: title };
+    if (sub === 'review') return { label: reviewLabels[flagValue(command, 'verdict') ?? ''] ?? bi('验收便签', 'Reviewed Note'), detail: argument };
+    if (sub === 'cancel') return { label: bi('撕掉便签', 'Cancelled Note'), detail: argument };
+    if (sub === 'report') return { label: reportLabels[flagValue(command, 'kind') ?? ''] ?? bi('汇报进度', 'Reported Progress'), detail: flagValue(command, 'text') };
+    return { label: bi('翻看便签', 'Checked Notes'), detail: argument };
   }
-  if (group === 'notify') return { label: /\s--ask\b/.test(command) ? '请你拍板' : '通知你', detail: sub ? undefined : argument };
-  if (group === 'watch') return { label: sub === 'add' ? '布置盯梢' : '查看盯梢', detail: flagValue(command, 'name') ?? argument };
-  return { label: sub === 'create' ? '起草回复' : sub === 'send' ? '发送草稿' : '处理草稿', detail: flagValue(command, 'target') };
+  if (group === 'notify') return { label: /\s--ask\b/.test(command) ? bi('请你拍板', 'Needs Your Input') : bi('通知你', 'Notified You'), detail: sub ? undefined : argument };
+  if (group === 'watch') return { label: sub === 'add' ? bi('布置盯梢', 'Added Watch') : bi('查看盯梢', 'Checked Watch'), detail: flagValue(command, 'name') ?? argument };
+  return { label: sub === 'create' ? bi('起草回复', 'Drafted Reply') : sub === 'send' ? bi('发送草稿', 'Sent Draft') : bi('处理草稿', 'Updated Draft'), detail: flagValue(command, 'target') };
 }
 
 /**
@@ -556,8 +563,8 @@ function listSummary(items: unknown, keys: string[]): string | undefined {
     .map(item => typeof item === 'string' ? item.trim() : stringField(item, keys))
     .filter((value): value is string => Boolean(value));
   if (!labels.length) return;
-  const shown = labels.slice(0, 3).join('、');
-  return labels.length > 3 ? `${shown} 等 ${labels.length} 项` : shown;
+  const shown = labels.slice(0, 3).join(bi('、', ', '));
+  return labels.length > 3 ? bi(`${shown} 等 ${labels.length} 项`, `${shown} (+${labels.length - 3} more)`) : shown;
 }
 
 function formatSearchDetail(primary: string | undefined, path: string | undefined, fallback?: string): string | undefined {
@@ -664,8 +671,10 @@ const COMPACT_TOOLS = new Set(['compact', 'compact_conversation']);
 const DB_DIRECT_TOOLS = new Set(['query_database', 'execute_sql', 'run_sql', 'sql_query', 'sqlite_query']);
 
 function makePresentation(kind: ToolKind, label: string, detail?: string): ToolPresentation {
-  const clean = sanitizeDetail(label, detail);
-  return clean !== undefined ? { kind, label, detail: clean } : { kind, label };
+  const phrase = ACTION_PHRASES[label];
+  const displayLabel = phrase ? bi(label, phrase.enLabel) : label;
+  const clean = sanitizeDetail(displayLabel, detail);
+  return clean !== undefined ? { kind, label: displayLabel, detail: clean } : { kind, label: displayLabel };
 }
 
 export function toolPresentation(data: TimelineEvent['data']): ToolPresentation {
@@ -968,63 +977,78 @@ export function toolPresentation(data: TimelineEvent['data']): ToolPresentation 
   }
 
   // 16. 最终安全兜底：不重复 label 与 detail，不暴露生硬的 `tool call`。
-  if (isGeneric) return { kind: 'tool', label: '工具调用' };
+  if (isGeneric) return { kind: 'tool', label: bi('工具调用', 'Tool Call') };
   const label = strippedName || toolDisplayName(data);
   return makePresentation('tool', label, filePath ?? url ?? query);
 }
 
 type ActionPhrase = {
+  enLabel: string;
   running: string;
   completed: string;
   summary: (count: number) => string;
+  enRunning: string;
+  enCompleted: string;
+  enSummary: (count: number) => string;
 };
+
+const plural = (c: number, one: string, many: string) => (c > 1 ? `${c} ${many}` : one);
 
 const ACTION_PHRASES: Record<string, ActionPhrase> = {
-  '读取文件': { running: '正在读取文件', completed: '已读取文件', summary: c => `读取了${withCount(c, '个')}文件` },
-  '查看代码结构': { running: '正在查看代码结构', completed: '已查看代码结构', summary: c => `查看了${withCount(c, '次')}代码结构` },
-  '修改文件': { running: '正在修改文件', completed: '已修改文件', summary: c => `修改了${withCount(c, '个')}文件` },
-  '写入文件': { running: '正在写入文件', completed: '已写入文件', summary: c => `写入了${withCount(c, '个')}文件` },
-  '应用补丁': { running: '正在应用补丁', completed: '已应用补丁', summary: c => `应用了${withCount(c, '次')}补丁` },
-  '删除文件': { running: '正在删除文件', completed: '已删除文件', summary: c => `删除了${withCount(c, '个')}文件` },
-  '移动文件': { running: '正在移动文件', completed: '已移动文件', summary: c => `移动了${withCount(c, '个')}文件` },
-  '查看目录': { running: '正在查看目录', completed: '已查看目录', summary: c => `查看了${withCount(c, '个')}目录` },
-  '查找文件': { running: '正在查找文件', completed: '已查找文件', summary: c => `查找了${withCount(c, '次')}文件` },
-  '搜索内容': { running: '正在搜索内容', completed: '已搜索内容', summary: c => `搜索了${withCount(c, '次')}内容` },
-  '搜索工具': { running: '正在搜索工具', completed: '已搜索工具', summary: c => `搜索了${withCount(c, '次')}工具` },
-  '检查诊断': { running: '正在检查诊断', completed: '已检查诊断', summary: c => `检查了${withCount(c, '次')}诊断` },
-  '执行命令': { running: '正在执行命令', completed: '已执行命令', summary: c => `执行了${withCount(c, '条')}命令` },
-  '查看命令输出': { running: '正在查看命令输出', completed: '已查看命令输出', summary: c => `查看了${withCount(c, '次')}命令输出` },
-  '向命令发送输入': { running: '正在向命令发送输入', completed: '已向命令发送输入', summary: c => `向命令发送了${withCount(c, '次')}输入` },
-  '搜索网页': { running: '正在搜索网页', completed: '已搜索网页', summary: c => `搜索了${withCount(c, '次')}网页` },
-  '读取网页': { running: '正在读取网页', completed: '已读取网页', summary: c => `读取了${withCount(c, '个')}网页` },
-  '操作浏览器': { running: '正在操作浏览器', completed: '已操作浏览器', summary: c => `操作了${withCount(c, '次')}浏览器` },
-  'Git 操作': { running: '正在执行 Git 操作', completed: '已执行 Git 操作', summary: c => `执行了${withCount(c, '次')} Git 操作` },
-  '运行测试': { running: '正在运行测试', completed: '已运行测试', summary: c => `运行了${withCount(c, '次')}测试` },
-  '查询数据': { running: '正在查询数据', completed: '已查询数据', summary: c => `查询了${withCount(c, '次')}数据` },
-  '调用子 Agent': { running: '正在调用子 Agent', completed: '已调用子 Agent', summary: c => `调用了${withCount(c, '个')}子 Agent` },
-  '定义子 Agent': { running: '正在定义子 Agent', completed: '已定义子 Agent', summary: c => `定义了${withCount(c, '个')}子 Agent` },
-  '管理子 Agent': { running: '正在管理子 Agent', completed: '已管理子 Agent', summary: c => `管理了${withCount(c, '次')}子 Agent` },
-  '发送消息': { running: '正在发送消息', completed: '已发送消息', summary: c => `发送了${withCount(c, '条')}消息` },
-  '多 Agent 协作': { running: '正在进行多 Agent 协作', completed: '已完成多 Agent 协作', summary: c => `进行了${withCount(c, '次')}多 Agent 协作` },
-  'Agent 群协作': { running: '正在进行 Agent 群协作', completed: '已完成 Agent 群协作', summary: c => `进行了${withCount(c, '次')} Agent 群协作` },
-  '运行工作流': { running: '正在运行工作流', completed: '已运行工作流', summary: c => `运行了${withCount(c, '个')}工作流` },
-  '发起提问': { running: '正在发起提问', completed: '已发起提问', summary: c => `发起了${withCount(c, '次')}提问` },
-  '更新待办': { running: '正在更新待办', completed: '已更新待办', summary: c => `更新了${withCount(c, '次')}待办` },
-  '更新计划': { running: '正在更新计划', completed: '已更新计划', summary: c => `更新了${withCount(c, '次')}计划` },
-  '切换规划模式': { running: '正在切换规划模式', completed: '已切换规划模式', summary: c => `切换了${withCount(c, '次')}规划模式` },
-  '汇报检查结果': { running: '正在汇报检查结果', completed: '已汇报检查结果', summary: c => `汇报了${withCount(c, '次')}检查结果` },
-  '管理后台任务': { running: '正在管理后台任务', completed: '已管理后台任务', summary: c => `管理了${withCount(c, '次')}后台任务` },
-  '停止后台任务': { running: '正在停止后台任务', completed: '已停止后台任务', summary: c => `停止了${withCount(c, '个')}后台任务` },
-  '设置定时任务': { running: '正在设置定时任务', completed: '已设置定时任务', summary: c => `设置了${withCount(c, '个')}定时任务` },
-  '加载技能': { running: '正在加载技能', completed: '已加载技能', summary: c => `加载了${withCount(c, '个')}技能` },
-  '生成图片': { running: '正在生成图片', completed: '已生成图片', summary: c => `生成了${withCount(c, '张')}图片` },
-  '查看图片': { running: '正在查看图片', completed: '已查看图片', summary: c => `查看了${withCount(c, '张')}图片` },
-  '调用 MCP': { running: '正在调用 MCP 工具', completed: '已调用 MCP 工具', summary: c => `调用了${withCount(c, '次')} MCP 工具` },
-  '压缩上下文': { running: '正在压缩上下文', completed: '已压缩上下文', summary: c => `压缩了${withCount(c, '次')}上下文` },
-  '工具调用': { running: '正在执行工具', completed: '已执行工具', summary: c => `调用了${withCount(c, '次')}工具` }
+  '读取文件': { enLabel: 'Read File', running: '正在读取文件', completed: '已读取文件', summary: c => `读取了${withCount(c, '个')}文件`, enRunning: 'Reading file', enCompleted: 'Read file', enSummary: c => `Read ${plural(c, 'file', 'files')}` },
+  '查看代码结构': { enLabel: 'View Outline', running: '正在查看代码结构', completed: '已查看代码结构', summary: c => `查看了${withCount(c, '次')}代码结构`, enRunning: 'Viewing code outline', enCompleted: 'Viewed code outline', enSummary: c => `Viewed outline ${c > 1 ? `${c}x` : ''}`.trim() },
+  '修改文件': { enLabel: 'Edit File', running: '正在修改文件', completed: '已修改文件', summary: c => `修改了${withCount(c, '个')}文件`, enRunning: 'Editing file', enCompleted: 'Edited file', enSummary: c => `Edited ${plural(c, 'file', 'files')}` },
+  '写入文件': { enLabel: 'Write File', running: '正在写入文件', completed: '已写入文件', summary: c => `写入了${withCount(c, '个')}文件`, enRunning: 'Writing file', enCompleted: 'Wrote file', enSummary: c => `Wrote ${plural(c, 'file', 'files')}` },
+  '应用补丁': { enLabel: 'Apply Patch', running: '正在应用补丁', completed: '已应用补丁', summary: c => `应用了${withCount(c, '次')}补丁`, enRunning: 'Applying patch', enCompleted: 'Applied patch', enSummary: c => `Applied ${plural(c, 'patch', 'patches')}` },
+  '删除文件': { enLabel: 'Delete File', running: '正在删除文件', completed: '已删除文件', summary: c => `删除了${withCount(c, '个')}文件`, enRunning: 'Deleting file', enCompleted: 'Deleted file', enSummary: c => `Deleted ${plural(c, 'file', 'files')}` },
+  '移动文件': { enLabel: 'Move File', running: '正在移动文件', completed: '已移动文件', summary: c => `移动了${withCount(c, '个')}文件`, enRunning: 'Moving file', enCompleted: 'Moved file', enSummary: c => `Moved ${plural(c, 'file', 'files')}` },
+  '查看目录': { enLabel: 'List Directory', running: '正在查看目录', completed: '已查看目录', summary: c => `查看了${withCount(c, '个')}目录`, enRunning: 'Listing directory', enCompleted: 'Listed directory', enSummary: c => `Listed ${plural(c, 'directory', 'directories')}` },
+  '查找文件': { enLabel: 'Find Files', running: '正在查找文件', completed: '已查找文件', summary: c => `查找了${withCount(c, '次')}文件`, enRunning: 'Finding files', enCompleted: 'Found files', enSummary: c => c > 1 ? `Found files ${c}x` : 'Found files' },
+  '搜索内容': { enLabel: 'Search Code', running: '正在搜索内容', completed: '已搜索内容', summary: c => `搜索了${withCount(c, '次')}内容`, enRunning: 'Searching code', enCompleted: 'Searched code', enSummary: c => c > 1 ? `Searched ${c}x` : 'Searched code' },
+  '搜索工具': { enLabel: 'Search Tools', running: '正在搜索工具', completed: '已搜索工具', summary: c => `搜索了${withCount(c, '次')}工具`, enRunning: 'Searching tools', enCompleted: 'Searched tools', enSummary: c => c > 1 ? `Searched tools ${c}x` : 'Searched tools' },
+  '检查诊断': { enLabel: 'Check Diagnostics', running: '正在检查诊断', completed: '已检查诊断', summary: c => `检查了${withCount(c, '次')}诊断`, enRunning: 'Checking diagnostics', enCompleted: 'Checked diagnostics', enSummary: c => c > 1 ? `Checked diagnostics ${c}x` : 'Checked diagnostics' },
+  '执行命令': { enLabel: 'Run Command', running: '正在执行命令', completed: '已执行命令', summary: c => `执行了${withCount(c, '条')}命令`, enRunning: 'Running command', enCompleted: 'Ran command', enSummary: c => `Ran ${plural(c, 'command', 'commands')}` },
+  '查看命令输出': { enLabel: 'Read Output', running: '正在查看命令输出', completed: '已查看命令输出', summary: c => `查看了${withCount(c, '次')}命令输出`, enRunning: 'Reading command output', enCompleted: 'Read command output', enSummary: c => c > 1 ? `Read output ${c}x` : 'Read output' },
+  '向命令发送输入': { enLabel: 'Send Input', running: '正在向命令发送输入', completed: '已向命令发送输入', summary: c => `向命令发送了${withCount(c, '次')}输入`, enRunning: 'Sending input', enCompleted: 'Sent input', enSummary: c => c > 1 ? `Sent input ${c}x` : 'Sent input' },
+  '搜索网页': { enLabel: 'Web Search', running: '正在搜索网页', completed: '已搜索网页', summary: c => `搜索了${withCount(c, '次')}网页`, enRunning: 'Searching web', enCompleted: 'Searched web', enSummary: c => c > 1 ? `Web search ${c}x` : 'Searched web' },
+  '读取网页': { enLabel: 'Fetch Page', running: '正在读取网页', completed: '已读取网页', summary: c => `读取了${withCount(c, '个')}网页`, enRunning: 'Fetching web page', enCompleted: 'Fetched web page', enSummary: c => `Fetched ${plural(c, 'page', 'pages')}` },
+  '操作浏览器': { enLabel: 'Browser Action', running: '正在操作浏览器', completed: '已操作浏览器', summary: c => `操作了${withCount(c, '次')}浏览器`, enRunning: 'Operating browser', enCompleted: 'Used browser', enSummary: c => c > 1 ? `Browser ${c}x` : 'Used browser' },
+  'Git 操作': { enLabel: 'Git Command', running: '正在执行 Git 操作', completed: '已执行 Git 操作', summary: c => `执行了${withCount(c, '次')} Git 操作`, enRunning: 'Running Git command', enCompleted: 'Ran Git command', enSummary: c => c > 1 ? `Ran ${c} Git commands` : 'Ran Git command' },
+  '运行测试': { enLabel: 'Run Tests', running: '正在运行测试', completed: '已运行测试', summary: c => `运行了${withCount(c, '次')}测试`, enRunning: 'Running tests', enCompleted: 'Ran tests', enSummary: c => c > 1 ? `Ran tests ${c}x` : 'Ran tests' },
+  '查询数据': { enLabel: 'Query Data', running: '正在查询数据', completed: '已查询数据', summary: c => `查询了${withCount(c, '次')}数据`, enRunning: 'Querying data', enCompleted: 'Queried data', enSummary: c => c > 1 ? `Ran ${c} queries` : 'Queried data' },
+  '调用子 Agent': { enLabel: 'Invoke Subagent', running: '正在调用子 Agent', completed: '已调用子 Agent', summary: c => `调用了${withCount(c, '个')}子 Agent`, enRunning: 'Running subagent', enCompleted: 'Ran subagent', enSummary: c => `Ran ${plural(c, 'subagent', 'subagents')}` },
+  '定义子 Agent': { enLabel: 'Define Subagent', running: '正在定义子 Agent', completed: '已定义子 Agent', summary: c => `定义了${withCount(c, '个')}子 Agent`, enRunning: 'Defining subagent', enCompleted: 'Defined subagent', enSummary: c => `Defined ${plural(c, 'subagent', 'subagents')}` },
+  '管理子 Agent': { enLabel: 'Manage Subagents', running: '正在管理子 Agent', completed: '已管理子 Agent', summary: c => `管理了${withCount(c, '次')}子 Agent`, enRunning: 'Managing subagents', enCompleted: 'Managed subagents', enSummary: c => c > 1 ? `Managed subagents ${c}x` : 'Managed subagents' },
+  '发送消息': { enLabel: 'Send Message', running: '正在发送消息', completed: '已发送消息', summary: c => `发送了${withCount(c, '条')}消息`, enRunning: 'Sending message', enCompleted: 'Sent message', enSummary: c => `Sent ${plural(c, 'message', 'messages')}` },
+  '多 Agent 协作': { enLabel: 'Agent Swarm', running: '正在进行多 Agent 协作', completed: '已完成多 Agent 协作', summary: c => `进行了${withCount(c, '次')}多 Agent 协作`, enRunning: 'Coordinating swarm', enCompleted: 'Swarm updated', enSummary: c => c > 1 ? `Swarm ${c}x` : 'Swarm action' },
+  'Agent 群协作': { enLabel: 'Group Collaboration', running: '正在进行 Agent 群协作', completed: '已完成 Agent 群协作', summary: c => `进行了${withCount(c, '次')} Agent 群协作`, enRunning: 'Collaborating in group', enCompleted: 'Group action done', enSummary: c => c > 1 ? `Group action ${c}x` : 'Group action' },
+  '运行工作流': { enLabel: 'Run Workflow', running: '正在运行工作流', completed: '已运行工作流', summary: c => `运行了${withCount(c, '个')}工作流`, enRunning: 'Running workflow', enCompleted: 'Ran workflow', enSummary: c => `Ran ${plural(c, 'workflow', 'workflows')}` },
+  '发起提问': { enLabel: 'Ask Question', running: '正在发起提问', completed: '已发起提问', summary: c => `发起了${withCount(c, '次')}提问`, enRunning: 'Asking question', enCompleted: 'Asked question', enSummary: c => `Asked ${plural(c, 'question', 'questions')}` },
+  '更新待办': { enLabel: 'Update TODOs', running: '正在更新待办', completed: '已更新待办', summary: c => `更新了${withCount(c, '次')}待办`, enRunning: 'Updating TODOs', enCompleted: 'Updated TODOs', enSummary: c => c > 1 ? `Updated TODOs ${c}x` : 'Updated TODOs' },
+  '更新计划': { enLabel: 'Update Plan', running: '正在更新计划', completed: '已更新计划', summary: c => `更新了${withCount(c, '次')}计划`, enRunning: 'Updating plan', enCompleted: 'Updated plan', enSummary: c => c > 1 ? `Updated plan ${c}x` : 'Updated plan' },
+  '切换规划模式': { enLabel: 'Switch Plan Mode', running: '正在切换规划模式', completed: '已切换规划模式', summary: c => `切换了${withCount(c, '次')}规划模式`, enRunning: 'Switching plan mode', enCompleted: 'Switched plan mode', enSummary: c => c > 1 ? `Switched mode ${c}x` : 'Switched plan mode' },
+  '汇报检查结果': { enLabel: 'Report Findings', running: '正在汇报检查结果', completed: '已汇报检查结果', summary: c => `汇报了${withCount(c, '次')}检查结果`, enRunning: 'Reporting findings', enCompleted: 'Reported findings', enSummary: c => c > 1 ? `Reported findings ${c}x` : 'Reported findings' },
+  '管理后台任务': { enLabel: 'Manage Task', running: '正在管理后台任务', completed: '已管理后台任务', summary: c => `管理了${withCount(c, '次')}后台任务`, enRunning: 'Managing task', enCompleted: 'Managed task', enSummary: c => c > 1 ? `Managed tasks ${c}x` : 'Managed task' },
+  '停止后台任务': { enLabel: 'Stop Task', running: '正在停止后台任务', completed: '已停止后台任务', summary: c => `停止了${withCount(c, '个')}后台任务`, enRunning: 'Stopping task', enCompleted: 'Stopped task', enSummary: c => `Stopped ${plural(c, 'task', 'tasks')}` },
+  '设置定时任务': { enLabel: 'Schedule Task', running: '正在设置定时任务', completed: '已设置定时任务', summary: c => `设置了${withCount(c, '个')}定时任务`, enRunning: 'Scheduling task', enCompleted: 'Scheduled task', enSummary: c => `Scheduled ${plural(c, 'task', 'tasks')}` },
+  '加载技能': { enLabel: 'Load Skill', running: '正在加载技能', completed: '已加载技能', summary: c => `加载了${withCount(c, '个')}技能`, enRunning: 'Loading skill', enCompleted: 'Loaded skill', enSummary: c => `Loaded ${plural(c, 'skill', 'skills')}` },
+  '生成图片': { enLabel: 'Generate Image', running: '正在生成图片', completed: '已生成图片', summary: c => `生成了${withCount(c, '张')}图片`, enRunning: 'Generating image', enCompleted: 'Generated image', enSummary: c => `Generated ${plural(c, 'image', 'images')}` },
+  '查看图片': { enLabel: 'View Image', running: '正在查看图片', completed: '已查看图片', summary: c => `查看了${withCount(c, '张')}图片`, enRunning: 'Viewing image', enCompleted: 'Viewed image', enSummary: c => `Viewed ${plural(c, 'image', 'images')}` },
+  '调用 MCP': { enLabel: 'Call MCP', running: '正在调用 MCP 工具', completed: '已调用 MCP 工具', summary: c => `调用了${withCount(c, '次')} MCP 工具`, enRunning: 'Calling MCP tool', enCompleted: 'Called MCP tool', enSummary: c => c > 1 ? `Called MCP ${c}x` : 'Called MCP tool' },
+  '压缩上下文': { enLabel: 'Compact Context', running: '正在压缩上下文', completed: '已压缩上下文', summary: c => `压缩了${withCount(c, '次')}上下文`, enRunning: 'Compacting context', enCompleted: 'Compacted context', enSummary: c => c > 1 ? `Compacted ${c}x` : 'Compacted context' },
+  '工具调用': { enLabel: 'Tool Call', running: '正在执行工具', completed: '已执行工具', summary: c => `调用了${withCount(c, '次')}工具`, enRunning: 'Running tool', enCompleted: 'Ran tool', enSummary: c => `Ran ${plural(c, 'tool', 'tools')}` }
 };
 
+const ACTION_PHRASES_BY_EN: Record<string, ActionPhrase> = Object.fromEntries(
+  Object.values(ACTION_PHRASES).map(phrase => [phrase.enLabel, phrase])
+);
+
+function findActionPhrase(label: string): ActionPhrase | undefined {
+  return ACTION_PHRASES[label] ?? ACTION_PHRASES_BY_EN[label];
+}
+
 export function summarizeTools(events: TimelineEvent[]) {
+  const isEn = getCurrentLocale() === 'en-US';
   const counts = new Map<string, { kind: ToolKind; label: string; count: number }>();
   for (const event of events) {
     if (event.type !== 'tool_call' && event.type !== 'tool_result') continue;
@@ -1038,16 +1062,21 @@ export function summarizeTools(events: TimelineEvent[]) {
     counts.set(key, { kind: presentation.kind, label: presentation.label, count: (current?.count ?? 0) + 1 });
   }
   return [...counts.values()].map(({ kind, label, count }) => {
-    if (kind === 'note') return count > 1 ? `处理了 ${count} 次便签` : label;
-    const phrase = ACTION_PHRASES[label];
-    if (phrase) return phrase.summary(count);
-    return joinZh(`使用了${withCount(count, '次')}`, label);
+    if (kind === 'note') return count > 1 ? (isEn ? `Handled ${count} notes` : `处理了 ${count} 次便签`) : label;
+    const phrase = findActionPhrase(label);
+    if (phrase) return isEn ? phrase.enSummary(count) : phrase.summary(count);
+    return isEn ? `Used ${label}${count > 1 ? ` ${count}x` : ''}` : joinZh(`使用了${withCount(count, '次')}`, label);
   }).join(' · ');
 }
 
 export function toolActionLabel(presentation: ToolPresentation, terminal: boolean) {
-  const phrase = ACTION_PHRASES[presentation.label];
-  if (phrase) return terminal ? phrase.completed : phrase.running;
+  const isEn = getCurrentLocale() === 'en-US';
+  const phrase = findActionPhrase(presentation.label);
+  if (phrase) return isEn ? (terminal ? phrase.enCompleted : phrase.enRunning) : (terminal ? phrase.completed : phrase.running);
+  if (isEn) {
+    if (presentation.kind === 'note') return presentation.label;
+    return terminal ? `Ran ${presentation.label}` : `Running ${presentation.label}`;
+  }
   const prefix = terminal ? '已' : '正在';
   if (presentation.kind === 'note') return `${prefix}${presentation.label}`;
   return joinZh(`${prefix}调用`, presentation.label);

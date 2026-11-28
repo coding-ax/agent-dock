@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type AgentUsage, type CodexUsage, type UsageSourceKind } from './api';
+import { bi } from './i18n';
 
 export type QuotaAgentId = 'codex' | 'claude' | 'cursor' | 'antigravity';
 export type UsageSourcePreference = 'auto' | UsageSourceKind;
@@ -293,18 +294,18 @@ export function quotaUsageTone(usedPercent: number): QuotaTone {
 export function formatQuotaResetCountdown(resetsAtSeconds?: number, nowMs = Date.now()): string | undefined {
   if (resetsAtSeconds === undefined || !Number.isFinite(resetsAtSeconds) || resetsAtSeconds <= 0) return undefined;
   const diffMs = resetsAtSeconds * 1000 - nowMs;
-  if (diffMs <= 0) return '即将重置';
+  if (diffMs <= 0) return bi("即将重置", "Resetting soon");
   const totalMinutes = Math.ceil(diffMs / 60_000);
-  if (totalMinutes <= 1) return '1 分钟内重置';
-  if (totalMinutes < 60) return `${totalMinutes} 分钟后重置`;
+  if (totalMinutes <= 1) return bi("1 分钟内重置", "Resets in <1m");
+  if (totalMinutes < 60) return bi(`${totalMinutes} 分钟后重置`, `Resets in ${totalMinutes}m`);
   const totalHours = Math.floor(totalMinutes / 60);
   const restMinutes = totalMinutes % 60;
   if (totalHours < 24) {
-    return restMinutes > 0 ? `${totalHours} 小时 ${restMinutes} 分后重置` : `${totalHours} 小时后重置`;
+    return restMinutes > 0 ? bi(`${totalHours} 小时 ${restMinutes} 分后重置`, `Resets in ${totalHours}h ${restMinutes}m`) : bi(`${totalHours} 小时后重置`, `Resets in ${totalHours}h`);
   }
   const days = Math.floor(totalHours / 24);
   const restHours = totalHours % 24;
-  return restHours > 0 ? `${days} 天 ${restHours} 小时后重置` : `${days} 天后重置`;
+  return restHours > 0 ? bi(`${days} 天 ${restHours} 小时后重置`, `Resets in ${days}d ${restHours}h`) : bi(`${days} 天后重置`, `Resets in ${days}d`);
 }
 
 export function formatQuotaResetClock(resetsAtSeconds?: number): string | undefined {
@@ -328,24 +329,24 @@ export function formatUpdatedAt(timestampMs?: number, nowMs = Date.now()): strin
   if (timestampMs === undefined || !Number.isFinite(timestampMs)) return undefined;
   const diffMs = Math.max(0, nowMs - timestampMs);
   const clock = formatClockTime(timestampMs);
-  if (diffMs < 60_000) return `刚刚更新 · ${clock}`;
+  if (diffMs < 60_000) return bi(`刚刚更新 · ${clock}`, `Updated just now · ${clock}`);
   const mins = Math.floor(diffMs / 60_000);
-  if (mins < 60) return `${mins} 分钟前 · ${clock}`;
+  if (mins < 60) return bi(`${mins} 分钟前 · ${clock}`, `${mins}m ago · ${clock}`);
   const date = new Date(timestampMs);
-  return `${date.getMonth() + 1}/${date.getDate()} ${clock} 更新`;
+  return bi(`${date.getMonth() + 1}/${date.getDate()} ${clock} 更新`, `Updated ${date.getMonth() + 1}/${date.getDate()} ${clock}`);
 }
 
 /** 格式化预计耗尽倒计时（来自 Magpie runsOutAt）。 */
 export function formatQuotaRunsOutCountdown(runsOutAtSeconds?: number, nowMs = Date.now()): string | undefined {
   if (runsOutAtSeconds === undefined || !Number.isFinite(runsOutAtSeconds) || runsOutAtSeconds <= 0) return undefined;
   const diffMs = runsOutAtSeconds * 1000 - nowMs;
-  if (diffMs <= 0) return '即将耗尽';
+  if (diffMs <= 0) return bi("即将耗尽", "Depleting soon");
   const totalMinutes = Math.ceil(diffMs / 60_000);
-  if (totalMinutes < 60) return `预计 ${totalMinutes} 分钟后耗尽`;
+  if (totalMinutes < 60) return bi(`预计 ${totalMinutes} 分钟后耗尽`, `Est. depleted in ${totalMinutes}m`);
   const totalHours = Math.floor(totalMinutes / 60);
-  if (totalHours < 24) return `预计 ${totalHours} 小时后耗尽`;
+  if (totalHours < 24) return bi(`预计 ${totalHours} 小时后耗尽`, `Est. depleted in ${totalHours}h`);
   const days = Math.floor(totalHours / 24);
-  return `预计 ${days} 天后耗尽`;
+  return bi(`预计 ${days} 天后耗尽`, `Est. depleted in ${days}d`);
 }
 
 /** 取最紧迫窗口的剩余百分比或余额，用于外层 HoverTooltip 一句话摘要（含 Magpie 来源标记）。 */
@@ -357,21 +358,21 @@ export function summarizeQuotaTooltip(data?: AgentQuotaData): string | undefined
 
   if (data.status !== 'available') {
     if (!isMagpie) return undefined;
-    if (data.unavailableCode === 'provider_no_quota') return `${providerTag}（无上游额度）`;
-    if (data.unavailableCode === 'magpie_auth_required') return 'Magpie 需授权';
-    if (data.unavailableCode === 'magpie_unreachable') return 'Magpie 未连接';
+    if (data.unavailableCode === 'provider_no_quota') return bi(`${providerTag}（无上游额度）`, `${providerTag} (No upstream quota)`);
+    if (data.unavailableCode === 'magpie_auth_required') return bi("Magpie 需授权", "Magpie Auth Needed");
+    if (data.unavailableCode === 'magpie_unreachable') return bi("Magpie 未连接", "Magpie Offline");
     return undefined;
   }
 
   if (data.windows.length) {
     const tightest = data.windows.reduce((max, item) => (item.usedPercent > max.usedPercent ? item : max), data.windows[0]!);
     const remaining = Math.round(100 - clampPercent(tightest.usedPercent));
-    if (isMagpie) return `${providerTag} · 剩余 ${remaining}%`;
-    return `${tightest.label} 剩余 ${remaining}%`;
+    if (isMagpie) return bi(`${providerTag} · 剩余 ${remaining}%`, `${providerTag} · ${remaining}% left`);
+    return bi(`${tightest.label} 剩余 ${remaining}%`, `${tightest.label} ${remaining}% left`);
   }
 
   if (data.balance?.display) {
-    return isMagpie ? `${providerTag} · 余额 ${data.balance.display}` : `余额 ${data.balance.display}`;
+    return isMagpie ? bi(`${providerTag} · 余额 ${data.balance.display}`, `${providerTag} · Bal ${data.balance.display}`) : bi(`余额 ${data.balance.display}`, `Bal ${data.balance.display}`);
   }
   return undefined;
 }

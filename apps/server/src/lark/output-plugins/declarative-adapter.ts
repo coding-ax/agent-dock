@@ -1,10 +1,14 @@
 import {
+  formatInteractionSourceBadge,
   normalizeOutputPluginId,
+  tShared,
   type DeclarativeOutputPluginInteractionPayload,
   type DeclarativeOutputPluginSpec,
+  type Locale,
   type OutputPluginAccentTone,
   type OutputPluginDefinition
 } from '@agent-dock/agent-dock-shared';
+import { getActiveServerLocale } from '../../locale-service.js';
 import { webAccessSessionToken } from '../../web-access.js';
 import type { LarkOutputPluginAdapter } from './types.js';
 
@@ -34,8 +38,8 @@ function escapeLarkInlineMd(value: string): string {
     .trim();
 }
 
-function escapeLarkTagText(value: string): string {
-  return truncatePlain(value.replace(/[<>&'"]/g, ''), 40) || '已响应';
+function escapeLarkTagText(value: string, locale: Locale): string {
+  return truncatePlain(value.replace(/[<>&'"]/g, ''), 40) || tShared(locale, 'lark.declarative.tagFallback');
 }
 
 function headerTemplateForTone(tone: OutputPluginAccentTone): string {
@@ -58,7 +62,7 @@ function formatTimestamp(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function buildWebSessionFooter(sessionId?: string, webBaseUrl?: string): Array<Record<string, unknown>> {
+function buildWebSessionFooter(locale: Locale, sessionId?: string, webBaseUrl?: string): Array<Record<string, unknown>> {
   if (!webBaseUrl) return [];
   const base = webBaseUrl.replace(/\/$/, '');
   let url = sessionId ? `${base}/sessions/${sessionId}` : `${base}/sessions`;
@@ -66,7 +70,7 @@ function buildWebSessionFooter(sessionId?: string, webBaseUrl?: string): Array<R
   if (token) url += `?t=${token}`;
   return [{
     tag: 'markdown',
-    content: `<font color='grey'>[在 AgentDock 查看会话](${url})</font>`,
+    content: `<font color='grey'>[${tShared(locale, 'lark.card.footer.viewSession')}](${url})</font>`,
     text_size: 'x-small',
     margin: '6px 0px 0px 0px'
   }];
@@ -93,7 +97,15 @@ export function createDeclarativeLarkAdapter(
       || (plugin.capabilities.interactive
         ? `<font color='grey'>👇 请在下方「${plugin.name}」交互卡片中操作</font>`
         : `<font color='grey'>👇 请在下方查看「${plugin.name}」详情卡片</font>`),
+    getTrailingHintMarkdown(locale) {
+      if (defaults?.trailingHintMarkdown) return defaults.trailingHintMarkdown;
+      const key = plugin.capabilities.interactive ? 'lark.declarative.trailingInteractive' : 'lark.declarative.trailingInfo';
+      return `<font color='grey'>${tShared(locale, key, { name: plugin.name })}</font>`;
+    },
     streamingPlaceholderText: defaults?.streamingPlaceholderText || `⏳ 正在生成「${plugin.name}」卡片…`,
+    getStreamingPlaceholderText(locale) {
+      return defaults?.streamingPlaceholderText || tShared(locale, 'lark.declarative.streamingPlaceholder', { name: plugin.name });
+    },
 
     handlesAction(action, value): boolean {
       if (!LARK_DECLARATIVE_PLUGIN_ACTIONS.has(action)) return false;
@@ -105,23 +117,25 @@ export function createDeclarativeLarkAdapter(
       return action === LARK_OUTPUT_PLUGIN_ACTION_PREVIEW;
     },
 
-    buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode }) {
+    buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, locale: explicitLocale }) {
+      const locale = explicitLocale ?? getActiveServerLocale();
       const baseTitle = spec.title?.trim() || plugin.name;
       const title = previewBanner ? `${previewBanner} ${baseTitle}` : baseTitle;
       const subtitle = previewMode
-        ? `AgentDock · ${plugin.name} 飞书预览`
+        ? tShared(locale, 'lark.declarative.subtitlePreview', { name: plugin.name })
         : spec.kind === 'info-card'
           ? `AgentDock · ${plugin.name}`
           : spec.kind === 'form-card'
-            ? `AgentDock · ${plugin.name}（填写后提交）`
-            : `AgentDock · ${plugin.name}（点击按钮直接响应）`;
+            ? tShared(locale, 'lark.declarative.subtitleForm', { name: plugin.name })
+            : tShared(locale, 'lark.declarative.subtitleAction', { name: plugin.name });
+      const colon = locale === 'en-US' ? ': ' : '：';
 
       const elements: Array<Record<string, unknown>> = [];
 
       if (spec.status?.trim()) {
         elements.push({
           tag: 'markdown',
-          content: `<text_tag color='${headerTemplateForTone(spec.tone)}'>${escapeLarkTagText(spec.status)}</text_tag>`,
+          content: `<text_tag color='${headerTemplateForTone(spec.tone)}'>${escapeLarkTagText(spec.status, locale)}</text_tag>`,
           text_size: 'notation',
           margin: '0px 0px 4px 0px'
         });
@@ -139,7 +153,7 @@ export function createDeclarativeLarkAdapter(
       if (spec.kind !== 'form-card' && spec.fields.length > 0) {
         const lines = spec.fields.map(field => {
           const val = field.value?.trim() ? escapeLarkInlineMd(field.value) : '—';
-          return `• **${escapeLarkInlineMd(field.label)}**：${val}`;
+          return `• **${escapeLarkInlineMd(field.label)}**${colon}${val}`;
         });
         elements.push({
           tag: 'markdown',
@@ -195,7 +209,7 @@ export function createDeclarativeLarkAdapter(
                 tag: 'select_static',
                 name: 'action_value',
                 width: 'fill',
-                placeholder: { tag: 'plain_text', content: '选择操作（带备注提交）' },
+                placeholder: { tag: 'plain_text', content: tShared(locale, 'lark.declarative.noteActionPlaceholder') },
                 options: spec.actions.map(act => ({
                   text: { tag: 'plain_text', content: truncatePlain(act.label, 40) },
                   value: act.value
@@ -207,11 +221,11 @@ export function createDeclarativeLarkAdapter(
                 tag: 'input',
                 name: 'note_text',
                 width: 'fill',
-                label: { tag: 'plain_text', content: '补充说明' },
+                label: { tag: 'plain_text', content: tShared(locale, 'lark.declarative.noteLabel') },
                 label_position: 'top',
                 placeholder: {
                   tag: 'plain_text',
-                  content: truncatePlain(spec.notePlaceholder || '输入补充说明后提交…', 60)
+                  content: truncatePlain(spec.notePlaceholder || tShared(locale, 'lark.declarative.notePlaceholder'), 60)
                 },
                 required: true
               },
@@ -221,7 +235,7 @@ export function createDeclarativeLarkAdapter(
                 form_action_type: 'submit',
                 type: 'default',
                 width: 'fill',
-                text: { tag: 'plain_text', content: '附带说明提交' },
+                text: { tag: 'plain_text', content: tShared(locale, 'lark.declarative.noteSubmit') },
                 behaviors: [{
                   type: 'callback',
                   value: {
@@ -249,7 +263,7 @@ export function createDeclarativeLarkAdapter(
               tag: 'select_static',
               name: fieldKey,
               width: 'fill',
-              placeholder: { tag: 'plain_text', content: truncatePlain(field.placeholder || `请选择${field.label}`, 60) },
+              placeholder: { tag: 'plain_text', content: truncatePlain(field.placeholder || tShared(locale, 'lark.declarative.selectFieldPlaceholder', { label: field.label }), 60) },
               options: field.options.map(opt => ({
                 text: { tag: 'plain_text', content: truncatePlain(opt.label, 40) },
                 value: opt.value
@@ -267,7 +281,7 @@ export function createDeclarativeLarkAdapter(
               label: { tag: 'plain_text', content: truncatePlain(field.label, 40) },
               label_position: 'top',
               ...(field.value ? { default_value: field.value } : {}),
-              placeholder: { tag: 'plain_text', content: truncatePlain(field.placeholder || `请输入${field.label}`, 60) },
+              placeholder: { tag: 'plain_text', content: truncatePlain(field.placeholder || tShared(locale, 'lark.declarative.inputFieldPlaceholder', { label: field.label }), 60) },
               required: field.required
             });
           }
@@ -280,7 +294,7 @@ export function createDeclarativeLarkAdapter(
           type: 'primary',
           width: 'fill',
           margin: '4px 0px 0px 0px',
-          text: { tag: 'plain_text', content: truncatePlain(spec.submitLabel || '提交', 40) },
+          text: { tag: 'plain_text', content: truncatePlain(spec.submitLabel || tShared(locale, 'lark.declarative.submitDefault'), 40) },
           behaviors: [{
             type: 'callback',
             value: {
@@ -301,14 +315,14 @@ export function createDeclarativeLarkAdapter(
         });
       }
 
-      elements.push(...buildWebSessionFooter(sessionId, webBaseUrl));
+      elements.push(...buildWebSessionFooter(locale, sessionId, webBaseUrl));
 
       return {
         schema: '2.0',
         config: {
           update_multi: true,
           width_mode: 'default',
-          summary: { content: truncatePlain(`${title}${spec.summary ? `：${spec.summary}` : ''}`, 110) }
+          summary: { content: truncatePlain(`${title}${spec.summary ? `${colon}${spec.summary}` : ''}`, 110) }
         },
         header: {
           template: headerTemplateForTone(spec.tone),
@@ -324,46 +338,49 @@ export function createDeclarativeLarkAdapter(
       };
     },
 
-    buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner }) {
-      const sourceLabel = payload.source === 'web' ? '网页端' : '飞书';
-      const actorPart = payload.actedBy?.trim() ? ` · 操作人：${payload.actedBy.trim()}` : '';
-      const baseTitle = payload.title?.trim()
-        ? `✅ ${payload.title.trim()}（已响应）`
-        : `✅ ${plugin.name}（已响应）`;
+    buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner, locale: explicitLocale }) {
+      const locale = explicitLocale ?? getActiveServerLocale();
+      const responder = payload.responderName?.trim() || payload.actedBy?.trim();
+      const sourceLabel = formatInteractionSourceBadge(payload.source, locale, { responderName: responder, variant: 'lark' });
+      const actorPart = payload.source === 'assistant'
+        ? ''
+        : (payload.actedBy?.trim() ? tShared(locale, 'lark.confirm.answeredActor', { name: payload.actedBy.trim() }) : '');
+      const baseTitle = tShared(locale, 'lark.declarative.answeredTitle', { title: payload.title?.trim() || plugin.name });
       const title = previewBanner ? `${previewBanner} ${baseTitle}` : baseTitle;
-      const subtitle = `来源：${sourceLabel}${actorPart}`;
+      const subtitle = tShared(locale, 'lark.confirm.answeredSubtitle', { source: sourceLabel, actor: actorPart });
+      const colon = locale === 'en-US' ? ':' : '：';
 
       const elements: Array<Record<string, unknown>> = [];
       const lines: string[] = [];
       if (payload.actionLabel || payload.actionValue) {
-        lines.push(`**操作：** <text_tag color='green'>${escapeLarkTagText(payload.actionLabel || payload.actionValue!)}</text_tag>`);
+        lines.push(`**${tShared(locale, 'lark.declarative.actionLabel')}${colon}** <text_tag color='green'>${escapeLarkTagText(payload.actionLabel || payload.actionValue!, locale)}</text_tag>`);
       }
       for (const field of payload.fields) {
-        lines.push(`**${escapeLarkInlineMd(field.label)}：** ${escapeLarkInlineMd(field.displayValue || field.value)}`);
+        lines.push(`**${escapeLarkInlineMd(field.label)}${colon}** ${escapeLarkInlineMd(field.displayValue || field.value)}`);
       }
       if (payload.note?.trim()) {
-        lines.push(`> 补充说明：${escapeLarkInlineMd(payload.note)}`);
+        lines.push(`> ${tShared(locale, 'lark.declarative.notePrefix', { text: escapeLarkInlineMd(payload.note) })}`);
       }
       elements.push({
         tag: 'markdown',
-        content: lines.join('\n') || '已确认响应。',
+        content: lines.join('\n') || tShared(locale, 'lark.declarative.confirmedFallback'),
         text_size: 'normal_v2',
         margin: '0px'
       });
       elements.push({
         tag: 'markdown',
-        content: `<font color='grey'>已同步至 AgentDock 会话并继续执行 · ${formatTimestamp(payload.actedAt)}</font>`,
+        content: `<font color='grey'>${tShared(locale, 'lark.ask.syncedContinue', { time: formatTimestamp(payload.actedAt) })}</font>`,
         text_size: 'x-small',
         margin: '6px 0px 0px 0px'
       });
-      elements.push(...buildWebSessionFooter(sessionId, webBaseUrl));
+      elements.push(...buildWebSessionFooter(locale, sessionId, webBaseUrl));
 
       return {
         schema: '2.0',
         config: {
           update_multi: true,
           width_mode: 'default',
-          summary: { content: truncatePlain(`${title}（${sourceLabel}）`, 110) }
+          summary: { content: truncatePlain(locale === 'en-US' ? `${title} (${sourceLabel})` : `${title}（${sourceLabel}）`, 110) }
         },
         header: {
           template: 'green',
@@ -379,11 +396,12 @@ export function createDeclarativeLarkAdapter(
       };
     },
 
-    parseAction(spec, action, value, formValue) {
+    parseAction(spec, action, value, formValue, explicitLocale) {
+      const locale = explicitLocale ?? getActiveServerLocale();
       if (action === LARK_OUTPUT_PLUGIN_ACTION_CLICK) {
         const actionValue = String(value.action_value ?? '').trim();
         const matched = spec.actions.find(item => item.value === actionValue);
-        if (!matched) return { ok: false, error: '未找到对应的操作选项' };
+        if (!matched) return { ok: false, error: tShared(locale, 'lark.declarative.error.actionNotFound') };
         return {
           ok: true,
           interaction: {
@@ -397,8 +415,8 @@ export function createDeclarativeLarkAdapter(
         const actionValue = String(formValue?.action_value ?? value.action_value ?? '').trim();
         const note = String(formValue?.note_text ?? '').trim();
         const matched = spec.actions.find(item => item.value === actionValue) ?? spec.actions[0];
-        if (!matched) return { ok: false, error: '未找到对应的操作选项' };
-        if (!note) return { ok: false, error: '请先填写补充说明后再提交' };
+        if (!matched) return { ok: false, error: tShared(locale, 'lark.declarative.error.actionNotFound') };
+        if (!note) return { ok: false, error: tShared(locale, 'lark.declarative.error.emptyNote') };
         return {
           ok: true,
           interaction: {
@@ -416,7 +434,7 @@ export function createDeclarativeLarkAdapter(
           const raw = formValue?.[declarativeFormFieldKey(idx)];
           const textVal = typeof raw === 'string' ? raw.trim() : raw !== undefined && raw !== null ? String(raw).trim() : '';
           if (field.required && !textVal) {
-            return { ok: false, error: `请先填写「${field.label}」` };
+            return { ok: false, error: tShared(locale, 'lark.declarative.error.requiredField', { label: field.label }) };
           }
           if (!textVal) continue;
           const optLabel = field.options.find(opt => opt.value === textVal)?.label;
@@ -428,19 +446,19 @@ export function createDeclarativeLarkAdapter(
           });
         }
         if (!fields.length) {
-          return { ok: false, error: '请至少填写一项后再提交' };
+          return { ok: false, error: tShared(locale, 'lark.declarative.error.emptyForm') };
         }
         return {
           ok: true,
           interaction: {
             actionValue: 'submit',
-            actionLabel: spec.submitLabel || '提交',
+            actionLabel: spec.submitLabel || tShared(locale, 'lark.declarative.submitDefault'),
             fields
           }
         };
       }
 
-      return { ok: false, error: '不支持的插件卡片操作' };
+      return { ok: false, error: tShared(locale, 'lark.declarative.error.unsupported') };
     }
   };
 }

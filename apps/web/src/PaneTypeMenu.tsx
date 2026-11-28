@@ -3,6 +3,7 @@ import { Folder, MessagesSquare, ScrollText, Terminal as TerminalIcon } from 'lu
 import { useDismissOnOutsidePointer } from './useDismissOnOutsidePointer';
 import type { Shortcut } from './useShortcuts';
 import type { PaneTabKind } from './store';
+import { bi } from './i18n';
 
 const MENU_WIDTH = 232;
 const MENU_HEIGHT = 210;
@@ -11,10 +12,10 @@ const GAP = 6;
 export interface PaneTypeOption { kind: PaneTabKind; label: string; shortcut?: Shortcut }
 
 export const paneTypeOptions = (shortcuts: Shortcut[]): PaneTypeOption[] => [
-  { kind: 'terminal', label: '终端', shortcut: shortcuts.find(item => item.key === 't' && !item.shift) },
-  { kind: 'side-chat', label: '侧边聊天', shortcut: shortcuts.find(item => item.key === 's' && item.shift) },
-  { kind: 'files', label: '文件', shortcut: shortcuts.find(item => item.key === 'p') },
-  { kind: 'raw', label: '原始日志', shortcut: undefined }
+  { kind: 'terminal', label: bi("终端", "Terminal"), shortcut: shortcuts.find(item => item.key === 't' && !item.shift) },
+  { kind: 'side-chat', label: bi("侧边聊天", "Side Chat"), shortcut: shortcuts.find(item => item.key === 's' && item.shift) },
+  { kind: 'files', label: bi("文件", "Files"), shortcut: shortcuts.find(item => item.key === 'p') },
+  { kind: 'raw', label: bi("原始日志", "Raw Logs"), shortcut: undefined }
 ];
 
 const icon = (kind: PaneTabKind) => kind === 'terminal' ? <TerminalIcon size={14}/> : kind === 'side-chat' ? <MessagesSquare size={14}/> : kind === 'raw' ? <ScrollText size={14}/> : <Folder size={14}/>;

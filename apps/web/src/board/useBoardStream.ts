@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { BoardItemLiveDigest, HydratedBoard } from '../api';
+import { bi } from '../i18n';
 import { useBoardStore } from './board-store';
 
 export type BoardStreamStatus = 'connecting' | 'live' | 'reconnecting';

@@ -17,12 +17,14 @@ import {
 import type { Agent, BoardDensity, HydratedBoardColumn, HydratedBoardItem } from '../api';
 import { AgentIcon } from '../AgentIcon';
 import { HoverTooltip } from '../HoverTooltip';
+import { useBi, useLocale } from '../i18n';
 import { BoardPopoverMenu } from './BoardPopoverMenu';
 import {
   COLUMN_COLOR_STYLES,
-  VISUAL_STATE_META,
   formatBoardElapsed,
   formatRelativeBrief,
+  getVisualStateMeta,
+  localizeBoardColumnName,
   projectBasename
 } from './board-utils';
 
@@ -63,10 +65,12 @@ export const BoardCardSurface = memo(function BoardCardSurface({
   columnBadge,
   handlers
 }: BoardCardSurfaceProps) {
+  const L = useBi();
+  const locale = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const stateMeta = VISUAL_STATE_META[item.live.visualState] ?? VISUAL_STATE_META.idle;
+  const stateMeta = getVisualStateMeta(item.live.visualState, locale);
   const compact = density === 'compact';
   const elapsedLabel = formatBoardElapsed(item.live.activeMs);
   const updatedBrief = formatRelativeBrief(item.live.updatedAt ?? item.updatedAt);
@@ -119,7 +123,7 @@ export const BoardCardSurface = memo(function BoardCardSurface({
             {!isOverlay && handlers && (
               <button
                 type="button"
-                aria-label={selected ? '取消选中卡片' : '选中卡片（批量 @小猫）'}
+                aria-label={selected ? L("取消选中卡片", "Deselect card") : L("选中卡片（批量 @小猫）", "Select card (batch @companion)")}
                 aria-pressed={selected}
                 onPointerDown={e => e.stopPropagation()}
                 onClick={e => {
@@ -150,13 +154,14 @@ export const BoardCardSurface = memo(function BoardCardSurface({
 
           <div className="flex shrink-0 items-center gap-1 pt-0.5">
             {item.pinned && (
-              <HoverTooltip content="已置顶">
+              <HoverTooltip content={L("已置顶", "Pinned")}>
                 <span className="text-amber-500"><Pin size={11} className="ui-icon-pop fill-current"/></span>
               </HoverTooltip>
             )}
             {hasRework && (
               <span className="rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium tabular-nums text-amber-800">
-                返工×{reworkRounds}
+                
+                {L("返工×", "Rework ×")}{reworkRounds}
               </span>
             )}
             {elapsedLabel ? (
@@ -205,7 +210,7 @@ export const BoardCardSurface = memo(function BoardCardSurface({
               </span>
             )}
             <span className="inline-flex items-center rounded-md bg-zinc-100 px-1.5 py-0.5 text-[10.5px] font-medium text-zinc-500">
-              {item.entityKind === 'task' ? '便签' : item.entityKind === 'session' ? '会话' : '文字'}
+              {item.entityKind === 'task' ? L("便签", "Note") : item.entityKind === 'session' ? L("会话", "Session") : L("文字", "Text")}
             </span>
             {project && (
               <span className="inline-flex max-w-[116px] items-center gap-0.5 truncate rounded-md bg-zinc-100/80 px-1.5 py-0.5 text-[10.5px] text-zinc-500" title={item.live.cwd ?? undefined}>
@@ -233,30 +238,30 @@ export const BoardCardSurface = memo(function BoardCardSurface({
               onPointerDown={e => e.stopPropagation()}
               onClick={e => e.stopPropagation()}
             >
-              <HoverTooltip content="打开详情抽屉">
+              <HoverTooltip content={L("打开详情抽屉", "Open details")}>
                 <button
                   type="button"
-                  aria-label="打开详情抽屉"
+                  aria-label={L("打开详情抽屉", "Open details")}
                   onClick={() => handlers.onOpenDrawer(item)}
                   className="ui-press grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
                 >
                   <Eye size={12.5}/>
                 </button>
               </HoverTooltip>
-              <HoverTooltip content="投喂给小猫处理">
+              <HoverTooltip content={L("投喂给小猫处理", "Send to companion")}>
                 <button
                   type="button"
-                  aria-label="投喂给小猫处理"
+                  aria-label={L("投喂给小猫处理", "Send to companion")}
                   onClick={() => handlers.onAskKitten(item)}
                   className="ui-press grid h-6 w-6 place-items-center rounded-md text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700"
                 >
                   <PawPrint size={12.5}/>
                 </button>
               </HoverTooltip>
-              <HoverTooltip content={item.pinned ? '取消置顶' : '置顶到列首'}>
+              <HoverTooltip content={item.pinned ? L("取消置顶", "Unpin") : L("置顶到列首", "Pin to top")}>
                 <button
                   type="button"
-                  aria-label={item.pinned ? '取消置顶' : '置顶到列首'}
+                  aria-label={item.pinned ? L("取消置顶", "Unpin") : L("置顶到列首", "Pin to top")}
                   onClick={() => handlers.onTogglePin(item)}
                   className={`ui-press grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-zinc-100 ${item.pinned ? 'text-amber-500' : 'text-zinc-500 hover:text-zinc-900'}`}
                 >
@@ -264,10 +269,10 @@ export const BoardCardSurface = memo(function BoardCardSurface({
                 </button>
               </HoverTooltip>
               <div ref={menuRef} className="relative">
-                <HoverTooltip content={menuOpen ? undefined : '移动与更多操作'} hoverOnly>
+                <HoverTooltip content={menuOpen ? undefined : L("移动与更多操作", "Move & more actions")} hoverOnly>
                   <button
                     type="button"
-                    aria-label="移动与更多操作"
+                    aria-label={L("移动与更多操作", "Move & more actions")}
                     aria-haspopup="menu"
                     aria-expanded={menuOpen}
                     onClick={() => setMenuOpen(open => !open)}
@@ -282,10 +287,10 @@ export const BoardCardSurface = memo(function BoardCardSurface({
                   open={menuOpen}
                   anchorRef={menuRef}
                   width={192}
-                  ariaLabel="移动与更多操作"
+                  ariaLabel={L("移动与更多操作", "Move & more actions")}
                   onClose={() => setMenuOpen(false)}
                 >
-                  <div className="px-2 py-1 text-[11px] font-medium text-zinc-400">移动到列</div>
+                  <div className="px-2 py-1 text-[11px] font-medium text-zinc-400">{L("移动到列", "Move to column")}</div>
                   <div className="max-h-40 overflow-y-auto">
                     {columns.map(col => {
                       const isCurrent = col.id === item.columnId;
@@ -303,7 +308,7 @@ export const BoardCardSurface = memo(function BoardCardSurface({
                           className="ui-press flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-zinc-700 hover:bg-zinc-100 disabled:opacity-45"
                         >
                           <span className={`h-2 w-2 shrink-0 rounded-full ${style.dot}`}/>
-                          <span className="min-w-0 flex-1 truncate">{col.name}</span>
+                          <span className="min-w-0 flex-1 truncate">{localizeBoardColumnName(col.name, locale)}</span>
                           {isCurrent && <ArrowRightLeft size={11} className="text-zinc-400"/>}
                         </button>
                       );
@@ -321,7 +326,7 @@ export const BoardCardSurface = memo(function BoardCardSurface({
                       className="ui-press flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-zinc-700 hover:bg-zinc-100"
                     >
                       <RotateCcw size={12} className="text-zinc-400"/>
-                      <span>恢复规则自动归位</span>
+                      <span>{L("恢复规则自动归位", "Reset to smart rule")}</span>
                     </button>
                   )}
                   {!item.virtual && (
@@ -335,7 +340,7 @@ export const BoardCardSurface = memo(function BoardCardSurface({
                       className="ui-press flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] text-red-600 hover:bg-red-50"
                     >
                       <Trash2 size={12}/>
-                      <span>从看板移出</span>
+                      <span>{L("从看板移出", "Remove from board")}</span>
                     </button>
                   )}
                 </BoardPopoverMenu>

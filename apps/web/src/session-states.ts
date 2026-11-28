@@ -1,8 +1,19 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
+import { getCurrentLocale } from './i18n';
+
 export const stateLabels: Record<string, string> = {
   created: '已创建', starting: '启动中', idle: '就绪', thinking: '思考中', running_tool: '正在调用工具', waiting_for_permission: '等待授权', interrupting: '正在取消', interrupted: '已取消', completed: '已完成', failed: '失败', stopped: '已停止'
 };
+const stateLabelsEn: Record<string, string> = {
+  created: 'Created', starting: 'Starting', idle: 'Ready', thinking: 'Thinking', running_tool: 'Running Tool', waiting_for_permission: 'Approval Needed', interrupting: 'Stopping', interrupted: 'Cancelled', completed: 'Completed', failed: 'Failed', stopped: 'Stopped'
+};
 /** 中断状态要结合原因：区分用户主动停止与服务重启被动中断，避免显示成模糊的「已取消」。 */
-export function sessionStateLabel(state: string, interruptIntent?: string | null) {
+export function sessionStateLabel(state: string, interruptIntent?: string | null, locale: Locale = getCurrentLocale()) {
+  if (locale === 'en-US') {
+    if (state === 'interrupted' && interruptIntent === 'user') return 'Stopped by user';
+    if (state === 'interrupted' && interruptIntent === 'daemon_restart') return 'Interrupted by restart';
+    return stateLabelsEn[state] ?? state;
+  }
   if (state === 'interrupted' && interruptIntent === 'user') return '用户已停止';
   if (state === 'interrupted' && interruptIntent === 'daemon_restart') return '服务重启中断';
   return stateLabels[state] ?? state;

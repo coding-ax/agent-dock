@@ -377,7 +377,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
     sshProbeCache.set(host, { at: Date.now(), value });
     return value;
   });
-  await registerSystemRoutes(app, options.system);
+  await registerSystemRoutes(app, options.system, streams);
   if (options.shareLinks) registerShareLinkRoutes(app, options.shareLinks, runtime);
   if (options.selfUpdate) registerSelfUpdateRoutes(app, options.selfUpdate);
   if (options.schedules) registerScheduleRoutes(app, options.schedules);

@@ -5,6 +5,7 @@ import { Kitten } from './Kitten';
 import { anchorElement, nudge, prefersReducedMotion, useAnchor } from './effects';
 import { useCompanion, useCompanionNav } from './useCompanion';
 import { useCompanionStore, type BubbleAction, type CompanionBubble } from './companion-store';
+import { useBi } from '../i18n';
 
 export type CompanionView = 'home' | 'main' | 'session' | 'board';
 
@@ -39,6 +40,7 @@ function usePausableTimeout(ms: number, paused: boolean, onDone: () => void) {
 }
 
 function EdgeBubble({ bubble, onAction, onDone }: { bubble: CompanionBubble; onAction(action: BubbleAction): void; onDone(): void }) {
+  const L = useBi();
   const [paused, setPaused] = useState(false);
   const [leaving, setLeaving] = useState(false);
   usePausableTimeout(BUBBLE_MS, paused || leaving, () => setLeaving(true));
@@ -50,7 +52,7 @@ function EdgeBubble({ bubble, onAction, onDone }: { bubble: CompanionBubble; onA
   return <div className="ui-edge-bubble" data-tone={bubble.tone} data-paused={paused || undefined} data-leaving={leaving || undefined} style={{ '--bubble-ms': `${BUBBLE_MS}ms` } as CSSProperties} onPointerEnter={() => setPaused(true)} onPointerLeave={() => setPaused(false)}>
     <div role="status" aria-live="polite" className="ui-edge-bubble-card" data-actionable={bubble.action ? '' : undefined} onClick={() => { if (bubble.action) onAction(bubble.action); setLeaving(true); }}>
       <span className="min-w-0">{bubble.text}</span>
-      <button type="button" aria-label="收起这句话" onClick={event => { event.stopPropagation(); setLeaving(true); }} className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-900/5 hover:text-zinc-700"><X size={12}/></button>
+      <button type="button" aria-label={L("收起这句话", "Dismiss bubble")} onClick={event => { event.stopPropagation(); setLeaving(true); }} className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-900/5 hover:text-zinc-700"><X size={12}/></button>
       <span className="ui-edge-bubble-timer" aria-hidden="true"/>
     </div>
     <span className="ui-edge-bubble-tail" aria-hidden="true"/>
@@ -67,6 +69,7 @@ function EdgeBubble({ bubble, onAction, onDone }: { bubble: CompanionBubble; onA
  * - 还没认领时：一只小猫从屏幕边缘探出半个头，点它去认领（用户说过「先不了」就不再探头）。
  */
 export function CompanionEdge({ view }: { view: CompanionView }) {
+  const L = useBi();
   const info = useCompanion();
   const nav = useCompanionNav();
   const drawerOpen = useCompanionStore(store => store.drawerOpen);
@@ -155,7 +158,7 @@ export function CompanionEdge({ view }: { view: CompanionView }) {
   if (!info.adopted) {
     if (inviteDismissed || view === 'home') return null;
     return <div ref={root} className="ui-edge" style={{ top }}>
-      <button type="button" onClick={nav.goAdopt} aria-label="认领一只小猫" title="喵？带我回家吧" className="ui-edge-peek ui-cat-hover-host">
+      <button type="button" onClick={nav.goAdopt} aria-label={L("认领一只小猫", "Adopt Companion")} title={L("喵？带我回家吧", "Meow? Adopt me!")} className="ui-edge-peek ui-cat-hover-host">
         <Kitten variant="face" size={32} mood="curious" interactive={false}/>
       </button>
     </div>;
@@ -165,17 +168,17 @@ export function CompanionEdge({ view }: { view: CompanionView }) {
   const open = info.counts.open;
   const alertTone = needs > 0 ? 'needs' : info.pendingDrafts > 0 ? 'draft' : undefined;
   const planned = info.counts.planned;
-  const label = `${info.name}的便签：${open} 张便签${needs ? `，${needs} 件需要你` : ''}${planned ? `，${planned} 张计划等你点头` : ''}`;
+  const label = L(`${info.name}的便签：${open} 张便签${needs ? `，${needs} 件需要你` : ''}${planned ? `，${planned} 张计划等你点头` : ''}`, `${info.name}'s Notes: ${open} active${needs ? `, ${needs} need you` : ''}${planned ? `, ${planned} plan(s) pending` : ''}`);
   return <div ref={root} className="ui-edge" style={{ top }} data-dragging={dragging || undefined} data-pulled={pulled || undefined} data-attention={needs > 0 || undefined} data-bubble={bubble ? '' : undefined}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endGesture} onPointerCancel={endGesture}
     onClickCapture={event => { if (suppressClick.current) { event.stopPropagation(); event.preventDefault(); } }}>
     {bubble && !drawerOpen && <EdgeBubble key={bubble.id} bubble={bubble} onAction={onAction} onDone={onBubbleDone}/>}
     <div ref={node => { pill.current = node; pillAnchor(node); }} className="ui-edge-pill">
-      <span className="ui-edge-grip" aria-hidden="true" title="上下拖动换位置"/>
-      {showKitten && <button type="button" onClick={() => nav.openMain()} aria-label={`和${info.name}聊聊（${info.status}）`} title={`${info.name} · ${info.status}`} className="ui-edge-btn ui-edge-kitten ui-cat-hover-host">
+      <span className="ui-edge-grip" aria-hidden="true" title={L("上下拖动换位置", "Drag up/down to reposition")}/>
+      {showKitten && <button type="button" onClick={() => nav.openMain()} aria-label={L(`和${info.name}聊聊（${info.status}）`, `Chat with ${info.name} (${info.status})`)} title={`${info.name} · ${info.status}`} className="ui-edge-btn ui-edge-kitten ui-cat-hover-host">
         <span ref={kittenAnchor}><Kitten variant="face" size={30} mood={info.mood} stage={info.stage} collar interactive={false}/></span>
       </button>}
-      <button type="button" onClick={() => useCompanionStore.getState().toggleDrawer()} aria-label={label} title={`${label}（也可以往左拉）`} aria-expanded={drawerOpen} className="ui-edge-btn ui-edge-notes">
+      <button type="button" onClick={() => useCompanionStore.getState().toggleDrawer()} aria-label={label} title={L(`${label}（也可以往左拉）`, `${label} (or pull left)`)} aria-expanded={drawerOpen} className="ui-edge-btn ui-edge-notes">
         <span ref={notesAnchor} className="ui-edge-stack ui-note-paper-running" aria-hidden="true"><i className="ui-note-paper-review"/><i className="ui-note-paper-done"/><i/></span>
         {open > 0 && <span className="ui-edge-count">{open > 99 ? '99+' : open}</span>}
         {alertTone && <span className="ui-edge-alert" data-tone={alertTone} aria-hidden="true"/>}

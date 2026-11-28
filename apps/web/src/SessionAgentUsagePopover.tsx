@@ -17,6 +17,7 @@ import {
   useAgentUsage,
   type QuotaTone
 } from './agent-usage-cache';
+import { useBi } from './i18n';
 
 const contextBarToneClass: Record<QuotaTone, string> = {
   normal: 'bg-blue-500',
@@ -91,6 +92,7 @@ export function SessionUsagePopoverBody({
   quotaSlot,
   onOpenDashboard
 }: SessionUsagePopoverBodyProps) {
+  const L = useBi();
   const displayName = agentName ?? agentId;
   const totals = sessionUsage?.totals;
   const hasTokens = Boolean(totals && totals.totalTokens > 0);
@@ -120,21 +122,21 @@ export function SessionUsagePopoverBody({
         {/* 第一层：本会话 Token 与上下文 */}
         <div className="space-y-2 px-3.5 py-2.5">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[12px] font-semibold text-zinc-800">本会话用量</span>
+            <span className="text-[12px] font-semibold text-zinc-800">{L("本会话用量", "Session Usage")}</span>
             {isLive ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium tabular-nums text-amber-700">
                 <Zap size={10} className="animate-pulse text-amber-500"/>
                 ~{liveTps!.tps!.toFixed(1)} t/s
               </span>
             ) : totals && totals.turnCount > 0 ? (
-              <span className="text-[11px] tabular-nums text-zinc-400">{totals.turnCount} 轮统计</span>
+              <span className="text-[11px] tabular-nums text-zinc-400">{L(`${totals.turnCount} 轮统计`, `${totals.turnCount} turns`)}</span>
             ) : null}
           </div>
 
           {hasContext && (
             <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/75 px-2.5 py-2" data-session-context-card="">
               <div className="flex items-baseline justify-between gap-2 text-[12px]">
-                <span className="font-medium text-zinc-700">上下文窗口</span>
+                <span className="font-medium text-zinc-700">{L("上下文窗口", "Context Window")}</span>
                 <span className={`font-semibold tabular-nums ${contextTextToneClass[contextTone]}`}>
                   {formatTokens(context.used)}
                   {context.size !== undefined ? ` / ${formatTokens(context.size)}` : ''}
@@ -151,7 +153,8 @@ export function SessionUsagePopoverBody({
               )}
               {context.compacted !== undefined && context.compacted > 0 && (
                 <div className="mt-1 text-[11px] tabular-nums text-zinc-400">
-                  已累计压缩回收 {formatTokens(context.compacted)} tokens
+                  
+                  {L("已累计压缩回收", "Compacted ")} {formatTokens(context.compacted)} tokens
                 </div>
               )}
             </div>
@@ -161,7 +164,7 @@ export function SessionUsagePopoverBody({
             <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/75 px-2.5 py-2" data-session-tokens-card="">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-[12px] font-medium text-zinc-700">
-                  {hasTokens ? '累计 Token' : '本轮生成中'}
+                  {hasTokens ? L("累计 Token", "Total Tokens") : L("本轮生成中", "Streaming")}
                 </span>
                 <div className="flex items-baseline gap-1.5 tabular-nums">
                   {hasTokens && (
@@ -180,25 +183,25 @@ export function SessionUsagePopoverBody({
               {hasTokens && (
                 <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px] tabular-nums">
                   <div className="flex items-center justify-between gap-1 text-zinc-500">
-                    <span>输入</span>
+                    <span>{L("输入", "Input")}</span>
                     <span className="font-medium text-zinc-700">{formatTokens(totals!.inputTokens)}</span>
                   </div>
                   <div className="flex items-center justify-between gap-1 text-zinc-500">
-                    <span>输出</span>
+                    <span>{L("输出", "Output")}</span>
                     <span className="font-medium text-zinc-700">{formatTokens(totals!.outputTokens)}</span>
                   </div>
                   <div className="flex items-center justify-between gap-1 text-zinc-500">
-                    <span>缓存读</span>
+                    <span>{L("缓存读", "Cache Read")}</span>
                     <span className="font-medium text-zinc-700">{formatTokens(totals!.cacheReadTokens)}</span>
                   </div>
                   {totals!.thoughtTokens > 0 ? (
                     <div className="flex items-center justify-between gap-1 text-zinc-500">
-                      <span>思考</span>
+                      <span>{L("思考", "Thinking")}</span>
                       <span className="font-medium text-zinc-700">{formatTokens(totals!.thoughtTokens)}</span>
                     </div>
                   ) : displayTps !== null ? (
                     <div className="flex items-center justify-between gap-1 text-zinc-500">
-                      <span>速率</span>
+                      <span>{L("速率", "Speed")}</span>
                       <span className={`inline-flex items-center gap-0.5 font-medium ${isLive ? 'text-amber-600' : 'text-zinc-700'}`}>
                         {isLive && <Zap size={10} className="text-amber-500"/>}
                         {isLive ? '~' : ''}{displayTps.toFixed(1)} t/s
@@ -206,13 +209,13 @@ export function SessionUsagePopoverBody({
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-1 text-zinc-500">
-                      <span>轮次</span>
+                      <span>{L("轮次", "Turns")}</span>
                       <span className="font-medium text-zinc-700">{totals!.turnCount}</span>
                     </div>
                   )}
                   {totals!.thoughtTokens > 0 && displayTps !== null && (
                     <div className="col-span-2 flex items-center justify-between gap-1 border-t border-zinc-200/60 pt-1 text-zinc-500">
-                      <span>{isLive ? '实时速率' : '生成速率'}</span>
+                      <span>{isLive ? L("实时速率", "Live Speed") : L("生成速率", "Output Speed")}</span>
                       <span className={`inline-flex items-center gap-0.5 font-medium ${isLive ? 'text-amber-600' : 'text-zinc-700'}`}>
                         {isLive && <Zap size={10} className="text-amber-500"/>}
                         {isLive ? '~' : ''}{displayTps.toFixed(1)} t/s
@@ -224,7 +227,7 @@ export function SessionUsagePopoverBody({
 
               {isLive && (
                 <div className="mt-1.5 text-[11px] text-zinc-400">
-                  {liveTps?.activeTool ? '工具执行中，速率保持；结束后按真实用量校准' : '实时估算速率，轮次结束后以真实上报校准'}
+                  {liveTps?.activeTool ? L("工具执行中，速率保持；结束后按真实用量校准", "Held during tool execution; calibrated on completion") : L("实时估算速率，轮次结束后以真实上报校准", "Live estimate; calibrated with reported usage on completion")}
                 </div>
               )}
             </div>
@@ -232,7 +235,8 @@ export function SessionUsagePopoverBody({
 
           {!hasAnySessionMetric && (
             <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50/50 px-3 py-2.5 text-[12px] leading-5 text-zinc-500">
-              暂无本会话 Token 记录，发送消息后将自动统计。
+              
+              {L("暂无本会话 Token 记录，发送消息后将自动统计。", "No token telemetry yet — stats appear after your first turn.")}
             </div>
           )}
         </div>
@@ -248,7 +252,7 @@ export function SessionUsagePopoverBody({
       {/* 底部操作条（固定底边，不随中间内容裁切） */}
       <div className="flex shrink-0 items-center justify-between gap-2 border-t border-zinc-100 bg-zinc-50/50 px-3.5 py-2">
         <span className="min-w-0 truncate text-[11px] text-zinc-400">
-          {quotaAgentId ? '点击刷新可实时同步额度' : '当前 Agent 暂不支持账号额度查询'}
+          {quotaAgentId ? L("点击刷新可实时同步额度", "Click refresh to sync live quota") : L("当前 Agent 暂不支持账号额度查询", "Account quota query not supported for this Agent")}
         </span>
         <button
           type="button"
@@ -256,7 +260,7 @@ export function SessionUsagePopoverBody({
           className="ui-press inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
         >
           <BarChart3 size={12}/>
-          <span>消耗看板</span>
+          <span>{L("消耗看板", "Usage Dashboard")}</span>
           <ChevronRight size={11} className="text-zinc-400"/>
         </button>
       </div>
@@ -288,6 +292,7 @@ export function SessionAgentUsagePopover({
   sessionUsage?: SessionUsageDetail;
   liveTps?: LiveStreamTpsResult;
 }) {
+  const L = useBi();
   const [open, setOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>();
@@ -369,28 +374,28 @@ export function SessionAgentUsagePopover({
   );
 
   const summaryBits = [
-    context.percentage !== undefined ? `上下文 ${Math.round(clampPercent(context.percentage))}%` : '',
-    hasTokens ? `本会话 ${formatTokens(totals!.totalTokens)} tok` : '',
-    quotaSummary ? `额度 ${quotaSummary}` : ''
+    context.percentage !== undefined ? L(`上下文 ${Math.round(clampPercent(context.percentage))}%`, `Context ${Math.round(clampPercent(context.percentage))}%`) : '',
+    hasTokens ? L(`本会话 ${formatTokens(totals!.totalTokens)} tok`, `Session ${formatTokens(totals!.totalTokens)} tok`) : '',
+    quotaSummary ? L(`额度 ${quotaSummary}`, `Quota ${quotaSummary}`) : ''
   ].filter(Boolean);
 
   const tooltipContent = (
     <div className="space-y-0.5">
       <div className="font-medium text-zinc-900">
-        {displayName} · {quotaTarget ? 'Token 用量与账号额度' : '本会话 Token 用量'}
+        {displayName} · {quotaTarget ? L("Token 用量与账号额度", "Token Usage & Quota") : L("本会话 Token 用量", "Session Token Usage")}
       </div>
       {magpieMeta && (
         <div className={`text-[11px] font-medium ${isMagpieIssue ? 'text-amber-700' : 'text-sky-700'}`}>
           {isMagpieIssue
-            ? `已检测到 Magpie 代理（${quotaPreview.data?.unavailableCode === 'magpie_auth_required' ? '需授权' : '未连接'}）`
-            : `来源：Magpie${magpieMeta.providerName ? ` · ${magpieMeta.providerName}` : ''}`}
+            ? L(`已检测到 Magpie 代理（${quotaPreview.data?.unavailableCode === 'magpie_auth_required' ? '需授权' : '未连接'}）`, `Magpie proxy detected (${quotaPreview.data?.unavailableCode === 'magpie_auth_required' ? 'Auth needed' : 'Offline'})`)
+            : L(`来源：Magpie${magpieMeta.providerName ? ` · ${magpieMeta.providerName}` : ''}`, `Source: Magpie${magpieMeta.providerName ? ` · ${magpieMeta.providerName}` : ''}`)}
         </div>
       )}
       {summaryBits.length > 0 ? (
         <div className="text-[11px] tabular-nums text-zinc-500">{summaryBits.join(' · ')}</div>
       ) : (
         <div className="text-[11px] text-zinc-400">
-          {quotaTarget ? '点击展开上下文统计与订阅额度' : '点击展开上下文与 Token 明细'}
+          {quotaTarget ? L("点击展开上下文统计与订阅额度", "Click for context stats & subscription quota") : L("点击展开上下文与 Token 明细", "Click for context & token breakdown")}
         </div>
       )}
     </div>
@@ -401,7 +406,7 @@ export function SessionAgentUsagePopover({
       <div
         ref={popoverRef}
         role="dialog"
-        aria-label={`${displayName} 用量与额度`}
+        aria-label={L(`${displayName} 用量与额度`, `${displayName} Usage & Quota`)}
         data-agent-usage-popover=""
         data-placement="bottom-start"
         style={panelStyle}
@@ -433,7 +438,7 @@ export function SessionAgentUsagePopover({
           type="button"
           aria-haspopup="dialog"
           aria-expanded={open}
-          aria-label={`${displayName}：${quotaTarget ? '查看本会话 Token 用量与账号额度' : '查看本会话 Token 用量'}`}
+          aria-label={L(`${displayName}：${quotaTarget ? '查看本会话 Token 用量与账号额度' : '查看本会话 Token 用量'}`, `${displayName}: ${quotaTarget ? 'View token usage & quota' : 'View token usage'}`)}
           data-agent-usage-trigger=""
           onPointerEnter={() => { if (quotaTarget && !hovered) setHovered(true); }}
           onClick={() => {

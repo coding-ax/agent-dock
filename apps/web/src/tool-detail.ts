@@ -1,5 +1,6 @@
 import { toolCommand } from './timeline';
 import { toolPresentation, type ToolKind } from './tool-presentation';
+import { bi } from './i18n';
 
 /**
  * 工具调用详情的数据视图。UI 只负责渲染，不直接碰原始 JSON：
@@ -131,7 +132,13 @@ export function toolDetailView(data: ToolData): ToolDetailView {
   if (kind === 'edit' || patch || oldNew) {
     const path = firstString(input, pathKeys) ?? quotedItems(String(data.name ?? ''))[0];
     const lines = patch ? parsePatch(patch) : oldNew ? lineDiff(oldNew.oldText, oldNew.newText) : [];
-    const verb = presentation.label === '写入文件' ? '已写入' : presentation.label === '删除文件' ? '已删除' : presentation.label === '移动文件' ? '已移动' : '已修改';
+    const verb = (presentation.label === '写入文件' || presentation.label === 'Write File')
+      ? bi("已写入", "Written")
+      : (presentation.label === '删除文件' || presentation.label === 'Delete File')
+        ? bi("已删除", "Deleted")
+        : (presentation.label === '移动文件' || presentation.label === 'Move File')
+          ? bi("已移动", "Moved")
+          : bi("已修改", "Modified");
     return { kind: 'diff', ...(path ? { path } : {}), lines, ...(lines.length ? {} : { note: path ? `${path} · ${verb}` : verb }) };
   }
 

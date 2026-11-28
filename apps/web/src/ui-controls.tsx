@@ -4,6 +4,7 @@ import { Button } from 'antd';
 import { useRef, type MouseEvent, type ReactNode } from 'react';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { HoverTooltip } from './HoverTooltip';
+import { useBi } from './i18n';
 
 /**
  * 图标按钮。提示走应用的 HoverTooltip，不用原生 title——原生提示要等约 1 秒、
@@ -148,6 +149,7 @@ export function ConfirmDialog({ open, ...props }: ConfirmDialogProps) {
 }
 
 function ConfirmDialogPanel({ title, description, confirmLabel, tone = 'warning', busy = false, error, onConfirm, onCancel }: Omit<ConfirmDialogProps, 'open'>) {
+  const L = useBi();
   const panelRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   useModalFocusTrap({ panel: panelRef, initial: cancelRef, dismissible: !busy, onDismiss: onCancel });
@@ -160,8 +162,8 @@ function ConfirmDialogPanel({ title, description, confirmLabel, tone = 'warning'
       </div>
       {error && <div className="mx-5 mb-4 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[12px] leading-4 text-red-700">{error}</div>}
       <div className="flex justify-end gap-2 border-t border-zinc-100 bg-zinc-50/70 px-5 py-3.5">
-        <Button ref={cancelRef} size="large" disabled={busy} onClick={onCancel}>取消</Button>
-        <Button type="primary" danger={danger} size="large" loading={busy} onClick={onConfirm} className="min-w-24">{busy ? '处理中' : confirmLabel}</Button>
+        <Button ref={cancelRef} size="large" disabled={busy} onClick={onCancel}>{L("取消", "Cancel")}</Button>
+        <Button type="primary" danger={danger} size="large" loading={busy} onClick={onConfirm} className="min-w-24">{busy ? L("处理中", "Processing") : confirmLabel}</Button>
       </div>
     </div>
   </div>;

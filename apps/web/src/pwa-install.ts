@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { bi } from './i18n';
 
 export interface BeforeInstallPromptEvent extends Event {
   readonly platforms?: string[];
@@ -62,10 +63,10 @@ export function getManualInstallHint(userAgent: string): string {
   const isEdge = /\bEdg\//i.test(ua);
   const isChrome = /\bChrome\//i.test(ua) && !isEdge;
   const isSafari = /\bSafari\//i.test(ua) && !/\bChrome\//i.test(ua) && !/\bChromium\//i.test(ua);
-  if (isChrome) return '点击 Chrome 地址栏右侧的安装图标，或打开右上角菜单 →「投放、保存和分享」→「将网页安装为应用…」。';
-  if (isEdge) return '点击 Edge 地址栏右侧的应用安装图标，或打开右上角菜单 →「应用」→「将此站点安装为应用」。';
-  if (isSafari) return '在 Safari 顶部菜单栏点击「文件」→「添加到程序坞…」，即可作为独立桌面应用打开。';
-  return '使用 Chrome 或 Edge 打开当前页面，点击地址栏右侧的安装图标即可安装为桌面应用。';
+  if (isChrome) return bi("点击 Chrome 地址栏右侧的安装图标，或打开右上角菜单 →「投放、保存和分享」→「将网页安装为应用…」。", "Click the install icon in Chrome's address bar, or open Menu → Cast, save, and share → Install page as app…");
+  if (isEdge) return bi("点击 Edge 地址栏右侧的应用安装图标，或打开右上角菜单 →「应用」→「将此站点安装为应用」。", "Click the app install icon in Edge's address bar, or open Menu → Apps → Install this site as an app.");
+  if (isSafari) return bi("在 Safari 顶部菜单栏点击「文件」→「添加到程序坞…」，即可作为独立桌面应用打开。", "In Safari's menu bar, choose File → Add to Dock… to open AgentDock as a standalone desktop app.");
+  return bi("使用 Chrome 或 Edge 打开当前页面，点击地址栏右侧的安装图标即可安装为桌面应用。", "Open this page in Chrome or Edge and click the install icon in the address bar.");
 }
 
 export function resolvePwaInstallSnapshot(env: PwaEnvLike): PwaInstallSnapshot {

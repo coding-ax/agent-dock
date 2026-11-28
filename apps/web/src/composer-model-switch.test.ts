@@ -123,9 +123,8 @@ describe('Composer model & reasoning loading/saved micro-interactions', () => {
 
   it('keeps mobile 390px compact width guards on both model and reasoning chips', () => {
     const html = renderComposer();
-    expect(html).toContain('max-w-[104px]');
+    expect(html).toContain('max-w-[88px]');
     expect(html).toContain('sm:max-w-[16rem]');
-    expect(html).toContain('max-w-[96px]');
     expect(html).toContain('sm:max-w-[10rem]');
   });
 });

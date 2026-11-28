@@ -2,6 +2,7 @@ import { Fragment } from 'react';
 import type { Session } from './api';
 import { modelBadge, modelBadgeText } from './model-label';
 import { absoluteActivityTime, sessionActivityRow, sessionSourceLabel, sessionStatusLabel, sessionTitleSourceLabel } from './session-details';
+import { useBi } from './i18n';
 
 /**
  * 会话行 hover 卡片。
@@ -18,16 +19,17 @@ export function SessionHoverCard({ session, agentName, botName, parentLabel, now
   parentLabel?: string;
   now: Date;
 }) {
+  const L = useBi();
   const status = sessionStatusLabel(session);
   // 别直接渲染 session.model：它是 agent 侧原样透传的，可能是 JSON 数组或带 [effort=…] 的怪串。
   const model = modelBadgeText(modelBadge(session.model, session.reasoningEffort));
   const titleSource = sessionTitleSourceLabel(session);
   const rows: Array<{ label: string; value: string; path?: boolean }> = [
-    { label: '工作目录', value: session.cwd, path: true },
+    { label: L("工作目录", "Workspace"), value: session.cwd, path: true },
     sessionActivityRow(session, now),
-    { label: '创建于', value: absoluteActivityTime(session.createdAt) },
-    { label: '来源', value: sessionSourceLabel(session, { botName, parentLabel }) },
-    ...(titleSource ? [{ label: '命名', value: titleSource }] : [])
+    { label: L("创建于", "Created"), value: absoluteActivityTime(session.createdAt) },
+    { label: L("来源", "Source"), value: sessionSourceLabel(session, { botName, parentLabel }) },
+    ...(titleSource ? [{ label: L("命名", "Title"), value: titleSource }] : [])
   ];
   return <div className="w-[320px] max-w-[76vw] leading-5">
     {session.title && <div className="mb-1 break-words text-[12.5px] font-medium text-zinc-900">{session.title}</div>}

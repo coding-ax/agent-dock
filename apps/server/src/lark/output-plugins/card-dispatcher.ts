@@ -4,8 +4,10 @@ import {
   normalizeOutputPluginId,
   now,
   type ChannelMappingRepository,
+  type Locale,
   type OutputPluginRegistry
 } from '@agent-dock/agent-dock-shared';
+import { getActiveServerLocale } from '../../locale-service.js';
 import { LARK_ASK_CARD_CHANNEL } from '../ask-user-question-card.js';
 import type { LarkCardService } from '../service.js';
 import { LarkTurnTracker, type LarkOutputPluginCardDedupKey } from '../turn-tracker.js';
@@ -42,6 +44,7 @@ export interface DispatchLarkOutputPluginCardInput {
   webBaseUrl?: string;
   pluginId: string;
   spec: unknown;
+  locale?: Locale;
 }
 
 export function cardChannelForOutputPlugin(pluginId: string): string {
@@ -157,7 +160,8 @@ export async function dispatchLarkOutputPluginCard(
       plugin,
       spec: input.spec,
       sessionId,
-      webBaseUrl: input.webBaseUrl
+      webBaseUrl: input.webBaseUrl,
+      locale: input.locale ?? getActiveServerLocale()
     });
     const idempotencyKey = buildLarkOutputPluginCardIdempotencyKey(dedupKey);
 

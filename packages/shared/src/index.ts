@@ -10,18 +10,24 @@ export * from './ask-user-question.js';
 export * from './output-plugins/index.js';
 export * from './themes.js';
 export * from './task-recovery.js';
+export * from './i18n/index.js';
 import type { BoardRepository } from './boards.js';
 import type { TaskRecoveryRepository } from './task-recovery.js';
+import { tShared, type Locale } from './i18n/index.js';
 
 export const highRiskPatternMaxLength = 4_096;
 export type RegexPatternValidation = { valid: true } | { valid: false; error: string };
 
-export function validateHighRiskPattern(pattern: string): RegexPatternValidation {
-  if (!pattern.trim()) return { valid: false, error: '请输入高危操作正则表达式' };
-  if (pattern.length > highRiskPatternMaxLength) return { valid: false, error: `正则表达式不能超过 ${highRiskPatternMaxLength} 个字符` };
+export function validateHighRiskPattern(pattern: string, locale: Locale = 'zh-CN'): RegexPatternValidation {
+  if (!pattern.trim()) return { valid: false, error: tShared(locale, 'regex.highRisk.empty') };
+  if (pattern.length > highRiskPatternMaxLength) {
+    return { valid: false, error: tShared(locale, 'regex.highRisk.tooLong', { max: highRiskPatternMaxLength }) };
+  }
   try { new RegExp(pattern, 'i'); }
-  catch (error) { return { valid: false, error: `正则表达式语法错误：${error instanceof Error ? error.message : String(error)}` }; }
-  if (!safeRegex(pattern)) return { valid: false, error: '正则表达式可能造成灾难性回溯，请移除嵌套量词或拆分复杂表达式' };
+  catch (error) {
+    return { valid: false, error: tShared(locale, 'regex.highRisk.syntaxError', { message: error instanceof Error ? error.message : String(error) }) };
+  }
+  if (!safeRegex(pattern)) return { valid: false, error: tShared(locale, 'regex.highRisk.catastrophic') };
   return { valid: true };
 }
 

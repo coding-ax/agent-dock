@@ -1,6 +1,7 @@
 import { isMainSessionScheduleTarget, SCHEDULE_MAIN_SESSION_ID } from '@agent-dock/agent-dock-shared';
 import type { CreateScheduleInput, Schedule, ScheduleDelivery, ScheduleRun, UpdateScheduleInput } from './api';
 import { defaultRecurrence, describeCron, describeInterval, recurrenceToTrigger, toLocalInput, type Recurrence } from './recurrence';
+import { bi, localizedRecord } from './i18n';
 
 export { isMainSessionScheduleTarget, SCHEDULE_MAIN_SESSION_ID };
 
@@ -9,11 +10,20 @@ export { isMainSessionScheduleTarget, SCHEDULE_MAIN_SESSION_ID };
  * cron 本身的合法性由服务端（croner）判定，这里只拦明显不对的输入，避免两套解析规则打架。
  */
 
-export const deliveryLabels: Record<ScheduleDelivery, string> = { new_session: '每次新开会话', append: '追加到已有会话' };
-export const deliveryHints: Record<ScheduleDelivery, string> = {
-  new_session: '每次触发用下面的 Agent 和目录新建一个会话，互不干扰。适合巡检、汇总、提醒。',
-  append: '接着在选定的会话里发，上下文连续。选择「当前活跃主会话」可在换代交接后自动跟随；会话正忙时本次跳过。'
-};
+export const deliveryLabels: Record<ScheduleDelivery, string> = localizedRecord(
+  { new_session: '每次新开会话', append: '追加到已有会话' },
+  { new_session: 'New Session Each Run', append: 'Append to Session' }
+);
+export const deliveryHints: Record<ScheduleDelivery, string> = localizedRecord(
+  {
+    new_session: '每次触发用下面的 Agent 和目录新建一个会话，互不干扰。适合巡检、汇总、提醒。',
+    append: '接着在选定的会话里发，上下文连续。选择「当前活跃主会话」可在换代交接后自动跟随；会话正忙时本次跳过。'
+  },
+  {
+    new_session: 'Starts an isolated session on each run with the selected Agent and workspace. Great for checks, summaries, and reminders.',
+    append: 'Appends directly to the chosen session to keep context continuous. Pick Active Main Session to auto-follow handovers; skipped if busy.'
+  }
+);
 
 /** 新建表单里「追加到已有会话」的默认目标：在主会话内打开时默认跟随主会话换代。 */
 export function defaultAppendTarget(options: { sessionId?: string; mainSessionId?: string; fallbackSessionId?: string }): string {
@@ -23,7 +33,10 @@ export function defaultAppendTarget(options: { sessionId?: string; mainSessionId
   return options.sessionId ?? options.fallbackSessionId ?? '';
 }
 
-export const runStatusLabels: Record<ScheduleRun['status'], string> = { delivered: '已投递', skipped: '已跳过', failed: '失败' };
+export const runStatusLabels: Record<ScheduleRun['status'], string> = localizedRecord(
+  { delivered: '已投递', skipped: '已跳过', failed: '失败' },
+  { delivered: 'Delivered', skipped: 'Skipped', failed: 'Failed' }
+);
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -38,17 +51,17 @@ export function formatScheduleTime(iso?: string | null): string {
 export function describeTrigger(schedule: Pick<Schedule, 'cron' | 'runAt' | 'intervalMinutes'>): string {
   if (schedule.cron) return describeCron(schedule.cron);
   if (schedule.intervalMinutes) return describeInterval(schedule.intervalMinutes);
-  return `单次 ${formatScheduleTime(schedule.runAt)}`;
+  return bi(`单次 ${formatScheduleTime(schedule.runAt)}`, `Once ${formatScheduleTime(schedule.runAt)}`);
 }
 
 /** 距离下次触发还有多久，给列表右侧的小字用。 */
 export function describeCountdown(at: Date, now: Date): string {
   const minutes = Math.round((at.getTime() - now.getTime()) / 60_000);
-  if (minutes <= 0) return '即将触发';
-  if (minutes < 60) return `${minutes} 分钟后`;
+  if (minutes <= 0) return bi('即将触发', 'Due soon');
+  if (minutes < 60) return bi(`${minutes} 分钟后`, `in ${minutes}m`);
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return minutes % 60 ? `${hours} 小时 ${minutes % 60} 分后` : `${hours} 小时后`;
-  return `${Math.round(hours / 24)} 天后`;
+  if (hours < 24) return minutes % 60 ? bi(`${hours} 小时 ${minutes % 60} 分后`, `in ${hours}h ${minutes % 60}m`) : bi(`${hours} 小时后`, `in ${hours}h`);
+  return bi(`${Math.round(hours / 24)} 天后`, `in ${Math.round(hours / 24)}d`);
 }
 
 export type ScheduleSummary = { active: number; inactive: number; dueToday: number; ran24h: number; failed24h: number; next?: Schedule };
@@ -72,10 +85,10 @@ export function summarizeSchedules(schedules: Schedule[], runs: ScheduleRun[], n
 
 /** 状态徽标：启用中看下次时间；停用时区分「单次已执行」和「已暂停」。 */
 export function scheduleState(schedule: Pick<Schedule, 'enabled' | 'cron' | 'intervalMinutes' | 'lastRunAt' | 'lastStatus'>): { label: string; tone: 'active' | 'paused' | 'done' | 'failed' } {
-  if (schedule.enabled) return { label: '启用中', tone: 'active' };
-  if (!isRecurringSchedule(schedule) && schedule.lastRunAt) return { label: '已执行', tone: 'done' };
-  if (schedule.lastStatus === 'failed') return { label: '已停用', tone: 'failed' };
-  return { label: '已暂停', tone: 'paused' };
+  if (schedule.enabled) return { label: bi('启用中', 'Active'), tone: 'active' };
+  if (!isRecurringSchedule(schedule) && schedule.lastRunAt) return { label: bi('已执行', 'Completed'), tone: 'done' };
+  if (schedule.lastStatus === 'failed') return { label: bi('已停用', 'Stopped'), tone: 'failed' };
+  return { label: bi('已暂停', 'Paused'), tone: 'paused' };
 }
 
 /** 只有周期任务、或还没执行过的单次任务能恢复；与服务端 resume 的规则一致。 */
@@ -114,14 +127,14 @@ export const emptyScheduleForm: ScheduleFormState = { name: '', prompt: '', kind
  */
 export function scheduleFormToInput(form: ScheduleFormState, options: { parentSessionId?: string; now?: Date } = {}): { input?: CreateScheduleInput; error?: string } {
   const prompt = form.prompt.trim();
-  if (!prompt) return { error: '请填写到点要发给 Agent 的内容。' };
+  if (!prompt) return { error: bi('请填写到点要发给 Agent 的内容。', 'Please enter the prompt to send to the Agent.') };
   let target: Pick<CreateScheduleInput, 'sessionId' | 'template'>;
   if (form.delivery === 'append') {
-    if (!form.appendSessionId) return { error: '请选择要追加到的会话。' };
+    if (!form.appendSessionId) return { error: bi('请选择要追加到的会话。', 'Please select a target session.') };
     target = { sessionId: form.appendSessionId };
   } else {
-    if (!form.agentId) return { error: '请选择 Agent。' };
-    if (!form.cwd.trim()) return { error: '请选择工作目录。' };
+    if (!form.agentId) return { error: bi('请选择 Agent。', 'Please select an Agent.') };
+    if (!form.cwd.trim()) return { error: bi('请选择工作目录。', 'Please select a workspace directory.') };
     target = { template: { agentId: form.agentId, cwd: form.cwd.trim(), ...(form.model ? { model: form.model } : {}) }, ...(options.parentSessionId ? { sessionId: options.parentSessionId } : {}) };
   }
   const base = { ...target, prompt, delivery: form.delivery, ...(form.name.trim() ? { name: form.name.trim() } : {}) };
@@ -131,8 +144,8 @@ export function scheduleFormToInput(form: ScheduleFormState, options: { parentSe
     return { input: { ...base, ...built.trigger, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } };
   }
   const at = new Date(form.runAt);
-  if (!form.runAt || Number.isNaN(at.getTime())) return { error: '请选择触发时间。' };
-  if (at.getTime() <= (options.now ?? new Date()).getTime()) return { error: '触发时间已经过去。' };
+  if (!form.runAt || Number.isNaN(at.getTime())) return { error: bi('请选择触发时间。', 'Please select a trigger time.') };
+  if (at.getTime() <= (options.now ?? new Date()).getTime()) return { error: bi('触发时间已经过去。', 'The trigger time is in the past.') };
   return { input: { ...base, runAt: at.toISOString() } };
 }
 

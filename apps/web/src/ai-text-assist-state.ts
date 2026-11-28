@@ -1,6 +1,16 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
 import type { LlmAssistAction, LlmAssistMode } from './api';
+import { bi, getCurrentLocale } from './i18n';
 
-export const LLM_UNCONFIGURED_TOOLTIP = '配置 LLM 模型端点后即可使用 AI 辅助写作与优化（前往 设置 → Agent 设置 → 模型端点）';
+export const LLM_UNCONFIGURED_TOOLTIP = '配置 LLM 模型端点后即可使用 AI 辅助写作与优化（前往 设置 → Agent 与能力 → 模型端点）';
+
+export function getLlmUnconfiguredTooltip(locale: Locale = getCurrentLocale()): string {
+  return bi(
+    LLM_UNCONFIGURED_TOOLTIP,
+    'Configure an LLM endpoint to enable AI writing & polish (Settings → Agents & Capabilities → Model Endpoints)',
+    locale
+  );
+}
 
 export const MAX_AI_UNDO_STEPS = 20;
 
@@ -67,6 +77,7 @@ export interface AiAssistPreset {
   description: string;
   mode: LlmAssistMode;
   action: LlmAssistAction;
+  resultLabel?: string;
 }
 
 export interface AiModeMeta {
@@ -80,106 +91,106 @@ export interface AiModeMeta {
   switchableModes?: Array<{ mode: LlmAssistMode; label: string }>;
 }
 
-export function getAiModeMeta(mode: LlmAssistMode): AiModeMeta {
+export function getAiModeMeta(mode: LlmAssistMode, locale: Locale = getCurrentLocale()): AiModeMeta {
   switch (mode) {
     case 'prompt_write':
       return {
-        title: 'AI 写 / 优化提示词',
-        emptyButtonLabel: 'AI 帮写',
-        filledButtonLabel: 'AI 优化',
-        placeholder: '输入一句话需求，例如：帮我写发布前回归检查提示词…',
-        busyText: '正在构思并生成提示词…',
+        title: bi('AI 写 / 优化提示词', 'AI Write / Polish Prompt', locale),
+        emptyButtonLabel: bi('AI 帮写', 'AI Write', locale),
+        filledButtonLabel: bi('AI 优化', 'AI Polish', locale),
+        placeholder: bi('输入一句话需求，例如：帮我写发布前回归检查提示词…', 'Describe what you need, e.g. pre-release checklist prompt…', locale),
+        busyText: bi('正在构思并生成提示词…', 'Drafting prompt…', locale),
         allowEmptyRun: true,
         switchableModes: [
-          { mode: 'prompt_write', label: 'AI 写 Prompt' },
-          { mode: 'prompt_optimize', label: 'AI 优化润色' }
+          { mode: 'prompt_write', label: bi('AI 写 Prompt', 'Draft prompt', locale) },
+          { mode: 'prompt_optimize', label: bi('AI 优化润色', 'Polish prompt', locale) }
         ]
       };
     case 'prompt_optimize':
       return {
-        title: 'AI 优化提示词',
-        emptyButtonLabel: 'AI 帮写',
-        filledButtonLabel: 'AI 优化',
-        placeholder: '补充优化要求（可选），例如：更简洁、突出验收清单…',
-        busyText: '正在润色并优化结构…',
+        title: bi('AI 优化提示词', 'AI Polish Prompt', locale),
+        emptyButtonLabel: bi('AI 帮写', 'AI Write', locale),
+        filledButtonLabel: bi('AI 优化', 'AI Polish', locale),
+        placeholder: bi('补充优化要求（可选），例如：更简洁、突出验收清单…', 'Optional instructions, e.g. more concise, highlight checklist…', locale),
+        busyText: bi('正在润色并优化结构…', 'Polishing & structuring…', locale),
         allowEmptyRun: false,
         switchableModes: [
-          { mode: 'prompt_optimize', label: 'AI 优化润色' },
-          { mode: 'prompt_write', label: 'AI 从零起草' }
+          { mode: 'prompt_optimize', label: bi('AI 优化润色', 'Polish prompt', locale) },
+          { mode: 'prompt_write', label: bi('AI 从零起草', 'Draft new', locale) }
         ]
       };
     case 'message_polish':
       return {
-        title: 'AI 润色与帮写',
-        emptyButtonLabel: 'AI 帮写',
-        filledButtonLabel: 'AI 润色',
-        placeholder: '输入一句话需求，Enter 帮你写成清晰条理的消息…',
-        busyText: '正在润色清晰表达…',
+        title: bi('AI 润色与帮写', 'AI Polish & Write', locale),
+        emptyButtonLabel: bi('AI 帮写', 'AI Write', locale),
+        filledButtonLabel: bi('AI 润色', 'AI Polish', locale),
+        placeholder: bi('输入一句话需求，Enter 帮你写成清晰条理的消息…', 'Describe your message, press Enter to draft clearly…', locale),
+        busyText: bi('正在润色清晰表达…', 'Polishing message…', locale),
         allowEmptyRun: false,
         switchableModes: [
-          { mode: 'message_polish', label: '润色消息' },
-          { mode: 'prompt_write', label: '写成 Prompt' }
+          { mode: 'message_polish', label: bi('润色消息', 'Polish message', locale) },
+          { mode: 'prompt_write', label: bi('写成 Prompt', 'As prompt', locale) }
         ]
       };
     case 'title_generate':
       return {
-        title: 'AI 生成标题',
-        emptyButtonLabel: 'AI 生成标题',
-        filledButtonLabel: 'AI 重生成标题',
-        placeholder: '可选：指定风格或重点，例如：偏技术排查、突出版本…',
-        busyText: '正在提炼精准标题…',
+        title: bi('AI 生成标题', 'AI Generate Title', locale),
+        emptyButtonLabel: bi('AI 生成标题', 'AI Title', locale),
+        filledButtonLabel: bi('AI 重生成标题', 'Regenerate Title', locale),
+        placeholder: bi('可选：指定风格或重点，例如：偏技术排查、突出版本…', 'Optional: style or focus, e.g. technical triage, highlight version…', locale),
+        busyText: bi('正在提炼精准标题…', 'Generating title…', locale),
         allowEmptyRun: true
       };
     case 'regex_generate':
       return {
-        title: 'AI 生成正则表达式',
-        emptyButtonLabel: 'AI 写正则',
-        filledButtonLabel: 'AI 优化正则',
-        placeholder: '描述匹配规则，例如：命中“告警/报错/P0”且忽略大小写…',
-        busyText: '正在生成并校验正则…',
+        title: bi('AI 生成正则表达式', 'AI Generate Regex', locale),
+        emptyButtonLabel: bi('AI 写正则', 'AI Regex', locale),
+        filledButtonLabel: bi('AI 优化正则', 'AI Polish Regex', locale),
+        placeholder: bi('描述匹配规则，例如：命中“告警/报错/P0”且忽略大小写…', 'Describe match rule, e.g. match "alert/error/P0" case-insensitively…', locale),
+        busyText: bi('正在生成并校验正则…', 'Generating & validating regex…', locale),
         allowEmptyRun: true
       };
     case 'description_polish':
       return {
-        title: 'AI 撰写 / 优化文案',
-        emptyButtonLabel: 'AI 帮写',
-        filledButtonLabel: 'AI 优化',
-        placeholder: '输入要点或要求，Enter 生成精炼文案…',
-        busyText: '正在撰写精炼文案…',
+        title: bi('AI 撰写 / 优化文案', 'AI Write / Polish Copy', locale),
+        emptyButtonLabel: bi('AI 帮写', 'AI Write', locale),
+        filledButtonLabel: bi('AI 优化', 'AI Polish', locale),
+        placeholder: bi('输入要点或要求，Enter 生成精炼文案…', 'Enter key points, press Enter for concise copy…', locale),
+        busyText: bi('正在撰写精炼文案…', 'Writing concise copy…', locale),
         allowEmptyRun: true
       };
   }
 }
 
-export function getAiAssistPresets(mode: LlmAssistMode, hasText: boolean): AiAssistPreset[] {
+export function getAiAssistPresets(mode: LlmAssistMode, hasText: boolean, locale: Locale = getCurrentLocale()): AiAssistPreset[] {
   if (mode === 'regex_generate') {
     return hasText
       ? [
-          { id: 'regex-opt', label: '优化清晰', description: '简化并加固现有正则，避免误伤与回溯', mode: 'regex_generate', action: 'optimize' },
-          { id: 'regex-gen', label: '按上下文重写', description: '结合群名与示例消息重新生成安全正则', mode: 'regex_generate', action: 'generate' }
+          { id: 'regex-opt', label: bi('优化清晰', 'Improve clarity', locale), description: bi('简化并加固现有正则，避免误伤与回溯', 'Simplify and harden the regex to avoid false matches and backtracking', locale), mode: 'regex_generate', action: 'optimize', resultLabel: bi('已优化清晰', 'Clarity improved', locale) },
+          { id: 'regex-gen', label: bi('按上下文重写', 'Rewrite from context', locale), description: bi('结合群名与示例消息重新生成安全正则', 'Regenerate a safe regex from group name and sample messages', locale), mode: 'regex_generate', action: 'generate', resultLabel: bi('已重写', 'Rewritten', locale) }
         ]
       : [
-          { id: 'regex-gen', label: '根据示例生成', description: '结合上下文和示例消息自动生成安全正则', mode: 'regex_generate', action: 'generate' }
+          { id: 'regex-gen', label: bi('根据示例生成', 'Generate from samples', locale), description: bi('结合上下文和示例消息自动生成安全正则', 'Generate a safe regex from context and sample messages', locale), mode: 'regex_generate', action: 'generate', resultLabel: bi('已根据示例生成', 'Generated', locale) }
         ];
   }
 
   if (mode === 'title_generate') {
     return [
-      { id: 'title-gen', label: hasText ? '重新提炼标题' : '智能生成标题', description: '结合上下文提炼简短直观的中文标题', mode: 'title_generate', action: 'generate' },
-      { id: 'title-concise', label: '更简短精炼', description: '压缩为 6–12 字的紧凑短标题', mode: 'title_generate', action: 'concise' }
+      { id: 'title-gen', label: hasText ? bi('重新提炼标题', 'Regenerate title', locale) : bi('智能生成标题', 'Generate title', locale), description: bi('结合上下文提炼简短直观的中文标题', 'Distill a short, clear title from context', locale), mode: 'title_generate', action: 'generate', resultLabel: hasText ? bi('已重新提炼标题', 'Title regenerated', locale) : bi('已智能生成标题', 'Title generated', locale) },
+      { id: 'title-concise', label: bi('更简短精炼', 'Make shorter', locale), description: bi('压缩为 6–12 字的紧凑短标题', 'Compress into a tight, punchy title', locale), mode: 'title_generate', action: 'concise', resultLabel: bi('已更简短精炼', 'Shortened', locale) }
     ];
   }
 
   if (!hasText) {
     if (mode === 'prompt_write' || mode === 'prompt_optimize') {
       return [
-        { id: 'prompt-write', label: '按场景自动起草', description: '结合当前上下文生成可直接使用的结构化 Prompt', mode: 'prompt_write', action: 'write' },
-        { id: 'prompt-concise', label: '写一版极简提示词', description: '短小克制，适合作为轻量约束', mode: 'prompt_write', action: 'concise' }
+        { id: 'prompt-write', label: bi('按场景自动起草', 'Auto-draft', locale), description: bi('结合当前上下文生成可直接使用的结构化 Prompt', 'Generate a ready-to-use structured prompt from context', locale), mode: 'prompt_write', action: 'write', resultLabel: bi('已自动起草', 'Drafted', locale) },
+        { id: 'prompt-concise', label: bi('写一版极简提示词', 'Minimal draft', locale), description: bi('短小克制，适合作为轻量约束', 'Brief and restrained, ideal for lightweight rules', locale), mode: 'prompt_write', action: 'concise', resultLabel: bi('已写一版极简提示词', 'Minimal draft ready', locale) }
       ];
     }
     if (mode === 'description_polish') {
       return [
-        { id: 'desc-write', label: '按上下文自动生成', description: '根据已有标题与场景自动起草简短说明', mode: 'description_polish', action: 'write' }
+        { id: 'desc-write', label: bi('按上下文自动生成', 'Auto-generate', locale), description: bi('根据已有标题与场景自动起草简短说明', 'Draft a concise description from the title and context', locale), mode: 'description_polish', action: 'write', resultLabel: bi('已自动生成', 'Generated', locale) }
       ];
     }
     // message_polish 空输入时不提供空跑预设，直接引导在输入框敲一句话回车生成
@@ -188,25 +199,25 @@ export function getAiAssistPresets(mode: LlmAssistMode, hasText: boolean): AiAss
 
   if (mode === 'prompt_write' || mode === 'prompt_optimize') {
     return [
-      { id: 'opt', label: '优化清晰', description: '理顺逻辑、补齐边界，保留 {{变量}}', mode: 'prompt_optimize', action: 'optimize' },
-      { id: 'concise', label: '精简提炼', description: '压缩冗余措辞，提高信息密度', mode: 'prompt_optimize', action: 'concise' },
-      { id: 'structure', label: '结构化展开', description: '按目标/约束/步骤/输出清晰分层', mode: 'prompt_optimize', action: 'structure' }
+      { id: 'opt', label: bi('优化清晰', 'Improve clarity', locale), description: bi('理顺逻辑、补齐边界，保留 {{变量}}', 'Clarify logic and edge cases while keeping {{variables}}', locale), mode: 'prompt_optimize', action: 'optimize', resultLabel: bi('已优化清晰', 'Polished', locale) },
+      { id: 'concise', label: bi('精简提炼', 'Make concise', locale), description: bi('压缩冗余措辞，提高信息密度', 'Cut redundancy and tighten phrasing', locale), mode: 'prompt_optimize', action: 'concise', resultLabel: bi('已精简提炼', 'Condensed', locale) },
+      { id: 'structure', label: bi('结构化展开', 'Structure', locale), description: bi('按目标/约束/步骤/输出清晰分层', 'Organize into clear goals, constraints, steps, and output', locale), mode: 'prompt_optimize', action: 'structure', resultLabel: bi('已结构化展开', 'Structured', locale) }
     ];
   }
 
   if (mode === 'description_polish') {
     return [
-      { id: 'opt', label: '优化清晰', description: '润色表达，精炼易读', mode: 'description_polish', action: 'optimize' },
-      { id: 'concise', label: '精简提炼', description: '收拢为一句话核心说明', mode: 'description_polish', action: 'concise' },
-      { id: 'structure', label: '分点整理', description: '整理成条理清晰的要点清单', mode: 'description_polish', action: 'structure' }
+      { id: 'opt', label: bi('优化清晰', 'Improve clarity', locale), description: bi('润色表达，精炼易读', 'Polish phrasing for readability', locale), mode: 'description_polish', action: 'optimize', resultLabel: bi('已优化清晰', 'Polished', locale) },
+      { id: 'concise', label: bi('精简提炼', 'Make concise', locale), description: bi('收拢为一句话核心说明', 'Condense into a single core sentence', locale), mode: 'description_polish', action: 'concise', resultLabel: bi('已精简提炼', 'Condensed', locale) },
+      { id: 'structure', label: bi('分点整理', 'Bullet list', locale), description: bi('整理成条理清晰的要点清单', 'Format as a clear bulleted list', locale), mode: 'description_polish', action: 'structure', resultLabel: bi('已分点整理', 'Formatted', locale) }
     ];
   }
 
   // message_polish with text
   return [
-    { id: 'opt', label: '优化清晰', description: '消除口语含糊，准确传达诉求', mode: 'message_polish', action: 'optimize' },
-    { id: 'concise', label: '精简提炼', description: '浓缩成直击重点的简短表达', mode: 'message_polish', action: 'concise' },
-    { id: 'structure', label: '结构化展开', description: '拆分为清晰的背景/目标/要求清单', mode: 'message_polish', action: 'structure' }
+    { id: 'opt', label: bi('优化清晰', 'Improve clarity', locale), description: bi('消除口语含糊，准确传达诉求', 'Remove ambiguity and state your request clearly', locale), mode: 'message_polish', action: 'optimize', resultLabel: bi('已优化清晰', 'Polished', locale) },
+    { id: 'concise', label: bi('精简提炼', 'Make concise', locale), description: bi('浓缩成直击重点的简短表达', 'Condense to a brief, direct message', locale), mode: 'message_polish', action: 'concise', resultLabel: bi('已精简提炼', 'Condensed', locale) },
+    { id: 'structure', label: bi('结构化展开', 'Structure', locale), description: bi('拆分为清晰的背景/目标/要求清单', 'Break down into clear context, goals, and requirements', locale), mode: 'message_polish', action: 'structure', resultLabel: bi('已结构化展开', 'Structured', locale) }
   ];
 }
 

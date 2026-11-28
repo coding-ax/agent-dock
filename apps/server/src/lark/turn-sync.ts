@@ -5,15 +5,18 @@ import {
   resolveOutputPluginEnabled,
   stripRecoveryVisiblePrefix,
   TASK_RECOVERY_ORIGIN,
+  tShared,
   type AgentEvent,
   type ChannelMappingRepository,
   type ConfigRepository,
+  type Locale,
   type OutputPluginRegistry,
   type RuntimeTurnEvent,
   type RuntimeTurnStartedEvent,
   type Session,
   type TaskRecord
 } from '@agent-dock/agent-dock-shared';
+import { getActiveServerLocale } from '../locale-service.js';
 import {
   defaultLarkTraceLimit,
   normalizeLarkTurnSyncConfig,
@@ -76,7 +79,9 @@ export function classifyTurnSource(input: {
   taskOrigin?: string | null;
   prompt?: string | null;
   sentPrompt?: string | null;
+  locale?: Locale;
 }): ClassifiedTurnSource {
+  const locale = input.locale ?? getActiveServerLocale();
   const origin = (input.taskOrigin ?? '').trim();
   const prompt = (input.prompt ?? '').trim();
   const sentPrompt = (input.sentPrompt ?? '').trim();
@@ -84,16 +89,16 @@ export function classifyTurnSource(input: {
   if (origin === 'handoff') {
     return {
       category: 'maintenance',
-      badge: '🧹 交接说明',
-      label: '交接说明',
+      badge: tShared(locale, 'lark.sync.badge.handoff'),
+      label: tShared(locale, 'lark.sync.label.handoff'),
       tagColor: 'neutral'
     };
   }
   if (origin === 'maintenance') {
     return {
       category: 'maintenance',
-      badge: '🧹 整理维护',
-      label: '整理维护',
+      badge: tShared(locale, 'lark.sync.badge.maintenance'),
+      label: tShared(locale, 'lark.sync.label.maintenance'),
       tagColor: 'neutral'
     };
   }
@@ -106,20 +111,20 @@ export function classifyTurnSource(input: {
     const combined = `${prompt}\n${sentPrompt}`;
     let detailLabel: string | undefined;
     if (/\[(?:failed|interrupted)\]|侧边会话(?:失败|超时)|卡死|停滞/.test(combined)) {
-      detailLabel = '异常预警';
+      detailLabel = tShared(locale, 'lark.sync.detail.alert');
     } else if (/\[user_stopped\]|用户主动停止|用户已停止/.test(combined)) {
-      detailLabel = '已暂停';
+      detailLabel = tShared(locale, 'lark.sync.detail.paused');
     } else if (/\[plan\]|计划待确认|待确认计划/.test(combined)) {
-      detailLabel = '计划待确认';
+      detailLabel = tShared(locale, 'lark.sync.detail.planPending');
     } else if (/\[needs_you\]|等权限确认|需要你拍板/.test(combined)) {
-      detailLabel = '待确认';
+      detailLabel = tShared(locale, 'lark.sync.detail.needsYou');
     } else if (/\[review\]|等待验收|验收/.test(combined)) {
-      detailLabel = '验收督办';
+      detailLabel = tShared(locale, 'lark.sync.detail.review');
     }
     return {
       category: 'supervision',
-      badge: '🐾 小猫督办',
-      label: '小猫督办',
+      badge: tShared(locale, 'lark.sync.badge.supervision'),
+      label: tShared(locale, 'lark.sync.label.supervision'),
       tagColor: 'purple',
       ...(detailLabel ? { detailLabel } : {})
     };
@@ -128,8 +133,8 @@ export function classifyTurnSource(input: {
   if (origin === 'schedule' || SCHEDULE_PROMPT_RE.test(prompt)) {
     return {
       category: 'schedule',
-      badge: '⏰ 定时任务',
-      label: '定时任务',
+      badge: tShared(locale, 'lark.sync.badge.schedule'),
+      label: tShared(locale, 'lark.sync.label.schedule'),
       tagColor: 'orange'
     };
   }
@@ -137,36 +142,36 @@ export function classifyTurnSource(input: {
   if (origin === TASK_RECOVERY_ORIGIN) {
     return {
       category: 'web',
-      badge: '🔄 断点续跑',
-      label: '断点续跑',
+      badge: tShared(locale, 'lark.sync.badge.recovery'),
+      label: tShared(locale, 'lark.sync.label.recovery'),
       tagColor: 'wathet',
-      detailLabel: '断点续跑'
+      detailLabel: tShared(locale, 'lark.sync.label.recovery')
     };
   }
 
   if (origin === 'board-mention') {
     return {
       category: 'web',
-      badge: '💻 网页同步 · 看板',
-      label: '网页同步',
+      badge: tShared(locale, 'lark.sync.badge.board'),
+      label: tShared(locale, 'lark.sync.label.web'),
       tagColor: 'blue',
-      detailLabel: '看板联动'
+      detailLabel: tShared(locale, 'lark.sync.detail.board')
     };
   }
 
   if (origin === 'emoji') {
     return {
       category: 'web',
-      badge: '💻 表情触发',
-      label: '表情触发',
+      badge: tShared(locale, 'lark.sync.badge.emoji'),
+      label: tShared(locale, 'lark.sync.label.emoji'),
       tagColor: 'blue'
     };
   }
 
   return {
     category: 'web',
-    badge: '💻 网页同步',
-    label: '网页同步',
+    badge: tShared(locale, 'lark.sync.badge.web'),
+    label: tShared(locale, 'lark.sync.label.web'),
     tagColor: 'blue'
   };
 }
@@ -260,14 +265,15 @@ export function formatSyncedTaskName(
   source: ClassifiedTurnSource,
   pluginRegistry: OutputPluginRegistry = defaultOutputPluginRegistry,
   taskOrigin?: string | null,
-  secrets: readonly (string | undefined)[] = []
+  secrets: readonly (string | undefined)[] = [],
+  locale: Locale = getActiveServerLocale()
 ): string {
   const raw = (prompt ?? '').trim();
   if (taskOrigin) {
     const parsedInteraction = pluginRegistry.parseInteractionEvent(taskOrigin, raw);
     if (parsedInteraction) {
       const summary = parsedInteraction.plugin.summarizeInteraction?.(parsedInteraction.payload)
-        ?? `已响应「${parsedInteraction.plugin.name}」`;
+        ?? tShared(locale, 'lark.plugin.respondedSummary', { name: parsedInteraction.plugin.name });
       return redactSensitiveContent(summary.replace(/\s+/g, ' ').trim(), secrets).slice(0, 80);
     }
   }
@@ -283,7 +289,7 @@ export function formatSyncedTaskName(
   if (!compact) return source.detailLabel ?? source.label;
   if (taskOrigin === TASK_RECOVERY_ORIGIN) {
     const cleaned = stripRecoveryVisiblePrefix(compact);
-    return redactSensitiveContent(cleaned || '服务重启断点续跑', secrets).slice(0, 80);
+    return redactSensitiveContent(cleaned || tShared(locale, 'lark.sync.taskName.recoveryFallback'), secrets).slice(0, 80);
   }
   if (source.category === 'supervision' && source.detailLabel) {
     const cleaned = compact.replace(/^📋\s*督办\s*·\s*/, '').trim();
@@ -293,7 +299,7 @@ export function formatSyncedTaskName(
       compact = cleaned;
     }
   } else if (source.category === 'web' && !taskOrigin) {
-    compact = `问：${compact}`;
+    compact = tShared(locale, 'lark.sync.taskName.webAsk', { text: compact });
   }
   return redactSensitiveContent(compact, secrets).slice(0, 80);
 }
@@ -862,20 +868,25 @@ export class LarkTurnSyncService {
     body: string;
     state: 'completed' | 'failed' | 'interrupted';
     error?: string;
+    locale?: Locale;
   }): string {
+    const locale = input.locale ?? getActiveServerLocale();
+    const badgeWrap = locale === 'en-US' ? `[${input.source.badge}]` : `【${input.source.badge}】`;
     const header = input.taskName && input.taskName !== input.source.label
-      ? `【${input.source.badge}】${input.taskName}`
-      : `【${input.source.badge}】`;
+      ? (locale === 'en-US' ? `${badgeWrap} ${input.taskName}` : `${badgeWrap}${input.taskName}`)
+      : badgeWrap;
     const body = input.body.trim();
     const errorLine = input.state === 'failed'
-      ? (input.error?.trim() ? `错误：${input.error.trim()}` : '任务未完全成功，详见 AgentDock Web 会话记录。')
+      ? (input.error?.trim() ? tShared(locale, 'lark.sync.quiet.error', { error: input.error.trim() }) : tShared(locale, 'lark.sync.quiet.failedFallback'))
       : input.state === 'interrupted'
-        ? '任务已被取消。'
+        ? tShared(locale, 'lark.sync.quiet.interrupted')
         : '';
     const parts = [header];
     if (body) parts.push(body);
-    if (errorLine && (!body || !body.includes(errorLine))) parts.push(`（${errorLine}）`);
-    if (parts.length === 1) parts.push('（Agent 未返回最终输出）');
+    if (errorLine && (!body || !body.includes(errorLine))) {
+      parts.push(locale === 'en-US' ? `(${errorLine})` : `（${errorLine}）`);
+    }
+    if (parts.length === 1) parts.push(tShared(locale, 'lark.sync.quiet.noOutput'));
     return parts.join('\n\n');
   }
 
@@ -1048,13 +1059,14 @@ export class LarkTurnSyncService {
       const elapsedSeconds = event.durationMs !== undefined
         ? Math.max(0, event.durationMs / 1_000)
         : Math.max(0, (this.nowMs() - turn.startedAt) / 1_000);
+      const dedupLocale = getActiveServerLocale();
       const dedupElements = boundLarkCardElements([
         {
           tag: 'markdown',
           element_id: 'final_output',
           content: turn.target.chatType === 'p2p'
-            ? "<font color='grey'>本轮结果已主动发送，此处不重复正文。</font>"
-            : "<font color='grey'>本轮结果已通过群消息主动发送，此处不重复正文。</font>",
+            ? `<font color='grey'>${tShared(dedupLocale, 'lark.sync.dedup.p2p')}</font>`
+            : `<font color='grey'>${tShared(dedupLocale, 'lark.sync.dedup.group')}</font>`,
           text_size: 'notation',
           margin: '0px'
         }

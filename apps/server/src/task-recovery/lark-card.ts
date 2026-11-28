@@ -1,4 +1,11 @@
-import { stripRecoveryVisiblePrefix, type TaskRecoveryDecisionSource, type TaskRecoveryRecord } from '@agent-dock/agent-dock-shared';
+import {
+  stripRecoveryVisiblePrefix,
+  tShared,
+  type Locale,
+  type TaskRecoveryDecisionSource,
+  type TaskRecoveryRecord
+} from '@agent-dock/agent-dock-shared';
+import { getActiveServerLocale } from '../locale-service.js';
 import { webAccessSessionToken } from '../web-access.js';
 
 export const LARK_TASK_RECOVERY_DECIDE_ACTION = 'task_recovery_decide';
@@ -54,15 +61,15 @@ function escapeLarkInlineMd(value: string): string {
     .trim();
 }
 
-function formatTimestamp(iso: string | null | undefined): string {
-  if (!iso) return '刚刚';
+function formatTimestamp(iso: string | null | undefined, locale: Locale): string {
+  if (!iso) return tShared(locale, 'lark.recovery.justNow');
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function buildWebSessionFooter(sessionId: string, webBaseUrl?: string): Array<Record<string, unknown>> {
+function buildWebSessionFooter(sessionId: string, locale: Locale, webBaseUrl?: string): Array<Record<string, unknown>> {
   if (!webBaseUrl?.trim()) return [];
   const base = webBaseUrl.trim().replace(/\/$/, '');
   let url = `${base}/sessions/${sessionId}`;
@@ -70,17 +77,23 @@ function buildWebSessionFooter(sessionId: string, webBaseUrl?: string): Array<Re
   if (token) url += `?t=${token}`;
   return [{
     tag: 'markdown',
-    content: `<font color='grey'>[在 AgentDock 查看会话](${url})</font>`,
+    content: `<font color='grey'>[${tShared(locale, 'lark.card.footer.viewSession')}](${url})</font>`,
     text_size: 'x-small',
     margin: '6px 0px 0px 0px'
   }];
 }
 
-function formatSourceActor(source?: TaskRecoveryDecisionSource | null, decidedBy?: string | null): string {
+function formatSourceActor(locale: Locale, source?: TaskRecoveryDecisionSource | null, decidedBy?: string | null): string {
   const actor = decidedBy?.trim();
-  if (source === 'lark') return actor ? `飞书 · ${actor}` : '飞书';
-  if (source === 'web') return actor ? `网页端 · ${actor}` : '网页端';
-  return '自动恢复';
+  if (source === 'lark') {
+    const label = tShared(locale, 'source.lark');
+    return actor ? tShared(locale, 'lark.recovery.actorFormat', { source: label, actor }) : label;
+  }
+  if (source === 'web') {
+    const label = tShared(locale, 'source.web');
+    return actor ? tShared(locale, 'lark.recovery.actorFormat', { source: label, actor }) : label;
+  }
+  return tShared(locale, 'source.auto');
 }
 
 /**
@@ -93,34 +106,37 @@ export function buildTaskRecoveryConfirmCard(input: {
   record: TaskRecoveryRecord;
   cardId: string;
   webBaseUrl?: string;
+  locale?: Locale;
 }): Record<string, unknown> {
   const { record, cardId, webBaseUrl } = input;
-  const excerpt = truncatePlain(stripRecoveryVisiblePrefix(record.originalPrompt) || '未记录原始请求文本', 160);
-  const interruptedLabel = formatTimestamp(record.interruptedAt);
+  const locale = input.locale ?? getActiveServerLocale();
+  const excerpt = truncatePlain(stripRecoveryVisiblePrefix(record.originalPrompt) || tShared(locale, 'lark.recovery.noOriginalPrompt'), 160);
+  const interruptedLabel = formatTimestamp(record.interruptedAt, locale);
+  const colon = locale === 'en-US' ? ': ' : '：';
 
   const elements: Array<Record<string, unknown>> = [
     {
       tag: 'markdown',
-      content: `<text_tag color='orange'>服务重启中断</text_tag>  该任务在 **${escapeLarkInlineMd(interruptedLabel)}** 因 AgentDock 服务重启被动中断，是否继续执行？`,
+      content: `<text_tag color='orange'>${tShared(locale, 'lark.recovery.tagInterrupted')}</text_tag>  ${tShared(locale, 'lark.recovery.bodyPrompt', { time: escapeLarkInlineMd(interruptedLabel) })}`,
       text_size: 'normal_v2',
       margin: '0px 0px 6px 0px'
     },
     {
       tag: 'markdown',
-      content: `> **中断前请求**：${escapeLarkInlineMd(excerpt)}`,
+      content: `> **${tShared(locale, 'lark.recovery.previousRequest')}**${colon}${escapeLarkInlineMd(excerpt)}`,
       text_size: 'notation',
       margin: '2px 0px 6px 0px'
     },
     {
       tag: 'markdown',
-      content: "<font color='grey'>继续执行前 Agent 会先核对工作区与已完成进度，不重复发消息、发版或删文件等副作用操作。</font>",
+      content: `<font color='grey'>${tShared(locale, 'lark.recovery.guardrailHint')}</font>`,
       text_size: 'x-small',
       margin: '0px 0px 8px 0px'
     },
     {
       tag: 'button',
       element_id: 'task_recovery_resume',
-      text: { tag: 'plain_text', content: '继续执行（断点自检续跑）' },
+      text: { tag: 'plain_text', content: tShared(locale, 'lark.recovery.btnResume') },
       type: 'primary',
       width: 'fill',
       margin: '4px 0px 0px 0px',
@@ -137,7 +153,7 @@ export function buildTaskRecoveryConfirmCard(input: {
     {
       tag: 'button',
       element_id: 'task_recovery_dismiss',
-      text: { tag: 'plain_text', content: '放弃 / 取消' },
+      text: { tag: 'plain_text', content: tShared(locale, 'lark.recovery.btnDismiss') },
       type: 'default',
       width: 'fill',
       margin: '6px 0px 0px 0px',
@@ -151,7 +167,7 @@ export function buildTaskRecoveryConfirmCard(input: {
         }
       }]
     },
-    ...buildWebSessionFooter(record.sessionId, webBaseUrl)
+    ...buildWebSessionFooter(record.sessionId, locale, webBaseUrl)
   ];
 
   return {
@@ -159,12 +175,12 @@ export function buildTaskRecoveryConfirmCard(input: {
     config: {
       update_multi: true,
       width_mode: 'default',
-      summary: { content: truncatePlain(`任务因服务重启中断，是否继续：${excerpt}`, 110) }
+      summary: { content: truncatePlain(tShared(locale, 'lark.recovery.summaryConfirm', { excerpt }), 110) }
     },
     header: {
       template: 'orange',
-      title: { tag: 'plain_text', content: '任务因服务重启中断' },
-      subtitle: { tag: 'plain_text', content: 'AgentDock · 请确认是否继续执行' }
+      title: { tag: 'plain_text', content: tShared(locale, 'lark.recovery.headerTitle') },
+      subtitle: { tag: 'plain_text', content: tShared(locale, 'lark.recovery.headerSubtitle') }
     },
     body: {
       direction: 'vertical',
@@ -179,48 +195,53 @@ export function buildTaskRecoveryConfirmCard(input: {
 export function buildTaskRecoveryResolvedCard(input: {
   record: TaskRecoveryRecord;
   webBaseUrl?: string;
+  locale?: Locale;
 }): Record<string, unknown> {
   const { record, webBaseUrl } = input;
+  const locale = input.locale ?? getActiveServerLocale();
   const resumed = record.status === 'resumed';
-  const excerpt = truncatePlain(stripRecoveryVisiblePrefix(record.originalPrompt) || '未记录原始请求文本', 140);
-  const actor = formatSourceActor(record.decidedSource, record.decidedBy);
-  const decidedAt = formatTimestamp(record.decidedAt ?? record.updatedAt);
+  const excerpt = truncatePlain(stripRecoveryVisiblePrefix(record.originalPrompt) || tShared(locale, 'lark.recovery.noOriginalPrompt'), 140);
+  const actor = formatSourceActor(locale, record.decidedSource, record.decidedBy);
+  const decidedAt = formatTimestamp(record.decidedAt ?? record.updatedAt, locale);
+  const colon = locale === 'en-US' ? ': ' : '：';
 
   const elements: Array<Record<string, unknown>> = [
     {
       tag: 'markdown',
       content: resumed
-        ? `<text_tag color='green'>已继续执行</text_tag>  已通过 **${escapeLarkInlineMd(actor)}** 触发断点自检续跑。`
-        : `<text_tag color='neutral'>已放弃续跑</text_tag>  已通过 **${escapeLarkInlineMd(actor)}** 放弃本次恢复并锁定。`,
+        ? `<text_tag color='green'>${tShared(locale, 'lark.recovery.tagResumed')}</text_tag>  ${tShared(locale, 'lark.recovery.bodyResumed', { actor: escapeLarkInlineMd(actor) })}`
+        : `<text_tag color='neutral'>${tShared(locale, 'lark.recovery.tagDismissed')}</text_tag>  ${tShared(locale, 'lark.recovery.bodyDismissed', { actor: escapeLarkInlineMd(actor) })}`,
       text_size: 'normal_v2',
       margin: '0px 0px 6px 0px'
     },
     {
       tag: 'markdown',
-      content: `> **原请求**：${escapeLarkInlineMd(excerpt)}`,
+      content: `> **${tShared(locale, 'lark.recovery.originalRequest')}**${colon}${escapeLarkInlineMd(excerpt)}`,
       text_size: 'notation',
       margin: '2px 0px 4px 0px'
     },
     {
       tag: 'markdown',
-      content: `<font color='grey'>处理时间：${escapeLarkInlineMd(decidedAt)}</font>`,
+      content: `<font color='grey'>${tShared(locale, 'lark.recovery.handledAt', { time: escapeLarkInlineMd(decidedAt) })}</font>`,
       text_size: 'x-small',
       margin: '0px 0px 2px 0px'
     },
-    ...buildWebSessionFooter(record.sessionId, webBaseUrl)
+    ...buildWebSessionFooter(record.sessionId, locale, webBaseUrl)
   ];
+
+  const statusTag = resumed ? tShared(locale, 'lark.recovery.tagResumed') : tShared(locale, 'lark.recovery.tagDismissed');
 
   return {
     schema: '2.0',
     config: {
       update_multi: true,
       width_mode: 'default',
-      summary: { content: truncatePlain(`${resumed ? '已继续执行' : '已放弃续跑'}：${excerpt}`, 110) }
+      summary: { content: truncatePlain(`${statusTag}${colon}${excerpt}`, 110) }
     },
     header: {
       template: resumed ? 'green' : 'grey',
-      title: { tag: 'plain_text', content: resumed ? '已确认继续执行' : '已放弃断点续跑' },
-      subtitle: { tag: 'plain_text', content: resumed ? `AgentDock · ${actor}已触发续跑` : `AgentDock · ${actor}已归档锁定` }
+      title: { tag: 'plain_text', content: resumed ? tShared(locale, 'lark.recovery.resolvedTitleResumed') : tShared(locale, 'lark.recovery.resolvedTitleDismissed') },
+      subtitle: { tag: 'plain_text', content: resumed ? tShared(locale, 'lark.recovery.resolvedSubtitleResumed', { actor }) : tShared(locale, 'lark.recovery.resolvedSubtitleDismissed', { actor }) }
     },
     body: {
       direction: 'vertical',

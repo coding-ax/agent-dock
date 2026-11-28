@@ -7,6 +7,7 @@ import { HoverTooltip } from './HoverTooltip';
 import { JsonTreeView } from './JsonTreeView';
 import { RequestTrajectoryView, type RequestTrajectoryContext } from './RequestTrajectory';
 import { buildRequestTrajectory } from './session-request-log';
+import { useBi } from './i18n';
 
 const PAGE_SIZE = 200;
 
@@ -16,6 +17,7 @@ export function formatRawEvent(event: DockEvent): string {
 }
 
 export function RawLogPanel({ sessionId, active = true }: { sessionId: string; active?: boolean }) {
+  const L = useBi();
   const [mode, setMode] = useState<'events' | 'requests' | 'record'>('events');
   const [recordView, setRecordView] = useState<'tree' | 'text'>('tree');
   const latest = useQuery({
@@ -66,7 +68,7 @@ export function RawLogPanel({ sessionId, active = true }: { sessionId: string; a
   // 服务端只回最近一页事件（避免把百万行读进内存）。截断必须说出来：这一档叫「完整记录」，
   // 用户会拿它对账，静默少给事件等于给出错误结论。
   const recordNote = record.data?.eventsTruncated
-    ? `事件仅显示最近 ${record.data.events.length} 条，共 ${record.data.eventTotal ?? '?'} 条；更早的事件请在「事件流」里逐页读取。`
+    ? L(`事件仅显示最近 ${record.data.events.length} 条，共 ${record.data.eventTotal ?? '?'} 条；更早的事件请在「事件流」里逐页读取。`, `Showing latest ${record.data.events.length} of ${record.data.eventTotal ?? '?'} events; view earlier ones in Event Stream.`)
     : undefined;
   const lines = useMemo(() => raw ? raw.split('\n').length : 0, [raw]);
 
@@ -112,28 +114,28 @@ export function RawLogPanel({ sessionId, active = true }: { sessionId: string; a
 
   return <div className="flex h-full min-h-0 flex-col bg-white">
     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-zinc-200 px-3 text-[12px] text-zinc-500">
-      <Segmented<typeof mode> size="small" aria-label="原始日志模式" className="shrink-0 text-[12px]" value={mode} onChange={next => { setMode(next); if (next !== 'events' && boxRef.current) boxRef.current.scrollTop = 0; }} options={[{ value: 'events', label: '事件流' }, { value: 'requests', label: '实际请求' }, { value: 'record', label: '完整记录' }]}/>
+      <Segmented<typeof mode> size="small" aria-label={L("原始日志模式", "Raw log view mode")} className="shrink-0 text-[12px]" value={mode} onChange={next => { setMode(next); if (next !== 'events' && boxRef.current) boxRef.current.scrollTop = 0; }} options={[{ value: 'events', label: L("事件流", "Event Stream") }, { value: 'requests', label: L("实际请求", "Actual Requests") }, { value: 'record', label: L("完整记录", "Full Record") }]}/>
       <span className="truncate font-mono text-[12px] text-zinc-400" title={sessionId}>{sessionId.slice(0, 16)}…</span>
-      <span className="shrink-0 tabular-nums text-[12px] text-zinc-400">{mode === 'events' ? `${events.length} 条 · ${lines} 行` : record.data ? `${record.data.tasks.length} 任务 · ${record.data.events.length} 事件${record.data.eventsTruncated ? ` / 共 ${record.data.eventTotal ?? '?'}` : ''}` : ''}</span>
+      <span className="shrink-0 tabular-nums text-[12px] text-zinc-400">{mode === 'events' ? L(`${events.length} 条 · ${lines} 行`, `${events.length} events · ${lines} lines`) : record.data ? L(`${record.data.tasks.length} 任务 · ${record.data.events.length} 事件${record.data.eventsTruncated ? ` / 共 ${record.data.eventTotal ?? '?'}` : ''}`, `${record.data.tasks.length} tasks · ${record.data.events.length} events${record.data.eventsTruncated ? ` / ${record.data.eventTotal ?? '?'} total` : ''}`) : ''}</span>
       <span className="ml-auto flex items-center gap-1">
-        <HoverTooltip content="刷新"><button type="button" aria-label="刷新原始日志" onClick={() => void (mode === 'events' ? latest.refetch() : record.refetch())} className={`grid h-7 w-7 place-items-center rounded-md ${toolButtonTone(false)}`}><RefreshCw size={13}/></button></HoverTooltip>
-        <HoverTooltip content={wrap ? '关闭自动换行' : '开启自动换行'}><button type="button" aria-label="切换自动换行" aria-pressed={wrap} onClick={() => setWrap(value => !value)} className={`grid h-7 w-7 place-items-center rounded-md ${toolButtonTone(wrap)}`}><WrapText size={13}/></button></HoverTooltip>
+        <HoverTooltip content={L("刷新", "Refresh")}><button type="button" aria-label={L("刷新原始日志", "Refresh raw logs")} onClick={() => void (mode === 'events' ? latest.refetch() : record.refetch())} className={`grid h-7 w-7 place-items-center rounded-md ${toolButtonTone(false)}`}><RefreshCw size={13}/></button></HoverTooltip>
+        <HoverTooltip content={wrap ? L("关闭自动换行", "Disable word wrap") : L("开启自动换行", "Enable word wrap")}><button type="button" aria-label={L("切换自动换行", "Toggle word wrap")} aria-pressed={wrap} onClick={() => setWrap(value => !value)} className={`grid h-7 w-7 place-items-center rounded-md ${toolButtonTone(wrap)}`}><WrapText size={13}/></button></HoverTooltip>
         {mode === 'record' ? <>
-          <HoverTooltip content={recordView === 'tree' ? '显示原始 JSON 文本' : '显示结构视图'}><button type="button" aria-label="切换记录视图" aria-pressed={recordView === 'tree'} onClick={() => setRecordView(value => value === 'tree' ? 'text' : 'tree')} className={`grid h-7 w-7 place-items-center rounded-md ${toolButtonTone(recordView === 'tree')}`}>{recordView === 'tree' ? <Braces size={13}/> : <FileJson size={13}/>}</button></HoverTooltip>
-          <HoverTooltip content="下载完整记录 JSON"><button type="button" aria-label="下载完整记录" disabled={!recordJson} onClick={downloadRecord} className={`grid h-7 w-7 place-items-center rounded-md disabled:opacity-40 ${toolButtonTone(false)}`}><Download size={13}/></button></HoverTooltip>
-        </> : <HoverTooltip content={follow ? '停止跟随最新输出' : '跟随最新输出'}><button type="button" aria-label="切换跟随输出" aria-pressed={follow} onClick={() => { setFollow(value => !value); if (!follow && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }} className={`grid h-7 w-7 place-items-center rounded-md ${toolButtonTone(follow)}`}><ArrowDownToLine size={13}/></button></HoverTooltip>}
+          <HoverTooltip content={recordView === 'tree' ? L("显示原始 JSON 文本", "Show raw JSON") : L("显示结构视图", "Show tree view")}><button type="button" aria-label={L("切换记录视图", "Toggle record view")} aria-pressed={recordView === 'tree'} onClick={() => setRecordView(value => value === 'tree' ? 'text' : 'tree')} className={`grid h-7 w-7 place-items-center rounded-md ${toolButtonTone(recordView === 'tree')}`}>{recordView === 'tree' ? <Braces size={13}/> : <FileJson size={13}/>}</button></HoverTooltip>
+          <HoverTooltip content={L("下载完整记录 JSON", "Download full record JSON")}><button type="button" aria-label={L("下载完整记录", "Download full record")} disabled={!recordJson} onClick={downloadRecord} className={`grid h-7 w-7 place-items-center rounded-md disabled:opacity-40 ${toolButtonTone(false)}`}><Download size={13}/></button></HoverTooltip>
+        </> : <HoverTooltip content={follow ? L("停止跟随最新输出", "Stop auto-scroll") : L("跟随最新输出", "Follow latest output")}><button type="button" aria-label={L("切换跟随输出", "Toggle auto-scroll")} aria-pressed={follow} onClick={() => { setFollow(value => !value); if (!follow && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight; }} className={`grid h-7 w-7 place-items-center rounded-md ${toolButtonTone(follow)}`}><ArrowDownToLine size={13}/></button></HoverTooltip>}
       </span>
     </div>
-    <div className="border-b border-zinc-200 bg-zinc-50/70 px-3 py-1.5 text-[12px] leading-4 text-zinc-500">{mode === 'requests' ? '按轮次展示创建时的 System Prompt、每轮实际发送给 Agent 的文本，以及每轮的最终输出与思考、工具调用（过程按需读取，不占首屏）。注入内容单独标出；旧任务未保存的请求无法还原；手动刷新获取最新记录。' : mode === 'record' ? <>会话配置、全部任务（含已保存的实际请求）和事件；默认按结构折叠，可切回原始 JSON。手动刷新获取最新记录。{recordNote && <span className="text-amber-700"> {recordNote}</span>}</> : '显示会话收到的原始事件；Agent 未提供终端原文时显示事件数据。最新事件每 3 秒刷新。'}</div>
+    <div className="border-b border-zinc-200 bg-zinc-50/70 px-3 py-1.5 text-[12px] leading-4 text-zinc-500">{mode === 'requests' ? L("按轮次展示创建时的 System Prompt、每轮实际发送给 Agent 的文本，以及每轮的最终输出与思考、工具调用（过程按需读取，不占首屏）。注入内容单独标出；旧任务未保存的请求无法还原；手动刷新获取最新记录。", "Inspect creation System Prompt, actual prompt sent per turn, final output, thinking, and tool calls on demand. Injected segments are highlighted; refresh manually for latest records.") : mode === 'record' ? <>{L("会话配置、全部任务（含已保存的实际请求）和事件；默认按结构折叠，可切回原始 JSON。手动刷新获取最新记录。", "Session config, all tasks (including saved prompts), and events in a collapsible tree or raw JSON. Refresh manually for latest data.")}{recordNote && <span className="text-amber-700"> {recordNote}</span>}</> : L("显示会话收到的原始事件；Agent 未提供终端原文时显示事件数据。最新事件每 3 秒刷新。", "Shows raw events received by this session (or structured event payloads). Refreshes every 3 seconds.")}</div>
     {(mode === 'events' ? latest.error : record.error) && <div role="alert" className="border-b border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-600">{(mode === 'events' ? latest.error : record.error)?.message}</div>}
     <div ref={boxRef} onScroll={event => { const el = event.currentTarget; if (follow && el.scrollHeight - el.scrollTop - el.clientHeight > 24) setFollow(false); }} className={`min-h-0 flex-1 overflow-auto bg-zinc-50/60 p-3 text-[12px] leading-5 text-zinc-700 ${mode === 'requests' ? '' : 'font-mono'}`}>
-      {mode === 'events' && events.length > 0 && hasMore && (older.length > 0 || latest.data?.length === PAGE_SIZE) && <button type="button" disabled={loadingOlder} onClick={() => void loadOlder()} className="mb-3 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[12px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-50">{loadingOlder ? '读取中…' : '加载更早事件'}</button>}
+      {mode === 'events' && events.length > 0 && hasMore && (older.length > 0 || latest.data?.length === PAGE_SIZE) && <button type="button" disabled={loadingOlder} onClick={() => void loadOlder()} className="mb-3 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[12px] text-zinc-600 hover:bg-zinc-100 disabled:opacity-50">{loadingOlder ? L("读取中…", "Loading…") : L("加载更早事件", "Load earlier events")}</button>}
       {mode === 'events' && olderError && <div role="alert" className="mb-2 text-red-600">{olderError}</div>}
       {mode === 'requests'
-        ? trajectory ? <RequestTrajectoryView trajectory={trajectory} context={context} wrap={wrap}/> : <span className="text-zinc-500">{record.isLoading ? '读取记录中…' : '暂无记录。'}</span>
+        ? trajectory ? <RequestTrajectoryView trajectory={trajectory} context={context} wrap={wrap}/> : <span className="text-zinc-500">{record.isLoading ? L("读取记录中…", "Loading record…") : L("暂无记录。", "No records yet.")}</span>
         : mode === 'record' && record.data && recordView === 'tree'
           ? <JsonTreeView value={record.data} wrap={wrap}/>
-          : displayedRaw ? <pre className={`m-0 ${wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}>{displayedRaw}</pre> : <span className="text-zinc-500">{mode === 'events' ? (latest.isLoading ? '读取事件中…' : '当前会话暂无事件。') : (record.isLoading ? '读取记录中…' : '暂无记录。')}</span>}
+          : displayedRaw ? <pre className={`m-0 ${wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}>{displayedRaw}</pre> : <span className="text-zinc-500">{mode === 'events' ? (latest.isLoading ? L("读取事件中…", "Loading events…") : L("当前会话暂无事件。", "No events in this session yet.")) : (record.isLoading ? L("读取记录中…", "Loading record…") : L("暂无记录。", "No records yet."))}</span>}
     </div>
   </div>;
 }

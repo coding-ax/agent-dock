@@ -17,17 +17,19 @@ export function useModalFocusTrap(options: {
   initial: RefObject<HTMLElement | null>;
   dismissible: boolean;
   onDismiss(): void;
+  enabled?: boolean;
 }) {
-  const { panel, initial, dismissible, onDismiss } = options;
+  const { panel, initial, dismissible, onDismiss, enabled = true } = options;
   const restore = useRef<HTMLElement>(undefined);
   const dismiss = useMemoizedFn(onDismiss);
 
   useMount(() => {
+    if (!enabled) return;
     restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     // 让出一帧：打开动画期间元素尚未就位，立即 focus 会被浏览器忽略。
     requestAnimationFrame(() => initial.current?.focus());
   });
-  useUnmount(() => restore.current?.focus());
+  useUnmount(() => { if (enabled) restore.current?.focus(); });
 
   useEventListener('keydown', event => {
     // antd 下拉/日期浮层开着时，Esc 留给浮层自己关。
@@ -38,5 +40,5 @@ export function useModalFocusTrap(options: {
     const first = focusable[0]!; const last = focusable.at(-1)!;
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-  }, { target: () => document });
+  }, { target: () => document, enable: enabled });
 }

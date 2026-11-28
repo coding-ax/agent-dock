@@ -1,4 +1,5 @@
 import { api, type AgentModel, type AgentModelsResult } from './api';
+import { bi } from './i18n';
 
 type ModelCacheStorage = Pick<Storage, 'getItem' | 'setItem'>;
 type CachedAgentModels = { savedAt: number; value: AgentModelsResult };
@@ -69,7 +70,7 @@ export function writeCachedAgentModels(agentId: string, model: string | undefine
 /** 降级信息不能覆盖上次成功的 ACP 能力；缓存内容也必须明确标记。 */
 export function reconcileAgentModels(result: AgentModelsResult, cached?: AgentModelsResult): AgentModelsResult {
   if (cached?.source === 'acp' && !cached.warning && (result.source !== 'acp' || result.warning)) {
-    return { ...cached, warning: `${result.warning ?? '本次未能读取完整 Agent 配置。'} 正在显示上次成功读取的选项。` };
+    return { ...cached, warning: bi(`${result.warning ?? '本次未能读取完整 Agent 配置。'} 正在显示上次成功读取的选项。`, `${result.warning ?? 'Could not load full Agent configuration.'} Showing last cached options.`) };
   }
   return result;
 }
@@ -81,7 +82,7 @@ export async function loadAgentModels(agentId: string, model?: string, refresh =
   try { result = await api.agentModels(agentId, model, refresh, sshHost); }
   catch (error) {
     if (cached?.source !== 'acp') throw error;
-    return { ...cached, warning: 'Agent 配置请求失败，正在显示上次成功读取的选项，可重新读取。' };
+    return { ...cached, warning: bi("Agent 配置请求失败，正在显示上次成功读取的选项，可重新读取。", "Failed to fetch Agent options; showing last cached options. You can refresh to retry.") };
   }
   const reconciled = reconcileAgentModels(result, cached);
   if (!sshHost && !reconciled.warning) writeCachedAgentModels(agentId, model, reconciled);

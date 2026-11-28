@@ -4,6 +4,7 @@ import Lightbox from 'yet-another-react-lightbox';
 import { Zoom } from 'yet-another-react-lightbox/plugins';
 import 'yet-another-react-lightbox/styles.css';
 import './ImageLightbox.css';
+import { bi } from './i18n';
 
 export interface ImageLightboxSlide {
   src: string;
@@ -34,11 +35,11 @@ export function clampLightboxIndex(index: number, total: number): number {
 }
 
 const LIGHTBOX_LABELS = {
-  Previous: '上一张',
-  Next: '下一张',
-  Close: '关闭',
-  'Zoom in': '放大',
-  'Zoom out': '缩小'
+  get Previous() { return bi("上一张", "Previous"); },
+  get Next() { return bi("下一张", "Next"); },
+  get Close() { return bi("关闭", "Close"); },
+  get 'Zoom in'() { return bi("放大", "Zoom In"); },
+  get 'Zoom out'() { return bi("缩小", "Zoom Out"); }
 } as const;
 
 /**

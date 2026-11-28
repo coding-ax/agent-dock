@@ -1,3 +1,6 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
+import { bi, getCurrentLocale } from './i18n';
+
 /**
  * 「侧边会话」的种子文本。
  *
@@ -14,11 +17,19 @@
  *
  * 措辞也跟着变了：它是给模型的指令，不是冒充用户说的话。
  */
-export function buildSideSessionSeed(mainSessionId: string): string {
+export function buildSideSessionSeed(mainSessionId: string, locale: Locale = getCurrentLocale()): string {
   // 命令细节在 `agent-dock session -h`，这里只给门牌号和最常用的一条取数命令，避免与通用运行约束重复。
-  return [
-    `你是一个侧边会话：由主会话 ${mainSessionId} 派生的独立会话，历史和任务队列不共享。`,
-    '用户通常会问主会话在做什么，或要你接着主会话的活继续做。',
-    `不要假设自己已经知道主会话的内容——需要时先用 \`agent-dock session show ${mainSessionId}\` 读取转录，再回答；发消息、打断等用法见 \`agent-dock session -h\`。`
-  ].join('\n');
+  return bi(
+    [
+      `你是一个侧边会话：由主会话 ${mainSessionId} 派生的独立会话，历史和任务队列不共享。`,
+      '用户通常会问主会话在做什么，或要你接着主会话的活继续做。',
+      `不要假设自己已经知道主会话的内容——需要时先用 \`agent-dock session show ${mainSessionId}\` 读取转录，再回答；发消息、打断等用法见 \`agent-dock session -h\`。`
+    ].join('\n'),
+    [
+      `You are a side session: an independent session spawned from main session ${mainSessionId} with separate history and task queue.`,
+      'The user may ask what the main session is doing or ask you to continue work from it.',
+      `Do not assume you already know the main session's content—use \`agent-dock session show ${mainSessionId}\` to read its transcript when needed; see \`agent-dock session -h\` for messaging, interrupting, and other commands.`
+    ].join('\n'),
+    locale
+  );
 }

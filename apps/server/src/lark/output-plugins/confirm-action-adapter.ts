@@ -1,10 +1,14 @@
 import {
   BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
+  formatInteractionSourceBadge,
+  tShared,
   type ConfirmActionDecision,
   type ConfirmActionInteractionPayload,
   type ConfirmActionRisk,
-  type ConfirmActionSpec
+  type ConfirmActionSpec,
+  type Locale
 } from '@agent-dock/agent-dock-shared';
+import { getActiveServerLocale } from '../../locale-service.js';
 import { webAccessSessionToken } from '../../web-access.js';
 import type { LarkOutputPluginAdapter } from './types.js';
 
@@ -31,8 +35,8 @@ function escapeLarkInlineMd(value: string): string {
     .trim();
 }
 
-function escapeLarkTagText(value: string): string {
-  return truncatePlain(value.replace(/[<>&'"]/g, ''), 40) || '确认';
+function escapeLarkTagText(value: string, locale: Locale): string {
+  return truncatePlain(value.replace(/[<>&'"]/g, ''), 40) || tShared(locale, 'lark.confirm.tagFallback');
 }
 
 function riskHeaderTemplate(risk: ConfirmActionRisk): string {
@@ -45,13 +49,13 @@ function riskHeaderTemplate(risk: ConfirmActionRisk): string {
   }
 }
 
-function riskTagMeta(risk: ConfirmActionRisk): { color: string; label: string } {
+function riskTagMeta(risk: ConfirmActionRisk, locale: Locale): { color: string; label: string } {
   switch (risk) {
-    case 'high': return { color: 'red', label: '高风险' };
-    case 'low': return { color: 'blue', label: '常规确认' };
+    case 'high': return { color: 'red', label: tShared(locale, 'lark.confirm.risk.high') };
+    case 'low': return { color: 'blue', label: tShared(locale, 'lark.confirm.risk.low') };
     case 'medium':
     default:
-      return { color: 'orange', label: '需确认' };
+      return { color: 'orange', label: tShared(locale, 'lark.confirm.risk.medium') };
   }
 }
 
@@ -62,7 +66,7 @@ function formatTimestamp(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function buildWebSessionFooter(sessionId?: string, webBaseUrl?: string): Array<Record<string, unknown>> {
+function buildWebSessionFooter(locale: Locale, sessionId?: string, webBaseUrl?: string): Array<Record<string, unknown>> {
   if (!webBaseUrl) return [];
   const base = webBaseUrl.replace(/\/$/, '');
   let url = sessionId ? `${base}/sessions/${sessionId}` : `${base}/sessions`;
@@ -70,7 +74,7 @@ function buildWebSessionFooter(sessionId?: string, webBaseUrl?: string): Array<R
   if (token) url += `?t=${token}`;
   return [{
     tag: 'markdown',
-    content: `<font color='grey'>[在 AgentDock 查看会话](${url})</font>`,
+    content: `<font color='grey'>[${tShared(locale, 'lark.card.footer.viewSession')}](${url})</font>`,
     text_size: 'x-small',
     margin: '6px 0px 0px 0px'
   }];
@@ -89,7 +93,9 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
 > = {
   pluginId: BUILTIN_CONFIRM_ACTION_PLUGIN_ID,
   trailingHintMarkdown: "<font color='grey'>👇 请在下方「操作确认卡」中确认或取消</font>",
+  getTrailingHintMarkdown: locale => `<font color='grey'>${tShared(locale, 'lark.confirm.trailingHint')}</font>`,
   streamingPlaceholderText: '⏳ 正在生成操作确认卡…',
+  getStreamingPlaceholderText: locale => tShared(locale, 'lark.confirm.streamingPlaceholder'),
 
   handlesAction(action: string): boolean {
     return LARK_CONFIRM_ACTIONS.has(action);
@@ -99,13 +105,15 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
     return action === LARK_CONFIRM_ACTION_PREVIEW;
   },
 
-  buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode }) {
-    const baseTitle = spec.title?.trim() || '确认执行操作';
+  buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, locale: explicitLocale }) {
+    const locale = explicitLocale ?? getActiveServerLocale();
+    const baseTitle = spec.title?.trim() || tShared(locale, 'lark.confirm.defaultTitle');
     const title = previewBanner ? `${previewBanner} ${baseTitle}` : baseTitle;
-    const riskMeta = riskTagMeta(spec.risk);
+    const riskMeta = riskTagMeta(spec.risk, locale);
     const subtitle = previewMode
-      ? 'AgentDock · 操作确认卡飞书预览'
-      : `AgentDock · ${riskMeta.label}，请点击确认执行或取消`;
+      ? tShared(locale, 'lark.confirm.subtitlePreview')
+      : tShared(locale, 'lark.confirm.subtitle', { risk: riskMeta.label });
+    const colon = locale === 'en-US' ? ': ' : '：';
 
     const elements: Array<Record<string, unknown>> = [];
 
@@ -120,7 +128,7 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
       elements.push({
         tag: 'markdown',
         content: spec.details
-          .map(item => `• **${escapeLarkInlineMd(item.label)}**：${escapeLarkInlineMd(item.value)}`)
+          .map(item => `• **${escapeLarkInlineMd(item.label)}**${colon}${escapeLarkInlineMd(item.value)}`)
           .join('\n'),
         text_size: 'notation',
         margin: '2px 0px 6px 0px'
@@ -185,7 +193,7 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
             tag: 'select_static',
             name: 'decision',
             width: 'fill',
-            placeholder: { tag: 'plain_text', content: '附带意见的决策' },
+            placeholder: { tag: 'plain_text', content: tShared(locale, 'lark.confirm.commentDecisionPlaceholder') },
             options: [
               { text: { tag: 'plain_text', content: truncatePlain(spec.confirmLabel, 38) }, value: 'confirm' },
               { text: { tag: 'plain_text', content: truncatePlain(spec.cancelLabel, 38) }, value: 'cancel' }
@@ -197,11 +205,11 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
             tag: 'input',
             name: 'comment_text',
             width: 'fill',
-            label: { tag: 'plain_text', content: '补充意见' },
+            label: { tag: 'plain_text', content: tShared(locale, 'lark.confirm.commentLabel') },
             label_position: 'top',
             placeholder: {
               tag: 'plain_text',
-              content: truncatePlain(spec.commentPlaceholder || '输入补充意见或限制条件…', 60)
+              content: truncatePlain(spec.commentPlaceholder || tShared(locale, 'lark.confirm.commentPlaceholder'), 60)
             },
             required: true
           },
@@ -211,7 +219,7 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
             form_action_type: 'submit',
             type: 'default',
             width: 'fill',
-            text: { tag: 'plain_text', content: '附带意见提交' },
+            text: { tag: 'plain_text', content: tShared(locale, 'lark.confirm.commentSubmit') },
             behaviors: [{
               type: 'callback',
               value: {
@@ -225,14 +233,14 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
       });
     }
 
-    elements.push(...buildWebSessionFooter(sessionId, webBaseUrl));
+    elements.push(...buildWebSessionFooter(locale, sessionId, webBaseUrl));
 
     return {
       schema: '2.0',
       config: {
         update_multi: true,
         width_mode: 'default',
-        summary: { content: truncatePlain(`${title}${spec.summary ? `：${spec.summary}` : ''}`, 110) }
+        summary: { content: truncatePlain(`${title}${spec.summary ? `${colon}${spec.summary}` : ''}`, 110) }
       },
       header: {
         template: riskHeaderTemplate(spec.risk),
@@ -248,22 +256,28 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
     };
   },
 
-  buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner }) {
+  buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner, locale: explicitLocale }) {
+    const locale = explicitLocale ?? getActiveServerLocale();
     const confirmed = payload.decision === 'confirm';
-    const sourceLabel = payload.source === 'web' ? '网页端' : '飞书';
-    const actorPart = payload.decidedBy?.trim() ? ` · 操作人：${payload.decidedBy.trim()}` : '';
-    const statusText = confirmed ? '已确认执行' : '已取消操作';
+    const responder = payload.responderName?.trim() || payload.decidedBy?.trim();
+    const sourceLabel = formatInteractionSourceBadge(payload.source, locale, { responderName: responder, variant: 'lark' });
+    const actorPart = payload.source === 'assistant'
+      ? ''
+      : (payload.decidedBy?.trim() ? tShared(locale, 'lark.confirm.answeredActor', { name: payload.decidedBy.trim() }) : '');
+    const statusText = confirmed ? tShared(locale, 'lark.confirm.statusConfirmed') : tShared(locale, 'lark.confirm.statusCancelled');
+    const icon = confirmed ? '✅' : '⛔';
     const baseTitle = payload.title?.trim()
-      ? `${confirmed ? '✅' : '⛔'} ${payload.title.trim()}（${statusText}）`
-      : `${confirmed ? '✅' : '⛔'} ${statusText}`;
+      ? tShared(locale, 'lark.confirm.answeredTitleWithName', { icon, title: payload.title.trim(), status: statusText })
+      : tShared(locale, 'lark.confirm.answeredTitleDefault', { icon, status: statusText });
     const title = previewBanner ? `${previewBanner} ${baseTitle}` : baseTitle;
-    const subtitle = `来源：${sourceLabel}${actorPart}`;
+    const subtitle = tShared(locale, 'lark.confirm.answeredSubtitle', { source: sourceLabel, actor: actorPart });
+    const colon = locale === 'en-US' ? ':' : '：';
 
     const lines: string[] = [
-      `**结果：** <text_tag color='${confirmed ? 'green' : 'neutral'}'>${escapeLarkTagText(payload.decisionLabel)}</text_tag>`
+      `**${tShared(locale, 'lark.confirm.resultLabel')}${colon}** <text_tag color='${confirmed ? 'green' : 'neutral'}'>${escapeLarkTagText(payload.decisionLabel, locale)}</text_tag>`
     ];
     if (payload.comment?.trim()) {
-      lines.push(`> 补充意见：${escapeLarkInlineMd(payload.comment)}`);
+      lines.push(`> ${tShared(locale, 'lark.confirm.commentNote', { text: escapeLarkInlineMd(payload.comment) })}`);
     }
 
     const elements: Array<Record<string, unknown>> = [
@@ -275,11 +289,11 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
       },
       {
         tag: 'markdown',
-        content: `<font color='grey'>已同步至 AgentDock 会话并通知 Agent · ${formatTimestamp(payload.decidedAt)}</font>`,
+        content: `<font color='grey'>${tShared(locale, 'lark.confirm.syncedNotify', { time: formatTimestamp(payload.decidedAt) })}</font>`,
         text_size: 'x-small',
         margin: '6px 0px 0px 0px'
       },
-      ...buildWebSessionFooter(sessionId, webBaseUrl)
+      ...buildWebSessionFooter(locale, sessionId, webBaseUrl)
     ];
 
     return {
@@ -287,7 +301,7 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
       config: {
         update_multi: true,
         width_mode: 'default',
-        summary: { content: truncatePlain(`${title}（${sourceLabel}）`, 110) }
+        summary: { content: truncatePlain(locale === 'en-US' ? `${title} (${sourceLabel})` : `${title}（${sourceLabel}）`, 110) }
       },
       header: {
         template: confirmed ? 'green' : 'grey',
@@ -303,11 +317,12 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
     };
   },
 
-  parseAction(spec, action, value, formValue) {
+  parseAction(spec, action, value, formValue, explicitLocale) {
+    const locale = explicitLocale ?? getActiveServerLocale();
     if (action === LARK_CONFIRM_ACTION_DECIDE) {
       const decision = String(value.decision ?? '').trim() as ConfirmActionDecision;
       if (decision !== 'confirm' && decision !== 'cancel') {
-        return { ok: false, error: '无效的确认决策类型' };
+        return { ok: false, error: tShared(locale, 'lark.confirm.error.invalidDecision') };
       }
       return {
         ok: true,
@@ -322,11 +337,11 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
     if (action === LARK_CONFIRM_ACTION_COMMENT) {
       const decision = String(formValue?.decision ?? value.decision ?? 'confirm').trim() as ConfirmActionDecision;
       if (decision !== 'confirm' && decision !== 'cancel') {
-        return { ok: false, error: '请选择确认或取消' };
+        return { ok: false, error: tShared(locale, 'lark.confirm.error.chooseDecision') };
       }
       const comment = String(formValue?.comment_text ?? '').trim();
       if (!comment) {
-        return { ok: false, error: '请先输入补充意见后再提交' };
+        return { ok: false, error: tShared(locale, 'lark.confirm.error.emptyComment') };
       }
       return {
         ok: true,
@@ -339,6 +354,6 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
       };
     }
 
-    return { ok: false, error: '不支持的操作确认卡回调' };
+    return { ok: false, error: tShared(locale, 'lark.confirm.error.unsupported') };
   }
 };

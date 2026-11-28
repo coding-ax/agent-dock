@@ -1,4 +1,6 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
 import type { AssistantTask, LifeStage } from '../api';
+import { bi, getCurrentLocale } from '../i18n';
 
 /**
  * Companion 小猫多状态体系：状态枚举、精灵资源映射、文案/提示元数据、状态推导优先级与防抖平滑。
@@ -69,113 +71,135 @@ export type KittenMoodMeta = {
   tone: KittenMoodTone;
 };
 
-export const KITTEN_MOOD_META: Record<KittenMood, KittenMoodMeta> = {
+type KittenMoodSpec = {
+  sprite: KittenSpriteKey;
+  label: { zh: string; en: string };
+  hint: { zh: string; en: string };
+  tier: KittenMoodTier;
+  tone: KittenMoodTone;
+};
+
+const KITTEN_MOOD_SPECS: Record<KittenMood, KittenMoodSpec> = {
   idle: {
     sprite: 'idle',
-    label: '随时待命',
-    hint: '安静守在工位上，随时准备接活',
+    label: { zh: '随时待命', en: 'Standing by' },
+    hint: { zh: '安静守在工位上，随时准备接活', en: 'Quietly at the desk, ready for tasks' },
     tier: 1,
     tone: 'neutral',
   },
   curious: {
     sprite: 'curious',
-    label: '好奇探头',
-    hint: '歪着脑袋打量，等你带它开工',
+    label: { zh: '好奇探头', en: 'Curious' },
+    hint: { zh: '歪着脑袋打量，等你带它开工', en: 'Peeking over, waiting for you to adopt it' },
     tier: 4,
     tone: 'info',
   },
   thinking: {
     sprite: 'thinking',
-    label: '思考推演',
-    hint: '托腮琢磨思路与拆解方案',
+    label: { zh: '思考推演', en: 'Thinking' },
+    hint: { zh: '托腮琢磨思路与拆解方案', en: 'Planning and breaking down the task' },
     tier: 2,
     tone: 'active',
   },
   busy: {
     sprite: 'busy',
-    label: '专注干活',
-    hint: '敲着键盘调用工具执行中',
+    label: { zh: '专注干活', en: 'Working' },
+    hint: { zh: '敲着键盘调用工具执行中', en: 'Running tools and working on tasks' },
     tier: 2,
     tone: 'active',
   },
   delegating: {
     sprite: 'delegating',
-    label: '派活调度',
-    hint: '正在派发便签或并行盯着多项任务',
+    label: { zh: '派活调度', en: 'Delegating' },
+    hint: { zh: '正在派发便签或并行盯着多项任务', en: 'Dispatching notes or tracking multiple tasks' },
     tier: 2,
     tone: 'info',
   },
   reviewing: {
     sprite: 'search',
-    label: '验收审查',
-    hint: '举着放大镜逐条核对交付结果',
+    label: { zh: '验收审查', en: 'Reviewing' },
+    hint: { zh: '举着放大镜逐条核对交付结果', en: 'Checking completed work against criteria' },
     tier: 2,
     tone: 'info',
   },
   waiting: {
     sprite: 'waiting',
-    label: '等你拍板',
-    hint: '轻轻招手，等你授权、确认计划或做决定',
+    label: { zh: '等你拍板', en: 'Waiting for you' },
+    hint: { zh: '轻轻招手，等你授权、确认计划或做决定', en: 'Waiting for approval, plan sign-off, or input' },
     tier: 4,
     tone: 'warning',
   },
   alert: {
     sprite: 'waiting',
-    label: '需要你处理',
-    hint: '有卡住的事项或授权在等你拍板',
+    label: { zh: '需要你处理', en: 'Needs attention' },
+    hint: { zh: '有卡住的事项或授权在等你拍板', en: 'Blocked task or permission awaits your decision' },
     tier: 4,
     tone: 'warning',
   },
   happy: {
     sprite: 'happy',
-    label: '开心摇尾巴',
-    hint: '心情很好，眯起眼睛摇尾巴',
+    label: { zh: '开心摇尾巴', en: 'Happy' },
+    hint: { zh: '心情很好，眯起眼睛摇尾巴', en: 'In a great mood, purring happily' },
     tier: 3,
     tone: 'success',
   },
   celebrating: {
     sprite: 'celebrating',
-    label: '交付庆祝',
-    hint: '任务验收通过或阶段完成，举爪撒花中',
+    label: { zh: '交付庆祝', en: 'Celebrating' },
+    hint: { zh: '任务验收通过或阶段完成，举爪撒花中', en: 'Task accepted or milestone completed!' },
     tier: 3,
     tone: 'success',
   },
   error: {
     sprite: 'error',
-    label: '排查出错',
-    hint: '遇到报错或任务异常，小紧张排查中',
+    label: { zh: '排查出错', en: 'Error' },
+    hint: { zh: '遇到报错或任务异常，小紧张排查中', en: 'Hit an error or task failure — needs checking' },
     tier: 4,
     tone: 'danger',
   },
   sad: {
     sprite: 'sad',
-    label: '有点失落',
-    hint: '耳朵耷拉下来，有点委屈或暂时冻结',
+    label: { zh: '有点失落', en: 'Down' },
+    hint: { zh: '耳朵耷拉下来，有点委屈或暂时冻结', en: 'Ears down — paused or archived' },
     tier: 4,
     tone: 'neutral',
   },
   tidying: {
     sprite: 'tidying',
-    label: '整理记忆',
-    hint: '正在打扫归档已完成便签、梳理上下文记忆',
+    label: { zh: '整理记忆', en: 'Tidying' },
+    hint: { zh: '正在打扫归档已完成便签、梳理上下文记忆', en: 'Archiving finished notes and tidying memory' },
     tier: 2,
     tone: 'info',
   },
   night: {
     sprite: 'night',
-    label: '深夜陪伴',
-    hint: '夜深了，点着小月光陪你守在屏幕旁',
+    label: { zh: '深夜陪伴', en: 'Late night' },
+    hint: { zh: '夜深了，点着小月光陪你守在屏幕旁', en: 'Keeping you company under the moonlight' },
     tier: 1,
     tone: 'cozy',
   },
   sleepy: {
     sprite: 'sleepy',
-    label: '空闲打盹',
-    hint: '暂时清闲，先趴下眯一会儿，喊一声就醒',
+    label: { zh: '空闲打盹', en: 'Napping' },
+    hint: { zh: '暂时清闲，先趴下眯一会儿，喊一声就醒', en: 'Taking a quick nap — ping anytime to wake' },
     tier: 1,
     tone: 'cozy',
   },
 };
+
+export const KITTEN_MOOD_META: Record<KittenMood, KittenMoodMeta> = Object.fromEntries(
+  KITTEN_MOODS.map(mood => {
+    const spec = KITTEN_MOOD_SPECS[mood];
+    const entry: KittenMoodMeta = {
+      sprite: spec.sprite,
+      get label() { return bi(spec.label.zh, spec.label.en); },
+      get hint() { return bi(spec.hint.zh, spec.hint.en); },
+      tier: spec.tier,
+      tone: spec.tone,
+    };
+    return [mood, entry];
+  })
+) as Record<KittenMood, KittenMoodMeta>;
 
 export const KITTEN_SPRITE_PNG: Record<KittenSpriteKey, string> = Object.fromEntries(
   KITTEN_SPRITE_KEYS.map(key => [key, `/companion/cat-${key}.png`])
@@ -189,7 +213,7 @@ export const FALLBACK_KITTEN_SPRITE = KITTEN_SPRITE_PNG.idle;
 
 export function kittenSpriteKey(mood: KittenMood | undefined, sparkling = false): KittenSpriteKey {
   if (sparkling) return 'sparkle';
-  return (mood && KITTEN_MOOD_META[mood]?.sprite) || 'idle';
+  return (mood && KITTEN_MOOD_SPECS[mood]?.sprite) || 'idle';
 }
 
 export function kittenSpritePng(mood: KittenMood | undefined, sparkling = false): string {
@@ -200,8 +224,15 @@ export function kittenSpriteWebp(mood: KittenMood | undefined, sparkling = false
   return KITTEN_SPRITE_WEBP[kittenSpriteKey(mood, sparkling)] ?? KITTEN_SPRITE_WEBP.idle;
 }
 
-export function kittenMoodMeta(mood: KittenMood | undefined): KittenMoodMeta {
-  return (mood && KITTEN_MOOD_META[mood]) || KITTEN_MOOD_META.idle;
+export function kittenMoodMeta(mood: KittenMood | undefined, locale: Locale = getCurrentLocale()): KittenMoodMeta {
+  const spec = (mood && KITTEN_MOOD_SPECS[mood]) || KITTEN_MOOD_SPECS.idle;
+  return {
+    sprite: spec.sprite,
+    label: bi(spec.label.zh, spec.label.en, locale),
+    hint: bi(spec.hint.zh, spec.hint.en, locale),
+    tier: spec.tier,
+    tone: spec.tone,
+  };
 }
 
 /* ---------- 状态推导规则与阈值 ---------- */

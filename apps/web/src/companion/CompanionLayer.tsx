@@ -9,6 +9,7 @@ import { anchorElement, anchorRect, bump, burst, flyNote } from './effects';
 import { diffLifecycle, lifecycleBubble } from './lifecycle-model';
 import { useCompanion } from './useCompanion';
 import { useCompanionStore } from './companion-store';
+import { bi } from '../i18n';
 
 /** 便签从哪只猫身上飞出来：当前看得见的那只（主会话头像 > 首页大猫 > 右缘 > 侧栏）。 */
 const KITTEN_ANCHORS = ['kitten-header', 'kitten-hero', 'kitten-edge', 'kitten-card'];
@@ -60,9 +61,9 @@ function useCompanionReactions(view: CompanionView) {
     const store = useCompanionStore.getState();
     store.touch();
     if (view === 'main') return;
-    if (state === 'waiting_for_permission') store.say(`${info.name}需要你授权一下`, 'alert', { kind: 'main' });
-    else if (state === 'failed' || (isMainBusy(before) && state === 'idle' && Boolean(mainError))) store.say(`${info.name}好像遇到了点麻烦`, 'alert', { kind: 'main' });
-    else if (isMainBusy(before) && (state === 'completed' || (state === 'idle' && !mainError))) store.say(`${info.name}回复你啦，喵～`, 'info', { kind: 'main' });
+    if (state === 'waiting_for_permission') store.say(bi(`${info.name}需要你授权一下`, `${info.name} needs your approval`), 'alert', { kind: 'main' });
+    else if (state === 'failed' || (isMainBusy(before) && state === 'idle' && Boolean(mainError))) store.say(bi(`${info.name}好像遇到了点麻烦`, `${info.name} hit a snag`), 'alert', { kind: 'main' });
+    else if (isMainBusy(before) && (state === 'completed' || (state === 'idle' && !mainError))) store.say(bi(`${info.name}回复你啦，喵～`, `${info.name} replied!`), 'info', { kind: 'main' });
   }, [state, mainError, view, info.name]);
 }
 

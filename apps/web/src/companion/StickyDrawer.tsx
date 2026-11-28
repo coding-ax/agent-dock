@@ -10,17 +10,18 @@ import { groupNotes, type NoteCounts, type NoteFilter } from './companion-model'
 import { prefersReducedMotion, springEasing } from './effects';
 import { useAssistantState, useCompanion, useCompanionNav } from './useCompanion';
 import { useCompanionStore } from './companion-store';
+import { bi, useBi } from '../i18n';
 
 const FILTERS: Array<{ key: NoteFilter; label: string; count(counts: NoteCounts): number; hot?(counts: NoteCounts): boolean }> = [
-  { key: 'all', label: '全部', count: counts => counts.open + counts.closed },
+  { key: 'all', get label() { return bi("全部", "All"); }, count: counts => counts.open + counts.closed },
   // 计划卡和「需要你」同栏展示，但不报红：只有真正卡住的事才点亮。
-  { key: 'needs_user', label: '需要你', count: counts => counts.needsUser + counts.planned, hot: counts => counts.needsUser > 0 },
-  { key: 'review', label: '待验收', count: counts => counts.review },
-  { key: 'running', label: '进行中', count: counts => counts.running },
-  { key: 'closed', label: '已完成', count: counts => counts.closed }
+  { key: 'needs_user', get label() { return bi("需要你", "Needs You"); }, count: counts => counts.needsUser + counts.planned, hot: counts => counts.needsUser > 0 },
+  { key: 'review', get label() { return bi("待验收", "Review"); }, count: counts => counts.review },
+  { key: 'running', get label() { return bi("进行中", "Running"); }, count: counts => counts.running },
+  { key: 'closed', get label() { return bi("已完成", "Done"); }, count: counts => counts.closed }
 ];
 
-const draftChannelLabel: Record<AssistantDraft['channel'], string> = { github_comment: 'GitHub 评论', lark_reply: '飞书回复' };
+const draftChannelLabel: Record<AssistantDraft['channel'], string> = { get github_comment() { return bi("GitHub 评论", "GitHub Comment"); }, get lark_reply() { return bi("飞书回复", "Lark Reply"); } };
 
 /**
  * FLIP：每次提交后记下每张便签相对滚动内容的位置；下次布局变了（展开、切换过滤、
@@ -67,6 +68,7 @@ function useFilterPill(container: RefObject<HTMLDivElement | null>, active: stri
 }
 
 function DraftCard({ draft }: { draft: AssistantDraft }) {
+  const L = useBi();
   const qc = useQueryClient();
   const refresh = () => void qc.invalidateQueries({ queryKey: ['assistant-state'] });
   const send = useMutation({ mutationFn: () => api.assistantSendDraft(draft.id), onSuccess: refresh });
@@ -74,24 +76,25 @@ function DraftCard({ draft }: { draft: AssistantDraft }) {
   const busy = send.isPending || discard.isPending;
   const error = send.error ?? discard.error;
   return <div className="ui-note-slot" data-flip-id={draft.id} data-expanded="">
-    <article className="ui-note ui-note-paper-review" aria-label={`待确认的${draftChannelLabel[draft.channel]}`}>
+    <article className="ui-note ui-note-paper-review" aria-label={L(`待确认的${draftChannelLabel[draft.channel]}`, `Pending ${draftChannelLabel[draft.channel]}`)}>
       <span className="ui-note-tape" aria-hidden="true"/>
       <div className="flex flex-col gap-1.5 px-3 pb-2 pt-3.5">
-        <span className="ui-note-status ui-note-ink"><span className="ui-note-dot"/>{draftChannelLabel[draft.channel]}草稿 · 等你确认</span>
+        <span className="ui-note-status ui-note-ink"><span className="ui-note-dot"/>{draftChannelLabel[draft.channel]}{L("草稿 · 等你确认", "Draft · Awaiting Approval")}</span>
         <span className="truncate font-mono text-[11.5px] text-zinc-500" title={draft.target}>{draft.target}</span>
         <p className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-[12.5px] leading-5 text-zinc-800">{draft.body}</p>
-        {draft.lastError && <p className="text-[11.5px] text-red-600">上次发送失败：{draft.lastError}</p>}
+        {draft.lastError && <p className="text-[11.5px] text-red-600">{L("上次发送失败：", "Last send failed: ")}{draft.lastError}</p>}
         {error && <p className="text-[11.5px] text-red-600">{error.message}</p>}
       </div>
       <div className="ui-note-actions">
-        <button type="button" className="ui-note-action" data-primary="" disabled={busy} onClick={() => send.mutate()}>{send.isPending ? <LoaderCircle size={12} className="animate-spin"/> : <Send size={12}/>}<span className="ui-note-action-text">发送</span></button>
-        <button type="button" className="ui-note-action" data-danger="" disabled={busy} onClick={() => discard.mutate()}>{discard.isPending ? <LoaderCircle size={12} className="animate-spin"/> : <Trash2 size={12}/>}<span className="ui-note-action-text">丢弃</span></button>
+        <button type="button" className="ui-note-action" data-primary="" disabled={busy} onClick={() => send.mutate()}>{send.isPending ? <LoaderCircle size={12} className="animate-spin"/> : <Send size={12}/>}<span className="ui-note-action-text">{L("发送", "Send")}</span></button>
+        <button type="button" className="ui-note-action" data-danger="" disabled={busy} onClick={() => discard.mutate()}>{discard.isPending ? <LoaderCircle size={12} className="animate-spin"/> : <Trash2 size={12}/>}<span className="ui-note-action-text">{L("丢弃", "Discard")}</span></button>
       </div>
     </article>
   </div>;
 }
 
 function DrawerBody({ filter, expandedId, onToggle, highlight, now }: { filter: NoteFilter; expandedId?: string; onToggle(id: string): void; highlight?: { taskId: string; nonce: number }; now: number }) {
+  const L = useBi();
   const info = useCompanion();
   const nav = useCompanionNav();
   const drafts = useAssistantState().data?.drafts;
@@ -108,24 +111,24 @@ function DrawerBody({ filter, expandedId, onToggle, highlight, now }: { filter: 
   return <div ref={scroller} className="ui-drawer-body">
     {!info.adopted ? <div className="flex flex-col items-center px-6 pb-6 pt-10 text-center">
       <Kitten size={72} mood="curious"/>
-      <p className="mt-3 text-[14px] font-semibold text-zinc-800">还没有小猫帮你记便签</p>
-      <p className="mt-1 text-[12.5px] leading-5 text-zinc-500">认领一只小猫当主会话，它派出去的活都会贴在这里。</p>
-      <button type="button" onClick={() => { useCompanionStore.getState().closeDrawer(); nav.goAdopt(); }} className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-full bg-zinc-900 px-4 text-[13px] font-medium text-white transition-transform hover:bg-zinc-700 active:scale-95"><PawPrint size={14}/>去认领</button>
+      <p className="mt-3 text-[14px] font-semibold text-zinc-800">{L("还没有小猫帮你记便签", "No Companion adopted yet")}</p>
+      <p className="mt-1 text-[12.5px] leading-5 text-zinc-500">{L("认领一只小猫当主会话，它派出去的活都会贴在这里。", "Adopt a Companion as your main session; every delegated task appears here as a sticky note.")}</p>
+      <button type="button" onClick={() => { useCompanionStore.getState().closeDrawer(); nav.goAdopt(); }} className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-full bg-zinc-900 px-4 text-[13px] font-medium text-white transition-transform hover:bg-zinc-700 active:scale-95"><PawPrint size={14}/>{L("去认领", "Adopt")}</button>
     </div> : empty ? <div className="flex flex-col items-center px-6 pb-6 pt-10 text-center">
       <Kitten size={68} mood={filter === 'all' ? 'sleepy' : 'idle'} stage={info.stage} collar/>
-      <p className="mt-3 text-[14px] font-semibold text-zinc-800">{filter === 'all' ? '一张便签都还没有' : filter === 'needs_user' ? '没有需要你点头的事' : '这一栏是空的'}</p>
-      <p className="mt-1 max-w-[260px] text-[12.5px] leading-5 text-zinc-500">{filter === 'all' ? `跟${info.name}说说要做的事，它会拆成便签派出去，做完帮你验收。` : filter === 'needs_user' ? `${info.name}拿不准的事、写好等你点头的计划会贴到这里。` : '换个分类看看吧。'}</p>
-      {filter === 'all' && <button type="button" onClick={() => { useCompanionStore.getState().closeDrawer(); nav.openMain(); }} className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-full bg-zinc-900 px-4 text-[13px] font-medium text-white transition-transform hover:bg-zinc-700 active:scale-95"><PawPrint size={14}/>和{info.name}聊聊</button>}
+      <p className="mt-3 text-[14px] font-semibold text-zinc-800">{filter === 'all' ? L("一张便签都还没有", "No sticky notes yet") : filter === 'needs_user' ? L("没有需要你点头的事", "Nothing needs your approval") : L("这一栏是空的", "This filter is empty")}</p>
+      <p className="mt-1 max-w-[260px] text-[12.5px] leading-5 text-zinc-500">{filter === 'all' ? L(`跟${info.name}说说要做的事，它会拆成便签派出去，做完帮你验收。`, `Tell ${info.name} what you need — it will dispatch tasks and review the results.`) : filter === 'needs_user' ? L(`${info.name}拿不准的事、写好等你点头的计划会贴到这里。`, `Questions and plans from ${info.name} awaiting your sign-off will appear here.`) : L("换个分类看看吧。", "Try switching to another filter.")}</p>
+      {filter === 'all' && <button type="button" onClick={() => { useCompanionStore.getState().closeDrawer(); nav.openMain(); }} className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-full bg-zinc-900 px-4 text-[13px] font-medium text-white transition-transform hover:bg-zinc-700 active:scale-95"><PawPrint size={14}/>{L("和", "Chat with ")}{info.name}{L("聊聊", "")}</button>}
     </div> : <>
       {showDrafts && <section className="ui-drawer-section">
-        <h3 className="ui-drawer-section-title">待你确认的草稿 · {pendingDrafts.length}</h3>
+        <h3 className="ui-drawer-section-title">{L("待你确认的草稿 ·", "Drafts awaiting approval ·")} {pendingDrafts.length}</h3>
         <div className="ui-note-grid">{pendingDrafts.map(draft => <DraftCard key={draft.id} draft={draft}/>)}</div>
       </section>}
       {sections.map(section => <section key={section.key} className="ui-drawer-section">
         <h3 className="ui-drawer-section-title">{section.label} · {section.tasks.length}</h3>
         {section.tasks.length ? <div className="ui-note-grid">
           {section.tasks.map(task => <StickyNote key={task.id} task={task} index={index++} expanded={expandedId === task.id} highlightNonce={highlight?.taskId === task.id ? highlight.nonce : undefined} kittenName={info.name} agent={agents?.find(agent => agent.id === task.agentId)} now={now} onToggle={onToggle}/>)}
-        </div> : <p className="px-1 text-[12px] text-zinc-400">这一栏是空的。</p>}
+        </div> : <p className="px-1 text-[12px] text-zinc-400">{L("这一栏是空的。", "This tab is empty.")}</p>}
       </section>)}
     </>}
     {info.adopted && (filter === 'all' || filter === 'closed') && <ArchiveShelf/>}
@@ -140,6 +143,7 @@ function DrawerBody({ filter, expandedId, onToggle, highlight, now }: { filter: 
  * 关掉：点遮罩、按 Esc、点 ×、或在触屏上往右一划。
  */
 export function StickyDrawer() {
+  const L = useBi();
   const open = useCompanionStore(store => store.drawerOpen);
   const nonce = useCompanionStore(store => store.drawerNonce);
   const filter = useCompanionStore(store => store.filter);
@@ -212,20 +216,20 @@ export function StickyDrawer() {
   // 第一次打开之前不建 DOM。
   if (!nonce) return null;
   const summary = [
-    counts.needsUser ? `${counts.needsUser} 件需要你` : '',
-    counts.planned ? `${counts.planned} 张计划等你点头` : '',
-    counts.running ? `${counts.running} 张进行中` : '',
-    counts.review ? `${counts.review} 张待验收` : '',
-    !counts.open && counts.closed ? `${counts.closed} 张已完成` : ''
-  ].filter(Boolean).join(' · ') || (info.adopted ? '还没有便签' : '还没有认领小猫');
+    counts.needsUser ? L(`${counts.needsUser} 件需要你`, `${counts.needsUser} need you`) : '',
+    counts.planned ? L(`${counts.planned} 张计划等你点头`, `${counts.planned} plan(s) pending`) : '',
+    counts.running ? L(`${counts.running} 张进行中`, `${counts.running} running`) : '',
+    counts.review ? L(`${counts.review} 张待验收`, `${counts.review} in review`) : '',
+    !counts.open && counts.closed ? L(`${counts.closed} 张已完成`, `${counts.closed} done`) : ''
+  ].filter(Boolean).join(' · ') || (info.adopted ? L("还没有便签", "No notes yet") : L("还没有认领小猫", "No Companion yet"));
 
   return <div ref={rootRef} className="ui-drawer-root" data-open={open || undefined} data-dragging={dragging || undefined} inert={!open} aria-hidden={!open}>
     <div className="ui-drawer-backdrop" onClick={close}/>
-    <aside ref={panelRef} role="dialog" aria-modal="true" aria-label={`${info.name}的便签`} className="ui-drawer" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd}>
+    <aside ref={panelRef} role="dialog" aria-modal="true" aria-label={L(`${info.name}的便签`, `${info.name}'s Notes`)} className="ui-drawer" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd}>
       <div key={`head-${nonce}`} className="ui-drawer-head">
         <span className="ui-companion-avatar ui-cat-hover-host"><Kitten variant="face" size={30} mood={info.adopted ? info.mood : 'curious'} stage={info.adopted ? info.stage : undefined} collar={info.adopted} interactive={false}/></span>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[15px] font-semibold tracking-[-.01em] text-zinc-900">{info.adopted ? `${info.name}的便签` : '便签'}</h2>
+          <h2 className="truncate text-[15px] font-semibold tracking-[-.01em] text-zinc-900">{info.adopted ? L(`${info.name}的便签`, `${info.name}'s Notes`) : L("便签", "Notes")}</h2>
           <p className="truncate text-[12px] text-zinc-500">{summary}</p>
         </div>
         <button
@@ -234,12 +238,12 @@ export function StickyDrawer() {
           className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2 text-[11.5px] font-medium text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900"
         >
           <Columns3 size={12}/>
-          <span>看板</span>
+          <span>{L("看板", "Board")}</span>
           <ArrowUpRight size={11} className="text-zinc-400"/>
         </button>
-        <button ref={closeRef} type="button" onClick={close} aria-label="收起便签" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-200/60 hover:text-zinc-900"><X size={16}/></button>
+        <button ref={closeRef} type="button" onClick={close} aria-label={L("收起便签", "Close drawer")} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-200/60 hover:text-zinc-900"><X size={16}/></button>
       </div>
-      {info.adopted && <div key={`filter-${nonce}`} ref={filterRef} className="ui-filter" role="toolbar" aria-label="按状态筛选便签">
+      {info.adopted && <div key={`filter-${nonce}`} ref={filterRef} className="ui-filter" role="toolbar" aria-label={L("按状态筛选便签", "Filter sticky notes by status")}>
         <span className="ui-filter-pill" aria-hidden="true"/>
         {FILTERS.map(item => {
           const count = item.count(counts);
@@ -248,8 +252,8 @@ export function StickyDrawer() {
       </div>}
       <DrawerBody key={nonce} filter={filter} expandedId={expandedId} onToggle={toggleNote} highlight={highlight} now={now}/>
       {info.adopted && <div className="ui-drawer-foot">
-        <button type="button" onClick={() => { close(); nav.openSettings(); }} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] text-zinc-500 transition-colors hover:bg-zinc-200/60 hover:text-zinc-900"><Settings2 size={14}/>督办设置</button>
-        <button type="button" onClick={() => { close(); nav.openMain(); }} className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-full bg-zinc-900 px-3.5 text-[12.5px] font-medium text-white transition-[background-color,transform] hover:bg-zinc-700 active:scale-95"><PawPrint size={13}/>和{info.name}聊聊</button>
+        <button type="button" onClick={() => { close(); nav.openSettings(); }} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] text-zinc-500 transition-colors hover:bg-zinc-200/60 hover:text-zinc-900"><Settings2 size={14}/>{L("督办设置", "Companion Settings")}</button>
+        <button type="button" onClick={() => { close(); nav.openMain(); }} className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-full bg-zinc-900 px-3.5 text-[12.5px] font-medium text-white transition-[background-color,transform] hover:bg-zinc-700 active:scale-95"><PawPrint size={13}/>{L("和", "Chat with ")}{info.name}{L("聊聊", "")}</button>
       </div>}
     </aside>
   </div>;

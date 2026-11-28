@@ -1,6 +1,8 @@
 import { abortable } from '../abortable.js';
 import { readFile } from 'node:fs/promises';
+import { tShared, type Locale } from '@agent-dock/agent-dock-shared';
 import { sleep } from '../daemon/time.js';
+import { getActiveServerLocale } from '../locale-service.js';
 import { webAccessSessionToken } from '../web-access.js';
 
 export const larkCardStates = ['queued', 'running', 'completed', 'failed', 'interrupted'] as const;
@@ -40,6 +42,8 @@ export interface LarkCardInput {
   readOnly?: boolean;
   /** 显式覆盖卡片操作按钮；传空数组表示不渲染任何按钮。 */
   actions?: LarkCardActionButton[];
+  /** 可选语言覆盖（未传时读取服务端持久化有效语言）。 */
+  locale?: Locale;
 }
 export interface LarkSendInput extends LarkCardInput { receiveId?: string; receiveIdType?: LarkReceiveIdType; chatId?: string }
 export interface LarkReplyInput extends LarkCardInput { messageId: string; replyInThread?: boolean }
@@ -155,13 +159,20 @@ export interface LarkConfigurationStatus {
   baseUrl: string;
 }
 
-const statePresentation = {
-  queued: { title: '排队中', color: 'grey' },
-  running: { title: '正在执行', color: 'wathet' },
-  completed: { title: '已完成', color: 'green' },
-  failed: { title: '已失败', color: 'yellow' },
-  interrupted: { title: '已取消', color: 'grey' }
+const statePresentationColor = {
+  queued: 'grey',
+  running: 'wathet',
+  completed: 'green',
+  failed: 'yellow',
+  interrupted: 'grey'
 } as const;
+
+function getStatePresentation(state: LarkCardState, locale: Locale) {
+  const color = statePresentationColor[state];
+  if (!color) return undefined;
+  const titleKey = `lark.card.state.${state}` as const;
+  return { title: tShared(locale, titleKey), color };
+}
 const elapsedLabel = (seconds: number) => {
   const value = Math.max(0, Math.floor(seconds));
   if (value < 60) return `${value}s`;
@@ -179,12 +190,19 @@ const cardComponents = (value: unknown): number => {
   return (typeof record.tag === 'string' ? 1 : 0) + Object.values(record).reduce<number>((sum, item) => sum + cardComponents(item), 0);
 };
 
-export function boundLarkCardElements(elements: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+function isThinkingElementContent(content: unknown): boolean {
+  return typeof content === 'string' && (content.includes('思考过程') || content.includes('**Thinking**'));
+}
+
+export function boundLarkCardElements(
+  elements: Array<Record<string, unknown>>,
+  locale: Locale = getActiveServerLocale()
+): Array<Record<string, unknown>> {
   const withinLimits = (value: unknown) => cardBytes(value) <= larkCardSnapshotLimits.bytes
     && cardComponents(value) <= larkCardSnapshotLimits.components;
   const omissionNotice = (count: number) => ({
     tag: 'markdown', element_id: 'agentdock_snapshot_omission',
-    content: `<font color='grey'>内容较长，已省略 ${count} 个较早执行分组；完整记录请在 AgentDock Web 查看。</font>`,
+    content: `<font color='grey'>${tShared(locale, 'lark.card.omission.groups', { count })}</font>`,
     text_size: 'x-small', margin: '4px 0px'
   });
   const upsertOmissionNotice = (els: Array<Record<string, unknown>>, count: number) => {
@@ -199,7 +217,7 @@ export function boundLarkCardElements(elements: Array<Record<string, unknown>>):
   };
   const stripGroupContent = (group: Record<string, unknown>): boolean => {
     const groupElements = Array.isArray(group.elements) ? group.elements as Array<Record<string, unknown>> : [];
-    const thinkingIndex = groupElements.findIndex(el => typeof el.content === 'string' && el.content.includes('思考过程'));
+    const thinkingIndex = groupElements.findIndex(el => isThinkingElementContent(el.content));
     if (thinkingIndex >= 0) {
       group.elements = groupElements.filter((_, i) => i !== thinkingIndex);
       return true;
@@ -220,10 +238,10 @@ export function boundLarkCardElements(elements: Array<Record<string, unknown>>):
     const groupIndex = mainElements.findIndex(element => typeof element.element_id === 'string' && element.element_id.startsWith('trace_group_'));
     if (groupIndex < 0) {
       const fallbackText = String((mainElements.find(element => element.element_id === 'final_output') as any)?.content
-        ?? (mainElements.find(element => element.tag === 'markdown') as any)?.content ?? '内容过长');
+        ?? (mainElements.find(element => element.tag === 'markdown') as any)?.content ?? tShared(locale, 'lark.card.omission.tooLong'));
       return [
         { tag: 'markdown', element_id: 'final_output', content: fallbackText.length > 4_000 ? `${fallbackText.slice(0, 3_999)}…` : fallbackText, text_align: 'left', text_size: 'normal_v2', margin: '0px' },
-        { tag: 'markdown', element_id: 'agentdock_snapshot_omission', content: "<font color='grey'>卡片内容超过飞书限制，过程记录已收起；完整记录请在 AgentDock Web 查看。</font>", text_size: 'x-small', margin: '8px 0px 0px 0px' }
+        { tag: 'markdown', element_id: 'agentdock_snapshot_omission', content: `<font color='grey'>${tShared(locale, 'lark.card.omission.overflow')}</font>`, text_size: 'x-small', margin: '8px 0px 0px 0px' }
       ];
     }
     const group = mainElements[groupIndex] as Record<string, unknown>;
@@ -316,25 +334,26 @@ export function loadLarkBotConfig(env: NodeJS.ProcessEnv = process.env, input: L
 }
 
 export function buildLarkCard(input: LarkCardInput = {}) {
+  const locale = input.locale ?? getActiveServerLocale();
   const state = input.state ?? 'running';
-  const presentation = statePresentation[state];
+  const presentation = getStatePresentation(state, locale);
   if (!presentation) throw new LarkServiceError('INVALID_CARD_STATE', `Unsupported Lark card state: ${String(state)}`, 400);
   const taskName = input.taskName?.trim() || 'AgentDock';
   const taskId = String(input.taskId ?? Date.now()).trim();
   const elapsedSeconds = Number(input.elapsedSeconds ?? 0);
   if (!Number.isFinite(elapsedSeconds) || elapsedSeconds < 0) throw new LarkServiceError('INVALID_ELAPSED_SECONDS', 'elapsedSeconds must be a non-negative number', 400);
-  const content = input.markdown !== undefined ? String(input.markdown) : state === 'completed' ? '任务已完成。' : '';
-  const liveTitle = state === 'running' ? '执行中' : presentation.title;
+  const content = input.markdown !== undefined ? String(input.markdown) : state === 'completed' ? tShared(locale, 'lark.card.completedDefault') : '';
+  const liveTitle = state === 'running' ? tShared(locale, 'lark.card.state.runningLive') : presentation.title;
   const defaultActionButton = !input.readOnly && state === 'queued' ? {
-    tag: 'button', text: { tag: 'plain_text', content: '取消' }, type: 'default', size: 'small',
+    tag: 'button', text: { tag: 'plain_text', content: tShared(locale, 'lark.card.action.cancel') }, type: 'default', size: 'small',
     behaviors: [{ type: 'callback', value: { action: 'cancel', task_id: taskId } }],
     margin: '0px', element_id: 'cancel'
   } : !input.readOnly && state === 'running' ? {
-    tag: 'button', text: { tag: 'plain_text', content: '中断' }, type: 'danger', size: 'small',
+    tag: 'button', text: { tag: 'plain_text', content: tShared(locale, 'lark.card.action.interrupt') }, type: 'danger', size: 'small',
     behaviors: [{ type: 'callback', value: { action: 'interrupt', task_id: taskId } }],
     margin: '0px', element_id: 'interrupt'
   } : !input.readOnly && (state === 'failed' || state === 'interrupted') && input.retryable !== false ? {
-    tag: 'button', text: { tag: 'plain_text', content: '重试' }, type: 'primary', size: 'small',
+    tag: 'button', text: { tag: 'plain_text', content: tShared(locale, 'lark.card.action.retry') }, type: 'primary', size: 'small',
     behaviors: [{ type: 'callback', value: { action: 'retry', task_id: taskId } }],
     margin: '0px', element_id: 'retry'
   } : undefined;
@@ -348,7 +367,7 @@ export function buildLarkCard(input: LarkCardInput = {}) {
     : defaultActionButton ? [defaultActionButton] : [];
   const footerColumns: any[] = [{
     tag: 'column', width: 'weighted', weight: 1, vertical_align: 'center',
-    elements: [{ tag: 'markdown', content: `<font color='grey'>任务 #${taskId} · 已用时 ${elapsedLabel(elapsedSeconds)}</font>`, text_size: 'x-small', margin: '0px' }]
+    elements: [{ tag: 'markdown', content: `<font color='grey'>${tShared(locale, 'lark.card.footer.taskElapsed', { taskId, elapsed: elapsedLabel(elapsedSeconds) })}</font>`, text_size: 'x-small', margin: '0px' }]
   }];
   if (input.webBaseUrl) {
     let traceUrl = input.sessionId ? `${input.webBaseUrl}/sessions/${input.sessionId}` : `${input.webBaseUrl}/sessions`;
@@ -359,7 +378,7 @@ export function buildLarkCard(input: LarkCardInput = {}) {
       tag: 'column', width: 'auto', vertical_align: 'center',
       elements: [{
         tag: 'markdown',
-        content: `<font color='grey'>[查看详情](${traceUrl})</font>`,
+        content: `<font color='grey'>[${tShared(locale, 'lark.card.footer.viewDetails')}](${traceUrl})</font>`,
         text_size: 'x-small', margin: '0px'
       }]
     });
@@ -388,7 +407,7 @@ export function buildLarkCard(input: LarkCardInput = {}) {
       direction: 'vertical', vertical_spacing: '2px', padding: '2px 0px 0px 0px', margin: '0px',
       header: {
         title: {
-          tag: 'markdown', content: `${state === 'running' ? '已耗时' : '耗时'} ${elapsedLabel(elapsedSeconds)}　<font color='${state === 'running' ? 'trace_running' : state === 'failed' ? 'trace_failure' : presentation.color}'>● ${liveTitle}</font>　<font color='grey'>${traceElements.length} 个阶段</font>`, text_size: 'notation',
+          tag: 'markdown', content: `${state === 'running' ? tShared(locale, 'lark.card.overview.elapsedRunning') : tShared(locale, 'lark.card.overview.elapsedDone')} ${elapsedLabel(elapsedSeconds)}　<font color='${state === 'running' ? 'trace_running' : state === 'failed' ? 'trace_failure' : presentation.color}'>● ${liveTitle}</font>　<font color='grey'>${tShared(locale, 'lark.card.overview.steps', { count: traceElements.length })}</font>`, text_size: 'notation',
           ...(state === 'running' ? { icon: overviewLoadingIcon } : {})
         },
         vertical_align: 'center', icon: { tag: 'standard_icon', token: 'down-small-ccm_outlined', color: 'grey', size: '14px 14px' },
@@ -433,11 +452,12 @@ export function buildLarkCard(input: LarkCardInput = {}) {
   // 终态摘要优先取 final_output 元素文本；没有时（如纯状态卡片）回落到 markdown 正文。
   const finalRaw = input.elements?.find(element => element.element_id === 'final_output')?.content;
   const summaryBadge = input.sourceBadge?.label?.trim() ? `[${input.sourceBadge.label.trim()}] ` : '';
+  const summarySep = locale === 'en-US' ? ': ' : '：';
   const summaryContent = state === 'running' || state === 'queued'
     ? `${summaryBadge}${taskName} · ${liveTitle}`
     : (() => {
         const snippet = markdownToPlainPreview(typeof finalRaw === 'string' ? finalRaw : content);
-        return snippet ? `${summaryBadge}${taskName} · ${liveTitle}：${snippet}` : `${summaryBadge}${taskName} · ${liveTitle}`;
+        return snippet ? `${summaryBadge}${taskName} · ${liveTitle}${summarySep}${snippet}` : `${summaryBadge}${taskName} · ${liveTitle}`;
       })();
   const assemble = (mainElements: Array<Record<string, unknown>>) => ({
     schema: '2.0',
@@ -466,7 +486,7 @@ export function buildLarkCard(input: LarkCardInput = {}) {
   const withinLimits = (card: unknown) => cardBytes(card) <= larkCardSafeLimits.bytes && cardComponents(card) <= larkCardSafeLimits.components;
   const omissionNotice = (count: number) => ({
     tag: 'markdown', element_id: 'agentdock_omission',
-    content: `<font color='grey'>内容较长，已省略 ${count} 个较早执行分组；完整记录请在 AgentDock Web 查看。</font>`,
+    content: `<font color='grey'>${tShared(locale, 'lark.card.omission.groups', { count })}</font>`,
     text_size: 'x-small', margin: '4px 0px'
   });
   const upsertOmissionNotice = (elements: Array<Record<string, unknown>>, count: number) => {
@@ -482,7 +502,7 @@ export function buildLarkCard(input: LarkCardInput = {}) {
   const stripGroupContent = (group: Record<string, unknown>): boolean => {
     const groupElements = Array.isArray(group.elements) ? group.elements as Array<Record<string, unknown>> : [];
     // 1. 先移除思考过程元素
-    const thinkingIndex = groupElements.findIndex(el => typeof el.content === 'string' && el.content.includes('思考过程'));
+    const thinkingIndex = groupElements.findIndex(el => isThinkingElementContent(el.content));
     if (thinkingIndex >= 0) {
       group.elements = groupElements.filter((_, i) => i !== thinkingIndex);
       return true;
@@ -522,10 +542,10 @@ export function buildLarkCard(input: LarkCardInput = {}) {
     card = assemble(mainElements);
   }
   if (withinLimits(card)) return card;
-  const fallbackText = String((sourceMainElements.find(element => element.element_id === 'final_output') as any)?.content ?? (sourceMainElements.find(element => element.tag === 'markdown') as any)?.content ?? content ?? '内容过长');
+  const fallbackText = String((sourceMainElements.find(element => element.element_id === 'final_output') as any)?.content ?? (sourceMainElements.find(element => element.tag === 'markdown') as any)?.content ?? content ?? tShared(locale, 'lark.card.omission.tooLong'));
   return assemble([
     { tag: 'markdown', content: fallbackText.length > 4_000 ? `${fallbackText.slice(0, 3_999)}…` : fallbackText, text_align: 'left', text_size: 'normal_v2', margin: '0px' },
-    { tag: 'markdown', content: "<font color='grey'>卡片内容超过飞书限制，过程记录已收起；完整记录请在 AgentDock Web 查看。</font>", text_size: 'x-small', margin: '8px 0px 0px 0px' }
+    { tag: 'markdown', content: `<font color='grey'>${tShared(locale, 'lark.card.omission.overflow')}</font>`, text_size: 'x-small', margin: '8px 0px 0px 0px' }
   ]);
 }
 

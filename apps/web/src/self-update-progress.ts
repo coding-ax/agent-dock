@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { SelfUpdateStatus } from './api';
+import { bi } from './i18n';
 
 export type UpdateProgress =
   | { phase: 'pending' }
@@ -81,7 +82,7 @@ export function resolveServerUpdateBadge(
 export function resolveUpdateProgress(fromVersion: string, status: SelfUpdateStatus | undefined, elapsedMs: number): UpdateProgress {
   if (status && status.currentVersion !== fromVersion) return { phase: 'done', version: status.currentVersion };
   if (status && !status.updating && status.lastError) return { phase: 'failed', message: status.lastError };
-  if (elapsedMs > UPDATE_TIMEOUT_MS) return { phase: 'failed', message: '升级超时，请在终端执行 agent-dock status 查看服务状态' };
+  if (elapsedMs > UPDATE_TIMEOUT_MS) return { phase: 'failed', message: bi("升级超时，请在终端执行 agent-dock status 查看服务状态", "Update timed out; run `agent-dock status` in your terminal to check service status") };
   return { phase: 'pending' };
 }
 

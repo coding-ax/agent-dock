@@ -2,6 +2,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { reactionEmojiRows, reactionEmojiSelection } from './lark-avatar-emoji';
+import { useBi } from './i18n';
 
 /** 页面/面板滚动时收起菜单；菜单自己的滚动不能触发收起，否则列表一滚就消失。 */
 export function shouldCloseEmojiMenuOnScroll(menu: Pick<HTMLElement, 'contains'> | null, target: EventTarget | null): boolean {
@@ -13,9 +14,10 @@ export function ReactionEmojiOptionList({ value, onPick }: {
   value: string;
   onPick(code: string): void;
 }) {
+  const L = useBi();
   const rows = reactionEmojiRows(value);
   const selected = reactionEmojiSelection(value);
-  return <div role="listbox" aria-label="常用飞书 emoji" className="p-0.5">
+  return <div role="listbox" aria-label={L("常用飞书 emoji", "Common Lark Emojis")} className="p-0.5">
     <button
       type="button"
       role="option"
@@ -25,7 +27,7 @@ export function ReactionEmojiOptionList({ value, onPick }: {
       className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-zinc-600 transition-colors hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:outline-none"
     >
       <span aria-hidden="true" className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-zinc-100 text-[13px] text-zinc-400">＋</span>
-      <span className="min-w-0 flex-1 text-[12px] font-medium">未选择</span>
+      <span className="min-w-0 flex-1 text-[12px] font-medium">{L("未选择", "Not selected")}</span>
       <span className="font-mono text-[10px] text-zinc-400">--</span>
     </button>
     {rows.map(row => {
@@ -42,13 +44,13 @@ export function ReactionEmojiOptionList({ value, onPick }: {
         <span aria-hidden="true" className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-white text-[16px] shadow-[0_1px_3px_rgba(24,24,27,.08)]">{row.emoji}</span>
         <span className="min-w-0 flex-1">
           <span className={`block truncate text-[12px] font-medium ${row.custom ? 'text-amber-700' : 'text-zinc-800'}`}>{row.label}</span>
-          {row.custom && <span className="block text-[10px] leading-4 text-amber-600">不在常用集合，仍会保留</span>}
+          {row.custom && <span className="block text-[10px] leading-4 text-amber-600">{L("不在常用集合，仍会保留", "Custom emoji (preserved)")}</span>}
         </span>
         <span className="shrink-0 font-mono text-[10px] text-zinc-400">{row.code}</span>
         <span className={`grid h-4 w-4 shrink-0 place-items-center ${active ? 'text-zinc-700' : 'text-transparent'}`}><Check size={12}/></span>
       </button>;
     })}
-    <p className="px-2.5 pb-1 pt-1.5 text-[10px] leading-4 text-zinc-400">只列出常用飞书 emoji 代码；已有配置不在列表时会置顶保留。</p>
+    <p className="px-2.5 pb-1 pt-1.5 text-[10px] leading-4 text-zinc-400">{L("只列出常用飞书 emoji 代码；已有配置不在列表时会置顶保留。", "Shows common Lark emoji codes; custom configured values stay pinned on top.")}</p>
   </div>;
 }
 
@@ -61,6 +63,7 @@ export function ReactionEmojiPicker({ value, onChange }: {
   value: string;
   onChange(value: string): void;
 }) {
+  const L = useBi();
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -113,15 +116,15 @@ export function ReactionEmojiPicker({ value, onChange }: {
     <button
       ref={trigger}
       type="button"
-      aria-label="选择触发 emoji"
+      aria-label={L("选择触发 emoji", "Select trigger emoji")}
       aria-haspopup="listbox"
       aria-expanded={open}
       onClick={activate}
       className="flex h-9 w-full max-w-[280px] items-center gap-2 rounded-lg border border-zinc-300 bg-white px-2.5 text-left outline-none transition-colors hover:border-zinc-400 focus-visible:border-zinc-500"
     >
       <span aria-hidden="true" className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-zinc-100 text-[15px]">{selected?.emoji ?? '＋'}</span>
-      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-800">{selected ? selected.label : '选择 emoji'}</span>
-      <span className="shrink-0 font-mono text-[10px] text-zinc-400">{selected?.code ?? '未选择'}</span>
+      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-800">{selected ? selected.label : L("选择 emoji", "Select emoji")}</span>
+      <span className="shrink-0 font-mono text-[10px] text-zinc-400">{selected?.code ?? L("未选择", "Not selected")}</span>
       <ChevronDown size={14} className={`shrink-0 text-zinc-400 transition-transform ${open ? 'rotate-180' : ''}`}/>
     </button>
     {open && createPortal(<div

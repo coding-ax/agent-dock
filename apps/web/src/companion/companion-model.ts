@@ -1,4 +1,6 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
 import type { AssistantTask } from '../api';
+import { bi, getCurrentLocale } from '../i18n';
 import {
   deriveKittenMood,
   hasFailedNeedsUserTask,
@@ -50,6 +52,18 @@ export type NoteSectionKey = Exclude<NoteFilter, 'all'> | 'planned';
 export type NoteTone = 'running' | 'review' | 'needs' | 'plan' | 'done' | 'cancelled' | 'interrupted';
 
 export const KITTEN_NAMES = ['小A同学', '年糕', '芝麻', '布丁', '栗子', '可乐', '小满', '豆包', '麻薯', '橘子', '汤圆', '奶盖'];
+export const KITTEN_NAMES_EN = ['Mochi', 'Sesame', 'Pudding', 'Chestnut', 'Cola', 'Pixel', 'Biscuit', 'Miso', 'Tangerine', 'Dumpling', 'Latte', 'Clover'];
+
+function liveLabels<K extends string>(table: Record<K, { zh: string; en: string }>): Record<K, string> {
+  const out = {} as Record<K, string>;
+  for (const key of Object.keys(table) as K[]) {
+    Object.defineProperty(out, key, {
+      enumerable: true,
+      get: () => bi(table[key].zh, table[key].en),
+    });
+  }
+  return out;
+}
 
 const BUSY_MAIN_STATES = new Set(['starting', 'thinking', 'running_tool', 'interrupting']);
 
@@ -61,9 +75,22 @@ export function noteTone(task: Pick<AssistantTask, 'state' | 'plan' | 'outcome'>
   return 'running';
 }
 
-export const noteToneLabel: Record<NoteTone, string> = {
-  running: '进行中', review: '待验收', needs: '需要你', plan: '计划待开工', done: '已验收', cancelled: '已取消', interrupted: '已打断'
+const NOTE_TONE_LABELS: Record<NoteTone, { zh: string; en: string }> = {
+  running: { zh: '进行中', en: 'Running' },
+  review: { zh: '待验收', en: 'In Review' },
+  needs: { zh: '需要你', en: 'Needs You' },
+  plan: { zh: '计划待开工', en: 'Planned' },
+  done: { zh: '已验收', en: 'Accepted' },
+  cancelled: { zh: '已取消', en: 'Cancelled' },
+  interrupted: { zh: '已打断', en: 'Interrupted' },
 };
+
+export function getNoteToneLabel(tone: NoteTone, locale: Locale = getCurrentLocale()): string {
+  const entry = NOTE_TONE_LABELS[tone];
+  return bi(entry.zh, entry.en, locale);
+}
+
+export const noteToneLabel: Record<NoteTone, string> = liveLabels(NOTE_TONE_LABELS);
 
 export function noteSectionOf(task: Pick<AssistantTask, 'state' | 'plan'>): NoteSectionKey {
   if (task.state === 'closed') return 'closed';
@@ -75,9 +102,20 @@ export function noteSectionOf(task: Pick<AssistantTask, 'state' | 'plan'>): Note
   return 'running';
 }
 
-export const noteSectionLabel: Record<NoteSectionKey, string> = {
-  needs_user: '需要你', planned: '等你点头', review: '待验收', running: '进行中', closed: '已完成'
+const NOTE_SECTION_LABELS: Record<NoteSectionKey, { zh: string; en: string }> = {
+  needs_user: { zh: '需要你', en: 'Needs You' },
+  planned: { zh: '等你点头', en: 'Awaiting Approval' },
+  review: { zh: '待验收', en: 'In Review' },
+  running: { zh: '进行中', en: 'Running' },
+  closed: { zh: '已完成', en: 'Done' },
 };
+
+export function getNoteSectionLabel(key: NoteSectionKey, locale: Locale = getCurrentLocale()): string {
+  const entry = NOTE_SECTION_LABELS[key];
+  return bi(entry.zh, entry.en, locale);
+}
+
+export const noteSectionLabel: Record<NoteSectionKey, string> = liveLabels(NOTE_SECTION_LABELS);
 
 /** 「需要你」「等你点头」最该先看，其次是等验收的，再是还在跑的；收尾的沉底。 */
 export const NOTE_SECTION_ORDER: NoteSectionKey[] = ['needs_user', 'planned', 'review', 'running', 'closed'];
@@ -108,7 +146,7 @@ const sortTime = (task: AssistantTask) => (task.state === 'closed' ? task.closed
  * 按状态分区；分区内最近动过的在前。
  * 「需要你」筛选也带上计划卡（同一栏、不报警），所以它对应两个分区；其余筛选只返回一个分区。
  */
-export function groupNotes(tasks: AssistantTask[], filter: NoteFilter = 'all'): NoteSection[] {
+export function groupNotes(tasks: AssistantTask[], filter: NoteFilter = 'all', locale: Locale = getCurrentLocale()): NoteSection[] {
   const buckets = new Map<NoteSectionKey, AssistantTask[]>();
   for (const task of tasks) {
     const key = noteSectionOf(task);
@@ -119,7 +157,7 @@ export function groupNotes(tasks: AssistantTask[], filter: NoteFilter = 'all'): 
     : filter === 'needs_user' ? ['needs_user', 'planned'] : [filter];
   const dropEmpty = filter === 'all' || filter === 'needs_user';
   return keys
-    .map(key => ({ key, label: noteSectionLabel[key], tasks: [...(buckets.get(key) ?? [])].sort((left, right) => sortTime(right).localeCompare(sortTime(left))) }))
+    .map(key => ({ key, label: getNoteSectionLabel(key, locale), tasks: [...(buckets.get(key) ?? [])].sort((left, right) => sortTime(right).localeCompare(sortTime(left))) }))
     .filter(section => !dropEmpty || section.tasks.length > 0);
 }
 
@@ -164,17 +202,17 @@ export function diffTasks(previous: Map<string, TaskSnapshot> | undefined, next:
 
 export type BubbleTone = 'info' | 'success' | 'alert' | 'muted';
 
-export function companionBubble(event: CompanionEvent): { text: string; tone: BubbleTone } {
+export function companionBubble(event: CompanionEvent, locale: Locale = getCurrentLocale()): { text: string; tone: BubbleTone } {
   const title = event.task.title;
   switch (event.kind) {
-    case 'dispatched': return { text: `派出一张便签：${title}`, tone: 'info' };
-    case 'planned': return { text: `写了张计划便签「${title}」，你点头就开工`, tone: 'info' };
-    case 'started': return { text: `便签「${title}」开工啦`, tone: 'info' };
-    case 'review': return { text: `「${title}」做完了，我去验收`, tone: 'info' };
-    case 'needs_user': return { text: `「${title}」需要你拍板`, tone: 'alert' };
-    case 'accepted': return { text: `验收通过：${title}`, tone: 'success' };
-    case 'cancelled': return { text: `撕掉了便签：${title}`, tone: 'muted' };
-    case 'rework': return { text: `「${title}」打回去返工了`, tone: 'info' };
+    case 'dispatched': return { text: bi(`派出一张便签：${title}`, `Dispatched note: ${title}`, locale), tone: 'info' };
+    case 'planned': return { text: bi(`写了张计划便签「${title}」，你点头就开工`, `Planned "${title}" — approve to start`, locale), tone: 'info' };
+    case 'started': return { text: bi(`便签「${title}」开工啦`, `Started note "${title}"`, locale), tone: 'info' };
+    case 'review': return { text: bi(`「${title}」做完了，我去验收`, `"${title}" finished — reviewing now`, locale), tone: 'info' };
+    case 'needs_user': return { text: bi(`「${title}」需要你拍板`, `"${title}" needs your decision`, locale), tone: 'alert' };
+    case 'accepted': return { text: bi(`验收通过：${title}`, `Accepted: ${title}`, locale), tone: 'success' };
+    case 'cancelled': return { text: bi(`撕掉了便签：${title}`, `Cancelled note: ${title}`, locale), tone: 'muted' };
+    case 'rework': return { text: bi(`「${title}」打回去返工了`, `Sent "${title}" back for rework`, locale), tone: 'info' };
   }
 }
 
@@ -198,35 +236,39 @@ export function companionStatus(input: {
   hasFailedNeedsUser?: boolean;
   mood: KittenMood;
   recent?: RecentKind;
-}): string {
+}, locale: Locale = getCurrentLocale()): string {
   const { mainState, mainError, archived, counts, pendingDrafts = 0, maintenanceRunning = false, hasFailedNeedsUser = false, mood, recent } = input;
-  if (!mainState) return '等你来认领';
+  if (!mainState) return bi('等你来认领', 'Ready to adopt', locale);
   // 旧版本允许直接归档主会话：这里必须先说清楚主会话已冻结，否则只显示「打盹中」会误导。
-  if (archived) return '被归档了，需要恢复';
-  if (mainState === 'starting') return '醒来中…';
-  if (mainState === 'waiting_for_permission') return '在等你授权';
-  if (mainState === 'failed' || (mainState === 'idle' && Boolean(mainError))) return '出了点状况';
-  if (counts.needsUser > 0) return hasFailedNeedsUser ? `${counts.needsUser} 件事出错待排查` : `${counts.needsUser} 件事等你拍板`;
-  if (counts.planned > 0) return `${counts.planned} 张计划等你点头`;
-  if (pendingDrafts > 0) return `${pendingDrafts} 份草稿等你确认`;
-  if (mainState === 'thinking') return '正在思考…';
-  if (mainState === 'running_tool') return '正在忙活…';
-  if (mainState === 'interrupting') return '停下手头的事…';
-  if (maintenanceRunning || mood === 'tidying') return '在收拾便签和记忆';
-  if (mood === 'celebrating') {
-    if (recent === 'maintenance_finished') return '便签和记忆收拾好啦';
-    if (recent === 'handoff_done') return '交接完成啦';
-    return '验收通过啦';
+  if (archived) return bi('被归档了，需要恢复', 'Archived — restore', locale);
+  if (mainState === 'starting') return bi('醒来中…', 'Waking up…', locale);
+  if (mainState === 'waiting_for_permission') return bi('在等你授权', 'Needs approval', locale);
+  if (mainState === 'failed' || (mainState === 'idle' && Boolean(mainError))) return bi('出了点状况', 'Hit an issue', locale);
+  if (counts.needsUser > 0) {
+    return hasFailedNeedsUser
+      ? bi(`${counts.needsUser} 件事出错待排查`, `${counts.needsUser} failed to check`, locale)
+      : bi(`${counts.needsUser} 件事等你拍板`, `${counts.needsUser} need${counts.needsUser > 1 ? '' : 's'} you`, locale);
   }
-  if (mood === 'happy') return recent === 'cheer' ? '开心地摇尾巴' : '验收通过啦';
-  if (counts.review > 0) return `${counts.review} 张便签待验收`;
-  if (counts.running >= 2) return `并行盯着 ${counts.running} 张便签`;
-  if (counts.running > 0) return `在盯着 ${counts.running} 张便签`;
-  if (mood === 'delegating') return '刚派出新便签';
-  if (mood === 'error') return '出了点状况';
-  if (mood === 'night') return '深夜陪你待命';
-  if (mood === 'sleepy') return '打盹中';
-  return '随时待命';
+  if (counts.planned > 0) return bi(`${counts.planned} 张计划等你点头`, `${counts.planned} plan${counts.planned > 1 ? '' : 's'} to OK`, locale);
+  if (pendingDrafts > 0) return bi(`${pendingDrafts} 份草稿等你确认`, `${pendingDrafts} draft${pendingDrafts > 1 ? '' : 's'} to send`, locale);
+  if (mainState === 'thinking') return bi('正在思考…', 'Thinking…', locale);
+  if (mainState === 'running_tool') return bi('正在忙活…', 'Working…', locale);
+  if (mainState === 'interrupting') return bi('停下手头的事…', 'Stopping…', locale);
+  if (maintenanceRunning || mood === 'tidying') return bi('在收拾便签和记忆', 'Tidying notes', locale);
+  if (mood === 'celebrating') {
+    if (recent === 'maintenance_finished') return bi('便签和记忆收拾好啦', 'Notes tidied!', locale);
+    if (recent === 'handoff_done') return bi('交接完成啦', 'Handoff complete!', locale);
+    return bi('验收通过啦', 'Accepted!', locale);
+  }
+  if (mood === 'happy') return recent === 'cheer' ? bi('开心地摇尾巴', 'Purring happily', locale) : bi('验收通过啦', 'Accepted!', locale);
+  if (counts.review > 0) return bi(`${counts.review} 张便签待验收`, `${counts.review} in review`, locale);
+  if (counts.running >= 2) return bi(`并行盯着 ${counts.running} 张便签`, `Tracking ${counts.running} notes`, locale);
+  if (counts.running > 0) return bi(`在盯着 ${counts.running} 张便签`, `Tracking ${counts.running} note`, locale);
+  if (mood === 'delegating') return bi('刚派出新便签', 'Dispatched note', locale);
+  if (mood === 'error') return bi('出了点状况', 'Hit an issue', locale);
+  if (mood === 'night') return bi('深夜陪你待命', 'Late-night standby', locale);
+  if (mood === 'sleepy') return bi('打盹中', 'Napping', locale);
+  return bi('随时待命', 'Standing by', locale);
 }
 
 export { hasFailedNeedsUserTask as isFailedNeedsUserList };
@@ -234,13 +276,13 @@ export { hasFailedNeedsUserTask as isFailedNeedsUserList };
 export const isMainBusy = (state?: string) => Boolean(state && BUSY_MAIN_STATES.has(state));
 
 /** 本机时间的问候语（用户在新加坡，浏览器时区即 UTC+8）。 */
-export function greeting(date: Date = new Date()): string {
+export function greeting(date: Date = new Date(), locale: Locale = getCurrentLocale()): string {
   const hour = date.getHours();
-  if (hour < 5) return '夜深了';
-  if (hour < 11) return '早上好';
-  if (hour < 13) return '中午好';
-  if (hour < 18) return '下午好';
-  return '晚上好';
+  if (hour < 5) return bi('夜深了', 'Late night', locale);
+  if (hour < 11) return bi('早上好', 'Good morning', locale);
+  if (hour < 13) return bi('中午好', 'Good day', locale);
+  if (hour < 18) return bi('下午好', 'Good afternoon', locale);
+  return bi('晚上好', 'Good evening', locale);
 }
 
 /* ---------- 便签的手作感：稳定的随机倾斜 ---------- */
@@ -264,22 +306,24 @@ export function tapeTilt(id: string): number {
   return Math.round(((hashString(`${id}:tape`) % 1000) / 1000 * 10 - 5) * 100) / 100;
 }
 
-export function pickKittenName(current?: string, random: () => number = Math.random): string {
-  const pool = KITTEN_NAMES.filter(name => name !== current);
-  return pool[Math.floor(random() * pool.length) % pool.length] ?? KITTEN_NAMES[0]!;
+export function pickKittenName(current?: string, random: () => number = Math.random, locale: Locale = getCurrentLocale()): string {
+  const list = locale === 'en-US' ? KITTEN_NAMES_EN : KITTEN_NAMES;
+  const pool = list.filter(name => name !== current);
+  return pool[Math.floor(random() * pool.length) % pool.length] ?? list[0]!;
 }
 
 /** 「12 分钟前」这类相对时间；不到一分钟说「刚刚」。 */
-export function sinceLabel(iso: string | undefined, now: number = Date.now()): string {
+export function sinceLabel(iso: string | undefined, now: number = Date.now(), locale: Locale = getCurrentLocale()): string {
   if (!iso) return '';
   const time = Date.parse(iso);
   if (!Number.isFinite(time)) return '';
   const minutes = Math.max(0, Math.floor((now - time) / 60_000));
-  if (minutes < 1) return '刚刚';
-  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 1) return bi('刚刚', 'just now', locale);
+  if (minutes < 60) return bi(`${minutes} 分钟前`, `${minutes}m ago`, locale);
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  return `${Math.floor(hours / 24)} 天前`;
+  if (hours < 24) return bi(`${hours} 小时前`, `${hours}h ago`, locale);
+  const days = Math.floor(hours / 24);
+  return bi(`${days} 天前`, `${days}d ago`, locale);
 }
 
 /* ---------- 督办注入 → 便签小卡 ---------- */
@@ -311,9 +355,20 @@ export function parseSupervisionDetail(detail: string): SupervisionItem[] {
   return items;
 }
 
-export const supervisionKindLabel: Record<string, string> = {
-  review: '待验收', needs_you: '需要你', failed: '出错了', interrupted: '已打断', user_stopped: '用户停止'
+const SUPERVISION_KIND_LABELS: Record<string, { zh: string; en: string }> = {
+  review: { zh: '待验收', en: 'In Review' },
+  needs_you: { zh: '需要你', en: 'Needs You' },
+  failed: { zh: '出错了', en: 'Failed' },
+  interrupted: { zh: '已打断', en: 'Interrupted' },
+  user_stopped: { zh: '用户停止', en: 'Stopped by User' },
 };
+
+export function getSupervisionKindLabel(kind: string, locale: Locale = getCurrentLocale()): string {
+  const entry = SUPERVISION_KIND_LABELS[kind];
+  return entry ? bi(entry.zh, entry.en, locale) : kind;
+}
+
+export const supervisionKindLabel: Record<string, string> = liveLabels(SUPERVISION_KIND_LABELS);
 
 export const supervisionKindTone: Record<string, NoteTone> = {
   review: 'review', needs_you: 'needs', failed: 'needs', interrupted: 'interrupted', user_stopped: 'cancelled'

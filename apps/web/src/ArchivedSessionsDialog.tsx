@@ -6,12 +6,14 @@ import { AgentIcon } from './AgentIcon';
 import { useModalFocusTrap } from './useModalFocusTrap';
 import { DeferredMount, DeferredSkeleton } from './DeferredMount';
 import { formatScheduleTime } from './schedule-view';
+import { useBi } from './i18n';
 
 /**
  * 归档会话列表。早先是侧边栏里的展开区，挂在整棵会话树底部：会话一多，点了按钮
  * 也要滚到底才看得见，看上去就是「点不开」。改成弹窗，并支持按标题/目录过滤。
  */
 export function ArchivedSessionsDialog({ sessions, agents, mainSessionId, onClose, onOpenSession }: { sessions: Session[]; agents: Agent[]; mainSessionId?: string; onClose(): void; onOpenSession(id: string): void }) {
+  const L = useBi();
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
@@ -37,21 +39,21 @@ export function ArchivedSessionsDialog({ sessions, agents, mainSessionId, onClos
   }, [sessions, keyword]);
 
   return <div className="ui-overlay ui-overlay-sheet fixed inset-0 z-[60] grid place-items-center bg-zinc-950/30 p-0 sm:p-4" onMouseDown={event => { if (event.currentTarget === event.target) onClose(); }}>
-    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="归档会话" className="ui-dialog flex h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)] sm:h-[min(720px,86dvh)] sm:rounded-[14px] sm:border sm:border-zinc-200">
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label={L("归档会话", "Archived Sessions")} className="ui-dialog flex h-[100dvh] w-full max-w-2xl flex-col overflow-hidden rounded-none border-0 bg-white shadow-[0_24px_80px_rgba(24,24,27,.2)] sm:h-[min(720px,86dvh)] sm:rounded-[14px] sm:border sm:border-zinc-200">
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-100 px-4">
-        <div className="flex items-center gap-2 text-[16px] font-semibold text-zinc-900"><Archive size={16}/>归档会话</div>
-        <span className="text-[12px] tabular-nums text-zinc-400">{sessions.length} 个，只读</span>
-        <button type="button" onClick={onClose} aria-label="关闭" className="ml-auto grid h-8 w-8 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={16}/></button>
+        <div className="flex items-center gap-2 text-[16px] font-semibold text-zinc-900"><Archive size={16}/>{L("归档会话", "Archived Sessions")}</div>
+        <span className="text-[12px] tabular-nums text-zinc-400">{sessions.length}  {L("个，只读", " archived · Read-only")}</span>
+        <button type="button" onClick={onClose} aria-label={L("关闭", "Close")} className="ml-auto grid h-8 w-8 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={16}/></button>
       </div>
       <div className="shrink-0 border-b border-zinc-100 px-4 py-2.5">
         <div className="flex h-8 items-center gap-2 rounded-md border border-zinc-200 px-2.5 ui-field-within">
           <Search size={13} className="shrink-0 text-zinc-400"/>
-          <input ref={inputRef} value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="按标题、工作目录或会话 ID 过滤" className="min-w-0 flex-1 bg-transparent text-[12px] text-zinc-800 outline-none placeholder:text-zinc-400"/>
+          <input ref={inputRef} value={keyword} onChange={event => setKeyword(event.target.value)} placeholder={L("按标题、工作目录或会话 ID 过滤", "Filter by title, workspace, or session ID")} className="min-w-0 flex-1 bg-transparent text-[12px] text-zinc-800 outline-none placeholder:text-zinc-400"/>
         </div>
       </div>
       <DeferredMount placeholder={<div className="min-h-0 flex-1 overflow-y-auto px-4 py-3"><DeferredSkeleton/></div>}>
       <div className="min-h-0 flex-1 overflow-y-auto pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        {!filtered.length && <div className="px-4 py-8 text-center text-[12px] text-zinc-400">{keyword ? '没有匹配的归档会话' : '还没有归档会话'}</div>}
+        {!filtered.length && <div className="px-4 py-8 text-center text-[12px] text-zinc-400">{keyword ? L("没有匹配的归档会话", "No matching archived sessions") : L("还没有归档会话", "No archived sessions yet")}</div>}
         {filtered.map(session => {
           const isMain = session.id === mainSessionId;
           return <div key={session.id} className="flex flex-wrap items-center gap-2.5 border-b border-zinc-100 px-3.5 py-3 transition-colors last:border-b-0 hover:bg-zinc-50 sm:flex-nowrap sm:gap-3 sm:px-4 sm:py-2.5">
@@ -60,16 +62,16 @@ export function ArchivedSessionsDialog({ sessions, agents, mainSessionId, onClos
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="truncate text-[13px] text-zinc-800" title={session.title}>{session.title || names.get(session.agentId) || session.agentId}</span>
-                  {isMain && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10.5px] font-medium leading-[18px] text-amber-800">当前主会话 · 可恢复</span>}
+                  {isMain && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[10.5px] font-medium leading-[18px] text-amber-800">{L("当前主会话 · 可恢复", "Main Session · Restorable")}</span>}
                 </span>
                 <span className="mt-0.5 block truncate font-mono text-[12px] text-zinc-400" title={session.cwd}>{session.cwd}</span>
               </span>
             </button>
             {isMain
               ? <button type="button" disabled={restore.isPending} onClick={() => restore.mutate(session.id)} className="ml-6 inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 text-[11.5px] font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50 sm:ml-0">
-                <RotateCcw size={11} className={restore.isPending && restore.variables === session.id ? 'animate-spin' : ''}/>{restore.isPending && restore.variables === session.id ? '恢复中…' : '恢复主会话'}
+                <RotateCcw size={11} className={restore.isPending && restore.variables === session.id ? 'animate-spin' : ''}/>{restore.isPending && restore.variables === session.id ? L("恢复中…", "Restoring…") : L("恢复主会话", "Restore Main Session")}
               </button>
-              : <span className="w-full shrink-0 pl-6 text-[11.5px] tabular-nums text-zinc-400 sm:w-auto sm:pl-0 sm:text-[12px]">归档于 {formatScheduleTime(session.archivedAt)}</span>}
+              : <span className="w-full shrink-0 pl-6 text-[11.5px] tabular-nums text-zinc-400 sm:w-auto sm:pl-0 sm:text-[12px]">{L("归档于", "Archived ")} {formatScheduleTime(session.archivedAt)}</span>}
           </div>;
         })}
       </div>

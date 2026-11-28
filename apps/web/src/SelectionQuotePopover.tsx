@@ -7,6 +7,7 @@ import {
   type SelectionPopoverPosition,
   type SelectionQuoteTarget
 } from './selection-quote';
+import { useBi } from './i18n';
 
 const ESTIMATED_POPOVER_SIZE = { width: 96, height: 34 };
 
@@ -24,6 +25,7 @@ export function SelectionQuotePopover({
   enabled?: boolean;
   onQuote(text: string): void;
 }) {
+  const L = useBi();
   const [target, setTarget] = useState<SelectionQuoteTarget | null>(null);
   const [position, setPosition] = useState<SelectionPopoverPosition | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -168,7 +170,7 @@ export function SelectionQuotePopover({
     <div
       ref={popoverRef}
       role="toolbar"
-      aria-label="选中文本操作"
+      aria-label={L("选中文本操作", "Selection actions")}
       data-testid="selection-quote-popover"
       data-placement={coords.placement}
       style={{ left: `${coords.left}px`, top: `${coords.top}px` }}
@@ -187,7 +189,7 @@ export function SelectionQuotePopover({
         className="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-[12px] font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 active:scale-[0.98]"
       >
         <CornerDownRight size={13} className="shrink-0 text-zinc-500" />
-        <span>引用回复</span>
+        <span>{L("引用回复", "Quote Reply")}</span>
       </button>
     </div>,
     document.body

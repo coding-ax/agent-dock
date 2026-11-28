@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Input } from 'antd';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Session } from './api';
+import { useBi } from './i18n';
 
 /**
  * 会话名的展示 + 就地编辑。
@@ -23,6 +24,7 @@ export function SessionTitleEditor({ session, label, nameClassName, editRequest 
   /** 右键菜单「重命名会话」递增的请求号；变化时进入行内编辑。 */
   editRequest?: number;
 }) {
+  const L = useBi();
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -70,11 +72,11 @@ export function SessionTitleEditor({ session, label, nameClassName, editRequest 
       autoFocus
       size="small"
       value={draft}
-      placeholder={label || '会话名'}
+      placeholder={label || L("会话名", "Session Title")}
       maxLength={120}
       disabled={save.isPending}
       status={save.error ? 'error' : undefined}
-      aria-label="会话名"
+      aria-label={L("会话名", "Session Title")}
       // 编辑期间整行要「静音」：点输入框会冒泡到行的 onClick（跳走会话），
       // 按空格/Enter 会命中行的 onKeyDown（同样跳走），行本身还 draggable（选中文字变成拖拽）。
       onClick={event => event.stopPropagation()}

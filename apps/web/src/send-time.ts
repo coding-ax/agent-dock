@@ -1,4 +1,8 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
+import { getCurrentLocale } from './i18n';
+
 const pad = (value: number) => String(value).padStart(2, '0');
+const EN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
 
 /** 按本机时区的日历日比较，不能用 24 小时差：跨 DST / 夏令时的「昨天」会算错。 */
 function calendarDayOffset(date: Date, reference: Date): number {
@@ -13,12 +17,17 @@ function calendarDayOffset(date: Date, reference: Date): number {
  *
  * 只做格式化，不在悬停时重新取时间或算相对时长：值全部来自落库的 ISO 时间戳。
  */
-export function formatSendTime(timestamp: string | undefined, reference: Date = new Date()): string {
+export function formatSendTime(timestamp: string | undefined, reference: Date = new Date(), locale: Locale = getCurrentLocale()): string {
   if (!timestamp) return '';
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return '';
   const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
   if (date.getFullYear() === reference.getFullYear() && date.getMonth() === reference.getMonth() && date.getDate() === reference.getDate()) return clock;
+  if (locale === 'en-US') {
+    const monthDay = `${EN_MONTHS[date.getMonth()]} ${date.getDate()}`;
+    if (date.getFullYear() === reference.getFullYear()) return `${monthDay}, ${clock}`;
+    return `${monthDay}, ${date.getFullYear()} ${clock}`;
+  }
   if (date.getFullYear() === reference.getFullYear()) return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
 }
@@ -32,12 +41,19 @@ export function formatSendTime(timestamp: string | undefined, reference: Date = 
  *
  * 时间戳来自事件本身，reference 只用于判断「今天/昨天」，不会用渲染时刻代替发送时刻。
  */
-export function formatUserMessageTime(timestamp: string | undefined, reference: Date = new Date()): string {
+export function formatUserMessageTime(timestamp: string | undefined, reference: Date = new Date(), locale: Locale = getCurrentLocale()): string {
   if (!timestamp) return '';
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return '';
   const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
   const dayOffset = calendarDayOffset(date, reference);
+  if (locale === 'en-US') {
+    if (dayOffset === 0) return `Today ${clock}`;
+    if (dayOffset === -1 && date.getFullYear() === reference.getFullYear()) return `Yesterday ${clock}`;
+    const monthDay = `${EN_MONTHS[date.getMonth()]} ${date.getDate()}`;
+    if (date.getFullYear() === reference.getFullYear()) return `${monthDay}, ${clock}`;
+    return `${monthDay}, ${date.getFullYear()} ${clock}`;
+  }
   if (dayOffset === 0) return `今天 ${clock}`;
   if (dayOffset === -1 && date.getFullYear() === reference.getFullYear()) return `昨天 ${clock}`;
   if (date.getFullYear() === reference.getFullYear()) return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;

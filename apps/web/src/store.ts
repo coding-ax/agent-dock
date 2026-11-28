@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { bi } from './i18n';
 
 export type PaneKind = 'primary' | 'secondary';
 
@@ -104,7 +105,7 @@ export const useDockStore = create<Store>(set => ({
     const key = paneKey(owner);
     const tabId = `files:${owner}`;
     const normalizedPath = input.filePath.replace(/\/+$/, '');
-    const title = input.title ?? (normalizedPath.split('/').at(-1) || (input.filePath.startsWith('/') ? '/' : '文件'));
+    const title = input.title ?? (normalizedPath.split('/').at(-1) || (input.filePath.startsWith('/') ? '/' : bi("文件", "Files")));
     const existingIndex = state.tabs.findIndex(item => item.id === tabId);
     let tabs: PaneTab[];
     if (existingIndex >= 0) {

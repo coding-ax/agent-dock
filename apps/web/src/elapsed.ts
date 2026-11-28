@@ -1,3 +1,6 @@
+import type { Locale } from '@agent-dock/agent-dock-shared';
+import { getCurrentLocale } from './i18n';
+
 /**
  * 任务/会话耗时的唯一口径。
  *

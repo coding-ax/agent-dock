@@ -78,11 +78,14 @@ import {
   COLUMN_COLOR_STYLES,
   filterBoardColumns,
   isFilterActive,
+  localizeBoardColumnName,
+  localizeBoardName,
   toMentionedCard,
   type BoardFilterState
 } from './board-utils';
 import { useBoardStream } from './useBoardStream';
 import './board.css';
+import { useBi, useLocale } from '../i18n';
 
 /**
  * FLIP 弹簧动画：当 CLI / 主小猫通过 SSE 重排或跨列移动卡片时，
@@ -155,6 +158,8 @@ export function BoardWorkspace({
   onOpenFullSession,
   onOpenSidebar
 }: BoardWorkspaceProps) {
+  const L = useBi();
+  const locale = useLocale();
   const qc = useQueryClient();
   const companion = useCompanion();
   const notice = useToast(2_400);
@@ -275,8 +280,8 @@ export function BoardWorkspace({
       setLastActiveBoardId(created.board.id);
       onBoardRouteChange(created.board.id);
       void qc.invalidateQueries({ queryKey: ['boards'] });
-      useBoardStore.getState().flashKitten('happy', `新看板「${created.board.name}」已建好！`, 3_000);
-      notice.show(`已创建看板「${created.board.name}」`, 'info');
+      useBoardStore.getState().flashKitten('happy', L(`新看板「${created.board.name}」已建好！`, `Board "${created.board.name}" is ready!`), 3_000);
+      notice.show(L(`已创建看板「${created.board.name}」`, `Created board "${created.board.name}"`), 'info');
     },
     onError: err => notice.show(err instanceof Error ? err.message : String(err), 'error')
   });
@@ -290,14 +295,14 @@ export function BoardWorkspace({
       setLastActiveBoardId(created.board.id);
       onBoardRouteChange(created.board.id);
       void qc.invalidateQueries({ queryKey: ['boards'] });
-      notice.show(`已导入看板「${created.board.name}」`, 'info');
+      notice.show(L(`已导入看板「${created.board.name}」`, `Imported board "${created.board.name}"`), 'info');
     },
     onError: err => notice.show(err instanceof Error ? err.message : String(err), 'error')
   });
 
   const updateBoardMutation = useMutation({
     mutationFn: (patch: { name?: string; viewMode?: BoardViewMode; density?: BoardDensity; isDefault?: boolean }) => {
-      if (!activeBoard) throw new Error('看板未就绪');
+      if (!activeBoard) throw new Error(L("看板未就绪", "Board is not ready"));
       return api.updateBoard(activeBoard.id, { ...patch, clientMutationId: nextClientMutationId() });
     },
     onMutate: patch => {
@@ -320,14 +325,14 @@ export function BoardWorkspace({
       setBoardMenuOpen(false);
       setLastActiveBoardId(undefined);
       void qc.invalidateQueries({ queryKey: ['boards'] });
-      notice.show('看板已删除（底层任务与会话已保留）', 'info');
+      notice.show(L("看板已删除（底层任务与会话已保留）", "Board deleted (underlying tasks & sessions preserved)"), 'info');
     },
     onError: err => notice.show(err instanceof Error ? err.message : String(err), 'error')
   });
 
   const saveColumnMutation = useMutation({
     mutationFn: async (input: { editing: HydratedBoardColumn | null; payload: ColumnEditorPayload }) => {
-      if (!activeBoard) throw new Error('看板未就绪');
+      if (!activeBoard) throw new Error(L("看板未就绪", "Board is not ready"));
       const clientMutationId = nextClientMutationId();
       if (input.editing) {
         return api.updateBoardColumn(input.editing.id, { ...input.payload, clientMutationId });
@@ -338,7 +343,7 @@ export function BoardWorkspace({
       setColumnModal({ open: false, editing: null });
       if (res.board) qc.setQueryData(['board', res.board.board.id], res.board);
       void qc.invalidateQueries({ queryKey: ['boards'] });
-      notice.show('列配置已更新', 'info');
+      notice.show(L("列配置已更新", "Column settings updated"), 'info');
     },
     onError: err => notice.show(err instanceof Error ? err.message : String(err), 'error')
   });
@@ -359,7 +364,7 @@ export function BoardWorkspace({
     onSuccess: res => {
       if (res.board) qc.setQueryData(['board', res.board.board.id], res.board);
       void qc.invalidateQueries({ queryKey: ['boards'] });
-      notice.show('已删除列并迁移卡片', 'info');
+      notice.show(L("已删除列并迁移卡片", "Column deleted and cards migrated"), 'info');
     },
     onError: err => notice.show(err instanceof Error ? err.message : String(err), 'error')
   });
@@ -385,7 +390,7 @@ export function BoardWorkspace({
       tags?: string[];
       pinned?: boolean;
     }) => {
-      if (!activeBoard) throw new Error('看板未就绪');
+      if (!activeBoard) throw new Error(L("看板未就绪", "Board is not ready"));
       return api.addBoardItem(activeBoard.id, { ...body, clientMutationId: nextClientMutationId() });
     },
     onSuccess: res => {
@@ -393,7 +398,7 @@ export function BoardWorkspace({
       if (res.board) qc.setQueryData(['board', res.board.board.id], res.board);
       void qc.invalidateQueries({ queryKey: ['boards'] });
       useBoardStore.getState().markCardLanded(res.item.id);
-      notice.show('已添加到看板', 'info');
+      notice.show(L("已添加到看板", "Added to board"), 'info');
     },
     onError: err => notice.show(err instanceof Error ? err.message : String(err), 'error')
   });
@@ -406,7 +411,7 @@ export function BoardWorkspace({
       afterItemId?: string;
       placement?: 'top' | 'bottom';
     }) => {
-      if (!activeBoard) throw new Error('看板未就绪');
+      if (!activeBoard) throw new Error(L("看板未就绪", "Board is not ready"));
       return api.moveBoardItem(activeBoard.id, input.itemId, {
         toColumnId: input.toColumnId,
         ...(input.beforeItemId ? { beforeItemId: input.beforeItemId } : {}),
@@ -428,7 +433,7 @@ export function BoardWorkspace({
 
   const batchMoveMutation = useMutation({
     mutationFn: (input: { itemIds: string[]; toColumnId: string }) => {
-      if (!activeBoard) throw new Error('看板未就绪');
+      if (!activeBoard) throw new Error(L("看板未就绪", "Board is not ready"));
       return api.batchMoveBoardItems(activeBoard.id, {
         itemIds: input.itemIds,
         toColumnId: input.toColumnId,
@@ -438,14 +443,14 @@ export function BoardWorkspace({
     onSuccess: res => {
       if (res.board) qc.setQueryData(['board', res.board.board.id], res.board);
       clearSelectedCards();
-      notice.show(`已批量移动 ${res.moved.length} 张卡片`, 'info');
+      notice.show(L(`已批量移动 ${res.moved.length} 张卡片`, `Moved ${res.moved.length} card(s)`), 'info');
     },
     onError: err => notice.show(err instanceof Error ? err.message : String(err), 'error')
   });
 
   const updateItemMutation = useMutation({
     mutationFn: (input: { itemId: string; pinned?: boolean; resetRuleOverride?: boolean }) => {
-      if (!activeBoard) throw new Error('看板未就绪');
+      if (!activeBoard) throw new Error(L("看板未就绪", "Board is not ready"));
       return api.updateBoardItem(activeBoard.id, input.itemId, {
         ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
         ...(input.resetRuleOverride ? { manualOverride: false } : {}),
@@ -460,7 +465,7 @@ export function BoardWorkspace({
 
   const removeItemMutation = useMutation({
     mutationFn: (itemId: string) => {
-      if (!activeBoard) throw new Error('看板未就绪');
+      if (!activeBoard) throw new Error(L("看板未就绪", "Board is not ready"));
       return api.removeBoardItem(activeBoard.id, itemId);
     },
     onSuccess: (res, itemId) => {
@@ -468,7 +473,7 @@ export function BoardWorkspace({
       else if (activeBoard) void qc.invalidateQueries({ queryKey: ['board', activeBoard.id] });
       if (drawerCardId === itemId) openDrawerCard(undefined);
       void qc.invalidateQueries({ queryKey: ['boards'] });
-      notice.show('已从看板移出（任务与会话本身已保留）', 'info');
+      notice.show(L("已从看板移出（任务与会话本身已保留）", "Removed from board (underlying task/session preserved)"), 'info');
     },
     onError: err => notice.show(err instanceof Error ? err.message : String(err), 'error')
   });
@@ -508,8 +513,8 @@ export function BoardWorkspace({
     // 1. 拖卡投喂给底部主小猫 Dock！
     if (currentDrag.type === 'card' && over.id === KITTEN_DOCK_DROPPABLE_ID) {
       useBoardStore.getState().addDockMentionCard(toMentionedCard(currentDrag.item));
-      useBoardStore.getState().flashKitten('happy', `接住啦！想让${companion.name}怎么处理？`, 3_000);
-      notice.show(`已投喂「${currentDrag.item.live.title}」给${companion.name}`, 'info');
+      useBoardStore.getState().flashKitten('happy', L(`接住啦！想让${companion.name}怎么处理？`, `Caught it! How should ${companion.name} handle this?`), 3_000);
+      notice.show(L(`已投喂「${currentDrag.item.live.title}」给${companion.name}`, `Sent "${currentDrag.item.live.title}" to ${companion.name}`), 'info');
       return;
     }
 
@@ -604,8 +609,8 @@ export function BoardWorkspace({
     onOpenDrawer: item => openDrawerCard(item.id),
     onAskKitten: item => {
       useBoardStore.getState().addDockMentionCard(toMentionedCard(item));
-      useBoardStore.getState().flashKitten('happy', `收到「${item.live.title}」！`, 2_800);
-      notice.show(`已把「${item.live.title}」投喂给${companion.name}`, 'info');
+      useBoardStore.getState().flashKitten('happy', L(`收到「${item.live.title}」！`, `Got "${item.live.title}"!`), 2_800);
+      notice.show(L(`已把「${item.live.title}」投喂给${companion.name}`, `Sent "${item.live.title}" to ${companion.name}`), 'info');
     },
     onTogglePin: item => updateItemMutation.mutate({ itemId: item.id, pinned: !item.pinned }),
     onToggleSelect: item => toggleCardSelected(item.id),
@@ -631,7 +636,7 @@ export function BoardWorkspace({
       a.download = `agentdock-board-${activeBoard.name.replace(/[^\w\u4e00-\u9fa5-]+/g, '_')}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      notice.show('已导出看板模板 JSON', 'info');
+      notice.show(L("已导出看板模板 JSON", "Exported board template JSON"), 'info');
     } catch (err) {
       notice.show(err instanceof Error ? err.message : String(err), 'error');
     }
@@ -655,7 +660,7 @@ export function BoardWorkspace({
       >
         {/* 移动端打开侧栏按钮 */}
         <span className="md:hidden">
-          <IconButton label="打开会话列表" onClick={onOpenSidebar}><Menu size={17}/></IconButton>
+          <IconButton label={L("打开会话列表", "Open session list")} onClick={onOpenSidebar}><Menu size={17}/></IconButton>
         </span>
 
         {/* 多看板快速记忆切换 Tabs */}
@@ -678,7 +683,7 @@ export function BoardWorkspace({
                 }`}
               >
                 {b.isDefault && <Star size={11} className={active ? 'fill-amber-400 text-amber-400' : 'text-amber-500'}/>}
-                <span className="max-w-[140px] truncate">{b.name}</span>
+                <span className="max-w-[140px] truncate">{localizeBoardName(b, locale)}</span>
                 {active && summary && summary.running > 0 && (
                   <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[10px] font-semibold tabular-nums text-white">
                     {summary.running}
@@ -687,15 +692,15 @@ export function BoardWorkspace({
               </button>
             );
           })}
-          <HoverTooltip content="新建自定义看板或导入模板">
+          <HoverTooltip content={L("新建自定义看板或导入模板", "Create custom board or import template")}>
             <button
               type="button"
-              aria-label="新建看板"
+              aria-label={L("新建看板", "New Board")}
               onClick={() => setCreateBoardOpen(true)}
               className="ui-press inline-flex h-8 shrink-0 items-center gap-1 rounded-xl border border-dashed border-zinc-300 px-2.5 text-[12px] font-medium text-zinc-500 transition-colors hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"
             >
               <Plus size={13}/>
-              <span className="hidden sm:inline">新看板</span>
+              <span className="hidden sm:inline">{L("新看板", "New")}</span>
             </button>
           </HoverTooltip>
         </div>
@@ -703,17 +708,17 @@ export function BoardWorkspace({
         {/* 右侧控制组 */}
         <div className="flex shrink-0 items-center gap-1.5">
           {/* 实时 SSE 呼吸指示 */}
-          <HoverTooltip content={streamStatus === 'live' ? '实时同步已连接（拖拽与 CLI 秒级双向同步）' : '正在重连实时同步…'}>
+          <HoverTooltip content={streamStatus === 'live' ? L("实时同步已连接（拖拽与 CLI 秒级双向同步）", "Live sync connected (instant drag & CLI two-way sync)") : L("正在重连实时同步…", "Reconnecting live sync…")}>
             <span className="hidden items-center gap-1.5 rounded-full bg-zinc-100 px-2.5 py-1 text-[11px] font-medium text-zinc-600 xl:inline-flex">
               <span className={`h-1.5 w-1.5 rounded-full ${streamStatus === 'live' ? 'bg-emerald-500 ui-board-dot-pulse' : 'bg-amber-400'}`}/>
-              {summary ? `${summary.totalItems} 卡${summary.running ? ` · ${summary.running} 运行` : ''}` : '实时同步'}
+              {summary ? L(`${summary.totalItems} 卡${summary.running ? ` · ${summary.running} 运行` : ''}`, `${summary.totalItems} cards${summary.running ? ` · ${summary.running} running` : ''}`) : L("实时同步", "Live Sync")}
             </span>
           </HoverTooltip>
 
           {/* 视图切换：列视图 | 盯盘矩阵 */}
           <div className="hidden sm:block">
             <SlidingSegmented
-              ariaLabel="看板视图模式"
+              ariaLabel={L("看板视图模式", "Board view mode")}
               size="sm"
               value={viewMode}
               onChange={next => {
@@ -723,23 +728,23 @@ export function BoardWorkspace({
               options={[
                 {
                   value: 'lanes' as const,
-                  ariaLabel: '列视图',
-                  tooltip: '列视图（按列自由拖拽编排）',
+                  ariaLabel: L("列视图", "Columns"),
+                  tooltip: L("列视图（按列自由拖拽编排）", "Column view (drag and organize freely across columns)"),
                   label: (
                     <>
                       <Columns3 size={13}/>
-                      <span className="hidden lg:inline">列视图</span>
+                      <span className="hidden lg:inline">{L("列视图", "Columns")}</span>
                     </>
                   )
                 },
                 {
                   value: 'grid' as const,
-                  ariaLabel: '盯盘矩阵',
-                  tooltip: '盯盘矩阵（一屏高密度平铺盯多任务）',
+                  ariaLabel: L("盯盘矩阵", "Matrix"),
+                  tooltip: L("盯盘矩阵（一屏高密度平铺盯多任务）", "Monitoring matrix (high-density grid for tracking many tasks)"),
                   label: (
                     <>
                       <LayoutGrid size={13}/>
-                      <span className="hidden lg:inline">矩阵</span>
+                      <span className="hidden lg:inline">{L("矩阵", "Matrix")}</span>
                     </>
                   )
                 }
@@ -748,10 +753,10 @@ export function BoardWorkspace({
           </div>
 
           {/* 密度切换：紧凑 | 舒适 */}
-          <HoverTooltip content={density === 'compact' ? '当前：紧凑盯盘（点击切换舒适）' : '当前：舒适展开（点击切换紧凑）'}>
+          <HoverTooltip content={density === 'compact' ? L("当前：紧凑盯盘（点击切换舒适）", "Density: Compact (click for Comfortable)") : L("当前：舒适展开（点击切换紧凑）", "Density: Comfortable (click for Compact)")}>
             <button
               type="button"
-              aria-label="切换卡片密度"
+              aria-label={L("切换卡片密度", "Toggle card density")}
               onClick={() => updateBoardMutation.mutate({ density: density === 'compact' ? 'comfortable' : 'compact' })}
               className="ui-press hidden h-8 w-8 place-items-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 sm:grid"
             >
@@ -760,10 +765,10 @@ export function BoardWorkspace({
           </HoverTooltip>
 
           {/* 筛选按钮 */}
-          <HoverTooltip content="搜索与筛选卡片">
+          <HoverTooltip content={L("搜索与筛选卡片", "Search & filter cards")}>
             <button
               type="button"
-              aria-label="搜索与筛选卡片"
+              aria-label={L("搜索与筛选卡片", "Search & filter cards")}
               aria-pressed={filterOpen || isFilterActive(filter)}
               onClick={() => setFilterOpen(o => !o)}
               className={`ui-press grid h-8 w-8 place-items-center rounded-xl border transition-colors ${
@@ -777,25 +782,25 @@ export function BoardWorkspace({
           </HoverTooltip>
 
           {/* 新建列 */}
-          <HoverTooltip content="新建一列（手动列或智能规则列）">
+          <HoverTooltip content={L("新建一列（手动列或智能规则列）", "Add column (manual or smart-rule)")}>
             <button
               type="button"
-              aria-label="新建列"
+              aria-label={L("新建列", "Add Column")}
               onClick={() => setColumnModal({ open: true, editing: null })}
               className="ui-press inline-flex h-8 items-center gap-1 rounded-xl border border-zinc-200 bg-white px-2.5 text-[12px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
             >
               <Plus size={13}/>
-              <span className="hidden md:inline">新建列</span>
+              <span className="hidden md:inline">{L("新建列", "Add Column")}</span>
             </button>
           </HoverTooltip>
 
           {/* 当前看板更多设置菜单 */}
           <div ref={boardMenuRef} className="relative">
-            <HoverTooltip content={boardMenuOpen ? undefined : '当前看板操作'} hoverOnly>
+            <HoverTooltip content={boardMenuOpen ? undefined : L("当前看板操作", "Board actions")} hoverOnly>
               <button
                 type="button"
                 data-testid="board-more-menu-trigger"
-                aria-label="当前看板操作"
+                aria-label={L("当前看板操作", "Board actions")}
                 aria-haspopup="menu"
                 aria-expanded={boardMenuOpen}
                 onClick={() => setBoardMenuOpen(o => {
@@ -816,7 +821,7 @@ export function BoardWorkspace({
               open={boardMenuOpen && Boolean(activeBoard)}
               anchorRef={boardMenuRef}
               width={208}
-              ariaLabel="当前看板操作"
+              ariaLabel={L("当前看板操作", "Board actions")}
               testId="board-more-menu"
               onClose={() => {
                 setBoardMenuOpen(false);
@@ -843,7 +848,8 @@ export function BoardWorkspace({
                         onClick={() => { if (renameDraft.trim()) updateBoardMutation.mutate({ name: renameDraft.trim() }); }}
                         className="ui-press h-7 rounded-md bg-zinc-900 px-2 text-[11.5px] font-medium text-white"
                       >
-                        保存
+                        
+                        {L("保存", "Save")}
                       </button>
                     </div>
                   ) : (
@@ -853,7 +859,8 @@ export function BoardWorkspace({
                       onClick={() => { setRenameDraft(activeBoard.name); setRenamingBoard(true); }}
                       className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
                     >
-                      重命名此看板
+                      
+                      {L("重命名此看板", "Rename Board")}
                     </button>
                   )}
                   {!activeBoard.isDefault && (
@@ -864,7 +871,8 @@ export function BoardWorkspace({
                       className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
                     >
                       <Star size={13} className="text-amber-500"/>
-                      设为默认记忆看板
+                      
+                      {L("设为默认记忆看板", "Set as Default Board")}
                     </button>
                   )}
                   <button
@@ -874,7 +882,8 @@ export function BoardWorkspace({
                     className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
                   >
                     <Download size={13} className="text-zinc-400"/>
-                    导出看板模板 JSON
+                    
+                    {L("导出看板模板 JSON", "Export Template JSON")}
                   </button>
                   <div className="my-1 border-t border-zinc-100"/>
                   <button
@@ -885,7 +894,8 @@ export function BoardWorkspace({
                     className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-red-600 hover:bg-red-50 disabled:opacity-40"
                   >
                     <Trash2 size={13}/>
-                    删除此看板
+                    
+                    {L("删除此看板", "Delete Board")}
                   </button>
                 </>
               )}
@@ -903,39 +913,39 @@ export function BoardWorkspace({
               type="text"
               value={filter.query}
               onChange={e => setFilter(f => ({ ...f, query: e.target.value }))}
-              placeholder="搜索标题、工具步、批注、标签…"
+              placeholder={L("搜索标题、工具步、批注、标签…", "Search title, tool steps, notes, tags…")}
               className="h-full min-w-0 flex-1 bg-transparent text-[12.5px] text-zinc-900 placeholder:text-zinc-400"
             />
             {filter.query && (
-              <button type="button" aria-label="清空搜索词" onClick={() => setFilter(f => ({ ...f, query: '' }))} className="text-zinc-400 hover:text-zinc-700">
+              <button type="button" aria-label={L("清空搜索词", "Clear search")} onClick={() => setFilter(f => ({ ...f, query: '' }))} className="text-zinc-400 hover:text-zinc-700">
                 <X size={12}/>
               </button>
             )}
           </div>
           <select
-            aria-label="按状态筛选"
+            aria-label={L("按状态筛选", "Filter by status")}
             value={filter.visualState}
             onChange={e => setFilter(f => ({ ...f, visualState: e.target.value as BoardVisualState | 'all' }))}
             className="h-8 rounded-lg border border-zinc-200 bg-white px-2.5 text-[12px] text-zinc-700"
           >
-            <option value="all">全部状态</option>
-            <option value="running">进行中</option>
-            <option value="thinking">思考中</option>
-            <option value="needs_user">需要你</option>
-            <option value="waiting_approval">待授权</option>
-            <option value="review">待验收</option>
-            <option value="plan">计划中</option>
-            <option value="done">已完成</option>
-            <option value="failed">出错</option>
-            <option value="note">纯文字卡</option>
+            <option value="all">{L("全部状态", "All Statuses")}</option>
+            <option value="running">{L("进行中", "Running")}</option>
+            <option value="thinking">{L("思考中", "Thinking")}</option>
+            <option value="needs_user">{L("需要你", "Needs You")}</option>
+            <option value="waiting_approval">{L("待授权", "Approval")}</option>
+            <option value="review">{L("待验收", "Review")}</option>
+            <option value="plan">{L("计划中", "Planned")}</option>
+            <option value="done">{L("已完成", "Done")}</option>
+            <option value="failed">{L("出错", "Error")}</option>
+            <option value="note">{L("纯文字卡", "Text Note")}</option>
           </select>
           <select
-            aria-label="按 Agent 筛选"
+            aria-label={L("按 Agent 筛选", "Filter by Agent")}
             value={filter.agentId}
             onChange={e => setFilter(f => ({ ...f, agentId: e.target.value }))}
             className="h-8 rounded-lg border border-zinc-200 bg-white px-2.5 text-[12px] text-zinc-700"
           >
-            <option value="all">全部 Agent</option>
+            <option value="all">{L("全部 Agent", "All Agents")}</option>
             {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
           {isFilterActive(filter) && (
@@ -944,7 +954,8 @@ export function BoardWorkspace({
               onClick={() => setFilter({ query: '', agentId: 'all', visualState: 'all' })}
               className="ui-press h-8 rounded-lg px-2.5 text-[12px] font-medium text-blue-600 hover:bg-blue-50"
             >
-              重置筛选
+              
+              {L("重置筛选", "Reset Filters")}
             </button>
           )}
         </div>
@@ -955,22 +966,24 @@ export function BoardWorkspace({
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-blue-200 bg-blue-50/80 px-4 py-1.5 text-[12.5px] text-blue-900">
           <span className="inline-flex items-center gap-1.5 font-medium">
             <CheckSquare size={14} className="text-blue-600"/>
-            已选 {selectedCardIds.length} 张卡片
+            
+            {L("已选", "Selected ")} {selectedCardIds.length}  {L("张卡片", " card(s)")}
           </span>
           <button
             type="button"
             onClick={() => {
               const picked = allItemsFlat.filter(i => selectedSet.has(i.id)).map(toMentionedCard);
               useBoardStore.getState().setDockMentionCards(picked);
-              useBoardStore.getState().flashKitten('happy', `已接住 ${picked.length} 张卡！`, 3_000);
+              useBoardStore.getState().flashKitten('happy', L(`已接住 ${picked.length} 张卡！`, `Caught ${picked.length} card(s)!`), 3_000);
             }}
             className="ui-press inline-flex h-7 items-center gap-1 rounded-lg bg-amber-500 px-2.5 text-[12px] font-medium text-white hover:bg-amber-600"
           >
             <PawPrint size={12}/>
-            全部喂给{companion.name}
+            
+            {L("全部喂给", "Send all to ")}{companion.name}
           </button>
           <select
-            aria-label="批量移动到列"
+            aria-label={L("批量移动到列", "Move selected to column")}
             defaultValue=""
             onChange={e => {
               const colId = e.target.value;
@@ -979,7 +992,7 @@ export function BoardWorkspace({
             }}
             className="h-7 rounded-lg border border-blue-200 bg-white px-2 text-[12px] text-zinc-700"
           >
-            <option value="" disabled>批量移到列…</option>
+            <option value="" disabled>{L("批量移到列…", "Move to column…")}</option>
             {rawColumns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           <button
@@ -987,7 +1000,8 @@ export function BoardWorkspace({
             onClick={clearSelectedCards}
             className="ui-press ml-auto text-[12px] text-blue-700 hover:underline"
           >
-            取消全选
+            
+            {L("取消全选", "Clear")}
           </button>
         </div>
       </Disclosure>
@@ -1013,17 +1027,19 @@ export function BoardWorkspace({
             {boardQuery.isLoading && !hydrated ? (
               <div className="flex flex-1 items-center justify-center gap-2 text-[13px] text-zinc-400">
                 <LoaderCircle size={16} className="animate-spin"/>
-                正在加载看板…
+                
+                {L("正在加载看板…", "Loading board…")}
               </div>
             ) : !hydrated ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-                <p className="text-[14px] font-medium text-zinc-700">看板暂时无法加载</p>
+                <p className="text-[14px] font-medium text-zinc-700">{L("看板暂时无法加载", "Unable to load board")}</p>
                 <button
                   type="button"
                   onClick={() => void boardQuery.refetch()}
                   className="h-8 rounded-lg bg-zinc-900 px-3.5 text-[12.5px] font-medium text-white"
                 >
-                  重试
+                  
+                  {L("重试", "Retry")}
                 </button>
               </div>
             ) : (
@@ -1047,7 +1063,7 @@ export function BoardWorkspace({
                             }`}
                           >
                             <span className={`h-2 w-2 rounded-full ${style.dot}`}/>
-                            <span>{col.name}</span>
+                            <span>{localizeBoardColumnName(col.name, locale)}</span>
                             <span className={`rounded-full px-1.5 text-[10.5px] tabular-nums ${active ? 'bg-white/20 text-white' : 'bg-zinc-200/80 text-zinc-600'}`}>
                               {col.items.length}
                             </span>
@@ -1113,7 +1129,8 @@ export function BoardWorkspace({
                       className="ui-press flex h-12 w-48 shrink-0 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-zinc-300/90 bg-white/50 text-[12.5px] font-medium text-zinc-500 transition-colors hover:border-zinc-400 hover:bg-white hover:text-zinc-800"
                     >
                       <Plus size={14}/>
-                      新建自定义列
+                      
+                      {L("新建自定义列", "Add Custom Column")}
                     </button>
                   </div>
                 ) : (
@@ -1121,8 +1138,8 @@ export function BoardWorkspace({
                   <div key={`${activeBoard?.id ?? ''}:grid`} className="ui-view-fade min-h-0 flex-1 overflow-y-auto p-4 pb-28">
                     {filteredItemsFlat.length === 0 ? (
                       <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-300 text-center">
-                        <p className="text-[14px] font-medium text-zinc-700">盯盘矩阵暂无卡片</p>
-                        <p className="mt-1 text-[12.5px] text-zinc-500">可以新建卡片、从左侧栏拖入会话，或切换到运行状态看板。</p>
+                        <p className="text-[14px] font-medium text-zinc-700">{L("盯盘矩阵暂无卡片", "No cards in matrix view yet")}</p>
+                        <p className="mt-1 text-[12.5px] text-zinc-500">{L("可以新建卡片、从左侧栏拖入会话，或切换到运行状态看板。", "Add a card, drag a session from the sidebar, or switch to the Live Status board.")}</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -1136,7 +1153,7 @@ export function BoardWorkspace({
                             selected={selectedSet.has(item.id)}
                             activeDrawer={drawerCardId === item.id}
                             landed={landedCardId === item.id}
-                            columnBadge={{ name: column.name, color: column.color }}
+                            columnBadge={{ name: localizeBoardColumnName(column.name, locale), color: column.color }}
                             handlers={cardHandlers}
                           />
                         ))}
@@ -1165,12 +1182,12 @@ export function BoardWorkspace({
                 <div className="flex h-10 shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-3">
                   <span className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-zinc-800">
                     <PawPrint size={13} className="text-amber-500"/>
-                    {companion.name} · 看板协作者
+                    {companion.name}  {L("· 看板协作者", "· Board Collaborator")}
                   </span>
-                  <HoverTooltip content="收起并排对话">
+                  <HoverTooltip content={L("收起并排对话", "Close side chat")}>
                     <button
                       type="button"
-                      aria-label="收起并排对话"
+                      aria-label={L("收起并排对话", "Close side chat")}
                       onClick={() => setKittenChatOpen(false)}
                       className="ui-press grid h-7 w-7 place-items-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
                     >
@@ -1206,8 +1223,8 @@ export function BoardWorkspace({
             <div className="ui-board-card-overlay w-[280px] rounded-2xl p-3">
               <div className="flex items-center gap-2 text-[13.5px] font-semibold text-zinc-900">
                 <span className={`h-2.5 w-2.5 rounded-full ${(COLUMN_COLOR_STYLES[activeDrag.column.color] ?? COLUMN_COLOR_STYLES.zinc).dot}`}/>
-                {activeDrag.column.name}
-                <span className="ml-auto text-[11px] font-normal text-zinc-400">{activeDrag.column.items.length} 张卡</span>
+                {localizeBoardColumnName(activeDrag.column.name, locale)}
+                <span className="ml-auto text-[11px] font-normal text-zinc-400">{activeDrag.column.items.length}  {L("张卡", " cards")}</span>
               </div>
             </div>
           ) : null}

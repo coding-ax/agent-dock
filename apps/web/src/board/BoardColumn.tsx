@@ -15,9 +15,10 @@ import {
 } from 'lucide-react';
 import type { Agent, BoardDensity, HydratedBoardColumn, HydratedBoardItem } from '../api';
 import { HoverTooltip } from '../HoverTooltip';
+import { useBi, useLocale } from '../i18n';
 import { SortableBoardCard, type BoardCardActionHandlers } from './BoardCard';
 import { BoardPopoverMenu } from './BoardPopoverMenu';
-import { COLUMN_COLOR_STYLES, describeColumnRule } from './board-utils';
+import { COLUMN_COLOR_STYLES, describeColumnRule, localizeBoardColumnName } from './board-utils';
 
 export interface BoardColumnProps {
   column: HydratedBoardColumn;
@@ -54,6 +55,9 @@ export const BoardColumn = memo(function BoardColumn({
   onDeleteColumn,
   onDropSidebarSession
 }: BoardColumnProps) {
+  const L = useBi();
+  const locale = useLocale();
+  const displayName = localizeBoardColumnName(column.name, locale);
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarOver, setSidebarOver] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -83,7 +87,7 @@ export const BoardColumn = memo(function BoardColumn({
 
   const colorStyle = COLUMN_COLOR_STYLES[column.color] ?? COLUMN_COLOR_STYLES.zinc;
   const itemIds = useMemo(() => column.items.map(item => item.id), [column.items]);
-  const ruleSummary = describeColumnRule(column.rule);
+  const ruleSummary = describeColumnRule(column.rule, locale);
   const wipExceeded = Boolean(column.wipLimit && column.items.length > column.wipLimit);
   const dropHighlight = isCardOver || sidebarOver;
 
@@ -122,10 +126,10 @@ export const BoardColumn = memo(function BoardColumn({
         onDrop={onNativeDrop}
         className={`ui-board-lane flex h-full w-12 shrink-0 flex-col items-center rounded-2xl border border-zinc-200/70 py-2.5 ${isColumnDragging ? 'opacity-45' : ''}`}
       >
-        <HoverTooltip content={`展开「${column.name}」`}>
+        <HoverTooltip content={L(`展开「${displayName}」`, `Expand "${displayName}"`)}>
           <button
             type="button"
-            aria-label={`展开列 ${column.name}`}
+            aria-label={L(`展开列 ${displayName}`, `Expand column ${displayName}`)}
             onClick={() => onToggleCollapse(column)}
             className="grid h-7 w-7 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-white hover:text-zinc-900"
           >
@@ -141,7 +145,7 @@ export const BoardColumn = memo(function BoardColumn({
           onClick={() => onToggleCollapse(column)}
           className="mt-3 flex-1 overflow-hidden text-[12.5px] font-medium tracking-wide text-zinc-600 transition-colors hover:text-zinc-900 [writing-mode:vertical-rl]"
         >
-          {column.name}
+          {displayName}
         </button>
       </section>
     );
@@ -165,7 +169,7 @@ export const BoardColumn = memo(function BoardColumn({
         {!mobileFullWidth && (
           <button
             type="button"
-            aria-label={`拖拽调整「${column.name}」列顺序`}
+            aria-label={L(`拖拽调整「${displayName}」列顺序`, `Drag to reorder "${displayName}"`)}
             {...attributes}
             {...listeners}
             className="-ml-1 grid h-6 w-4 shrink-0 cursor-grab place-items-center rounded text-zinc-400 transition-colors hover:bg-zinc-200/60 hover:text-zinc-700 active:cursor-grabbing"
@@ -179,9 +183,9 @@ export const BoardColumn = memo(function BoardColumn({
         <h3
           onDoubleClick={() => onEditColumn(column)}
           className="min-w-0 flex-1 truncate text-[13px] font-semibold text-zinc-800"
-          title={column.name}
+          title={displayName}
         >
-          {column.name}
+          {displayName}
         </h3>
 
         <span
@@ -195,17 +199,17 @@ export const BoardColumn = memo(function BoardColumn({
         </span>
 
         {ruleSummary && (
-          <HoverTooltip content={`智能规则列：${ruleSummary}`}>
+          <HoverTooltip content={L(`智能规则列：${ruleSummary}`, `Smart rule: ${ruleSummary}`)}>
             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-700 dark:text-sky-300">
               <Sparkles size={11}/>
             </span>
           </HoverTooltip>
         )}
 
-        <HoverTooltip content={`向「${column.name}」添加卡片`}>
+        <HoverTooltip content={L(`向「${displayName}」添加卡片`, `Add card to "${displayName}"`)}>
           <button
             type="button"
-            aria-label={`向「${column.name}」添加卡片`}
+            aria-label={L(`向「${displayName}」添加卡片`, `Add card to "${displayName}"`)}
             onClick={() => onAddCard(column)}
             className="ui-press grid h-6 w-6 shrink-0 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-white hover:text-zinc-900"
           >
@@ -214,10 +218,10 @@ export const BoardColumn = memo(function BoardColumn({
         </HoverTooltip>
 
         {!mobileFullWidth && (
-          <HoverTooltip content="折叠为细条">
+          <HoverTooltip content={L("折叠为细条", "Collapse column")}>
             <button
               type="button"
-              aria-label={`折叠列 ${column.name}`}
+              aria-label={L(`折叠列 ${displayName}`, `Collapse column ${displayName}`)}
               onClick={() => onToggleCollapse(column)}
               className="ui-press grid h-6 w-6 shrink-0 place-items-center rounded-lg text-zinc-400 transition-colors hover:bg-white hover:text-zinc-900"
             >
@@ -227,10 +231,10 @@ export const BoardColumn = memo(function BoardColumn({
         )}
 
         <div ref={menuRef} className="relative shrink-0">
-          <HoverTooltip content={menuOpen ? undefined : '列设置'} hoverOnly>
+          <HoverTooltip content={menuOpen ? undefined : L("列设置", "Column settings")} hoverOnly>
             <button
               type="button"
-              aria-label={`列 ${column.name} 设置`}
+              aria-label={L(`列 ${displayName} 设置`, `Column ${displayName} settings`)}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen(open => !open)}
@@ -245,7 +249,7 @@ export const BoardColumn = memo(function BoardColumn({
             open={menuOpen}
             anchorRef={menuRef}
             width={176}
-            ariaLabel={`列 ${column.name} 设置`}
+            ariaLabel={L(`列 ${displayName} 设置`, `Column ${displayName} settings`)}
             onClose={() => setMenuOpen(false)}
           >
             <button
@@ -258,7 +262,8 @@ export const BoardColumn = memo(function BoardColumn({
               className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
             >
               <Pencil size={13} className="text-zinc-400"/>
-              编辑名称 / 规则
+              
+              {L("编辑名称 / 规则", "Edit Name / Rules")}
             </button>
             <button
               type="button"
@@ -270,7 +275,8 @@ export const BoardColumn = memo(function BoardColumn({
               className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-zinc-700 hover:bg-zinc-100"
             >
               <Plus size={13} className="text-zinc-400"/>
-              添加会话 / 卡片
+              
+              {L("添加会话 / 卡片", "Add Session / Card")}
             </button>
             <div className="my-1 border-t border-zinc-100"/>
             <button
@@ -284,7 +290,8 @@ export const BoardColumn = memo(function BoardColumn({
               className="ui-press flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12.5px] text-red-600 hover:bg-red-50 disabled:opacity-40"
             >
               <Trash2 size={13}/>
-              删除此列
+              
+              {L("删除此列", "Delete Column")}
             </button>
           </BoardPopoverMenu>
         </div>
@@ -320,10 +327,10 @@ export const BoardColumn = memo(function BoardColumn({
             }`}
           >
             <p className="text-[12px] font-medium">
-              {dropHighlight ? '松手放到这一列' : ruleSummary ? '暂无匹配的实时任务' : '这一列还是空的'}
+              {dropHighlight ? L("松手放到这一列", "Drop card here") : ruleSummary ? L("暂无匹配的实时任务", "No matching live tasks") : L("这一列还是空的", "This column is empty")}
             </p>
             <p className="mt-1 text-[11px] opacity-80">
-              {draggingSidebarSessionId ? '松手将左侧会话加入此列' : '拖拽卡片进来，或点上方 + 添加'}
+              {draggingSidebarSessionId ? L("松手将左侧会话加入此列", "Drop sidebar session here") : L("拖拽卡片进来，或点上方 + 添加", "Drag cards here or click + above")}
             </p>
           </div>
         )}

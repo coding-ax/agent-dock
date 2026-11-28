@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { MarkdownContent } from './MarkdownContent';
 import { useAdaptiveTypewriter } from './typewriter-reveal';
+import { useBi } from './i18n';
 
 /**
  * 流式输出的 Markdown 容器。
@@ -38,12 +39,13 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({ text, active,
   assistantLabel?: string;
   sessionId: string | undefined;
 }) {
+  const L = useBi();
   const { revealed, caret, animateUnits } = useAnimatedText(text, active, replay);
   // 流式输出时至少占一行：打字机从 0 字起播，空的 article 上下外边距会叠成一个，
   // 它顶替「处理中」那一行时时间线先缩 44px、等第一个字出来再撑开 50px——就是首段回复时那一下「弹」。
   return <article
     data-assistant-output=""
-    aria-label={final ? `${assistantLabel} 最终输出` : undefined}
+    aria-label={final ? L(`${assistantLabel} 最终输出`, `${assistantLabel} final output`) : undefined}
     className={`assistant-output markdown ${animateEnter ? 'ui-timeline-item' : ''} ${final ? 'mb-6 mt-2' : 'my-6'} ${active ? 'min-h-[1.7em]' : ''} max-w-[78ch] text-[15px] leading-[1.7] text-zinc-800 ${caret ? 'ui-typewriter-caret' : ''}`}
   >
     <MarkdownContent sessionId={sessionId} animateUnits={animateUnits}>{revealed}</MarkdownContent>

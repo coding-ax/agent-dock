@@ -29,10 +29,12 @@ import { SessionPane } from '../SessionPane';
 import { nextClientMutationId, useBoardStore } from './board-store';
 import {
   COLUMN_COLOR_STYLES,
-  VISUAL_STATE_META,
   formatBoardElapsed,
+  getVisualStateMeta,
+  localizeBoardColumnName,
   toMentionedCard
 } from './board-utils';
+import { useBi, useLocale } from '../i18n';
 
 interface BoardDetailDrawerProps {
   boardId: string;
@@ -59,6 +61,8 @@ export function BoardDetailDrawer({
   onOpenSidebar,
   onNotice
 }: BoardDetailDrawerProps) {
+  const L = useBi();
+  const locale = useLocale();
   const qc = useQueryClient();
   const [drawerWidth, setDrawerWidth] = useState(560);
   const [resizing, setResizing] = useState(false);
@@ -97,7 +101,7 @@ export function BoardDetailDrawer({
     if (resizing) setResizing(false);
   }, { target: () => document, enable: resizing });
 
-  const stateMeta = VISUAL_STATE_META[item.live.visualState] ?? VISUAL_STATE_META.idle;
+  const stateMeta = getVisualStateMeta(item.live.visualState, locale);
   const elapsed = formatBoardElapsed(item.live.activeMs);
   const reworkRounds = item.live.round && item.live.round > 1 ? item.live.round - 1 : 0;
 
@@ -106,8 +110,8 @@ export function BoardDetailDrawer({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['board', boardId] });
       void qc.invalidateQueries({ queryKey: ['assistant-state'] });
-      useBoardStore.getState().flashKitten('delegating', '已启动该计划任务', 3_200);
-      onNotice('计划已启动执行', 'info');
+      useBoardStore.getState().flashKitten('delegating', L("已启动该计划任务", "Started planned task"), 3_200);
+      onNotice(L("计划已启动执行", "Plan started"), 'info');
     },
     onError: err => onNotice(err instanceof Error ? err.message : String(err), 'error')
   });
@@ -116,17 +120,17 @@ export function BoardDetailDrawer({
     mutationFn: (verdict: 'accepted' | 'rework') =>
       api.assistantReviewTask(item.entityId, {
         verdict,
-        note: verdict === 'accepted' ? '在看板详情抽屉确认验收通过' : '在看板详情抽屉退回返工'
+        note: verdict === 'accepted' ? L("在看板详情抽屉确认验收通过", "Approved in board detail drawer") : L("在看板详情抽屉退回返工", "Sent back for rework in board detail drawer")
       }),
     onSuccess: (_res, verdict) => {
       void qc.invalidateQueries({ queryKey: ['board', boardId] });
       void qc.invalidateQueries({ queryKey: ['assistant-state'] });
       if (verdict === 'accepted') {
-        useBoardStore.getState().triggerCelebrate('任务已验收通过！');
-        onNotice('已验收通过', 'success');
+        useBoardStore.getState().triggerCelebrate(L("任务已验收通过！", "Task approved!"));
+        onNotice(L("已验收通过", "Approved"), 'success');
       } else {
-        useBoardStore.getState().flashKitten('thinking', '已打回返工', 3_000);
-        onNotice('已打回返工', 'info');
+        useBoardStore.getState().flashKitten('thinking', L("已打回返工", "Returned for rework"), 3_000);
+        onNotice(L("已打回返工", "Returned for rework"), 'info');
       }
     },
     onError: err => onNotice(err instanceof Error ? err.message : String(err), 'error')
@@ -144,7 +148,7 @@ export function BoardDetailDrawer({
       setSavedNotice(true);
       window.clearTimeout(savedTimerRef.current);
       savedTimerRef.current = window.setTimeout(() => setSavedNotice(false), 1600);
-      onNotice('卡片备注已保存', 'success');
+      onNotice(L("卡片备注已保存", "Card notes saved"), 'success');
     },
     onError: err => onNotice(err instanceof Error ? err.message : String(err), 'error')
   });
@@ -158,7 +162,7 @@ export function BoardDetailDrawer({
       }),
     onSuccess: res => {
       if (res.board) qc.setQueryData(['board', boardId], res.board);
-      onNotice('已移动到新列', 'info');
+      onNotice(L("已移动到新列", "Moved to column"), 'info');
     },
     onError: err => onNotice(err instanceof Error ? err.message : String(err), 'error')
   });
@@ -168,13 +172,13 @@ export function BoardDetailDrawer({
       {/* 移动端半透明遮罩 */}
       <button
         type="button"
-        aria-label="关闭详情抽屉"
+        aria-label={L("关闭详情抽屉", "Close detail drawer")}
         onClick={onClose}
         className="ui-board-drawer-scrim fixed inset-0 bg-zinc-950/25 md:hidden"
       />
       <aside
         role="dialog"
-        aria-label={`任务详情：${item.live.title}`}
+        aria-label={L(`任务详情：${item.live.title}`, `Task Details: ${item.live.title}`)}
         style={{ ['--drawer-w' as string]: `${drawerWidth}px` }}
         className="ui-board-drawer pointer-events-auto relative z-10 flex h-full w-full flex-col border-l border-zinc-200 bg-canvas shadow-[-16px_0_44px_rgba(15,23,42,.14)] md:w-[var(--drawer-w)]"
       >
@@ -211,25 +215,25 @@ export function BoardDetailDrawer({
               </span>
               {elapsed && <span className="font-mono tabular-nums">{elapsed}</span>}
               <select
-                aria-label="切换卡片所属列"
+                aria-label={L("切换卡片所属列", "Change card column")}
                 value={item.columnId}
                 onChange={e => moveColMutation.mutate(e.target.value)}
                 className="h-5 rounded border border-zinc-200 bg-zinc-50 px-1.5 text-[11px] text-zinc-700"
               >
                 {columns.map(col => (
-                  <option key={col.id} value={col.id}>{col.name}</option>
+                  <option key={col.id} value={col.id}>{localizeBoardColumnName(col.name, locale)}</option>
                 ))}
               </select>
             </div>
           </div>
 
-          <HoverTooltip content="投喂给主小猫">
+          <HoverTooltip content={L("投喂给主小猫", "Send to companion")}>
             <button
               type="button"
-              aria-label="投喂给主小猫"
+              aria-label={L("投喂给主小猫", "Send to companion")}
               onClick={() => {
                 useBoardStore.getState().addDockMentionCard(toMentionedCard(item));
-                onNotice(`已把「${item.live.title}」放进小猫指令栏`, 'info');
+                onNotice(L(`已把「${item.live.title}」放进小猫指令栏`, `Added "${item.live.title}" to companion command bar`), 'info');
               }}
               className="ui-press grid h-8 w-8 shrink-0 place-items-center rounded-lg text-amber-600 transition-colors hover:bg-amber-50"
             >
@@ -238,10 +242,10 @@ export function BoardDetailDrawer({
           </HoverTooltip>
 
           {session && (
-            <HoverTooltip content="全屏打开完整会话">
+            <HoverTooltip content={L("全屏打开完整会话", "Open full session")}>
               <button
                 type="button"
-                aria-label="全屏打开完整会话"
+                aria-label={L("全屏打开完整会话", "Open full session")}
                 onClick={() => onOpenFullSession(session.id)}
                 className="ui-press grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
               >
@@ -250,10 +254,10 @@ export function BoardDetailDrawer({
             </HoverTooltip>
           )}
 
-          <HoverTooltip content="关闭抽屉（Esc）">
+          <HoverTooltip content={L("关闭抽屉（Esc）", "Close drawer (Esc)")}>
             <button
               type="button"
-              aria-label="关闭抽屉"
+              aria-label={L("关闭抽屉", "Close drawer")}
               onClick={onClose}
               className="ui-press grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
             >
@@ -267,9 +271,9 @@ export function BoardDetailDrawer({
           <div className="shrink-0 border-b border-zinc-200 bg-zinc-50/80 px-4 py-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-zinc-600">
-                <span className="font-medium text-zinc-800">便签状态：</span>
-                <span>{task?.plan ? '计划待启动' : stateMeta.label}</span>
-                {reworkRounds > 0 ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">返工 {reworkRounds} 轮</span> : null}
+                <span className="font-medium text-zinc-800">{L("便签状态：", "Note Status: ")}</span>
+                <span>{task?.plan ? L("计划待启动", "Planned") : stateMeta.label}</span>
+                {reworkRounds > 0 ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">{L("返工", "Rework ")} {reworkRounds}  {L("轮", "x")}</span> : null}
               </div>
               <div className="flex items-center gap-1.5">
                 {task?.plan && (
@@ -280,7 +284,8 @@ export function BoardDetailDrawer({
                     className="inline-flex h-7 items-center gap-1 rounded-lg bg-blue-600 px-2.5 text-[12px] font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                   >
                     {startPlanMutation.isPending ? <LoaderCircle size={12} className="animate-spin"/> : <Play size={12}/>}
-                    开始执行
+                    
+                    {L("开始执行", "Start")}
                   </button>
                 )}
                 {item.live.taskState === 'review' && (
@@ -292,7 +297,8 @@ export function BoardDetailDrawer({
                       className="inline-flex h-7 items-center gap-1 rounded-lg bg-emerald-600 px-2.5 text-[12px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                     >
                       <CheckCircle2 size={12}/>
-                      验收通过
+                      
+                      {L("验收通过", "Approve")}
                     </button>
                     <button
                       type="button"
@@ -301,7 +307,8 @@ export function BoardDetailDrawer({
                       className="inline-flex h-7 items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 text-[12px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
                     >
                       <RotateCcw size={12}/>
-                      打回返工
+                      
+                      {L("打回返工", "Rework")}
                     </button>
                   </>
                 )}
@@ -340,7 +347,7 @@ export function BoardDetailDrawer({
             <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
               <div>
                 <AiFieldHeader
-                  label="卡片内容 / 备注"
+                  label={L("卡片内容 / 备注", "Card Content / Notes")}
                   htmlFor="board-detail-note-draft"
                   assist={
                     <AiTextAssistControl
@@ -354,11 +361,11 @@ export function BoardDetailDrawer({
                       onFlash={noteFlash.triggerFlash}
                       resetKey={item.id}
                       context={() => ({
-                        field: '看板卡片内容与备注',
-                        purpose: '清晰记录任务要点、验收清单或关键上下文，方便回看与交给主小猫执行',
+                        field: L("看板卡片内容与备注", "Card content & notes"),
+                        purpose: L("清晰记录任务要点、验收清单或关键上下文，方便回看与交给主小猫执行", "Record key details, acceptance criteria, or context for review or delegation"),
                         sessionTitle: item.live.title,
                         ...(currentColumnName ? { columnName: currentColumnName } : {}),
-                        ...(kittenNoteDraft.trim() ? { extra: `督办批注：${kittenNoteDraft.trim()}` } : {})
+                        ...(kittenNoteDraft.trim() ? { extra: L(`督办批注：${kittenNoteDraft.trim()}`, `Companion note: ${kittenNoteDraft.trim()}`) } : {})
                       })}
                       testId="board-detail-note-ai"
                     />
@@ -369,14 +376,14 @@ export function BoardDetailDrawer({
                   rows={5}
                   value={noteDraft}
                   onChange={e => setNoteDraft(e.target.value)}
-                  placeholder="写下任务要点、验收清单或提醒…"
+                  placeholder={L("写下任务要点、验收清单或提醒…", "Write task notes, acceptance checklist, or reminders…")}
                   className={`ui-field mt-1.5 w-full rounded-xl border border-zinc-200 bg-white p-3 text-[13px] leading-6 text-zinc-900 ${noteFlash.flashClass}`}
                 />
               </div>
 
               <div>
                 <AiFieldHeader
-                  label="小猫督办批注"
+                  label={L("小猫督办批注", "Companion Note")}
                   htmlFor="board-detail-kitten-note"
                   assist={
                     <AiTextAssistControl
@@ -390,12 +397,12 @@ export function BoardDetailDrawer({
                       onFlash={kittenNoteFlash.triggerFlash}
                       resetKey={item.id}
                       context={() => ({
-                        field: '小猫督办批注',
-                        purpose: '精炼的一句话督办/验收结论，会高亮显示在看板卡片上，不超过 60 字',
+                        field: L("小猫督办批注", "Companion Note"),
+                        purpose: L("精炼的一句话督办/验收结论，会高亮显示在看板卡片上，不超过 60 字", "Concise one-line status or review verdict highlighted on the card"),
                         sessionTitle: item.live.title,
                         maxChars: 60,
                         ...(currentColumnName ? { columnName: currentColumnName } : {}),
-                        ...(noteDraft.trim() ? { extra: `卡片备注：${noteDraft.trim().slice(0, 400)}` } : {})
+                        ...(noteDraft.trim() ? { extra: L(`卡片备注：${noteDraft.trim().slice(0, 400)}`, `Card notes: ${noteDraft.trim().slice(0, 400)}`) } : {})
                       })}
                       testId="board-detail-kitten-note-ai"
                     />
@@ -406,13 +413,13 @@ export function BoardDetailDrawer({
                   type="text"
                   value={kittenNoteDraft}
                   onChange={e => setKittenNoteDraft(e.target.value)}
-                  placeholder="记录督办/验收结论，会高亮显示在卡片上…"
+                  placeholder={L("记录督办/验收结论，会高亮显示在卡片上…", "Record review verdict highlighted on the card…")}
                   className={`ui-field mt-1.5 h-9 w-full rounded-xl border border-zinc-200 bg-white px-3 text-[13px] text-zinc-900 ${kittenNoteFlash.flashClass}`}
                 />
               </div>
 
               <div>
-                <div className="text-[12px] font-medium text-zinc-600">所属列</div>
+                <div className="text-[12px] font-medium text-zinc-600">{L("所属列", "Column")}</div>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {columns.map(col => {
                     const style = COLUMN_COLOR_STYLES[col.color] ?? COLUMN_COLOR_STYLES.zinc;
@@ -429,7 +436,7 @@ export function BoardDetailDrawer({
                         }`}
                       >
                         <span className={`h-2 w-2 rounded-full ${style.dot}`}/>
-                        {col.name}
+                        {localizeBoardColumnName(col.name, locale)}
                       </button>
                     );
                   })}
@@ -448,19 +455,20 @@ export function BoardDetailDrawer({
                     : savedNotice
                       ? <Check key="saved" size={13} className="ui-icon-pop text-emerald-400"/>
                       : <Save key="save" size={13}/>}
-                  {savedNotice ? '已保存' : '保存修改'}
+                  {savedNotice ? L("已保存", "Saved") : L("保存修改", "Save Changes")}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     useBoardStore.getState().addDockMentionCard(toMentionedCard(item));
                     onClose();
-                    onNotice(`已把「${item.live.title}」投喂到小猫指令栏`, 'info');
+                    onNotice(L(`已把「${item.live.title}」投喂到小猫指令栏`, `Sent "${item.live.title}" to companion command bar`), 'info');
                   }}
                   className="ui-press inline-flex h-9 items-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 text-[13px] font-medium text-amber-800 hover:bg-amber-100"
                 >
                   <PawPrint size={13}/>
-                  派给主小猫执行
+                  
+                  {L("派给主小猫执行", "Delegate to Companion")}
                 </button>
               </div>
             </div>

@@ -12,6 +12,7 @@ import { parseLarkSourceId } from './lark-session-link';
 import { defaultHandoverPicked, filterHandoverCandidates, toggleHandoverPicked } from './handover-members';
 import { DEFAULT_LARK_TURN_SYNC, normalizeLarkTurnSyncForm } from './lark-config-form';
 import { LarkTurnSyncControls } from './LarkTurnSyncControls';
+import { bi, useBi } from './i18n';
 
 /** 为内置小猫头像追加版本号参数，避免旧版 immutable 强缓存继续展示旧线条猫。 */
 export function handoverKittenAvatarSrc(avatarUrl: string): string {
@@ -21,31 +22,31 @@ export function handoverKittenAvatarSrc(avatarUrl: string): string {
 
 const BINDING_META = {
   handover: {
-    dialogTitle: '托管群同步设置',
-    dialogSubtitle: '控制哪些非飞书轮次同步进该托管群',
-    kindLabel: '托管群',
+    get dialogTitle() { return bi("托管群同步设置", "Hosted Group Sync Settings"); },
+    get dialogSubtitle() { return bi("控制哪些非飞书轮次同步进该托管群", "Choose which non-Lark turns sync into this hosted group"); },
+    get kindLabel() { return bi("托管群", "Hosted Group"); },
     kindBadgeClass: 'border-emerald-200 bg-white text-emerald-700',
-    openLabel: '打开群聊',
-    overrideLabel: '当前托管群已使用独立同步配置',
-    savedLabel: '已保存该托管群的轮次同步策略，后续轮次立即生效。'
+    get openLabel() { return bi("打开群聊", "Open Group"); },
+    get overrideLabel() { return bi("当前托管群已使用独立同步配置", "Custom sync policy active for this hosted group"); },
+    get savedLabel() { return bi("已保存该托管群的轮次同步策略，后续轮次立即生效。", "Saved hosted group sync policy; applies immediately."); }
   },
   'lark-group': {
-    dialogTitle: '飞书群同步设置',
-    dialogSubtitle: '控制哪些非飞书轮次同步回该飞书群',
-    kindLabel: '飞书群聊',
+    get dialogTitle() { return bi("飞书群同步设置", "Lark Group Sync Settings"); },
+    get dialogSubtitle() { return bi("控制哪些非飞书轮次同步回该飞书群", "Choose which non-Lark turns sync back to this Lark group"); },
+    get kindLabel() { return bi("飞书群聊", "Lark Group"); },
     kindBadgeClass: 'border-blue-200 bg-white text-blue-700',
-    openLabel: '打开群聊',
-    overrideLabel: '当前飞书群会话已使用独立同步配置',
-    savedLabel: '已保存该飞书群会话的轮次同步策略，后续轮次立即生效。'
+    get openLabel() { return bi("打开群聊", "Open Group"); },
+    get overrideLabel() { return bi("当前飞书群会话已使用独立同步配置", "Custom sync policy active for this Lark group"); },
+    get savedLabel() { return bi("已保存该飞书群会话的轮次同步策略，后续轮次立即生效。", "Saved Lark group sync policy; applies immediately."); }
   },
   'lark-p2p': {
-    dialogTitle: '飞书私聊同步设置',
-    dialogSubtitle: '控制哪些非飞书轮次同步回该飞书私聊',
-    kindLabel: '飞书私聊',
+    get dialogTitle() { return bi("飞书私聊同步设置", "Lark DM Sync Settings"); },
+    get dialogSubtitle() { return bi("控制哪些非飞书轮次同步回该飞书私聊", "Choose which non-Lark turns sync back to this Lark DM"); },
+    get kindLabel() { return bi("飞书私聊", "Lark DM"); },
     kindBadgeClass: 'border-sky-200 bg-white text-sky-700',
-    openLabel: '打开私聊',
-    overrideLabel: '当前飞书私聊会话已使用独立同步配置',
-    savedLabel: '已保存该飞书私聊会话的轮次同步策略，后续轮次立即生效。'
+    get openLabel() { return bi("打开私聊", "Open DM"); },
+    get overrideLabel() { return bi("当前飞书私聊会话已使用独立同步配置", "Custom sync policy active for this Lark DM"); },
+    get savedLabel() { return bi("已保存该飞书私聊会话的轮次同步策略，后续轮次立即生效。", "Saved Lark DM sync policy; applies immediately."); }
   }
 } as const;
 
@@ -55,6 +56,7 @@ const BINDING_META = {
  * - 已绑定飞书会话（普通托管群、主会话托管群、普通飞书群聊、普通飞书私聊）：查看绑定入口并按需调整同步开关（支持恢复继承机器人默认）。
  */
 export function HandoverDialog({ session, agent, onClose }: { session: Session; agent?: Agent; onClose(): void }) {
+  const L = useBi();
   const qc = useQueryClient();
   const panelRef = useRef<HTMLDivElement>(null);
   useModalFocusTrap({ panel: panelRef, initial: panelRef, dismissible: true, onDismiss: onClose });
@@ -106,8 +108,8 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
   const isLarkNativeSession = session.source === 'lark';
   const isManageMode = Boolean(activeBinding && !created);
   const bindingMeta = activeBinding ? BINDING_META[activeBinding.kind] : undefined;
-  const dialogTitle = bindingMeta?.dialogTitle ?? (isLarkNativeSession ? '飞书同步设置' : '托管给机器人');
-  const dialogSubtitle = bindingMeta?.dialogSubtitle ?? (isLarkNativeSession ? '控制哪些非飞书轮次同步回原飞书会话' : '建一个飞书群，用群聊继续这个会话');
+  const dialogTitle = bindingMeta?.dialogTitle ?? (isLarkNativeSession ? L("飞书同步设置", "Lark Sync Settings") : L("托管给机器人", "Host in Lark Bot"));
+  const dialogSubtitle = bindingMeta?.dialogSubtitle ?? (isLarkNativeSession ? L("控制哪些非飞书轮次同步回原飞书会话", "Choose which non-Lark turns sync to this Lark chat") : L("建一个飞书群，用群聊继续这个会话", "Create a Lark group bound to this session"));
   const waitingNativeBinding = isLarkNativeSession && !activeBinding && handoverQuery.isLoading;
 
   // 机器人创建者：默认邀请人（机器人 + 创建者自己），无需用户去找 open_id。
@@ -203,25 +205,25 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
         <span className="hidden truncate text-[12px] text-zinc-400 sm:inline">
           {dialogSubtitle}
         </span>
-        <button type="button" onClick={onClose} aria-label="关闭" className="ml-auto grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={16}/></button>
+        <button type="button" onClick={onClose} aria-label={L("关闭", "Close")} className="ml-auto grid h-8 w-8 shrink-0 place-items-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X size={16}/></button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <DeferredMount placeholder={<DeferredSkeleton/>}>
         {kitten && <div data-testid="handover-kitten" className="mb-3 flex items-center gap-2.5 rounded-lg border border-amber-100 bg-amber-50/60 px-2.5 py-2">
-          <img src={handoverKittenAvatarSrc(kitten.avatarUrl)} alt={`${kitten.name}的头像`} className="ui-pixelated h-9 w-9 shrink-0 rounded-full object-cover"/>
+          <img src={handoverKittenAvatarSrc(kitten.avatarUrl)} alt={L(`${kitten.name}的头像`, `${kitten.name}'s avatar`)} className="ui-pixelated h-9 w-9 shrink-0 rounded-full object-cover"/>
           <div className="min-w-0 text-[12px] leading-4">
-            <div className="font-medium text-zinc-800">当前小猫：{kitten.name} · 第 {kitten.generation} 代</div>
+            <div className="font-medium text-zinc-800">{L("当前小猫：", "Companion: ")}{kitten.name}  {L("· 第", "· Gen ")} {kitten.generation}  {L("代", "")}</div>
             <div className="text-zinc-500">
               {isManageMode
-                ? '主会话的系统督办、网页对话与定时任务将按下方策略实时同步至绑定飞书群。'
-                : '建群后会尝试把飞书机器人名称和头像同步成这只小猫；不支持时会提示你手动处理。'}
+                ? L("主会话的系统督办、网页对话与定时任务将按下方策略实时同步至绑定飞书群。", "Companion supervision, web chats, and schedules sync in real time according to the policy below.")
+                : L("建群后会尝试把飞书机器人名称和头像同步成这只小猫；不支持时会提示你手动处理。", "Will sync the Lark bot name and avatar to match this companion after creating the group.")}
             </div>
           </div>
         </div>}
 
         {waitingNativeBinding ? (
-          <div className="flex items-center gap-2 py-6 text-[12px] text-zinc-400"><Spinner size={13}/>正在读取飞书会话绑定信息…</div>
+          <div className="flex items-center gap-2 py-6 text-[12px] text-zinc-400"><Spinner size={13}/>{L("正在读取飞书会话绑定信息…", "Loading Lark binding info…")}</div>
         ) : isManageMode && activeBinding && bindingMeta ? (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2.5 text-[12px]">
@@ -232,7 +234,7 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
                     {bindingMeta.kindLabel}
                   </span>
                 </div>
-                <div className="mt-0.5 truncate text-emerald-700">绑定机器人：{activeBinding.botName}</div>
+                <div className="mt-0.5 truncate text-emerald-700">{L("绑定机器人：", "Bound Bot: ")}{activeBinding.botName}</div>
               </div>
               {activeBinding.url && (
                 <a href={activeBinding.url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-200 bg-white px-2.5 py-1 text-[12px] font-medium text-emerald-700 hover:bg-emerald-50">
@@ -258,7 +260,7 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
                   onClick={() => updateSync.mutate(null)}
                   className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-zinc-700 hover:bg-zinc-200/70 disabled:opacity-40"
                 >
-                  <RotateCcw size={12}/>恢复跟随机器人默认
+                  <RotateCcw size={12}/>{L("恢复跟随机器人默认", "Reset to Bot Default")}
                 </button>
               </div>
             )}
@@ -271,42 +273,43 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
           </div>
         ) : isLarkNativeSession ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] leading-5 text-amber-800">
-            未解析到当前飞书会话的绑定信息，请确认所属机器人已在「飞书设置」中配置。
+            
+            {L("未解析到当前飞书会话的绑定信息，请确认所属机器人已在「飞书设置」中配置。", "Could not resolve Lark binding info. Verify the bot is configured in Lark Settings.")}
           </div>
         ) : <>
-          {config.isLoading && <div className="flex items-center gap-2 text-[12px] text-zinc-400"><Spinner size={13}/>正在读取机器人配置…</div>}
-          {!config.isLoading && !bots.length && <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-800">还没有配置任何飞书机器人。先到「飞书设置」添加一个，再回来托管。</div>}
+          {config.isLoading && <div className="flex items-center gap-2 text-[12px] text-zinc-400"><Spinner size={13}/>{L("正在读取机器人配置…", "Loading bot configurations…")}</div>}
+          {!config.isLoading && !bots.length && <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-800">{L("还没有配置任何飞书机器人。先到「飞书设置」添加一个，再回来托管。", "No Lark bots configured yet. Add one in Lark Settings first.")}</div>}
 
           {bots.length > 0 && <>
-            <label className="block text-[12px] font-medium text-zinc-700">用哪个机器人</label>
+            <label className="block text-[12px] font-medium text-zinc-700">{L("用哪个机器人", "Select Bot")}</label>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {bots.map(item => <button key={item.appId} type="button" onClick={() => { setAppId(item.appId); setPicked(null); setKeyword(''); setTurnSyncDraft(null); }} className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${item.appId === effectiveAppId ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'}`}>{item.name || item.appId}</button>)}
             </div>
 
-            <label className="mt-4 block text-[12px] font-medium text-zinc-700">群名称</label>
+            <label className="mt-4 block text-[12px] font-medium text-zinc-700">{L("群名称", "Group Name")}</label>
             <Input size="large" value={nameValue} onChange={event => setName(event.target.value)} className="mt-1.5 text-[13px]"/>
 
-            <div className="mt-4 flex items-center gap-1.5 text-[12px] font-medium text-zinc-700"><Users size={12}/>邀请成员<span className="font-normal text-zinc-400">（点成员胶囊勾选，可全部取消）</span></div>
+            <div className="mt-4 flex items-center gap-1.5 text-[12px] font-medium text-zinc-700"><Users size={12}/>{L("邀请成员", "Invite Members")}<span className="font-normal text-zinc-400">{L("（点成员胶囊勾选，可全部取消）", " (click chips to toggle)")}</span></div>
             <div className="mt-1.5 flex items-center gap-1.5">
-              <Input className="min-w-0 flex-1" value={keyword} onChange={event => setKeyword(event.target.value)} onPressEnter={event => { if (keyword.trim()) { event.preventDefault(); search.mutate(keyword.trim()); } }} placeholder="输入姓名后回车搜索（机器人可见范围）" prefix={<Search size={13} className="text-zinc-400"/>} suffix={(members.isFetching || search.isPending) ? <Spinner size={12} className="text-zinc-400"/> : <span/>}/>
-              <button type="button" disabled={!effectiveAppId || !keyword.trim() || search.isPending} onClick={() => search.mutate(keyword.trim())} className="h-8 shrink-0 rounded-md border border-zinc-200 px-2.5 text-[12px] text-zinc-600 hover:bg-zinc-50 disabled:opacity-40">搜索</button>
+              <Input className="min-w-0 flex-1" value={keyword} onChange={event => setKeyword(event.target.value)} onPressEnter={event => { if (keyword.trim()) { event.preventDefault(); search.mutate(keyword.trim()); } }} placeholder={L("输入姓名后回车搜索（机器人可见范围）", "Type a name and press Enter to search")} prefix={<Search size={13} className="text-zinc-400"/>} suffix={(members.isFetching || search.isPending) ? <Spinner size={12} className="text-zinc-400"/> : <span/>}/>
+              <button type="button" disabled={!effectiveAppId || !keyword.trim() || search.isPending} onClick={() => search.mutate(keyword.trim())} className="h-8 shrink-0 rounded-md border border-zinc-200 px-2.5 text-[12px] text-zinc-600 hover:bg-zinc-50 disabled:opacity-40">{L("搜索", "Search")}</button>
             </div>
-            {(search.data?.error || search.error) && <p className="mt-1.5 text-[12px] text-amber-700">{search.data?.error ?? (search.error instanceof Error ? search.error.message : '搜索失败')}</p>}
+            {(search.data?.error || search.error) && <p className="mt-1.5 text-[12px] text-amber-700">{search.data?.error ?? (search.error instanceof Error ? search.error.message : L("搜索失败", "Search failed"))}</p>}
             <div className="mt-2.5 rounded-lg border border-zinc-100 bg-zinc-50/60 p-2.5">
-              <div className="mb-2 flex items-center gap-1.5 text-[12px] text-zinc-400"><Users size={11}/>已选 {effectivePicked.length} 人{effectivePicked.length === 0 && <span className="text-zinc-400">· 仅机器人和自己可在群内，其他人可稍后邀请</span>}</div>
+              <div className="mb-2 flex items-center gap-1.5 text-[12px] text-zinc-400"><Users size={11}/>{L("已选", "Selected ")} {effectivePicked.length}  {L("人", " member(s)")}{effectivePicked.length === 0 && <span className="text-zinc-400">{L("· 仅机器人和自己可在群内，其他人可稍后邀请", "· Only you and the bot; invite others later")}</span>}</div>
               <div className="max-h-40 overflow-y-auto">
                 {filtered.length > 0 ? <div className="flex flex-wrap gap-1.5">{filtered.map(user => {
                   const selected = effectivePicked.includes(user.openId);
                   const avatar = avatarFor(user.openId);
                   return <button key={user.openId} type="button" aria-pressed={selected} onClick={() => toggle(user.openId)} className={`flex h-8 items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2.5 text-[12px] transition-colors ${selected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'}`}>{avatar ? <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover"/> : <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-100 text-[12px] text-zinc-500">{(user.name || '?').slice(0, 1)}</span>}{user.name}{selected && <span aria-hidden="true" className="ml-0.5 text-[10px] font-semibold">✓</span>}</button>;
-                })}</div> : <p className="text-[12px] text-zinc-400">{members.isError && originChatId ? '读取原群成员失败（机器人可能不在该群）；用上面的搜索按姓名找人，或在下面填 open_id。' : '没有匹配的成员：换个名字搜索，或在下面填 open_id。'}</p>}
+                })}</div> : <p className="text-[12px] text-zinc-400">{members.isError && originChatId ? L("读取原群成员失败（机器人可能不在该群）；用上面的搜索按姓名找人，或在下面填 open_id。", "Could not fetch members; search by name above or enter an open_id below.") : L("没有匹配的成员：换个名字搜索，或在下面填 open_id。", "No matching members; try another name or enter an open_id below.")}</p>}
               </div>
             </div>
-            <Input value={manual} status={manualValid ? undefined : 'error'} onChange={event => setManual(event.target.value)} placeholder="补充一个 open_id（ou_ 开头，可选）" className="mt-2 font-mono text-[12px]"/>
-            {!manualValid && <p className="mt-1 text-[12px] text-red-600">open_id 必须以 ou_ 开头。</p>}
+            <Input value={manual} status={manualValid ? undefined : 'error'} onChange={event => setManual(event.target.value)} placeholder={L("补充一个 open_id（ou_ 开头，可选）", "Add open_id (starts with ou_, optional)")} className="mt-2 font-mono text-[12px]"/>
+            {!manualValid && <p className="mt-1 text-[12px] text-red-600">{L("open_id 必须以 ou_ 开头。", "open_id must start with ou_.")}</p>}
 
             <div className="mt-4">
-              <div className="mb-1.5 text-[12px] font-medium text-zinc-700">全轮次同步策略</div>
+              <div className="mb-1.5 text-[12px] font-medium text-zinc-700">{L("全轮次同步策略", "Full-Turn Sync Policy")}</div>
               <LarkTurnSyncControls
                 value={effectiveTurnSync}
                 onChange={setTurnSyncDraft}
@@ -316,27 +319,28 @@ export function HandoverDialog({ session, agent, onClose }: { session: Session; 
               />
             </div>
 
-            <p className="mt-3 text-[12px] leading-4 text-zinc-400">建群后，这个群的消息会直接进入当前会话；现有 Agent、模型、历史都保持不变。群里需要 @ 机器人来唤醒。机器人白名单内的群成员都能以完全信任权限驱动这个会话，请只拉信任的人。</p>
+            <p className="mt-3 text-[12px] leading-4 text-zinc-400">{L("建群后，这个群的消息会直接进入当前会话；现有 Agent、模型、历史都保持不变。群里需要 @ 机器人来唤醒。机器人白名单内的群成员都能以完全信任权限驱动这个会话，请只拉信任的人。", "Messages mentioning the bot in this group feed directly into this session with full trust permissions. Invite only trusted members.")}</p>
           </>}
         </>}
 
         {activeError && <p role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-700">{activeError instanceof Error ? activeError.message : String(activeError)}</p>}
         {created && <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[12px] leading-5 text-emerald-800">
-          已建群并绑定：<span className="font-medium">{created.name}</span>
-          <a href={created.url} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-1 font-medium text-emerald-700 underline"><ExternalLink size={11}/>打开群聊</a>
+          
+          {L("已建群并绑定：", "Created and bound group: ")}<span className="font-medium">{created.name}</span>
+          <a href={created.url} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-1 font-medium text-emerald-700 underline"><ExternalLink size={11}/>{L("打开群聊", "Open Group")}</a>
           {created.botProfile && <p className={`mt-1.5 border-t pt-1.5 ${created.botProfile.ok ? 'border-emerald-200 text-emerald-700' : 'border-amber-200 text-amber-800'}`}>{created.botProfile.message}</p>}
         </div>}
         </DeferredMount>
       </div>
 
       <div className="flex shrink-0 items-center justify-end gap-2 border-t border-zinc-100 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        <button type="button" onClick={onClose} className="rounded-lg border border-zinc-300 px-3.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50">{created ? '完成' : '关闭'}</button>
+        <button type="button" onClick={onClose} className="rounded-lg border border-zinc-300 px-3.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50">{created ? L("完成", "Done") : L("关闭", "Close")}</button>
         {isManageMode ? (
           !session.archivedAt && <button type="button" disabled={updateSync.isPending} onClick={() => updateSync.mutate(effectiveTurnSync)} className="flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400">
-            {updateSync.isPending && <Spinner size={12}/>}保存同步设置
+            {updateSync.isPending && <Spinner size={12}/>}{L("保存同步设置", "Save Sync Settings")}
           </button>
         ) : (
-          !isLarkNativeSession && !created && <button type="button" disabled={!effectiveAppId || !nameValue.trim() || !manualValid || handover.isPending} onClick={() => handover.mutate()} className="flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400">{handover.isPending && <Spinner size={12}/>}建群并托管</button>
+          !isLarkNativeSession && !created && <button type="button" disabled={!effectiveAppId || !nameValue.trim() || !manualValid || handover.isPending} onClick={() => handover.mutate()} className="flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400">{handover.isPending && <Spinner size={12}/>}{L("建群并托管", "Create Group & Host")}</button>
         )}
       </div>
     </div>

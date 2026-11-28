@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { AntdScope } from './AntdScope';
+import { I18nProvider } from './i18n';
 import { WebAccessDeniedError } from './api';
 import { initPwaInstall, registerPwaServiceWorker } from './pwa-install';
 import './index.css';
@@ -38,7 +39,7 @@ client.setQueryDefaults(['events'], {
 });
 // 跟随鼠标的聚光已移除：全站只保留克制的边框 / 底色反馈，不再有装饰性光效。
 
-createRoot(document.getElementById('root')!).render(<StrictMode><QueryClientProvider client={client}><AntdScope><App/></AntdScope></QueryClientProvider></StrictMode>);
+createRoot(document.getElementById('root')!).render(<StrictMode><QueryClientProvider client={client}><I18nProvider><AntdScope><App/></AntdScope></I18nProvider></QueryClientProvider></StrictMode>);
 
 // 临时调试：?vvdebug=1 时在页面左上角显示 viewport 实测数值，用于定位移动端软键盘问题。
 // 挂在 body 根级，独立于 #root，避免根容器的 height/transform 影响自身定位。

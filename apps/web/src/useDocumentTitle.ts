@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { bi } from './i18n';
 
 const BASE_TITLE = 'AgentDock';
 
@@ -29,8 +30,8 @@ export function useDocumentTitle(sessionLabel?: string, unread?: DocumentTitleUn
 
     const withCount = `(${unreadCount}) ${base}`;
     const alertBanner = hasUrgent
-      ? `(${unreadCount}) 需要你处理 - ${BASE_TITLE}`
-      : `(${unreadCount}) 任务已完成 - ${BASE_TITLE}`;
+      ? bi(`(${unreadCount}) 需要你处理 - ${BASE_TITLE}`, `(${unreadCount}) Action Needed - ${BASE_TITLE}`)
+      : bi(`(${unreadCount}) 任务已完成 - ${BASE_TITLE}`, `(${unreadCount}) Task Completed - ${BASE_TITLE}`);
     const reducedMotion = typeof window !== 'undefined'
       && typeof window.matchMedia === 'function'
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches;

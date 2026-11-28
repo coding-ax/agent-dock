@@ -1,4 +1,4 @@
-import type { OutputPluginDefinition } from '@agent-dock/agent-dock-shared';
+import type { Locale, OutputPluginDefinition } from '@agent-dock/agent-dock-shared';
 
 /** 持久化在 `channel_mappings` 中的通用飞书插件卡片记录。 */
 export interface PersistedLarkOutputPluginCard<TSpec = unknown> {
@@ -32,6 +32,7 @@ export interface LarkOutputPluginCardBuildInput<TSpec = unknown> {
   webBaseUrl?: string;
   previewBanner?: string;
   previewMode?: boolean;
+  locale?: Locale;
 }
 
 export interface LarkOutputPluginAnsweredCardBuildInput<TInteraction = unknown> {
@@ -40,6 +41,7 @@ export interface LarkOutputPluginAnsweredCardBuildInput<TInteraction = unknown> 
   sessionId?: string;
   webBaseUrl?: string;
   previewBanner?: string;
+  locale?: Locale;
 }
 
 export type ParsedLarkOutputPluginAction =
@@ -81,10 +83,15 @@ export interface LarkOutputPluginAdapter<TSpec = unknown, TInteraction = unknown
     spec: TSpec,
     action: string,
     value: Record<string, unknown>,
-    formValue?: Record<string, unknown>
+    formValue?: Record<string, unknown>,
+    locale?: Locale
   ): ParsedLarkOutputPluginAction;
   /** 在主消息正文末尾附加的轻引导文案。 */
   trailingHintMarkdown?: string;
+  /** 按当前服务端语言返回轻引导文案（优先于静态 trailingHintMarkdown）。 */
+  getTrailingHintMarkdown?(locale: Locale): string;
   /** 流式未闭合阶段替换裸 XML 的占位提示。 */
   streamingPlaceholderText?: string;
+  /** 按当前服务端语言返回流式占位提示（优先于静态 streamingPlaceholderText）。 */
+  getStreamingPlaceholderText?(locale: Locale): string;
 }

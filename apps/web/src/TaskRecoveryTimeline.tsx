@@ -20,6 +20,7 @@ import {
 } from '@agent-dock/agent-dock-shared';
 import { Disclosure } from './Disclosure';
 import { Spinner } from './Loaders';
+import { useBi } from './i18n';
 
 function formatShortTime(iso: string | null | undefined): string {
   if (!iso) return '';
@@ -29,6 +30,7 @@ function formatShortTime(iso: string | null | undefined): string {
 }
 
 function RecoverySourcePill({ source, decidedBy }: { source?: TaskRecoveryDecisionSource | null; decidedBy?: string | null }) {
+  const L = useBi();
   if (source === 'lark') {
     return (
       <span
@@ -36,7 +38,7 @@ function RecoverySourcePill({ source, decidedBy }: { source?: TaskRecoveryDecisi
         className="inline-flex max-w-full shrink-0 items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-blue-700 dark:text-blue-300"
       >
         <Send size={10} className="shrink-0"/>
-        <span className="truncate">{decidedBy?.trim() ? `飞书 · ${decidedBy.trim()}` : '飞书确认'}</span>
+        <span className="truncate">{decidedBy?.trim() ? L(`飞书 · ${decidedBy.trim()}`, `Lark · ${decidedBy.trim()}`) : L("飞书确认", "Confirmed in Lark")}</span>
       </span>
     );
   }
@@ -47,7 +49,7 @@ function RecoverySourcePill({ source, decidedBy }: { source?: TaskRecoveryDecisi
         className="inline-flex max-w-full shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-emerald-700 dark:text-emerald-300"
       >
         <Globe2 size={10} className="shrink-0"/>
-        <span className="truncate">{decidedBy?.trim() ? `网页端 · ${decidedBy.trim()}` : '网页端确认'}</span>
+        <span className="truncate">{decidedBy?.trim() ? L(`网页端 · ${decidedBy.trim()}`, `Web · ${decidedBy.trim()}`) : L("网页端确认", "Confirmed in Web")}</span>
       </span>
     );
   }
@@ -57,7 +59,7 @@ function RecoverySourcePill({ source, decidedBy }: { source?: TaskRecoveryDecisi
       className="inline-flex max-w-full shrink-0 items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-sky-700 dark:text-sky-300"
     >
       <RefreshCw size={10} className="shrink-0"/>
-      <span className="truncate">自动恢复</span>
+      <span className="truncate">{L("自动恢复", "Auto-Recovery")}</span>
     </span>
   );
 }
@@ -92,15 +94,16 @@ export const TaskRecoveryNotice = memo(function TaskRecoveryNotice({
   timestamp?: string;
   recoveryRecord?: TaskRecoveryRecord;
 }) {
+  const L = useBi();
   const [open, setOpen] = useState(false);
-  const summary = stripRecoveryVisiblePrefix(text || recoveryRecord?.originalPrompt || '') || '续接因服务重启中断的任务';
+  const summary = stripRecoveryVisiblePrefix(text || recoveryRecord?.originalPrompt || '') || L("续接因服务重启中断的任务", "Resuming task interrupted by restart");
   const triggerSource = recoveryRecord?.decidedSource ?? parseRecoveryTriggerSourceFromPrompt(detail) ?? 'auto';
   const time = formatShortTime(timestamp);
 
   return (
     <aside
       role="note"
-      aria-label="断点续跑轮次"
+      aria-label={L("断点续跑轮次", "Checkpoint Resume Turn")}
       data-task-recovery-turn=""
       data-recovery-trigger={triggerSource}
       className="ui-timeline-item my-5 overflow-hidden rounded-2xl border border-sky-200/85 bg-sky-50/45 shadow-[0_1px_2px_rgba(12,13,16,.03)]"
@@ -110,7 +113,7 @@ export const TaskRecoveryNotice = memo(function TaskRecoveryNotice({
           <RotateCcw size={13}/>
         </span>
         <span className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-white px-2 py-0.5 text-[11.5px] font-semibold text-sky-800 dark:text-sky-200">
-          <span>断点续跑</span>
+          <span>{L("断点续跑", "Checkpoint Resume")}</span>
         </span>
         <RecoverySourcePill source={triggerSource} decidedBy={recoveryRecord?.decidedBy}/>
         {time && <span className="ml-auto shrink-0 text-[11px] tabular-nums text-zinc-400">{time}</span>}
@@ -122,7 +125,7 @@ export const TaskRecoveryNotice = memo(function TaskRecoveryNotice({
         </p>
         <div className="flex items-start gap-1.5 text-[11.5px] leading-4 text-zinc-500">
           <ShieldCheck size={12} className="mt-0.5 shrink-0 text-sky-600 dark:text-sky-400"/>
-          <span className="min-w-0 flex-1">已注入断点自检护栏：先核对当前工作区与已完成进度，严禁重复已完成的外部副作用操作。</span>
+          <span className="min-w-0 flex-1">{L("已注入断点自检护栏：先核对当前工作区与已完成进度，严禁重复已完成的外部副作用操作。", "Checkpoint guardrail injected: verify workspace progress first and avoid repeating side-effect operations.")}</span>
         </div>
 
         {detail && (
@@ -134,7 +137,7 @@ export const TaskRecoveryNotice = memo(function TaskRecoveryNotice({
               onClick={() => setOpen(value => !value)}
               className="inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-[11.5px] font-medium text-zinc-500 transition-colors hover:bg-zinc-100/80 hover:text-zinc-900"
             >
-              <span>{open ? '收起完整续跑指令' : '查看完整续跑指令'}</span>
+              <span>{open ? L("收起完整续跑指令", "Hide full resume prompt") : L("查看完整续跑指令", "View full resume prompt")}</span>
               <ChevronDown size={11} className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`}/>
             </button>
             <Disclosure open={open}>
@@ -171,7 +174,8 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
   error?: string;
   onDecide?(recoveryId: string, decision: 'resume' | 'dismiss'): void | Promise<void>;
 }) {
-  const excerpt = stripRecoveryVisiblePrefix(record.originalPrompt) || '未记录原始请求文本';
+  const L = useBi();
+  const excerpt = stripRecoveryVisiblePrefix(record.originalPrompt) || L("未记录原始请求文本", "Original request not recorded");
   const interruptedTime = formatShortTime(record.interruptedAt);
   const decidedTime = formatShortTime(record.decidedAt ?? record.updatedAt);
 
@@ -179,15 +183,15 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
     return (
       <section
         role="status"
-        aria-label="即将自动断点续跑"
+        aria-label={L("即将自动断点续跑", "Auto-resuming shortly")}
         data-task-recovery-card="scheduled"
         data-task-recovery-id={record.id}
         className="ui-timeline-item my-4 flex items-start gap-2.5 rounded-2xl border border-sky-200/85 bg-sky-50/55 px-3.5 py-3 text-[12.5px] leading-5 text-sky-900 dark:text-sky-200"
       >
-        <Spinner size={14} label="正在排队自动续跑" className="mt-0.5 shrink-0 text-sky-600 dark:text-sky-400"/>
+        <Spinner size={14} label={L("正在排队自动续跑", "Queued for auto-resume")} className="mt-0.5 shrink-0 text-sky-600 dark:text-sky-400"/>
         <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-          <div className="font-medium">检测到任务因服务重启中断，正在错峰排队自动断点续跑…</div>
-          <div className="mt-0.5 text-[12px] text-zinc-600">原请求：{excerpt}</div>
+          <div className="font-medium">{L("检测到任务因服务重启中断，正在错峰排队自动断点续跑…", "Detected task interrupted by service restart; queued for safe staggered resume…")}</div>
+          <div className="mt-0.5 text-[12px] text-zinc-600">{L("原请求：", "Original request: ")}{excerpt}</div>
         </div>
       </section>
     );
@@ -198,7 +202,7 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
     return (
       <section
         role="status"
-        aria-label={isMaxAttempts ? '已达自动续跑上限' : '中断任务超出恢复时间窗口'}
+        aria-label={isMaxAttempts ? L("已达自动续跑上限", "Auto-resume limit reached") : L("中断任务超出恢复时间窗口", "Interrupted task exceeded recovery window")}
         data-task-recovery-card="skipped"
         data-task-recovery-skip-reason={record.skipReason ?? ''}
         data-task-recovery-id={record.id}
@@ -210,13 +214,13 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
         <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
           <span className="font-medium text-zinc-800">
             {isMaxAttempts
-              ? '已触发防重启循环护栏，暂停自动续跑'
-              : '中断任务已超过恢复时间窗口，已跳过自动续跑'}
+              ? L("已触发防重启循环护栏，暂停自动续跑", "Crash-loop guardrail triggered; auto-resume paused")
+              : L("中断任务已超过恢复时间窗口，已跳过自动续跑", "Task exceeded the recovery window; auto-resume skipped")}
           </span>
           <span className="ml-1.5 text-zinc-500">
             {isMaxAttempts
-              ? `该任务已自动恢复过 ${Math.max(1, record.attemptCount)} 次，如需继续请核对现状后手动发送消息。`
-              : '如需继续处理，可直接发送新消息让 Agent 核对当前工作区进度。'}
+              ? L(`该任务已自动恢复过 ${Math.max(1, record.attemptCount)} 次，如需继续请核对现状后手动发送消息。`, `This task has already auto-recovered ${Math.max(1, record.attemptCount)} time(s). Verify state and send a message manually to continue.`)
+              : L("如需继续处理，可直接发送新消息让 Agent 核对当前工作区进度。", "To continue, send a new message asking the Agent to verify current workspace progress.")}
           </span>
         </div>
       </section>
@@ -227,7 +231,7 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
     const resumed = record.status === 'resumed';
     return (
       <section
-        aria-label={resumed ? '已确认继续执行' : '已放弃本次续跑'}
+        aria-label={resumed ? L("已确认继续执行", "Resumed") : L("已放弃本次续跑", "Dismissed")}
         data-task-recovery-card={record.status}
         data-task-recovery-id={record.id}
         className={`ui-timeline-item my-4 overflow-hidden rounded-2xl border bg-[rgb(var(--surface))] ${
@@ -245,20 +249,20 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
             {resumed ? <Check size={13} className="ui-icon-pop"/> : <X size={13} className="ui-icon-pop"/>}
           </span>
           <span className="min-w-0 truncate text-[13px] font-semibold text-zinc-900">
-            {resumed ? '已确认继续执行' : '已放弃本次断点续跑'}
+            {resumed ? L("已确认继续执行", "Resumed") : L("已放弃本次断点续跑", "Recovery dismissed")}
           </span>
           <span className={`rounded-full border px-1.5 py-px text-[11px] font-medium ${
             resumed
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:text-emerald-300'
               : 'border-zinc-200 bg-zinc-100 text-zinc-600'
           }`}>
-            {resumed ? '已锁定 · 已触发续跑' : '已归档锁定'}
+            {resumed ? L("已锁定 · 已触发续跑", "Locked · Resumed") : L("已归档锁定", "Archived & Locked")}
           </span>
           <RecoverySourcePill source={record.decidedSource} decidedBy={record.decidedBy}/>
           {decidedTime && <span className="ml-auto shrink-0 text-[11px] tabular-nums text-zinc-400">{decidedTime}</span>}
         </div>
         <div className="px-3.5 py-2.5 text-[12px] leading-5 text-zinc-600 [overflow-wrap:anywhere]">
-          <span className="text-zinc-400">中断任务：</span>
+          <span className="text-zinc-400">{L("中断任务：", "Interrupted task: ")}</span>
           <span>{excerpt}</span>
         </div>
       </section>
@@ -272,7 +276,7 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
   return (
     <section
       role="region"
-      aria-label="任务因服务重启中断，是否继续执行？"
+      aria-label={L("任务因服务重启中断，是否继续执行？", "Task interrupted by service restart — resume execution?")}
       data-task-recovery-card="pending_confirm"
       data-task-recovery-id={record.id}
       className="ui-timeline-item my-4 overflow-hidden rounded-2xl border border-amber-200/90 bg-[rgb(var(--surface))] shadow-[0_2px_10px_rgba(12,13,16,.05)]"
@@ -283,31 +287,33 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[13px] font-semibold text-zinc-900">任务因服务重启中断，是否继续执行？</span>
+            <span className="text-[13px] font-semibold text-zinc-900">{L("任务因服务重启中断，是否继续执行？", "Task interrupted by service restart — resume execution?")}</span>
             <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[11px] font-medium text-amber-800 dark:text-amber-300">
-              待确认
+              
+              {L("待确认", "Pending")}
             </span>
           </div>
         </div>
         {interruptedTime && (
           <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-zinc-500">
             <Clock size={11}/>
-            <span>中断于 {interruptedTime}</span>
+            <span>{L("中断于", "Interrupted ")} {interruptedTime}</span>
           </span>
         )}
       </div>
 
       <div className="space-y-2.5 px-3.5 py-3">
         <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/75 px-3 py-2 text-[12.5px] leading-5 text-zinc-800 [overflow-wrap:anywhere]">
-          <div className="mb-0.5 text-[11px] font-medium text-zinc-500">中断前的请求</div>
+          <div className="mb-0.5 text-[11px] font-medium text-zinc-500">{L("中断前的请求", "Request before interruption")}</div>
           <div>{excerpt}</div>
         </div>
 
         <div className="flex items-start gap-1.5 text-[11.5px] leading-4 text-zinc-500">
           <ShieldCheck size={13} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400"/>
           <span>
-            点击「继续执行」后，Agent 会先核对工作区和已完成进度，严禁重复已完成的发消息、发版或删文件等副作用操作。
-            {record.larkMessageId ? '（该确认卡已同步至绑定飞书，任一端操作即双端锁定）' : ''}
+            
+            {L("点击「继续执行」后，Agent 会先核对工作区和已完成进度，严禁重复已完成的发消息、发版或删文件等副作用操作。", "After clicking Resume, the Agent verifies workspace state first and avoids repeating messaging, publishing, or destructive operations.")}
+            {record.larkMessageId ? L("（该确认卡已同步至绑定飞书，任一端操作即双端锁定）", " (Synced to bound Lark chat — acting on either side locks both)") : ''}
           </span>
         </div>
 
@@ -330,9 +336,9 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
             className="ui-press inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-accent px-3.5 text-[12.5px] font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submittingDecision === 'resume'
-              ? <Spinner size={12} label="正在发起续跑" className="text-accent-fg"/>
+              ? <Spinner size={12} label={L("正在发起续跑", "Starting resume")} className="text-accent-fg"/>
               : <Play size={12}/>}
-            <span>{submittingDecision === 'resume' ? '正在续跑…' : '继续执行'}</span>
+            <span>{submittingDecision === 'resume' ? L("正在续跑…", "Resuming…") : L("继续执行", "Resume")}</span>
           </button>
           <button
             type="button"
@@ -342,9 +348,9 @@ export const TaskRecoveryConfirmCard = memo(function TaskRecoveryConfirmCard({
             className="ui-press inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-[12.5px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submittingDecision === 'dismiss'
-              ? <Spinner size={12} label="正在放弃" className="text-zinc-500"/>
+              ? <Spinner size={12} label={L("正在放弃", "Dismissing")} className="text-zinc-500"/>
               : <X size={12}/>}
-            <span>{submittingDecision === 'dismiss' ? '处理中…' : '放弃 / 取消'}</span>
+            <span>{submittingDecision === 'dismiss' ? L("处理中…", "Processing…") : L("放弃 / 取消", "Dismiss / Cancel")}</span>
           </button>
         </div>
       </div>
