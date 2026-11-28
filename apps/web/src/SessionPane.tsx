@@ -11,17 +11,20 @@ import {
   mergeSessionOutputPluginsPatch,
   outputPluginInstanceKey,
   resolveOutputPluginEnabled,
+  TASK_RECOVERY_ORIGIN,
   type AskUserQuestionAnswerItem,
   type DeclarativeInteractionField,
   type OutputPluginCatalogItem,
   type OutputPluginMetadata,
   type OutputPluginRegistry,
-  type OutputPluginsGlobalConfig
+  type OutputPluginsGlobalConfig,
+  type TaskRecoveryRecord
 } from '@agent-dock/agent-dock-shared';
 import { api, type Agent, type DockEvent, type LlmAssistContext, type Session, type Task } from './api';
 import { AiTextAssistControl, useAiFlash } from './AiTextAssist';
 import { awaitsFirstOutput, bindOptimisticTask, buildTimeline, buildTimelineSections, EMOJI_TRIGGER_ORIGIN, groupTimelineSections, isStreamingSection, isTurnOngoing, optimisticRowKeys, startsImmediately, timelineRowKey, turnTimeBadge, waitingQueuedTasks, type OptimisticMessage } from './timeline';
 import { ActivityPanel, SystemPromptBubble, TimelineItem } from './TimelineItems';
+import { shouldRenderRecoveryCard, TaskRecoveryConfirmCard } from './TaskRecoveryTimeline';
 import { TimelineTurn } from './SendTimeHint';
 import { Composer, type ComposerOutputPluginItem } from './Composer';
 import { buildFallbackOutputPluginCatalogItems } from './output-plugins/useOutputPlugins';
@@ -73,7 +76,7 @@ function CompanionPlaceholder() {
 type SendMode = 'queue' | 'interrupt';
 /** 表情触发的轮次不能出现在「等待发送」面板：它不是用户可编辑的消息。 */
 // 整理轮次、交接说明与问答提交轮次不进「等待发送」编辑面板，避免系统指令或结构化 JSON 暴露成可编辑草稿。
-const BASE_HIDDEN_QUEUE_ORIGINS: ReadonlyArray<string> = [EMOJI_TRIGGER_ORIGIN, 'maintenance', 'handoff', ASK_USER_QUESTION_ANSWER_ORIGIN];
+const BASE_HIDDEN_QUEUE_ORIGINS: ReadonlyArray<string> = [EMOJI_TRIGGER_ORIGIN, 'maintenance', 'handoff', ASK_USER_QUESTION_ANSWER_ORIGIN, TASK_RECOVERY_ORIGIN];
 
 /**
  * 会话标题栏的副屏开关。空副屏里直接展示可打开的面板类型。
@@ -421,6 +424,60 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
   // 标题栏时钟上的高亮：只算启用中的。和弹窗共用同一个缓存键，弹窗里的增删改会自动刷新这里。
   const schedules = useQuery({ queryKey: ['schedules', session.id], queryFn: () => api.schedules(session.id), enabled: !session.archivedAt, staleTime: 30_000 });
   const activeSchedules = schedules.data?.filter(item => item.enabled).length ?? 0;
+  const sessionRecoveries = useQuery({
+    queryKey: ['session-recoveries', session.id],
+    queryFn: () => api.sessionRecoveries(session.id),
+    staleTime: 5_000,
+    refetchOnWindowFocus: true
+  });
+  const [submittingRecovery, setSubmittingRecovery] = useState<{ id: string; decision: 'resume' | 'dismiss' } | null>(null);
+  const [recoveryErrors, setRecoveryErrors] = useState<Record<string, string>>({});
+  const recoveryRecords = sessionRecoveries.data?.items ?? [];
+  const recoveryByRecoveryTaskId = useMemo(() => {
+    const map = new Map<string, TaskRecoveryRecord>();
+    for (const rec of recoveryRecords) {
+      if (rec.recoveryTaskId) map.set(rec.recoveryTaskId, rec);
+    }
+    return map;
+  }, [recoveryRecords]);
+  const visibleRecoveryCards = useMemo(
+    () => recoveryRecords.filter(shouldRenderRecoveryCard),
+    [recoveryRecords]
+  );
+  const handleDecideRecovery = useCallback(async (recoveryId: string, decision: 'resume' | 'dismiss') => {
+    if (session.archivedAt) return;
+    setSubmittingRecovery({ id: recoveryId, decision });
+    setRecoveryErrors(current => {
+      if (!(recoveryId in current)) return current;
+      const next = { ...current };
+      delete next[recoveryId];
+      return next;
+    });
+    try {
+      const result = await api.decideSessionRecovery(session.id, recoveryId, decision);
+      qc.setQueryData<{ items: TaskRecoveryRecord[] }>(['session-recoveries', session.id], current => {
+        const list = current?.items ?? [];
+        const exists = list.some(item => item.id === result.record.id);
+        return {
+          items: exists
+            ? list.map(item => (item.id === result.record.id ? result.record : item))
+            : [...list, result.record]
+        };
+      });
+      void qc.invalidateQueries({ queryKey: ['task-recovery-records'] });
+      if (decision === 'resume') {
+        void tasks.refetch();
+        void qc.invalidateQueries({ queryKey: ['sessions'] });
+      }
+    } catch (error) {
+      setRecoveryErrors(current => ({
+        ...current,
+        [recoveryId]: error instanceof Error ? error.message : '操作失败，请稍后重试'
+      }));
+    } finally {
+      setSubmittingRecovery(current => (current?.id === recoveryId ? null : current));
+    }
+  }, [qc, session.archivedAt, session.id, tasks]);
   const timeline = useMemo(() => buildTimeline(events.data, tasks.data, optimisticMessages), [events.data, tasks.data, optimisticMessages]); const timelineSections = useMemo(() => buildTimelineSections(timeline, tasks.data), [timeline, tasks.data]);
   const timelineTurns = useMemo(() => groupTimelineSections(timelineSections), [timelineSections]);
   const sentPromptByTaskId = useMemo(() => {
@@ -904,9 +961,22 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
     onReconnect: () => {
       // 断线期间漏掉的 task/status 事件不会补发：重连后立刻重取任务、会话状态并自愈本轮事件。
       void tasks.refetch();
+      void sessionRecoveries.refetch();
       void qc.invalidateQueries({ queryKey: ['sessions'] });
       healNextFetch.current = true;
       void events.refetch();
+    },
+    onRecoveryEvent: record => {
+      qc.setQueryData<{ items: TaskRecoveryRecord[] }>(['session-recoveries', session.id], current => {
+        const list = current?.items ?? [];
+        const exists = list.some(item => item.id === record.id);
+        return {
+          items: exists
+            ? list.map(item => (item.id === record.id ? record : item))
+            : [...list, record]
+        };
+      });
+      void qc.invalidateQueries({ queryKey: ['task-recovery-records'] });
     },
     onSidecarEvent: event => {
       // 改名（用户手改 / Agent 推来）也是走 status 事件的，和 model / reasoningEffort 同一个通道。
@@ -1329,41 +1399,71 @@ export const SessionPane = memo(function SessionPane({ session, agent, pane, onO
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
       <div className="relative min-h-0 flex-1"><div ref={timelineScroll.containerRef} onScroll={timelineScroll.onScroll} onClickCapture={event => { if (event.target instanceof Element && event.target.closest('[data-timeline-disclosure]')) timelineScroll.pauseFollowing(); }} className="absolute inset-0 overscroll-contain overflow-y-auto [overflow-anchor:none]"><div ref={timelineScroll.contentRef} className={`ui-view-fade mx-auto w-full max-w-[760px] px-4 py-6 sm:px-6 sm:py-8 ${!events.isLoading && !timeline.length ? 'flex min-h-full flex-col justify-center' : ''}`}>
-        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : timeline.length ? <>{session.systemPrompt?.trim() && <div data-search-item-key={SYSTEM_PROMPT_SEARCH_KEY} data-search-active={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY ? 'true' : undefined} className={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY ? 'ui-search-active-item' : undefined}><SystemPromptBubble prompt={session.systemPrompt.trim()} forceOpen={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY}/></div>}{timelineTurns.map(turn => {
-          const time = turnTimeBadge(turn);
-          return <TimelineTurn key={turn.turnId} turnId={turn.turnId} time={time}>
-            {turn.sections.map(section => {
-              if (section.kind === 'event') {
-                const itemKey = timelineRowKey(section.event, rowKeys);
-                const isSearchActive = activeSearchMatch?.itemKey === itemKey;
-                return <div key={itemKey} data-search-item-key={itemKey} data-search-active={isSearchActive ? 'true' : undefined} className={isSearchActive ? 'ui-search-active-item' : undefined}>
-                  <TimelineItem
-                    event={section.event}
-                    sentPrompt={typeof section.event.data.taskId === 'string' ? sentPromptByTaskId.get(section.event.data.taskId) : undefined}
-                    final={section.final}
-                    streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))}
-                    replay={section.event.timestamp < mountedAt}
-                    assistantLabel={outputLabel}
-                    sessionId={session.id}
-                    askUserQuestionXmlEnabled={effectiveAskUserQuestionEnabled}
-                    outputPluginRegistry={outputPluginRegistry}
-                    enabledOutputPluginIds={enabledOutputPluginIds}
-                    pluginInteractionsByKey={pluginInteractionsByKey}
-                    submittingPluginKey={submittingPluginKey}
-                    pluginSubmitErrors={pluginSubmitErrors}
-                    askDisabled={Boolean(session.archivedAt) || mainNeedsRestart}
-                    askDisabledReason={session.archivedAt ? '该会话已归档，无法提交操作' : mainNeedsRestart ? '请先恢复主会话后再操作' : undefined}
-                    onInteractOutputPlugin={handleInteractOutputPlugin}
-                  />
-                </div>;
+        {events.isLoading ? <div className="space-y-5"><div className="h-4 w-3/4 ui-skeleton rounded bg-zinc-200"/><div className="h-4 w-1/2 ui-skeleton rounded bg-zinc-200"/><div className="h-20 ui-skeleton rounded-xl bg-zinc-100"/></div> : (timeline.length || visibleRecoveryCards.length > 0) ? <>{session.systemPrompt?.trim() && <div data-search-item-key={SYSTEM_PROMPT_SEARCH_KEY} data-search-active={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY ? 'true' : undefined} className={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY ? 'ui-search-active-item' : undefined}><SystemPromptBubble prompt={session.systemPrompt.trim()} forceOpen={activeSearchMatch?.itemKey === SYSTEM_PROMPT_SEARCH_KEY}/></div>}{(() => {
+          const matchedRecoveryIds = new Set<string>();
+          const renderRecoveryCard = (rec: TaskRecoveryRecord) => (
+            <TaskRecoveryConfirmCard
+              key={rec.id}
+              record={rec}
+              disabled={Boolean(session.archivedAt) || mainNeedsRestart}
+              disabledReason={session.archivedAt ? '该会话已归档，无法操作' : mainNeedsRestart ? '请先恢复主会话后再操作' : undefined}
+              submittingDecision={submittingRecovery?.id === rec.id ? submittingRecovery.decision : null}
+              error={recoveryErrors[rec.id]}
+              onDecide={handleDecideRecovery}
+            />
+          );
+          return <>
+            {timelineTurns.map(turn => {
+              const time = turnTimeBadge(turn);
+              const turnTaskIds = new Set<string>();
+              for (const section of turn.sections) {
+                if (section.kind === 'event' && typeof section.event.data?.taskId === 'string') {
+                  turnTaskIds.add(section.event.data.taskId);
+                }
               }
-              const isSearchActive = activeSearchMatch?.itemKey === section.id;
-              return <div key={section.id} data-search-item-key={section.id} data-search-active={isSearchActive ? 'true' : undefined} className={isSearchActive ? 'ui-search-active-item' : undefined}>
-                <ActivityPanel groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt} forceOpen={isSearchActive} activeStepId={isSearchActive ? activeSearchMatch?.stepId : undefined} askUserQuestionXmlEnabled={effectiveAskUserQuestionEnabled} outputPluginRegistry={outputPluginRegistry} enabledOutputPluginIds={enabledOutputPluginIds}/>
+              const turnRecoveries = visibleRecoveryCards.filter(rec => turnTaskIds.has(rec.interruptedTaskId));
+              for (const rec of turnRecoveries) matchedRecoveryIds.add(rec.id);
+              return <div key={turn.turnId}>
+                <TimelineTurn turnId={turn.turnId} time={time}>
+                  {turn.sections.map(section => {
+                    if (section.kind === 'event') {
+                      const itemKey = timelineRowKey(section.event, rowKeys);
+                      const isSearchActive = activeSearchMatch?.itemKey === itemKey;
+                      const taskId = typeof section.event.data.taskId === 'string' ? section.event.data.taskId : undefined;
+                      return <div key={itemKey} data-search-item-key={itemKey} data-search-active={isSearchActive ? 'true' : undefined} className={isSearchActive ? 'ui-search-active-item' : undefined}>
+                        <TimelineItem
+                          event={section.event}
+                          sentPrompt={taskId ? sentPromptByTaskId.get(taskId) : undefined}
+                          recoveryRecord={taskId ? recoveryByRecoveryTaskId.get(taskId) : undefined}
+                          final={section.final}
+                          streaming={isStreamingSection(section, sessionBusy, section === timelineSections.at(-1))}
+                          replay={section.event.timestamp < mountedAt}
+                          assistantLabel={outputLabel}
+                          sessionId={session.id}
+                          askUserQuestionXmlEnabled={effectiveAskUserQuestionEnabled}
+                          outputPluginRegistry={outputPluginRegistry}
+                          enabledOutputPluginIds={enabledOutputPluginIds}
+                          pluginInteractionsByKey={pluginInteractionsByKey}
+                          submittingPluginKey={submittingPluginKey}
+                          pluginSubmitErrors={pluginSubmitErrors}
+                          askDisabled={Boolean(session.archivedAt) || mainNeedsRestart}
+                          askDisabledReason={session.archivedAt ? '该会话已归档，无法提交操作' : mainNeedsRestart ? '请先恢复主会话后再操作' : undefined}
+                          onInteractOutputPlugin={handleInteractOutputPlugin}
+                        />
+                      </div>;
+                    }
+                    const isSearchActive = activeSearchMatch?.itemKey === section.id;
+                    return <div key={section.id} data-search-item-key={section.id} data-search-active={isSearchActive ? 'true' : undefined} className={isSearchActive ? 'ui-search-active-item' : undefined}>
+                      <ActivityPanel groups={section.groups} replay={Boolean(section.startedAt && section.startedAt < mountedAt)} sessionId={session.id} hasAnswer={section.hasAnswer} taskStatus={section.taskStatus} ongoing={isTurnOngoing(section, sessionBusy)} modelLabel={outputLabel} startedAt={section.startedAt} completedAt={section.completedAt} forceOpen={isSearchActive} activeStepId={isSearchActive ? activeSearchMatch?.stepId : undefined} askUserQuestionXmlEnabled={effectiveAskUserQuestionEnabled} outputPluginRegistry={outputPluginRegistry} enabledOutputPluginIds={enabledOutputPluginIds}/>
+                    </div>;
+                  })}
+                </TimelineTurn>
+                {turnRecoveries.map(renderRecoveryCard)}
               </div>;
             })}
-          </TimelineTurn>;
-        })}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
+            {visibleRecoveryCards.filter(rec => !matchedRecoveryIds.has(rec.id)).map(renderRecoveryCard)}
+          </>;
+        })()}{showFirstOutputPlaceholder && <ActivityPanel groups={[]} sessionId={session.id} ongoing modelLabel={outputLabel} startedAt={timeline[latestUserIndex]?.timestamp}/>}</> : isMain ? <CompanionWelcome onPick={text => { setPrompt(text); requestAnimationFrame(() => composerTextarea.current?.focus()); }}/> : <div className="ui-empty-state flex flex-col items-center justify-center text-center"><div className="grid h-12 w-12 place-items-center rounded-2xl border border-zinc-200/80 bg-white/80 text-zinc-600 shadow-[0_3px_12px_rgba(24,24,27,.05)]"><MessageSquare size={19}/></div><p className="mt-5 text-[12px] font-medium tracking-[.08em] text-zinc-400">工作区已就绪</p><h2 className="mt-1.5 text-[18px] font-semibold tracking-tight text-zinc-800">从一个问题开始</h2><p className="mt-2 max-w-xs leading-5 text-xs text-zinc-500">让 Agent 检查代码、实现改动或讲解当前项目。</p><div className="mt-6 flex max-w-sm flex-wrap justify-center gap-2">{['了解当前项目', '检查未提交改动', '帮我规划下一步'].map(suggestion => <button key={suggestion} type="button" onClick={() => { setPrompt(suggestion); composerTextarea.current?.focus(); }} className="rounded-full border border-zinc-200/90 bg-white/75 px-3 py-1.5 text-[12px] text-zinc-600 transition-colors hover:border-zinc-300 hover:bg-white hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50">{suggestion}</button>)}</div></div>}
         </div></div><ExitGate open={searchOpen} ms={150}><TimelineSearchBar inputRef={searchInputRef} query={searchQuery} hasQuery={Boolean(normalizeSearchQuery(searchQuery))} activeIndex={clampedSearchIndex} total={searchMatches.length} onQueryChange={next => { setSearchQuery(next); setSearchIndex(0); }} onNext={goToNextMatch} onPrev={goToPrevMatch} onClear={() => { setSearchQuery(''); setSearchIndex(0); }} onClose={closeTimelineSearch}/></ExitGate><ExitGate open={showScrollToBottom} ms={150}><div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center"><button type="button" onClick={timelineScroll.scrollToBottom} className="ui-fab-in ui-press pointer-events-auto grid h-8 w-8 place-items-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-[0_6px_18px_rgba(0,0,0,.13)] hover:-translate-y-0.5 hover:border-zinc-300 hover:text-zinc-900 active:scale-95" aria-label="回到最新消息"><ArrowDown size={15}/></button></div></ExitGate><SelectionQuotePopover containerRef={timelineScroll.containerRef} enabled={!session.archivedAt && !mainNeedsRestart} onQuote={handleQuoteReply}/></div>
       {!session.archivedAt && prompt.length > MAX_DRAFT_CHARS && <div role="status" className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-center text-[12px] text-amber-700">草稿超过 {MAX_DRAFT_CHARS.toLocaleString()} 字符，超出部分不会保存，刷新后会丢失。</div>}
       {session.archivedAt || mainNeedsRestart

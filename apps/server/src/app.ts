@@ -39,6 +39,8 @@ import { registerBoardRoutes } from './boards/routes.js';
 import type { BoardService } from './boards/service.js';
 import { registerThemeRoutes } from './themes/routes.js';
 import type { ThemeService } from './themes/service.js';
+import { registerTaskRecoveryRoutes } from './task-recovery/routes.js';
+import type { TaskRecoveryService } from './task-recovery/service.js';
 import { registerJsonCompression } from './json-compression.js';
 import { LoginRateLimiter, readWebPasswordHash, verifyWebPassword, webPasswordPath } from './web-password.js';
 import { isLocalOwnerRequest, issueMasterToken, parseCookieHeader, sessionTokenAllows, verifyWebToken, webAccessCookieName, webAccessCookieNameFor, webAccessSessionCookieName, type VerifiedWebToken } from './web-access.js';
@@ -134,6 +136,8 @@ export interface BuildAppOptions {
   sourcesRouter?: SourceRouterService;
   /** AI 飞书替身；不传表示这套路由不挂。 */
   larkAvatar?: LarkAvatarService;
+  /** 普通会话任务中断自动恢复；不传表示这套路由不挂。 */
+  taskRecovery?: TaskRecoveryService;
 }
 
 // 上传路由接受任意 content-type（浏览器会为 .md/.heic/.zip 等发出五花八门的类型），
@@ -378,6 +382,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
   if (options.selfUpdate) registerSelfUpdateRoutes(app, options.selfUpdate);
   if (options.schedules) registerScheduleRoutes(app, options.schedules);
   if (options.assistant) registerAssistantRoutes(app, options.assistant);
+  if (options.taskRecovery) registerTaskRecoveryRoutes(app, options.taskRecovery);
   if (options.sourcesRouter) registerSourceRouterRoutes(app, options.sourcesRouter);
   if (options.larkAvatar) {
     registerLarkAvatarRoutes(app, options.larkAvatar, {
@@ -387,7 +392,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
         && process.env.AGENTDOCK_ALLOW_REACTION_TEST === 'true'
     });
   }
-  await registerLarkRoutes(app, { ...options.lark, assistant: options.lark?.assistant ?? options.assistant, runtime: options.lark?.runtime ?? runtime, ...(options.outputPlugins ? { outputPlugins: options.lark?.outputPlugins ?? options.outputPlugins } : {}), ...(options.askUserQuestion ? { askUserQuestion: options.lark?.askUserQuestion ?? options.askUserQuestion } : {}), ...(options.larkAvatar ? { larkAvatar: options.larkAvatar } : {}) });
+  await registerLarkRoutes(app, { ...options.lark, assistant: options.lark?.assistant ?? options.assistant, runtime: options.lark?.runtime ?? runtime, ...(options.outputPlugins ? { outputPlugins: options.lark?.outputPlugins ?? options.outputPlugins } : {}), ...(options.askUserQuestion ? { askUserQuestion: options.lark?.askUserQuestion ?? options.askUserQuestion } : {}), ...(options.larkAvatar ? { larkAvatar: options.larkAvatar } : {}), ...(options.taskRecovery ? { taskRecovery: options.lark?.taskRecovery ?? options.taskRecovery } : {}) });
   app.get('/api/agents', async request => {
     // 停用的内置 agent 只在配置面板展示，面板入口仅 master token 可用（会话令牌拿到的列表不含停用项）。
     const url = new URL(request.url, 'http://agent-dock.local');
@@ -978,6 +983,10 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       }
       if (!request.raw.destroyed) write(event);
     });
+    const unsubscribeRecovery = options.taskRecovery?.onChange(record => {
+      if (record.sessionId !== request.params.id || closed || request.raw.destroyed) return;
+      reply.raw.write(`event: recovery\ndata: ${JSON.stringify(record)}\n\n`);
+    });
     const heartbeat = setInterval(() => reply.raw.write(': heartbeat\n\n'), 15_000);
     let closed = false;
     const cleanup = () => {
@@ -985,6 +994,7 @@ export async function buildApp(runtime: AgentDockRuntime, options: BuildAppOptio
       closed = true;
       clearInterval(heartbeat);
       unsubscribe();
+      unsubscribeRecovery?.();
       streams.delete(reply.raw);
     };
     request.raw.once('close', cleanup);

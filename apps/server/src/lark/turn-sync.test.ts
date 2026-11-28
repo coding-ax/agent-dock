@@ -1366,4 +1366,70 @@ describe('LarkTurnSyncService', () => {
     });
     expect(patchUnbound.statusCode).toBe(404);
   });
+
+  it('syncs task recovery turns with 🔄 断点续跑 badge across handover, lark-group, and lark-p2p bindings even when web source toggle is off', async () => {
+    const repos = createTestRepos();
+    const { appId } = await seedBot(repos, {
+      turnSync: { enabled: true, sources: { supervision: true, web: false, schedule: true, maintenance: false } }
+    });
+
+    // Classify source + clean title stripping redundant prefix
+    const source = classifyTurnSource({ taskOrigin: 'recovery', prompt: '🔄 断点续跑：补齐支付模块回归测试' });
+    expect(source).toMatchObject({ badge: '🔄 断点续跑', label: '断点续跑', tagColor: 'wathet' });
+    expect(formatSyncedTaskName('🔄 断点续跑：补齐支付模块回归测试', source, undefined, 'recovery')).toBe('补齐支付模块回归测试');
+
+    const fakeRuntime = new FakeSyncRuntime();
+    fakeRuntime.addSession({ id: 'ses_rec_handover', runId: 'run_1' });
+    fakeRuntime.addSession({ id: 'ses_rec_group', source: 'lark', sourceId: `${appId}:oc_rec_grp:group`, runId: 'run_2' });
+    fakeRuntime.addSession({ id: 'ses_rec_p2p', source: 'lark', sourceId: `${appId}:oc_rec_dm:p2p`, runId: 'run_3' });
+    await bindHandover(repos, { appId, chatId: 'oc_rec_handover', sessionId: 'ses_rec_handover', name: '普通托管群' });
+
+    const sentCards: Array<{ chatId?: string; sourceBadge?: { label: string; color?: string }; taskName?: string }> = [];
+    const cardPort: LarkTurnSyncCardPort = {
+      send: vi.fn(async input => {
+        sentCards.push({ chatId: input.chatId, sourceBadge: input.sourceBadge, taskName: input.taskName });
+        return { messageId: `om_rec_${sentCards.length}`, chatId: input.chatId };
+      }),
+      update: vi.fn(async input => ({ messageId: input.messageId })),
+      sendText: vi.fn(async input => ({ messageId: 'om_txt', chatId: input.chatId }))
+    };
+
+    const stamp = new Date().toISOString();
+    fakeRuntime.addTask({ id: 'task_rec_1', sessionId: 'ses_rec_handover', prompt: '🔄 断点续跑：继续构建文档', origin: 'recovery', status: 'completed', finalText: '文档构建已完成。', createdAt: stamp, updatedAt: stamp });
+    fakeRuntime.addTask({ id: 'task_rec_2', sessionId: 'ses_rec_group', prompt: '🔄 断点续跑：巡检服务状态', origin: 'recovery', status: 'completed', finalText: '巡检正常。', createdAt: stamp, updatedAt: stamp });
+    fakeRuntime.addTask({ id: 'task_rec_3', sessionId: 'ses_rec_p2p', prompt: '🔄 断点续跑：整理周报', origin: 'recovery', status: 'completed', finalText: '周报已整理完毕。', createdAt: stamp, updatedAt: stamp });
+
+    const sync = new LarkTurnSyncService({
+      runtime: fakeRuntime,
+      configRepository: repos.config,
+      cardMappings: repos.channelMappings,
+      turnTracker: new LarkTurnTracker(),
+      resolveService: async () => cardPort,
+      log: { info: () => undefined, warn: () => undefined, error: () => undefined }
+    });
+
+    for (const [sessionId, taskId, expectedChatId] of [
+      ['ses_rec_handover', 'task_rec_1', 'oc_rec_handover'],
+      ['ses_rec_group', 'task_rec_2', 'oc_rec_grp'],
+      ['ses_rec_p2p', 'task_rec_3', 'oc_rec_dm']
+    ] as const) {
+      const outcome = await sync.handleTurnEvent({
+        id: `te_${taskId}`,
+        kind: 'completed',
+        sessionId,
+        taskId,
+        agentId: 'claude',
+        taskOrigin: 'recovery',
+        summary: '已完成断点续跑',
+        timestamp: stamp
+      });
+      expect(outcome).toMatchObject({ action: 'synced_card', chatId: expectedChatId });
+    }
+
+    expect(sentCards).toEqual([
+      { chatId: 'oc_rec_handover', sourceBadge: { label: '🔄 断点续跑', color: 'wathet' }, taskName: '继续构建文档' },
+      { chatId: 'oc_rec_grp', sourceBadge: { label: '🔄 断点续跑', color: 'wathet' }, taskName: '巡检服务状态' },
+      { chatId: 'oc_rec_dm', sourceBadge: { label: '🔄 断点续跑', color: 'wathet' }, taskName: '整理周报' }
+    ]);
+  });
 });

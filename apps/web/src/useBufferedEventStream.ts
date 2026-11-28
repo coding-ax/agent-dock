@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useMemoizedFn } from 'ahooks';
 import type { QueryClient } from '@tanstack/react-query';
-import type { DockEvent } from './api';
+import type { DockEvent, TaskRecoveryRecord } from './api';
 import { mergeEventBatch } from './event-buffer';
 
 /**
@@ -37,16 +37,19 @@ export function useBufferedEventStream(options: {
   runId: string | undefined;
   queryClient: QueryClient;
   onSidecarEvent(event: DockEvent): void;
+  /** 会话级断点恢复状态变更推送（例如飞书端点击确认/放弃，或错峰自动恢复已触发）。 */
+  onRecoveryEvent?(record: TaskRecoveryRecord): void;
   /**
    * 断线后 EventSource 自动重连成功时调用。断线期间漏掉的 task/status 事件不会补发，
    * 调用方需要重取一次任务列表（必要时再自愈本轮事件），不能只等下一次轮询。
    */
   onReconnect?(): void;
 }) {
-  const { sessionId, enabled, runId, queryClient, onSidecarEvent, onReconnect } = options;
+  const { sessionId, enabled, runId, queryClient, onSidecarEvent, onRecoveryEvent, onReconnect } = options;
   // 回调每次 render 都是新引用，直接进依赖会把 SSE 连接反复重建；
   // useMemoizedFn 给出稳定引用且始终读到最新闭包。
   const sidecar = useMemoizedFn(onSidecarEvent);
+  const recoveryHandler = useMemoizedFn(onRecoveryEvent ?? (() => undefined));
   const reconnect = useMemoizedFn(onReconnect ?? (() => undefined));
 
   // 这里保留 useEffect：订阅 EventSource 属于「与 React 外部系统同步」，是 Effect 的
@@ -86,10 +89,22 @@ export function useBufferedEventStream(options: {
       sidecar(event);
     };
 
+    const receiveRecovery = (message: MessageEvent<string>) => {
+      if (typeof message.data !== 'string' || !message.data) return;
+      try {
+        const record = JSON.parse(message.data) as TaskRecoveryRecord;
+        if (record && typeof record.id === 'string') recoveryHandler(record);
+      } catch {
+        return;
+      }
+    };
+
     for (const name of ['text','thinking','tool_call','tool_result','permission_request','status','task','error','completed','raw_terminal']) stream.addEventListener(name, receive as EventListener);
+    stream.addEventListener('recovery', receiveRecovery as EventListener);
     return () => {
       window.removeEventListener('agentdock:web-access-denied', closeOnDenied);
       stream.removeEventListener('open', onOpen);
+      stream.removeEventListener('recovery', receiveRecovery as EventListener);
       if (frame) cancelAnimationFrame(frame);
       // 收尾时把残余事件写进**本次订阅的** queryKey：sessionId 变化时这个 cleanup
       // 先于新 effect 执行，闭包里的 queryKey 仍指向旧会话，不会串台。

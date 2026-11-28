@@ -33,6 +33,13 @@ import type {
   HydratedBoard,
   HydratedBoardColumn,
   HydratedBoardItem,
+  TaskRecoveryConfig,
+  TaskRecoveryConfigInput,
+  TaskRecoveryDecisionSource,
+  TaskRecoveryMode,
+  TaskRecoveryRecord,
+  TaskRecoverySkipReason,
+  TaskRecoveryStatus,
   ThemeContrastAdjustment,
   ThemeContrastReport,
   ThemePreferenceMode,
@@ -78,6 +85,13 @@ export type {
   HydratedBoard,
   HydratedBoardColumn,
   HydratedBoardItem,
+  TaskRecoveryConfig,
+  TaskRecoveryConfigInput,
+  TaskRecoveryDecisionSource,
+  TaskRecoveryMode,
+  TaskRecoveryRecord,
+  TaskRecoverySkipReason,
+  TaskRecoveryStatus,
   ThemeContrastAdjustment,
   ThemeContrastReport,
   ThemePreferenceMode,
@@ -1289,5 +1303,25 @@ export const api = {
   generateTheme: (body: { prompt: string; mode?: 'auto' | CustomThemeMode; save?: boolean; apply?: boolean; timeoutMs?: number }, options: { signal?: AbortSignal } = {}) =>
     json<GenerateThemeResponse>('/api/themes/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), ...(options.signal ? { signal: options.signal } : {}) }, true),
   importVsCodeTheme: (body: { source?: string; fileBase64?: string; fileName?: string; jsonText?: string; variant?: string; all?: boolean; previewOnly?: boolean; apply?: boolean }) =>
-    json<ImportVsCodeThemeResponse>('/api/themes/import-vscode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, true)
+    json<ImportVsCodeThemeResponse>('/api/themes/import-vscode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, true),
+
+  // ---- 普通会话任务中断自动恢复 ----
+  taskRecoveryConfig: () => json<{ config: TaskRecoveryConfig }>('/api/task-recovery/config', undefined, true),
+  saveTaskRecoveryConfig: (body: TaskRecoveryConfigInput) =>
+    json<{ config: TaskRecoveryConfig }>('/api/task-recovery/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  taskRecoveryRecords: (params?: { sessionId?: string; status?: TaskRecoveryStatus; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.sessionId) query.set('sessionId', params.sessionId);
+    if (params?.status) query.set('status', params.status);
+    if (params?.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return json<{ items: TaskRecoveryRecord[] }>(`/api/task-recovery/records${qs ? `?${qs}` : ''}`, undefined, true);
+  },
+  sessionRecoveries: (id: string) =>
+    json<{ items: TaskRecoveryRecord[] }>(`/api/sessions/${encodeURIComponent(id)}/recoveries`, undefined, true),
+  decideSessionRecovery: (id: string, recoveryId: string, decision: 'resume' | 'dismiss') =>
+    json<{ record: TaskRecoveryRecord; alreadyDecided: boolean; dispatchedTaskId?: string }>(
+      `/api/sessions/${encodeURIComponent(id)}/recoveries/${encodeURIComponent(recoveryId)}/decide`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision }) }
+    )
 };

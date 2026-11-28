@@ -6,6 +6,7 @@ import { basename, dirname } from 'node:path';
 import { openDatabase, type NativeBindingFallback } from './native.js';
 import { createUsageRepository } from './usage.js';
 import { createBoardRepository } from './boards.js';
+import { createTaskRecoveryRepository } from './task-recoveries.js';
 import {
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   mergeSessionOutputPluginsPatch,
@@ -493,6 +494,7 @@ export function createRepositories(filename: string, options: { nativeFallback?:
     },
     usage: createUsageRepository(sqlite),
     boards: createBoardRepository(sqlite),
+    taskRecoveries: createTaskRecoveryRepository(sqlite),
     close() { sqlite.close(); }
   };
 }

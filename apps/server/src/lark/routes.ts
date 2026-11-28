@@ -40,6 +40,13 @@ import { registerLarkAgentToolRoutes } from './agent-tools-routes.js';
 import type { LarkAgentToolsService } from './agent-tools.js';
 import type { AssistantService } from '../assistant/service.js';
 import {
+  buildTaskRecoveryConfirmCard,
+  buildTaskRecoveryResolvedCard,
+  createTaskRecoveryLarkCardId,
+  type TaskRecoveryService
+} from '../task-recovery/service.js';
+import { isTaskRecoveryCardAction } from '../task-recovery/lark-card.js';
+import {
   handoverGroupName, handoverKittenProfile, larkKittenAvatarPath, larkKittenCdnBaseEnv, larkKittenAvatarPublicUrl,
   readKittenAvatar, syncKittenBotProfile, type KittenBotSyncResult
 } from './kitten-handover.js';
@@ -140,6 +147,8 @@ export interface LarkRoutesOptions {
   larkPluginAdapters?: LarkOutputPluginAdapterRegistry;
   /** 飞书轮次归属与同轮 group send 去重追踪器（与 agentTools / listener / turnSync 共享）。 */
   turnTracker?: LarkTurnTracker;
+  /** 普通会话任务中断恢复服务：确认卡模式下负责投递飞书确认卡与处理按钮回调。 */
+  taskRecovery?: TaskRecoveryService;
 }
 
 type ReactionChatInfo = { webChatId?: string; name?: string; type?: 'p2p' | 'group' | 'topic' | 'unknown' };
@@ -298,6 +307,27 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
       }
     },
     onCardAction: async (value, operatorOpenId, config) => {
+      if (options.taskRecovery && isTaskRecoveryCardAction(value)) {
+        const botService = await resolveService(undefined, config.appId);
+        const allowed = await authorizeCardOperator({
+          config,
+          ...(operatorOpenId ? { operatorOpenId } : {}),
+          service: botService,
+          ...(options.config ? { repository: options.config } : {}),
+          log: app.log
+        });
+        if (!allowed) {
+          return { type: 'warning', content: '当前账号不在机器人白名单中，无法操作此恢复确认卡' };
+        }
+        const operatorName = operatorOpenId
+          ? config.allowedUsers.find(user => user.openId === operatorOpenId)?.name
+          : undefined;
+        return options.taskRecovery.handleLarkCardAction({
+          value,
+          ...(operatorOpenId ? { operatorOpenId } : {}),
+          ...(operatorName ? { operatorName } : {})
+        });
+      }
       if (!options.larkAvatar) return undefined;
       const avatarService = await resolveService(undefined, config.appId);
       return options.larkAvatar.resolveReactionRoute({
@@ -421,6 +451,50 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
         lineage
       )
     : undefined;
+  if (options.taskRecovery && !listeningDisabled && sessionBindingLookup && options.config) {
+    options.taskRecovery.setLarkPort({
+      async sendConfirmCard(record) {
+        const binding = await sessionBindingLookup(record.sessionId).catch(() => undefined);
+        if (!binding) return undefined;
+        const botConfig = await readLarkConfig(options.config!, binding.appId);
+        if (!botConfig) return undefined;
+        const botService = await resolveService(undefined, binding.appId);
+        const cardId = createTaskRecoveryLarkCardId();
+        const card = buildTaskRecoveryConfirmCard({
+          record,
+          cardId,
+          ...(botConfig.webBaseUrl ? { webBaseUrl: botConfig.webBaseUrl } : {})
+        });
+        const recipient = binding.receiveIdType === 'open_id'
+          ? { receiveId: binding.chatId, receiveIdType: 'open_id' as const }
+          : { chatId: binding.chatId };
+        const sent = await botService.sendInteractiveCard({
+          ...recipient,
+          card,
+          idempotencyKey: `trec-${cardId}`.slice(0, 50)
+        });
+        turnTracker.markOutboundMessage(sent.messageId);
+        return {
+          appId: binding.appId,
+          chatId: sent.chatId ?? binding.chatId,
+          messageId: sent.messageId,
+          cardId
+        };
+      },
+      async updateCard(record) {
+        if (!record.larkAppId || !record.larkMessageId) return;
+        const botConfig = await readLarkConfig(options.config!, record.larkAppId);
+        const botService = await resolveService(undefined, record.larkAppId);
+        await botService.updateInteractiveCard({
+          messageId: record.larkMessageId,
+          card: buildTaskRecoveryResolvedCard({
+            record,
+            ...(botConfig?.webBaseUrl ? { webBaseUrl: botConfig.webBaseUrl } : {})
+          })
+        });
+      }
+    });
+  }
   // 绑定飞书群/私聊全轮次实时同步：统一承接全部非飞书入站轮次（系统督办 / Web 对话 / 定时任务 / 可选整理维护）
   // 及其末尾纯 XML 交互插件卡片推送；飞书入站轮次由 LarkMessageCoordinator 独占处理，两边通过共享
   // turnTracker 互斥归属 + 强幂等卡片派发层彻底杜绝重复推卡（不再额外挂载独立的延迟桥接监听）。

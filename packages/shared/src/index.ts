@@ -9,7 +9,9 @@ export * from './boards.js';
 export * from './ask-user-question.js';
 export * from './output-plugins/index.js';
 export * from './themes.js';
+export * from './task-recovery.js';
 import type { BoardRepository } from './boards.js';
+import type { TaskRecoveryRepository } from './task-recovery.js';
 
 export const highRiskPatternMaxLength = 4_096;
 export type RegexPatternValidation = { valid: true } | { valid: false; error: string };
@@ -594,6 +596,7 @@ export interface RepositoryBundle {
   projects: ProjectRepository;
   usage: UsageRepository;
   boards: BoardRepository;
+  taskRecoveries: TaskRecoveryRepository;
   close(): void;
 }
 

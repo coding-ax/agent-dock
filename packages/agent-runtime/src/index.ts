@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import type { AgentConfig, AgentEvent, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, RuntimeActivityEvent, RuntimeTurnEvent, RuntimeTurnStartedEvent, Session, SessionInterruptIntent, SessionUsageDetail, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy, TurnEventKind, TurnUsageRecord, UsageBreakdown, UsageBreakdownGroup, UsageQueryFilter, UsageSummary } from '@agent-dock/agent-dock-shared';
+import type { AgentConfig, AgentEvent, DaemonRestartInterruptedCandidate, EventType, ImportedTurn, PermissionMode, PermissionRequestData, ProjectRecord, RepositoryBundle, RuntimeActivityEvent, RuntimeTurnEvent, RuntimeTurnStartedEvent, Session, SessionInterruptIntent, SessionUsageDetail, StartSessionInput, TaskRecord, ToolCallData, ToolRiskPolicy, TurnEventKind, TurnUsageRecord, UsageBreakdown, UsageBreakdownGroup, UsageQueryFilter, UsageSummary } from '@agent-dock/agent-dock-shared';
 import { basename } from 'node:path';
 import { resolveProjectPath } from './project-path.js';
-import { ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, agentConfigSchema, BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, isAgentAuthErrorText, isDeferredAsyncWaitText, makeId, mergeSessionOutputPluginsPatch, normalizeSessionOutputPlugins, now, pickFinalAssistantText, RuntimeError, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
+import { ACPX_DEFERRED_WAIT_CORRECTION_PROMPT, agentConfigSchema, BUILTIN_ASK_USER_QUESTION_PLUGIN_ID, isAgentAuthErrorText, isDeferredAsyncWaitText, makeId, mergeSessionOutputPluginsPatch, normalizeSessionOutputPlugins, now, pickFinalAssistantText, RuntimeError, TASK_RECOVERY_ORIGIN, unresolvedToolCallsAfterAnswer } from '@agent-dock/agent-dock-shared';
 export type { AgentConfig };
 import { AcpxAdapter, describeAcpError, wrapAgentForSsh, type NormalizedDriverEvent } from '@agent-dock/agent-dock-acp-client';
 import { JsonlTransport, PipeTransport, probeAgent, PtyTransport, type ProbeMatrix } from '@agent-dock/agent-dock-transports';
@@ -172,6 +172,20 @@ function mentionsActiveWriter(error: unknown) {
   return false;
 }
 
+function maxIsoTimestamp(values: Array<string | null | undefined>): string | undefined {
+  let bestIso: string | undefined;
+  let bestMs = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (!value) continue;
+    const ms = Date.parse(value);
+    if (Number.isFinite(ms) && ms > bestMs) {
+      bestMs = ms;
+      bestIso = value;
+    }
+  }
+  return bestIso;
+}
+
 export class AgentDockRuntime {
   private readonly emitter = new EventEmitter();
   private readonly drivers = new Map<string, AgentDriver>();
@@ -212,6 +226,8 @@ export class AgentDockRuntime {
   // 12 秒后第二次到达，两次都是 202，于是跑了两轮）。key 优先用客户端生成的 clientMessageId，
   // 老客户端没有这个字段时退回「同会话 + 同 prompt 的短窗口」。
   private readonly recentSends = new Map<string, RecentSend>();
+  /** 本次 initialize() 在把残留运行任务标记为 interrupted 之前采集到的中断快照，供断点恢复审计使用。 */
+  private startupInterruptedTasks: DaemonRestartInterruptedCandidate[] = [];
 
   constructor(private readonly repos: RepositoryBundle, private readonly options: RuntimeOptions = {}) {
     this.streamCoalescer = new StreamEventCoalescer({
@@ -348,7 +364,12 @@ export class AgentDockRuntime {
     return wrapAgentForSsh(configured, session.sshHost, session.cwd, { localCwd: process.cwd() });
   }
 
+  getStartupInterruptedTasks(): DaemonRestartInterruptedCandidate[] {
+    return [...this.startupInterruptedTasks];
+  }
+
   async initialize(agents: AgentConfig[]) {
+    this.startupInterruptedTasks = [];
     // Configuration is the source of truth on every boot and removes built-ins
     // that are no longer discovered from the ACPX registry. Panel edits to
     // built-ins survive via stored-row merge (see mergeDiscoveredAgent).
@@ -358,6 +379,9 @@ export class AgentDockRuntime {
     const storedById = new Map(existingRows.map(row => [row.id, row]));
     for (const agent of agents) await this.repos.agents.save(mergeDiscoveredAgent(storedById.get(agent.id), agent));
     for (const session of await this.repos.sessions.list()) {
+      const previousSessionState = session.state;
+      const previousInterruptIntent = session.interruptIntent;
+      const previousSessionUpdatedAt = session.updatedAt;
       if (session.permissionMode !== 'full-trust') {
         session.permissionMode = 'full-trust';
         session.updatedAt = now();
@@ -374,15 +398,41 @@ export class AgentDockRuntime {
         await this.repos.sessions.save(session);
         continue;
       }
-      const orphaned = persistedTasks.filter(task => task.status === 'running');
+      const orphaned = persistedTasks
+        .filter(task => task.status === 'running')
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+      const hasQueuedTasks = persistedTasks.some(task => task.status === 'queued');
       if (orphaned.length) {
-        const message = 'AgentDock 守护进程重启，正在进行的任务已中断';
+        const [latestEvent] = await this.repos.events.listRecent(session.id, 1);
+        const detectedAt = now();
+        const resolvedIntent: SessionInterruptIntent = previousSessionState === 'interrupting' || previousInterruptIntent === 'user'
+          ? 'user'
+          : previousInterruptIntent === 'agent_cancelled'
+            ? 'agent_cancelled'
+            : 'daemon_restart';
+        const message = resolvedIntent === 'daemon_restart'
+          ? 'AgentDock 守护进程重启，正在进行的任务已中断'
+          : undefined;
         for (const task of orphaned) {
+          const lastActiveAt = maxIsoTimestamp([task.createdAt, task.updatedAt, previousSessionUpdatedAt, latestEvent?.timestamp]) ?? detectedAt;
+          this.startupInterruptedTasks.push({
+            sessionId: session.id,
+            taskId: task.id,
+            prompt: task.prompt,
+            origin: task.origin ?? null,
+            previousSessionState,
+            ...(previousInterruptIntent ? { previousInterruptIntent } : {}),
+            lastActiveAt,
+            detectedAt,
+            hasQueuedTasks
+          });
           await this.saveTask(task, 'interrupted');
-          await this.repos.artifacts.saveError(session.id, message);
-          await this.emit(session.id, 'error', { message });
+          if (message) {
+            await this.repos.artifacts.saveError(session.id, message);
+            await this.emit(session.id, 'error', { message });
+          }
         }
-        await this.saveState(session, 'interrupted', message, 'daemon_restart');
+        await this.saveState(session, 'interrupted', message, resolvedIntent);
       } else if (['starting', 'thinking', 'running_tool', 'waiting_for_permission', 'interrupting'].includes(session.state)) {
         // 即使 tasks 表里没有 running 任务（例如崩溃发生在落任务终态与落会话态之间，或重连/打断途中退出），
         // 残留的忙碌状态也不能带进新进程；否则前端与调度会误判会话仍在运行。
@@ -394,6 +444,8 @@ export class AgentDockRuntime {
           await this.saveState(session, 'completed');
         } else if (session.state === 'starting') {
           await this.saveState(session, 'idle');
+        } else if (previousSessionState === 'interrupting') {
+          await this.saveState(session, 'interrupted', undefined, 'user');
         } else {
           const message = 'AgentDock 守护进程重启，残留的运行状态已恢复';
           await this.saveState(session, 'interrupted', message, 'daemon_restart');
@@ -1189,7 +1241,7 @@ export class AgentDockRuntime {
         await this.saveTask(task, 'running');
         // 这一条就是轮次锚点：它是本会话唯一可靠的「这一轮从哪开始」的标记，
         // 判终态、面板切轮、按轮取事件全靠它，所以序号要留一份在手上。
-        const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' || task.origin === 'maintenance' || task.origin === 'handoff' ? { detail: agentPrompt } : {}) });
+        const anchor = await this.emit(id, 'text', { text: task.prompt, role: 'user', taskId: task.id, ...(task.origin ? { origin: task.origin } : {}), ...(task.origin === 'injected' || task.origin === 'maintenance' || task.origin === 'handoff' || task.origin === TASK_RECOVERY_ORIGIN ? { detail: agentPrompt } : {}) });
         if (!anchor) throw new RuntimeError('EVENT_NOT_PERSISTED', '轮次锚点未能落库', 500);
         this.turnAnchors.set(task.id, anchor.sequence);
         this.emitTurnStart(session, task);

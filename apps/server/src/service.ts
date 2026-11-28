@@ -27,6 +27,7 @@ import { AssistantService } from './assistant/service.js';
 import { createLarkNotifier } from './assistant/notify.js';
 import { defaultSessionTokenTtlMs, initWebAccess, issueMasterToken, loadOrCreateWebAccessSecret } from './web-access.js';
 import { ShareLinkService } from './share-link.js';
+import { TaskRecoveryService } from './task-recovery/service.js';
 
 export interface StartLocalServerOptions { env?: NodeJS.ProcessEnv; webRoot?: string; groupToolsCommand?: string; /** 当前 CLI 入口，给界面一键升级跑 `agent-dock update`；不传则不挂升级路由。 */ cliEntrypoint?: string }
 export interface LocalServer {
@@ -94,6 +95,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
   let themes: ThemeService | undefined;
   let larkAvatar: LarkAvatarService | undefined;
   let keepAwake: KeepAwakeService | undefined;
+  let taskRecovery: TaskRecoveryService | undefined;
   let closed = false;
   let webAuth: { enabled: boolean; secret?: string; sessionTokenTtlMs?: number } = { enabled: false };
   try {
@@ -195,7 +197,18 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     // 分享链接接口始终挂载：访问防护关闭时 build() 会返回可操作的 409，
     // 界面据此提示用户开启局域网访问，而不是显示一个 404「接口不存在」。
     const shareLinks = new ShareLinkService({ host: config.host, port: config.port, secret: webAuth.secret ?? '', config: repos.config, env });
-    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, outputPlugins, askUserQuestion, notifications, boards, themes, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, turnTracker: larkTurnTracker, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
+    taskRecovery = new TaskRecoveryService({
+      repos,
+      runtime,
+      isAssistantManaged: session => {
+        if (session.source === 'assistant-main' || session.source === 'assistant-task') return true;
+        if (assistant?.mainSessionId && session.id === assistant.mainSessionId) return true;
+        if (assistant?.isTaskSession(session.id)) return true;
+        if (assistant?.lifecycle.lineage().some(cat => cat.sessionId === session.id)) return true;
+        return false;
+      }
+    });
+    app = await buildApp(runtime, { webRoot, webAuth, shareLinks, schedules, ...(assistant ? { assistant } : {}), ...(selfUpdate ? { selfUpdate } : {}), system: { keepAwake, ...(autostart ? { autostart } : {}) }, llm: { service: llm }, sideChatConfig, outputPlugins, askUserQuestion, notifications, boards, themes, taskRecovery, lark: { env, config: repos.config, agents: repos.agents, cardMappings: repos.channelMappings, runtime, agentTools, turnTracker: larkTurnTracker, listeningDisabled: env.AGENTDOCK_DISABLE_LARK_LISTENER === 'true' }, larkAvatar });
     await app.listen(listenOptions(config));
     // 听到端口后再开始扫描：启动失败时不会先投递出去一半。
     notifications.start();
@@ -203,11 +216,13 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
     schedules.start();
     assistant?.start();
     larkAvatar.start();
+    taskRecovery.start();
   } catch (error) {
     keepAwake?.close();
     boards?.close();
     themes?.close();
     const results = await Promise.allSettled([
+      taskRecovery?.close() ?? Promise.resolve(),
       notifications?.close() ?? Promise.resolve(),
       schedules?.stop() ?? Promise.resolve(),
       app?.close() ?? Promise.resolve(),
@@ -232,6 +247,7 @@ export async function startLocalServer(options: StartLocalServerOptions = {}): P
       keepAwake?.close();
       boards?.close();
       themes?.close();
+      await taskRecovery?.close();
       await notifications?.close();
       await larkAvatar?.close();
       await schedules?.stop();

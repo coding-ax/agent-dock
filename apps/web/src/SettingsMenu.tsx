@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
 import { useEventListener } from 'ahooks';
 import { useQuery } from '@tanstack/react-query';
-import { AlarmClock, Archive, BarChart3, Bell, Bot, FolderOpen, MessagesSquare, MonitorDown, Palette, PawPrint, Puzzle, Regex, Settings, Settings2, Smartphone } from 'lucide-react';
-import { api } from './api';
+import { AlarmClock, Archive, BarChart3, Bell, Bot, FolderOpen, MessagesSquare, MonitorDown, Palette, PawPrint, Puzzle, Regex, RotateCcw, Settings, Settings2, Smartphone } from 'lucide-react';
+import { api, type TaskRecoveryMode } from './api';
+import { taskRecoveryModeShortLabel } from './TaskRecoverySettingsDialog';
 import { AutostartToggle } from './AutostartToggle';
 import { KeepAwakeToggle } from './KeepAwakeToggle';
 import { resolveDesktopUpdateBadge, useDesktopUpdate } from './desktop-update';
@@ -28,11 +29,12 @@ const itemClass = 'ui-press flex h-[34px] w-full items-center gap-2.5 rounded-lg
  *
  * 弹层只用 hidden 切换、不条件渲染：SelfUpdateNotice 里有「升级中轮询版本号、完成后刷新页面」的状态，卸载就丢了。
  */
-export function SettingsMenu({ webDenied, archivedCount, outputPluginsEnabledCount, outputPluginsTotalCount, onUsage, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onOutputPlugins, onAssistant, onNotifications, onLark, onLarkRegexTriggers, onLarkAvatar, onThemeStudio, onShare }: {
+export function SettingsMenu({ webDenied, archivedCount, outputPluginsEnabledCount, outputPluginsTotalCount, taskRecoveryMode, onUsage, onSchedule, onArchived, onImport, onAgentConfig, onSideChatConfig, onOutputPlugins, onTaskRecovery, onAssistant, onNotifications, onLark, onLarkRegexTriggers, onLarkAvatar, onThemeStudio, onShare }: {
   webDenied: boolean;
   archivedCount: number;
   outputPluginsEnabledCount?: number;
   outputPluginsTotalCount?: number;
+  taskRecoveryMode?: TaskRecoveryMode;
   onUsage(): void;
   onSchedule(): void;
   onArchived(): void;
@@ -40,6 +42,7 @@ export function SettingsMenu({ webDenied, archivedCount, outputPluginsEnabledCou
   onAgentConfig(): void;
   onSideChatConfig(): void;
   onOutputPlugins?(): void;
+  onTaskRecovery?(): void;
   onAssistant(): void;
   onNotifications?(): void;
   onLark(): void;
@@ -91,6 +94,17 @@ export function SettingsMenu({ webDenied, archivedCount, outputPluginsEnabledCou
           {outputPluginsTotalCount !== undefined && outputPluginsTotalCount > 0 && (
             <span className="ml-auto shrink-0 rounded-full border border-zinc-200 bg-zinc-50 px-1.5 py-px text-[11px] font-normal tabular-nums text-zinc-500">
               {outputPluginsEnabledCount ?? 0}/{outputPluginsTotalCount}
+            </span>
+          )}
+        </button>
+      )}
+      {onTaskRecovery && (
+        <button type="button" role="menuitem" data-testid="settings-task-recovery-item" onClick={pick(onTaskRecovery)} className={itemClass}>
+          <RotateCcw size={16}/>
+          <span>中断自动恢复</span>
+          {taskRecoveryMode && (
+            <span className="ml-auto shrink-0 rounded-full border border-zinc-200 bg-zinc-50 px-1.5 py-px text-[11px] font-normal text-zinc-500">
+              {taskRecoveryModeShortLabel(taskRecoveryMode)}
             </span>
           )}
         </button>

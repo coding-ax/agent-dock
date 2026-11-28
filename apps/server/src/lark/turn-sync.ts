@@ -3,6 +3,8 @@ import {
   defaultOutputPluginRegistry,
   pickFinalAssistantText,
   resolveOutputPluginEnabled,
+  stripRecoveryVisiblePrefix,
+  TASK_RECOVERY_ORIGIN,
   type AgentEvent,
   type ChannelMappingRepository,
   type ConfigRepository,
@@ -132,6 +134,16 @@ export function classifyTurnSource(input: {
     };
   }
 
+  if (origin === TASK_RECOVERY_ORIGIN) {
+    return {
+      category: 'web',
+      badge: '🔄 断点续跑',
+      label: '断点续跑',
+      tagColor: 'wathet',
+      detailLabel: '断点续跑'
+    };
+  }
+
   if (origin === 'board-mention') {
     return {
       category: 'web',
@@ -159,8 +171,10 @@ export function classifyTurnSource(input: {
   };
 }
 
-export function isTurnCategoryEnabled(config: LarkTurnSyncConfig, category: LarkSyncTurnCategory): boolean {
+export function isTurnCategoryEnabled(config: LarkTurnSyncConfig, category: LarkSyncTurnCategory, taskOrigin?: string | null): boolean {
   if (!config.enabled) return false;
+  // 断点续跑轮次属于被动中断的延续：只要总同步开关开启，始终同步回原绑定飞书群/私聊，不受 web 子开关误挡。
+  if (taskOrigin === TASK_RECOVERY_ORIGIN) return true;
   return config.sources[category] === true;
 }
 
@@ -267,6 +281,10 @@ export function formatSyncedTaskName(
   }
   let compact = raw.replace(/\s+/g, ' ').trim();
   if (!compact) return source.detailLabel ?? source.label;
+  if (taskOrigin === TASK_RECOVERY_ORIGIN) {
+    const cleaned = stripRecoveryVisiblePrefix(compact);
+    return redactSensitiveContent(cleaned || '服务重启断点续跑', secrets).slice(0, 80);
+  }
   if (source.category === 'supervision' && source.detailLabel) {
     const cleaned = compact.replace(/^📋\s*督办\s*·\s*/, '').trim();
     if (cleaned && !cleaned.includes(source.detailLabel)) {
@@ -757,7 +775,7 @@ export class LarkTurnSyncService {
 
     const syncConfig = normalizeLarkTurnSyncConfig(target.turnSyncOverride, normalizeLarkTurnSyncConfig(botConfig.turnSync));
     const source = classifyTurnSource({ taskOrigin: event.taskOrigin, prompt: event.prompt });
-    if (!isTurnCategoryEnabled(syncConfig, source.category)) {
+    if (!isTurnCategoryEnabled(syncConfig, source.category, event.taskOrigin)) {
       return { tracked: false, reason: `category_disabled:${source.category}` };
     }
 
@@ -908,7 +926,7 @@ export class LarkTurnSyncService {
       const sentPrompt = taskRecord?.sentPrompt ?? '';
       const taskOrigin = event.taskOrigin ?? taskRecord?.origin ?? undefined;
       const source = classifyTurnSource({ taskOrigin, prompt, sentPrompt });
-      if (!isTurnCategoryEnabled(syncConfig, source.category)) {
+      if (!isTurnCategoryEnabled(syncConfig, source.category, taskOrigin)) {
         return { action: 'skipped', reason: `category_disabled:${source.category}` };
       }
 

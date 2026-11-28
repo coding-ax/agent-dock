@@ -3425,7 +3425,7 @@ export interface LarkLongConnectionListenerOptions {
    * 用于 AI 替身的「询问」卡片按钮。
    */
   onCardAction?: (value: unknown, operatorOpenId: string | undefined, config: StoredLarkConfig) =>
-    Promise<{ type: 'success' | 'warning' | 'error'; content: string } | undefined> | { type: 'success' | 'warning' | 'error'; content: string } | undefined;
+    Promise<{ type: 'info' | 'success' | 'warning' | 'error'; content: string } | undefined> | { type: 'info' | 'success' | 'warning' | 'error'; content: string } | undefined;
   /**
    * 监听在后台耗尽重连次数（或遇到不可恢复错误）后回调。
    * 注意：正常 stop() 不触发。由上层（pool）决定是否冷却后重建，listener 自身不自愈。

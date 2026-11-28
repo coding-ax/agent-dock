@@ -89,3 +89,28 @@ export const boardEvents = sqliteTable('board_events', {
   payloadJson: text('payload_json').notNull(),
   createdAt: text('created_at').notNull()
 });
+
+export const taskRecoveries = sqliteTable('task_recoveries', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  interruptedTaskId: text('interrupted_task_id').notNull(),
+  rootTaskId: text('root_task_id').notNull(),
+  originalPrompt: text('original_prompt').notNull(),
+  originalOrigin: text('original_origin'),
+  interruptReason: text('interrupt_reason').notNull().default('daemon_restart'),
+  interruptedAt: text('interrupted_at').notNull(),
+  detectedAt: text('detected_at').notNull(),
+  mode: text('mode').notNull(),
+  status: text('status').notNull(),
+  skipReason: text('skip_reason'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  recoveryTaskId: text('recovery_task_id'),
+  decidedSource: text('decided_source'),
+  decidedBy: text('decided_by'),
+  decidedAt: text('decided_at'),
+  larkAppId: text('lark_app_id'),
+  larkChatId: text('lark_chat_id'),
+  larkMessageId: text('lark_message_id'),
+  larkCardId: text('lark_card_id'),
+  ...timestamps
+});

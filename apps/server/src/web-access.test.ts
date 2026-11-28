@@ -42,6 +42,11 @@ describe('web-access tokens', () => {
     expect(sessionTokenAllows('GET', '/api/usage/breakdown', claim!.sessionId!)).toBe(false);
     expect(sessionTokenAllows('GET', '/api/sessions/ses_1/usage', claim!.sessionId!)).toBe(true);
     expect(sessionTokenAllows('GET', '/api/sessions/ses_2/usage', claim!.sessionId!)).toBe(false);
+    expect(sessionTokenAllows('GET', '/api/sessions/ses_1/recoveries', claim!.sessionId!)).toBe(true);
+    expect(sessionTokenAllows('POST', '/api/sessions/ses_1/recoveries/rec_1/decide', claim!.sessionId!)).toBe(true);
+    expect(sessionTokenAllows('GET', '/api/sessions/ses_2/recoveries', claim!.sessionId!)).toBe(false);
+    expect(sessionTokenAllows('GET', '/api/task-recovery/config', claim!.sessionId!)).toBe(true);
+    expect(sessionTokenAllows('PUT', '/api/task-recovery/config', claim!.sessionId!)).toBe(false);
     expect(sessionTokenAllows('POST', '/api/system/select-directory', claim!.sessionId!)).toBe(false);
     expect(sessionTokenAllows('POST', '/api/sessions', claim!.sessionId!)).toBe(false);
   });

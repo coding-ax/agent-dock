@@ -4,11 +4,13 @@ import {
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
   defaultOutputPluginRegistry,
   outputPluginInstanceKey,
+  TASK_RECOVERY_ORIGIN,
   type AskUserQuestionAnswerItem,
   type AskUserQuestionAnswerPayload,
   type AskUserQuestionSpec,
   type OutputPluginMetadata,
-  type OutputPluginRegistry
+  type OutputPluginRegistry,
+  type TaskRecoveryRecord
 } from '@agent-dock/agent-dock-shared';
 import { Spinner } from './Loaders';
 import { buildActivitySteps, thinkingTitle, EMOJI_TRIGGER_ORIGIN, eventRenderSignature, groupRenderSignature, type ActivityStep, type TimelineActivityGroup, type TimelineEvent } from './timeline';
@@ -21,6 +23,7 @@ import { toolDetailView, type ToolDetailView } from './tool-detail';
 import { SupervisionNotice } from './companion/SupervisionNotice';
 import { SystemRoundNotice } from './companion/LifecycleNotices';
 import { isSystemRoundOrigin } from './companion/lifecycle-model';
+import { TaskRecoveryNotice } from './TaskRecoveryTimeline';
 import { UserMessageTime } from './SendTimeHint';
 import { Disclosure } from './Disclosure';
 
@@ -383,6 +386,7 @@ export const TimelineItem = memo(function TimelineItem({
   assistantLabel = 'Agent',
   sessionId,
   sentPrompt,
+  recoveryRecord,
   askUserQuestionXmlEnabled = true,
   outputPluginRegistry = defaultOutputPluginRegistry,
   enabledOutputPluginIds,
@@ -406,6 +410,8 @@ export const TimelineItem = memo(function TimelineItem({
   sessionId?: string;
   /** 该轮实际提交给 Agent 的完整文本，用于拆出隐式注入前缀并展示在气泡内。 */
   sentPrompt?: string | null;
+  /** 若该轮为断点续跑轮次，附带对应的恢复记录（展示触发来源与操作人）。 */
+  recoveryRecord?: TaskRecoveryRecord;
   askUserQuestionXmlEnabled?: boolean;
   outputPluginRegistry?: OutputPluginRegistry;
   enabledOutputPluginIds?: ReadonlySet<string>;
@@ -461,6 +467,12 @@ export const TimelineItem = memo(function TimelineItem({
     const baseDetail = typeof event.data.detail === 'string' ? event.data.detail : '';
     const detail = sentPrompt && sentPrompt.length > baseDetail.length ? sentPrompt : baseDetail;
     return <SystemRoundNotice origin={event.data.origin} text={event.data.text} detail={detail} timestamp={event.timestamp} taskId={typeof event.data.taskId === 'string' ? event.data.taskId : undefined} sessionId={sessionId}/>;
+  }
+  // 普通会话任务断点续跑轮次：展示清晰的「断点续跑」来源徽标与可展开自检指令，不画成普通用户气泡。
+  if (event.data.origin === TASK_RECOVERY_ORIGIN) {
+    const baseDetail = typeof event.data.detail === 'string' ? event.data.detail : '';
+    const detail = sentPrompt && sentPrompt.length > baseDetail.length ? sentPrompt : baseDetail;
+    return <TaskRecoveryNotice text={event.data.text} detail={detail} timestamp={event.timestamp} recoveryRecord={recoveryRecord}/>;
   }
   const user = event.data.role === 'user';
   if (user) {
@@ -545,6 +557,7 @@ export const TimelineItem = memo(function TimelineItem({
   return assistant;
 }, (prev, next) => prev.final === next.final && prev.streaming === next.streaming && prev.assistantLabel === next.assistantLabel && prev.sessionId === next.sessionId
   && prev.sentPrompt === next.sentPrompt
+  && prev.recoveryRecord === next.recoveryRecord
   && prev.askUserQuestionXmlEnabled === next.askUserQuestionXmlEnabled
   && prev.outputPluginRegistry === next.outputPluginRegistry
   && sameStringSet(prev.enabledOutputPluginIds, next.enabledOutputPluginIds)

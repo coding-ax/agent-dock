@@ -191,6 +191,55 @@ describe('runtime lifecycle acceptance', () => {
     expect((await h.runtime.getSession('ses_orphaned'))).toMatchObject({ state: 'interrupted', interruptIntent: 'daemon_restart' });
     const events = await h.runtime.getEvents('ses_orphaned');
     expect(events.some(e => e.type === 'error' && e.data.message.includes('守护进程重启'))).toBe(true);
+    expect(h.runtime.getStartupInterruptedTasks()).toEqual([
+      expect.objectContaining({
+        sessionId: 'ses_orphaned',
+        taskId: 'task_orphaned',
+        prompt: 'long task',
+        previousSessionState: 'running_tool',
+        lastActiveAt: timestamp
+      })
+    ]);
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('preserves pre-restart lastActiveAt from latest event and marks interrupting sessions as user stop', async () => {
+    const h = harness();
+    const createdAt = '2026-11-28T06:00:00.000Z';
+    const lastEventAt = '2026-11-28T06:12:30.000Z';
+    await h.repos.sessions.save({ id: 'ses_active_event', agentId: 'mock', state: 'thinking', cwd: '/tmp', permissionMode: 'full-trust', protocol: 'acp', runId: 'run_old', createdAt, updatedAt: createdAt });
+    await h.repos.tasks.save({ id: 'task_active_event', sessionId: 'ses_active_event', prompt: 'active task', status: 'running', createdAt, updatedAt: createdAt });
+    await h.repos.events.append({ id: 'evt_last', sessionId: 'ses_active_event', sequence: 1, type: 'thinking', timestamp: lastEventAt, data: { text: 'working' } });
+
+    await h.repos.sessions.save({ id: 'ses_interrupting', agentId: 'mock', state: 'interrupting', cwd: '/tmp', permissionMode: 'full-trust', protocol: 'acp', runId: 'run_old', createdAt, updatedAt: createdAt });
+    await h.repos.tasks.save({ id: 'task_interrupting', sessionId: 'ses_interrupting', prompt: 'stopping task', status: 'running', createdAt, updatedAt: createdAt });
+
+    await h.runtime.initialize([agent]);
+    expect(await h.runtime.getSession('ses_interrupting')).toMatchObject({ state: 'interrupted', interruptIntent: 'user' });
+    const candidates = h.runtime.getStartupInterruptedTasks();
+    expect(candidates.find(c => c.taskId === 'task_active_event')).toMatchObject({
+      lastActiveAt: lastEventAt,
+      previousSessionState: 'thinking'
+    });
+    expect(candidates.find(c => c.taskId === 'task_interrupting')).toMatchObject({
+      previousSessionState: 'interrupting'
+    });
+    await h.runtime.shutdown(); h.repos.close();
+  });
+
+  it('stores detail on anchor event for recovery origin turns', async () => {
+    const h = harness({ onSend: emit => emit({ type: 'text', data: { text: 'resumed ok' } }) });
+    await h.runtime.initialize([agent]);
+    const session = await h.runtime.start({ agentId: 'mock' });
+    const dispatched = await h.runtime.dispatch(session.id, '🔄 断点续跑：检查任务', 'queue', '[AgentDock 系统断点续跑指令]\n请先检查工作区', undefined, 'recovery');
+    await vi.waitFor(async () => expect((await h.runtime.getTasks(session.id)).find(t => t.id === dispatched.id)?.status).toBe('completed'));
+    const events = await h.runtime.getEvents(session.id);
+    const anchor = events.find(e => e.type === 'text' && e.data?.taskId === dispatched.id && e.data?.role === 'user');
+    expect(anchor?.data).toMatchObject({
+      origin: 'recovery',
+      text: '🔄 断点续跑：检查任务',
+      detail: '[AgentDock 系统断点续跑指令]\n请先检查工作区'
+    });
     await h.runtime.shutdown(); h.repos.close();
   });
 

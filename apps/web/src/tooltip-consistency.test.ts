@@ -34,7 +34,9 @@ const files = [
   'output-plugins/ConfirmActionCard.tsx',
   'output-plugins/DeclarativeOutputPluginCard.tsx',
   'ThemeStudioDialog.tsx',
-  'ThemeToggle.tsx'
+  'ThemeToggle.tsx',
+  'TaskRecoverySettingsDialog.tsx',
+  'TaskRecoveryTimeline.tsx'
 ];
 
 const read = (name: string) => readFileSync(join(sourceDir, name), 'utf8');

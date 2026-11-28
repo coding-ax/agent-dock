@@ -180,5 +180,6 @@ export function sessionTokenAllows(method: string, pathname: string, sessionId: 
     || pathname === '/api/output-plugins'
     || pathname === '/api/themes'
     || pathname === '/api/themes/stream'
-    || pathname === '/api/notifications/stream';
+    || pathname === '/api/notifications/stream'
+    || pathname === '/api/task-recovery/config';
 }
