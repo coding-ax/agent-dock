@@ -1432,4 +1432,56 @@ describe('LarkTurnSyncService', () => {
       { chatId: 'oc_rec_dm', sourceBadge: { label: '🔄 断点续跑', color: 'wathet' }, taskName: '整理周报' }
     ]);
   });
+
+  it('attaches Lark turquoise source badge with Lark logo icon when syncing emoji reaction turns', async () => {
+    const repos = createTestRepos();
+    const appId = 'cli_emoji_sync';
+    await seedBot(repos, { appId });
+    await bindHandover(repos, { appId, chatId: 'oc_handover_emoji', sessionId: 'ses_main_emoji', name: '小猫督办群' });
+
+    const fakeRuntime = new FakeSyncRuntime();
+    fakeRuntime.addSession({ id: 'ses_main_emoji', source: 'assistant-main' });
+    const cardService = fakeCardService();
+    const sync = new LarkTurnSyncService({
+      runtime: fakeRuntime,
+      configRepository: repos.config,
+      cardMappings: repos.channelMappings,
+      turnTracker: new LarkTurnTracker(),
+      resolveService: async () => cardService,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    });
+    cleanups.push(() => sync.close());
+
+    const stamp = new Date().toISOString();
+    fakeRuntime.addTask({
+      id: 'task_emoji_1',
+      sessionId: 'ses_main_emoji',
+      prompt: '飞书表情触发（OK）：请帮我看下这条消息',
+      origin: 'emoji',
+      status: 'completed',
+      finalText: '已处理该消息。',
+      createdAt: stamp,
+      updatedAt: stamp
+    });
+
+    const outcome = await sync.handleTurnEvent({
+      id: 'te_emoji_1',
+      kind: 'completed',
+      sessionId: 'ses_main_emoji',
+      taskId: 'task_emoji_1',
+      agentId: 'claude',
+      taskOrigin: 'emoji',
+      summary: '已处理该消息。',
+      timestamp: stamp
+    });
+
+    expect(outcome).toMatchObject({ action: 'synced_card', category: 'web', chatId: 'oc_handover_emoji' });
+    expect(cardService.send).toHaveBeenCalledTimes(1);
+    expect(cardService.send.mock.calls[0]![0]).toMatchObject({
+      chatId: 'oc_handover_emoji',
+      state: 'completed',
+      readOnly: true,
+      sourceBadge: { label: '🕊️ 飞书表情', color: 'turquoise' }
+    });
+  });
 });

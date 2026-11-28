@@ -10,6 +10,11 @@ import {
 } from '@agent-dock/agent-dock-shared';
 import { getActiveServerLocale } from '../../locale-service.js';
 import { webAccessSessionToken } from '../../web-access.js';
+import {
+  buildInteractionSourceLarkBadge,
+  buildLarkInteractiveDefaultSourceBadge,
+  buildLarkSourceBadgeElement
+} from '../service.js';
 import type { LarkOutputPluginAdapter } from './types.js';
 
 export const LARK_CONFIRM_ACTION_DECIDE = 'confirm_action_decide';
@@ -105,7 +110,7 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
     return action === LARK_CONFIRM_ACTION_PREVIEW;
   },
 
-  buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, locale: explicitLocale }) {
+  buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, sourceBadge, locale: explicitLocale }) {
     const locale = explicitLocale ?? getActiveServerLocale();
     const baseTitle = spec.title?.trim() || tShared(locale, 'lark.confirm.defaultTitle');
     const title = previewBanner ? `${previewBanner} ${baseTitle}` : baseTitle;
@@ -116,6 +121,11 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
     const colon = locale === 'en-US' ? ': ' : '：';
 
     const elements: Array<Record<string, unknown>> = [];
+    const badgeEl = buildLarkSourceBadgeElement(
+      sourceBadge ?? buildLarkInteractiveDefaultSourceBadge(locale, Boolean(previewMode)),
+      { margin: '0px 0px 4px 0px' }
+    );
+    if (badgeEl) elements.push(badgeEl);
 
     elements.push({
       tag: 'markdown',
@@ -256,7 +266,7 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
     };
   },
 
-  buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner, locale: explicitLocale }) {
+  buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner, sourceBadge, locale: explicitLocale }) {
     const locale = explicitLocale ?? getActiveServerLocale();
     const confirmed = payload.decision === 'confirm';
     const responder = payload.responderName?.trim() || payload.decidedBy?.trim();
@@ -277,10 +287,19 @@ export const confirmActionLarkAdapter: LarkOutputPluginAdapter<
       `**${tShared(locale, 'lark.confirm.resultLabel')}${colon}** <text_tag color='${confirmed ? 'green' : 'neutral'}'>${escapeLarkTagText(payload.decisionLabel, locale)}</text_tag>`
     ];
     if (payload.comment?.trim()) {
-      lines.push(`> ${tShared(locale, 'lark.confirm.commentNote', { text: escapeLarkInlineMd(payload.comment) })}`);
+      lines.push(`> ${tShared(locale, 'lark.confirm.commentNote', { text: escapeLarkInlineMd(truncatePlain(payload.comment, 800)) })}`);
     }
 
+    const answerBadgeEl = buildLarkSourceBadgeElement(
+      sourceBadge ?? buildInteractionSourceLarkBadge(payload.source, locale, { responderName: responder }),
+      {
+        note: payload.source === 'assistant' ? undefined : payload.decidedBy?.trim() || undefined,
+        margin: '0px 0px 4px 0px'
+      }
+    );
+
     const elements: Array<Record<string, unknown>> = [
+      ...(answerBadgeEl ? [answerBadgeEl] : []),
       {
         tag: 'markdown',
         content: lines.join('\n'),

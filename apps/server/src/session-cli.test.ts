@@ -98,8 +98,8 @@ describe('session control CLI', () => {
     await runSessionInterrupt('side', options);
     await runSessionCancel('side', 'task_queued', options);
     expect(requests).toEqual([
-      { method: 'POST', path: '/api/sessions/side/send', body: { prompt: '你好', mode: 'queue' } },
-      { method: 'POST', path: '/api/sessions/side/send', body: { prompt: '现在处理', mode: 'interrupt' } },
+      { method: 'POST', path: '/api/sessions/side/send', body: { prompt: '你好', mode: 'queue', origin: 'cli' } },
+      { method: 'POST', path: '/api/sessions/side/send', body: { prompt: '现在处理', mode: 'interrupt', origin: 'cli' } },
       { method: 'POST', path: '/api/sessions/side/interrupt', body: undefined },
       { method: 'DELETE', path: '/api/sessions/side/queue/task_queued', body: undefined }
     ]);

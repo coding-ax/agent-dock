@@ -138,8 +138,8 @@ export async function runSessionSend(targetId: string, message: string, options:
   if (options.mode && options.mode !== 'queue' && options.mode !== 'interrupt') throw new Error('发送模式只能是 queue 或 interrupt。');
   const state = requireDaemon(options.daemonDir);
   const fromId = await assertPeerTarget(state.database, targetId, options.from);
-  // 若发送方为主会话小猫且目标为侧边会话，自动标注 origin='assistant_reply'，避免伪装成人类直接输入。
-  let origin: string | undefined;
+  // 若发送方为主会话小猫且目标为侧边会话，自动标注 origin='assistant_reply'；其余命令行发送标注 origin='cli'。
+  let origin: string = 'cli';
   const repos = createRepositories(state.database);
   try {
     const [mainSessionId, fromSession, targetSession] = await Promise.all([
@@ -160,7 +160,7 @@ export async function runSessionSend(targetId: string, message: string, options:
   const result = await callDaemon(state, `/api/sessions/${encodeURIComponent(targetId)}/send`, 'POST', {
     prompt,
     mode: options.mode ?? 'queue',
-    ...(origin ? { origin } : {})
+    origin
   });
   return JSON.stringify({ ok: true, from: fromId, to: targetId, ...result }) + '\n';
 }

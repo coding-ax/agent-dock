@@ -1,4 +1,5 @@
 import type { Locale, OutputPluginDefinition } from '@agent-dock/agent-dock-shared';
+import type { LarkCardSourceBadge } from '../service.js';
 
 /** 持久化在 `channel_mappings` 中的通用飞书插件卡片记录。 */
 export interface PersistedLarkOutputPluginCard<TSpec = unknown> {
@@ -32,6 +33,7 @@ export interface LarkOutputPluginCardBuildInput<TSpec = unknown> {
   webBaseUrl?: string;
   previewBanner?: string;
   previewMode?: boolean;
+  sourceBadge?: LarkCardSourceBadge;
   locale?: Locale;
 }
 
@@ -41,6 +43,7 @@ export interface LarkOutputPluginAnsweredCardBuildInput<TInteraction = unknown> 
   sessionId?: string;
   webBaseUrl?: string;
   previewBanner?: string;
+  sourceBadge?: LarkCardSourceBadge;
   locale?: Locale;
 }
 
@@ -76,8 +79,12 @@ export interface LarkOutputPluginAdapter<TSpec = unknown, TInteraction = unknown
   isPreviewAction?(action: string): boolean;
   /** 构造出站飞书 Schema 2.0 卡片。 */
   buildCard(input: LarkOutputPluginCardBuildInput<TSpec>): Record<string, unknown>;
+  /** 可选：当完整交互卡因飞书 Schema 限制（如 230099 / 200xxx）被拒收时的极简只读降级卡。 */
+  buildFallbackCard?(input: LarkOutputPluginCardBuildInput<TSpec>): Record<string, unknown>;
   /** 构造已响应/已锁定回显卡片（只读信息卡可不提供）。 */
   buildAnsweredCard?(input: LarkOutputPluginAnsweredCardBuildInput<TInteraction>): Record<string, unknown>;
+  /** 可选：当完整已响应锁定卡因飞书 Schema/内容审核被拒收（如 230099/230028）时的极简锁定兜底卡。 */
+  buildAnsweredFallbackCard?(input: LarkOutputPluginAnsweredCardBuildInput<TInteraction>): Record<string, unknown>;
   /** 解析飞书回调载荷。 */
   parseAction?(
     spec: TSpec,

@@ -1,6 +1,6 @@
 import { abortable } from '../abortable.js';
 import { readFile } from 'node:fs/promises';
-import { tShared, type Locale } from '@agent-dock/agent-dock-shared';
+import { degradeRichMarkdownForLark, formatInteractionSourceBadge, tShared, type Locale } from '@agent-dock/agent-dock-shared';
 import { sleep } from '../daemon/time.js';
 import { getActiveServerLocale } from '../locale-service.js';
 import { webAccessSessionToken } from '../web-access.js';
@@ -17,11 +17,318 @@ export type LarkCardActionButton = {
   elementId?: string;
 };
 
-export type LarkCardSourceBadgeColor = 'purple' | 'blue' | 'orange' | 'neutral' | 'wathet' | 'green' | 'yellow' | 'red' | 'grey';
+export type LarkCardSourceBadgeColor =
+  | 'purple'
+  | 'blue'
+  | 'turquoise'
+  | 'indigo'
+  | 'violet'
+  | 'orange'
+  | 'neutral'
+  | 'wathet'
+  | 'green'
+  | 'yellow'
+  | 'red'
+  | 'carmine'
+  | 'lime'
+  | 'grey';
 
 export interface LarkCardSourceBadge {
   label: string;
   color?: LarkCardSourceBadgeColor;
+}
+
+export type LarkOriginBadgeVariant = 'default' | 'regex' | 'sideChat' | 'cardReply' | 'emoji';
+
+/** 构造飞书发起/触发轮次的统一来源徽标（青绿品牌色 + 胶囊内嵌 🕊️，与小猫督办/网页同步完全视觉对齐，随服务端语言自动切换中英文）。 */
+export function buildLarkOriginSourceBadge(
+  locale: Locale = getActiveServerLocale(),
+  variant: LarkOriginBadgeVariant = 'default'
+): LarkCardSourceBadge {
+  const key = variant === 'regex'
+    ? 'lark.sync.badge.larkRegex'
+    : variant === 'sideChat'
+      ? 'lark.sync.badge.larkSideChat'
+      : variant === 'cardReply'
+        ? 'lark.sync.badge.larkCardReply'
+        : variant === 'emoji'
+          ? 'lark.sync.badge.emoji'
+          : 'lark.sync.badge.lark';
+  return {
+    label: tShared(locale, key),
+    color: 'turquoise'
+  };
+}
+
+/** 构造交互卡片响应/决策来源徽标（🕊️ 飞书 / 💻 网页端 / 🐾 小猫代答 / 🔄 自动恢复）。 */
+export function buildInteractionSourceLarkBadge(
+  source: 'web' | 'lark' | 'assistant' | 'auto',
+  locale: Locale = getActiveServerLocale(),
+  options: { responderName?: string } = {}
+): LarkCardSourceBadge {
+  if (source === 'lark') {
+    return {
+      label: `🕊️ ${tShared(locale, 'source.lark')}`,
+      color: 'turquoise'
+    };
+  }
+  if (source === 'assistant') {
+    return {
+      label: formatInteractionSourceBadge('assistant', locale, { responderName: options.responderName, variant: 'lark' }),
+      color: 'purple'
+    };
+  }
+  if (source === 'auto') {
+    return {
+      label: `🔄 ${tShared(locale, 'source.auto')}`,
+      color: 'wathet'
+    };
+  }
+  return {
+    label: `💻 ${tShared(locale, 'source.web')}`,
+    color: 'blue'
+  };
+}
+
+/** 构造 CLI 直接发卡来源徽标。 */
+export function buildLarkCliSourceBadge(locale: Locale = getActiveServerLocale()): LarkCardSourceBadge {
+  return {
+    label: tShared(locale, 'lark.sync.badge.cli'),
+    color: 'indigo'
+  };
+}
+
+/** 构造 HTTP API 直接发卡来源徽标。 */
+export function buildLarkApiSourceBadge(locale: Locale = getActiveServerLocale()): LarkCardSourceBadge {
+  return {
+    label: tShared(locale, 'lark.sync.badge.api'),
+    color: 'indigo'
+  };
+}
+
+/** 构造交互卡片（或预览卡）未显式传入来源时的默认来源徽标。 */
+export function buildLarkInteractiveDefaultSourceBadge(
+  locale: Locale = getActiveServerLocale(),
+  previewMode = false
+): LarkCardSourceBadge {
+  return previewMode
+    ? { label: tShared(locale, 'lark.card.badge.preview'), color: 'wathet' }
+    : { label: tShared(locale, 'lark.card.badge.interactive'), color: 'blue' };
+}
+
+/** 构造系统/会话通知卡片的来源徽标（按会话来源区分 🕊️ 飞书会话通知 / 🐾 小猫提醒 / 🔔 系统通知）。 */
+export function buildLarkNotificationSourceBadge(
+  sessionSource?: string,
+  locale: Locale = getActiveServerLocale()
+): LarkCardSourceBadge {
+  if (sessionSource === 'lark') {
+    return {
+      label: tShared(locale, 'lark.card.badge.notifyLark'),
+      color: 'turquoise'
+    };
+  }
+  if (sessionSource === 'assistant-main') {
+    return {
+      label: tShared(locale, 'lark.card.badge.notifyCompanion'),
+      color: 'purple'
+    };
+  }
+  return {
+    label: tShared(locale, 'lark.card.badge.notifySystem'),
+    color: 'blue'
+  };
+}
+
+function normalizeTextTagColor(color: LarkCardSourceBadgeColor | undefined): string {
+  if (!color) return 'blue';
+  // 飞书卡片 Schema 2.0 <text_tag> 灰色枚举值为 neutral，而非 grey。
+  return color === 'grey' ? 'neutral' : color;
+}
+
+/**
+ * 构造飞书卡片 Schema 2.0 统一的顶部来源徽标元素（`element_id: 'task_source_badge'`）。
+ * 所有来源统一采用内嵌 emoji 的 `<text_tag>` 胶囊样式，不外挂 `div.icon`，保证视觉整齐协调且零额外上传开销。
+ */
+export function buildLarkSourceBadgeElement(
+  badge: LarkCardSourceBadge,
+  options: { note?: string; margin?: string; elementId?: string } = {}
+): Record<string, unknown> | undefined {
+  const label = badge.label?.trim();
+  if (!label) return undefined;
+  const escapeInline = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const tag = `<text_tag color='${normalizeTextTagColor(badge.color)}'>${escapeInline(label)}</text_tag>`;
+  const note = options.note?.replace(/\s+/g, ' ').trim();
+  return {
+    tag: 'div',
+    element_id: options.elementId ?? 'task_source_badge',
+    width: 'fill',
+    margin: options.margin ?? '0px 0px 4px 0px',
+    text: {
+      tag: 'lark_md',
+      content: note ? `${tag}　<font color='grey'>${escapeInline(note)}</font>` : tag,
+      text_size: 'notation'
+    }
+  };
+}
+
+/**
+ * 将 `sourceBadge` 幂等注入任意 Schema 2.0 交互卡片的 body 顶部：
+ * 若卡片已包含 `task_source_badge` 则直接返回原卡片，绝不重复叠放两个 Tag。
+ */
+export function withLarkCardSourceBadge(
+  card: Record<string, unknown>,
+  badge: LarkCardSourceBadge | undefined,
+  options: { note?: string } = {}
+): Record<string, unknown> {
+  if (!badge?.label?.trim()) return card;
+  const body = card.body as { elements?: Array<Record<string, unknown>> } | undefined;
+  if (!body || !Array.isArray(body.elements)) return card;
+  if (body.elements.some(el => el?.element_id === 'task_source_badge')) return card;
+  const el = buildLarkSourceBadgeElement(badge, { note: options.note, margin: '0px 0px 6px 0px' });
+  if (!el) return card;
+  return {
+    ...card,
+    body: {
+      ...body,
+      elements: [el, ...body.elements]
+    }
+  };
+}
+
+/**
+ * 确保飞书 Schema 2.0 交互卡片显式声明 `schema: '2.0'` 与 `config.update_multi: true`，
+ * 保证经由 `card.action.trigger` 同步返回或 `PATCH /im/v1/messages/:id` 更新时对群内全员生效。
+ */
+export function ensureLarkCardUpdateMulti(card: Record<string, unknown>): Record<string, unknown> {
+  const rawConfig = card.config && typeof card.config === 'object' && !Array.isArray(card.config)
+    ? card.config as Record<string, unknown>
+    : {};
+  if (card.schema === '2.0' && rawConfig.update_multi === true) {
+    return card;
+  }
+  return {
+    ...card,
+    schema: typeof card.schema === 'string' && card.schema.trim() ? card.schema : '2.0',
+    config: {
+      ...rawConfig,
+      update_multi: true
+    }
+  };
+}
+
+/** 判断飞书卡片更新/发送报错是否属于卡片 Schema 或内容审核拒收（可尝试极简锁定卡兜底）。 */
+export function isLarkInteractiveCardSchemaError(error: unknown): boolean {
+  if (!(error instanceof LarkServiceError)) return false;
+  const code = Number(error.details?.upstreamCode);
+  if (!Number.isFinite(code)) return false;
+  return code === 230025 || code === 230028 || code === 230099 || (code >= 200600 && code < 201000);
+}
+
+/** 提取结构化飞书错误诊断字段（绝不泄露 token / secret），便于日志排障与告警聚合。 */
+export function extractLarkErrorTelemetry(error: unknown): Record<string, unknown> {
+  if (error instanceof LarkServiceError) {
+    return {
+      errorCode: error.code,
+      errorMessage: error.message,
+      statusCode: error.statusCode,
+      ...(error.details?.upstreamCode !== undefined ? { upstreamCode: error.details.upstreamCode } : {}),
+      ...(error.details?.httpStatus !== undefined ? { httpStatus: error.details.httpStatus } : {})
+    };
+  }
+  return {
+    errorMessage: error instanceof Error ? error.message : String(error)
+  };
+}
+
+/**
+ * 可靠更新飞书交互卡片：
+ * - 遇到瞬时网络/5xx 或飞书限频（230020）自动有限次退避重试；
+ * - 遇到不可更新错误（230012/230030）立即停止，不做无意义重试；
+ * - 遇到 Schema/内容审核拒收（230025/230028/230099/2006xx）且调用方提供 `fallbackCard` 时自动降级重试一次；
+ * - 所有失败均携带结构化 `upstreamCode` / `httpStatus` 供日志观测。
+ */
+export async function updateInteractiveCardWithRetry(input: {
+  service: Pick<LarkCardService, 'updateInteractiveCard'>;
+  messageId: string;
+  card: Record<string, unknown>;
+  sourceBadge?: LarkCardSourceBadge;
+  fallbackCard?: () => Record<string, unknown>;
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  onRetryWarning?: (details: Record<string, unknown>) => void;
+}): Promise<{ ok: true; usedFallback: boolean } | { ok: false; error: unknown; telemetry: Record<string, unknown> }> {
+  const maxAttempts = Math.max(1, input.maxAttempts ?? 3);
+  const baseDelayMs = Math.max(0, input.baseDelayMs ?? 300);
+  const preparedCard = ensureLarkCardUpdateMulti(
+    input.sourceBadge ? withLarkCardSourceBadge(input.card, input.sourceBadge) : input.card
+  );
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await input.service.updateInteractiveCard({
+        messageId: input.messageId,
+        card: preparedCard,
+        ...(input.sourceBadge ? { sourceBadge: input.sourceBadge } : {})
+      });
+      return { ok: true, usedFallback: false };
+    } catch (error) {
+      lastError = error;
+      const upstreamCode = error instanceof LarkServiceError ? Number(error.details?.upstreamCode) : undefined;
+      const httpStatus = error instanceof LarkServiceError ? Number(error.details?.httpStatus) : undefined;
+      const unupdatable = upstreamCode === 230012 || upstreamCode === 230030;
+      if (unupdatable) break;
+
+      if (isLarkInteractiveCardSchemaError(error)) {
+        if (input.fallbackCard) {
+          try {
+            const rawFallback = input.fallbackCard();
+            const fallbackPrepared = ensureLarkCardUpdateMulti(
+              input.sourceBadge ? withLarkCardSourceBadge(rawFallback, input.sourceBadge) : rawFallback
+            );
+            await input.service.updateInteractiveCard({
+              messageId: input.messageId,
+              card: fallbackPrepared,
+              ...(input.sourceBadge ? { sourceBadge: input.sourceBadge } : {})
+            });
+            return { ok: true, usedFallback: true };
+          } catch (fallbackError) {
+            lastError = fallbackError;
+          }
+        }
+        break;
+      }
+
+      const isRateLimit = upstreamCode === 230020;
+      const isTransient = isRateLimit
+        || (error instanceof LarkServiceError && (error.code === 'LARK_TIMEOUT' || error.code === 'LARK_NETWORK_ERROR'))
+        || (httpStatus !== undefined && httpStatus >= 500 && httpStatus < 600)
+        || !(error instanceof LarkServiceError);
+
+      if (!isTransient || attempt >= maxAttempts) {
+        break;
+      }
+
+      input.onRetryWarning?.({
+        messageId: input.messageId,
+        attempt,
+        maxAttempts,
+        ...extractLarkErrorTelemetry(error)
+      });
+      const delayMs = baseDelayMs === 0
+        ? 0
+        : isRateLimit
+          ? Math.min(10_000, Math.max(baseDelayMs, 1_000) * attempt)
+          : baseDelayMs * attempt;
+      if (delayMs > 0) await sleep(delayMs);
+    }
+  }
+
+  return {
+    ok: false,
+    error: lastError,
+    telemetry: extractLarkErrorTelemetry(lastError)
+  };
 }
 
 export interface LarkCardInput {
@@ -383,9 +690,14 @@ export function buildLarkCard(input: LarkCardInput = {}) {
       }]
     });
   }
+  const normalizedContent = degradeRichMarkdownForLark(content, locale);
   const sourceMainElements = input.elements?.length
-    ? input.elements
-    : [{ tag: 'markdown', content, text_align: 'left', text_size: 'normal_v2', margin: '0px' }];
+    ? input.elements.map(element =>
+        element.tag === 'markdown' && typeof element.content === 'string'
+          ? { ...element, content: degradeRichMarkdownForLark(element.content, locale) }
+          : element
+      )
+    : [{ tag: 'markdown', content: normalizedContent, text_align: 'left', text_size: 'normal_v2', margin: '0px' }];
   const arrange = (mainElements: Array<Record<string, unknown>>) => {
     const finalElements = mainElements.filter(element => element.element_id === 'final_output');
     const traceElements = mainElements.filter(element => typeof element.element_id === 'string' && element.element_id.startsWith('trace_group_'));
@@ -415,21 +727,15 @@ export function buildLarkCard(input: LarkCardInput = {}) {
       },
       elements: traceElements
     }] : [];
-    const escapeInline = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     const compactTaskName = taskName.replace(/\s+/g, ' ').trim();
-    const badgeLabel = input.sourceBadge?.label?.trim();
-    const badgeTag = badgeLabel ? `<text_tag color='${input.sourceBadge?.color ?? 'blue'}'>${escapeInline(badgeLabel)}</text_tag>` : '';
-    const taskSummary = badgeTag
-      ? [{
-          tag: 'div', element_id: 'task_source_badge', width: 'fill', margin: '0px 0px 4px 0px',
-          text: {
-            tag: 'lark_md',
-            content: compactTaskName && compactTaskName !== 'AgentDock'
-              ? `${badgeTag}　<font color='grey'>${escapeInline(compactTaskName)}</font>`
-              : badgeTag,
-            text_size: 'notation'
-          }
-        }]
+    const badgeElement = input.sourceBadge
+      ? buildLarkSourceBadgeElement(input.sourceBadge, {
+          note: compactTaskName && compactTaskName !== 'AgentDock' ? compactTaskName : undefined,
+          margin: '0px 0px 4px 0px'
+        })
+      : undefined;
+    const taskSummary = badgeElement
+      ? [badgeElement]
       : taskName === 'AgentDock' ? [] : [{
           tag: 'div', width: 'fill', margin: '0px 0px 4px 0px',
           text: { tag: 'plain_text', content: compactTaskName, text_size: 'notation', text_color: 'grey', lines: 1 }
@@ -449,14 +755,14 @@ export function buildLarkCard(input: LarkCardInput = {}) {
     }] : taskSummary;
     return [...taskHeader, primaryStatus, ...otherElements, ...finals];
   };
-  // 终态摘要优先取 final_output 元素文本；没有时（如纯状态卡片）回落到 markdown 正文。
-  const finalRaw = input.elements?.find(element => element.element_id === 'final_output')?.content;
+  // 终态摘要优先取已降级的 final_output 元素文本；没有时（如纯状态卡片）回落到降级后的 markdown 正文。
+  const finalRaw = sourceMainElements.find(element => element.element_id === 'final_output')?.content;
   const summaryBadge = input.sourceBadge?.label?.trim() ? `[${input.sourceBadge.label.trim()}] ` : '';
   const summarySep = locale === 'en-US' ? ': ' : '：';
   const summaryContent = state === 'running' || state === 'queued'
     ? `${summaryBadge}${taskName} · ${liveTitle}`
     : (() => {
-        const snippet = markdownToPlainPreview(typeof finalRaw === 'string' ? finalRaw : content);
+        const snippet = markdownToPlainPreview(typeof finalRaw === 'string' ? finalRaw : normalizedContent);
         return snippet ? `${summaryBadge}${taskName} · ${liveTitle}${summarySep}${snippet}` : `${summaryBadge}${taskName} · ${liveTitle}`;
       })();
   const assemble = (mainElements: Array<Record<string, unknown>>) => ({
@@ -567,6 +873,7 @@ export const larkIdentityPermissionHelp = (error?: unknown, appId?: string) => {
 export type LarkChoiceCardInput = {
   title: string;
   markdown: string;
+  sourceBadge?: LarkCardSourceBadge;
   buttons: Array<{
     action: string;
     label: string;
@@ -577,13 +884,16 @@ export type LarkChoiceCardInput = {
 
 /** 卡片 2.0 的纯正文 + 按钮卡片；单独导出，便于用飞书 CardKit 做结构校验。 */
 export function buildChoiceCard(input: LarkChoiceCardInput) {
+  const badgeEl = input.sourceBadge ? buildLarkSourceBadgeElement(input.sourceBadge, { margin: '0px 0px 4px 0px' }) : undefined;
+  const summaryBadge = input.sourceBadge?.label?.trim() ? `[${input.sourceBadge.label.trim()}] ` : '';
   return {
     schema: '2.0',
-    config: { update_multi: true, width_mode: 'default', summary: { content: input.title } },
+    config: { update_multi: true, width_mode: 'default', summary: { content: `${summaryBadge}${input.title}` } },
     header: { template: 'blue', title: { tag: 'plain_text', content: input.title } },
     body: {
       direction: 'vertical',
       elements: [
+        ...(badgeEl ? [badgeEl] : []),
         { tag: 'markdown', content: input.markdown },
         // 卡片 2.0 没有 1.0 的 action 容器；按钮必须直接放进 body 或 column_set。
         // 之前套了 action 容器，飞书返回 230099「Failed to create card content」，询问卡片全部发不出去。
@@ -602,6 +912,22 @@ export function buildChoiceCard(input: LarkChoiceCardInput) {
             }]
           }))
         }] : [])
+      ]
+    }
+  };
+}
+
+/** 轻量选择卡片的锁定结果态（同步回调返回与异步 PATCH 兜底共用）。 */
+export function buildChoiceResolvedCard(input: { text: string; sourceBadge?: LarkCardSourceBadge }): Record<string, unknown> {
+  const badgeEl = input.sourceBadge ? buildLarkSourceBadgeElement(input.sourceBadge, { margin: '0px 0px 4px 0px' }) : undefined;
+  return {
+    schema: '2.0',
+    config: { update_multi: true },
+    body: {
+      direction: 'vertical',
+      elements: [
+        ...(badgeEl ? [badgeEl] : []),
+        { tag: 'markdown', content: input.text }
       ]
     }
   };
@@ -628,7 +954,7 @@ export class LarkCardService {
   constructor(private readonly config: LarkBotConfig, private readonly fetcher: Fetch = globalThis.fetch) {}
 
   private async cardInput<T extends LarkCardInput>(input: T): Promise<T> {
-    if ((input.state ?? 'running') !== 'running') return input;
+    if ((input.state ?? 'running') !== 'running' || input.loadingImageKey) return input;
     const loadingImageKey = await this.ensureLoadingImageKey();
     return loadingImageKey ? { ...input, loadingImageKey } : input;
   }
@@ -684,7 +1010,6 @@ export class LarkCardService {
   }): Promise<LarkMessageResult> {
     const chatId = required(input.chatId, 'chatId');
     if (!chatId.startsWith('oc_')) throw new LarkServiceError('INVALID_CHAT_ID', 'chatId must start with oc_', 400);
-    const card = buildChoiceCard(input);
     const replyTo = input.replyTo?.trim();
     // 飞书 im/v1/messages 的 uuid 上限 50 字符且不接受控制字符；超限时直接报错，
     // 不要静默发出去再被网关拒绝（默认 ask 路由曾因此完全不可用）。
@@ -692,6 +1017,7 @@ export class LarkCardService {
     if (idempotencyKey && (idempotencyKey.length > 50 || /[\u0000-\u001f\u007f]/.test(idempotencyKey))) {
       throw new LarkServiceError('INVALID_IDEMPOTENCY_KEY', '飞书消息 uuid 最多 50 个字符，且不能包含控制字符', 400);
     }
+    const card = buildChoiceCard(input);
     const payload = await this.request(
       replyTo
         ? `/open-apis/im/v1/messages/${encodeURIComponent(replyTo)}/reply`
@@ -711,13 +1037,12 @@ export class LarkCardService {
   }
 
   /** 选择完成后把询问卡片改成结果态，避免用户重复点击。 */
-  async updateChoiceCard(input: { messageId: string; text: string }): Promise<LarkMessageResult> {
+  async updateChoiceCard(input: { messageId: string; text: string; sourceBadge?: LarkCardSourceBadge }): Promise<LarkMessageResult> {
     const messageId = required(input.messageId, 'messageId');
-    const card = {
-      schema: '2.0',
-      config: { update_multi: true },
-      body: { direction: 'vertical', elements: [{ tag: 'markdown', content: input.text }] }
-    };
+    const card = buildChoiceResolvedCard({
+      text: input.text,
+      ...(input.sourceBadge ? { sourceBadge: input.sourceBadge } : {})
+    });
     const payload = await this.request(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
       method: 'PATCH',
       body: { content: JSON.stringify(card) }
@@ -731,6 +1056,7 @@ export class LarkCardService {
     receiveId?: string;
     receiveIdType?: LarkReceiveIdType;
     card: Record<string, unknown>;
+    sourceBadge?: LarkCardSourceBadge;
     idempotencyKey?: string;
   }): Promise<LarkMessageResult> {
     if (input.chatId && input.receiveId) {
@@ -743,11 +1069,12 @@ export class LarkCardService {
     const receiveId = required(chatId ?? input.receiveId ?? this.config.defaultReceiveId, 'chatId or receiveId');
     const resolvedType = receiveIdType(chatId ? 'chat_id' : input.receiveIdType ?? this.config.defaultReceiveIdType);
     const idempotencyKey = input.idempotencyKey?.trim().slice(0, 50);
+    const card = input.sourceBadge ? withLarkCardSourceBadge(input.card, input.sourceBadge) : input.card;
     const payload = await this.request(`/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(resolvedType)}`, {
       body: {
         receive_id: receiveId,
         msg_type: 'interactive',
-        content: JSON.stringify(input.card),
+        content: JSON.stringify(card),
         ...(idempotencyKey ? { uuid: idempotencyKey } : {})
       }
     });
@@ -762,15 +1089,17 @@ export class LarkCardService {
   async replyInteractiveCard(input: {
     messageId: string;
     card: Record<string, unknown>;
+    sourceBadge?: LarkCardSourceBadge;
     replyInThread?: boolean;
     idempotencyKey?: string;
   }): Promise<LarkMessageResult> {
     const messageId = required(input.messageId, 'messageId');
     const idempotencyKey = input.idempotencyKey?.trim().slice(0, 50);
+    const card = input.sourceBadge ? withLarkCardSourceBadge(input.card, input.sourceBadge) : input.card;
     const payload = await this.request(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
       body: {
         msg_type: 'interactive',
-        content: JSON.stringify(input.card),
+        content: JSON.stringify(card),
         ...(input.replyInThread ? { reply_in_thread: true } : {}),
         ...(idempotencyKey ? { uuid: idempotencyKey } : {})
       }
@@ -783,11 +1112,12 @@ export class LarkCardService {
   }
 
   /** 原地更新已发送的自定义 Schema 2.0 交互卡片（如切换为「✅ 已回答」锁定态）。 */
-  async updateInteractiveCard(input: { messageId: string; card: Record<string, unknown> }): Promise<LarkMessageResult> {
+  async updateInteractiveCard(input: { messageId: string; card: Record<string, unknown>; sourceBadge?: LarkCardSourceBadge }): Promise<LarkMessageResult> {
     const messageId = required(input.messageId, 'messageId');
+    const card = input.sourceBadge ? withLarkCardSourceBadge(input.card, input.sourceBadge) : input.card;
     const payload = await this.request(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
       method: 'PATCH',
-      body: { content: JSON.stringify(input.card) }
+      body: { content: JSON.stringify(card) }
     });
     return { messageId: payload.data?.message_id || messageId, chatId: payload.data?.chat_id };
   }
@@ -806,29 +1136,36 @@ export class LarkCardService {
     template?: 'green' | 'red' | 'orange' | 'blue' | 'grey';
     actionUrl?: string;
     actionLabel?: string;
+    sourceBadge?: LarkCardSourceBadge;
+    locale?: Locale;
     idempotencyKey?: string;
   }): Promise<LarkMessageResult> {
     const receiveId = required(input.receiveId, 'receiveId');
     const resolvedType = receiveIdType(input.receiveIdType);
     const idempotencyKey = input.idempotencyKey?.trim().slice(0, 50);
+    const locale = input.locale ?? getActiveServerLocale();
+    const resolvedBadge = input.sourceBadge ?? buildLarkNotificationSourceBadge(undefined, locale);
+    const badgeEl = buildLarkSourceBadgeElement(resolvedBadge, { margin: '0px 0px 4px 0px' });
     const elements: Array<Record<string, unknown>> = [
-      { tag: 'markdown', content: input.markdown, text_align: 'left', text_size: 'normal_v2', margin: '0px' }
+      ...(badgeEl ? [badgeEl] : []),
+      { tag: 'markdown', content: degradeRichMarkdownForLark(input.markdown, locale), text_align: 'left', text_size: 'normal_v2', margin: '0px' }
     ];
     if (input.actionUrl) {
       elements.push({
         tag: 'button',
-        text: { tag: 'plain_text', content: input.actionLabel || '在 AgentDock 查看' },
+        text: { tag: 'plain_text', content: input.actionLabel || tShared(locale, 'lark.card.footer.viewSession') },
         type: 'primary_text',
         size: 'small',
         behaviors: [{ type: 'open_url', default_url: input.actionUrl }],
         margin: '8px 0px 0px 0px'
       });
     }
+    const summaryBadge = resolvedBadge?.label?.trim() ? `[${resolvedBadge.label.trim()}] ` : '';
     const card = {
       schema: '2.0',
       config: {
         wide_screen_mode: true,
-        ...(input.summary ? { summary: { content: input.summary.slice(0, 120) } } : {})
+        ...(input.summary ? { summary: { content: `${summaryBadge}${input.summary}`.slice(0, 120) } } : {})
       },
       header: {
         template: input.template ?? 'blue',
@@ -1454,6 +1791,7 @@ export class LarkCardService {
           const consoleUrl = payload.error?.console_url ?? payload.console_url ?? violation?.url;
           throw new LarkServiceError('LARK_OPENAPI_ERROR', `Lark OpenAPI request failed: ${message} (code: ${payload.code ?? 'HTTP_ERROR'})`, 502, {
             upstreamCode: payload.code,
+            httpStatus: response.status,
             ...(consoleUrl ? { consoleUrl: String(consoleUrl) } : {}),
             ...(payload.error?.permission_violations ? { permissionViolations: payload.error.permission_violations } : {})
           });

@@ -9,7 +9,12 @@ import { createHmac } from 'node:crypto';
 import type { ConfigRepository, ChannelMappingRepository } from '@agent-dock/agent-dock-shared';
 import { createHandoverLookup } from '../lark/handover-binding.js';
 import { readLarkConfigs } from '../lark/config.js';
-import { createLarkCardService, LarkServiceError } from '../lark/service.js';
+import {
+  buildLarkNotificationSourceBadge,
+  buildLarkSourceBadgeElement,
+  createLarkCardService,
+  LarkServiceError
+} from '../lark/service.js';
 import { normalizePublicUrl, publicUrlConfigKey } from '../share-link.js';
 import { webAccessSessionToken } from '../web-access.js';
 import type {
@@ -173,7 +178,10 @@ export function buildWebhookRequest(
 
   switch (preset) {
     case 'lark_webhook': {
+      const sourceBadge = buildLarkNotificationSourceBadge(payload.sessionSource);
+      const badgeEl = buildLarkSourceBadgeElement({ label: sourceBadge.label, color: sourceBadge.color }, { margin: '0px 0px 4px 0px' });
       const elements: Array<Record<string, unknown>> = [
+        ...(badgeEl ? [badgeEl] : []),
         { tag: 'markdown', content: `${bodyText}${linkLine}` }
       ];
       return {
@@ -181,12 +189,16 @@ export function buildWebhookRequest(
         body: JSON.stringify({
           msg_type: 'interactive',
           card: {
+            schema: '2.0',
             config: { wide_screen_mode: true },
             header: {
               template: meta.larkTemplate,
               title: { tag: 'plain_text', content: title }
             },
-            elements
+            body: {
+              direction: 'vertical',
+              elements
+            }
           }
         })
       };
@@ -590,6 +602,7 @@ export async function deliverLarkNotification(
       markdown: bodyLines.join('\n\n'),
       summary: `${buildNotificationHeading(payload)}：${summarizeNotificationText(payload.error || payload.summary, 80)}`,
       template: meta.larkTemplate,
+      sourceBadge: buildLarkNotificationSourceBadge(payload.sessionSource),
       ...(actionUrl ? { actionUrl, actionLabel: '在 AgentDock 查看' } : {}),
       idempotencyKey: `adn-${payload.id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 42)}`
     });

@@ -19,7 +19,7 @@ import {
 } from '@agent-dock/agent-dock-shared';
 import { OutputPluginService } from '../../output-plugins/service.js';
 import { defaultHighRiskPattern, saveLarkConfig, type StoredLarkConfig } from '../config.js';
-import { LarkMessageCoordinator, renderLarkCardElements, type LarkRuntime } from '../listener.js';
+import { LarkMessageCoordinator, renderLarkCardElements, toLarkCardCallbackResponse, type LarkRuntime } from '../listener.js';
 import type { LarkCardService } from '../service.js';
 import {
   createDefaultLarkOutputPluginAdapterRegistry,
@@ -278,7 +278,10 @@ describe('Lark Output Plugins Adapter Registry & Coordinator integration', () =>
         mappings,
         configRepo,
         undefined,
-        outputPlugins
+        outputPlugins,
+        undefined,
+        undefined,
+        15
       );
 
       const extracted = outputPlugins.registry.parseTrailingOutput(events[0]!.data.text as string);
@@ -293,7 +296,7 @@ describe('Lark Output Plugins Adapter Registry & Coordinator integration', () =>
       expect(pushed).toBeDefined();
       expect(await mappings.get(LARK_OUTPUT_PLUGIN_CARD_CHANNEL, pushed!.cardId)).toBeDefined();
 
-      // 首次飞书点击回调 -> 派发续跑轮次 + 锁定卡片
+      // 首次飞书点击回调 -> 派发续跑轮次 + 同步返回绿色锁定卡 + 回调后异步 PATCH 兜底
       const firstToast = await coordinator.handleAction(
         {
           action: LARK_OUTPUT_PLUGIN_ACTION_CLICK,
@@ -303,14 +306,29 @@ describe('Lark Output Plugins Adapter Registry & Coordinator integration', () =>
         },
         'ou_operator_1'
       );
-      expect(firstToast).toEqual({ type: 'success', content: expect.any(String) });
+      expect(firstToast).toMatchObject({
+        type: 'success',
+        content: expect.any(String),
+        card: expect.objectContaining({
+          schema: '2.0',
+          config: expect.objectContaining({ update_multi: true }),
+          header: expect.objectContaining({ template: 'green' })
+        })
+      });
+      const firstCb = toLarkCardCallbackResponse(firstToast);
+      expect(firstCb?.card?.type).toBe('raw');
+      expect((firstCb?.card?.data as any)?.header?.template).toBe('green');
       expect(dispatched).toHaveLength(1);
       expect(dispatched[0]!.origin).toBe(declarativePluginInteractionOrigin('local:deploy-approval'));
       expect(parseDeclarativeInteraction(dispatched[0]!.prompt)?.actionValue).toBe('approve');
-      expect(updatedCards).toHaveLength(1);
+      // 同步回调返回前不抢先调 PATCH；返回后由延迟兜底任务完成 PATCH
+      expect(updatedCards).toHaveLength(0);
+      await vi.waitFor(() => {
+        expect(updatedCards).toHaveLength(1);
+      });
       expect((updatedCards[0]!.card as any).header.template).toBe('green');
 
-      // 重复点击 -> 幂等拦截，不再派发新轮次
+      // 重复点击 -> 幂等拦截，仍同步返回锁定态卡片，不再派发新轮次
       const dupToast = await coordinator.handleAction(
         {
           action: LARK_OUTPUT_PLUGIN_ACTION_CLICK,
@@ -321,6 +339,7 @@ describe('Lark Output Plugins Adapter Registry & Coordinator integration', () =>
         'ou_operator_1'
       );
       expect(dupToast.type).toBe('info');
+      expect((dupToast.card as any)?.header?.template).toBe('green');
       expect(dispatched).toHaveLength(1);
 
       // 内置插件 #2（builtin:confirm-action）：高风险飞书卡片推送、带补充意见确认回调、锁定更新与幂等防重
@@ -351,6 +370,7 @@ describe('Lark Output Plugins Adapter Registry & Coordinator integration', () =>
       });
       expect(pushedConfirm).toBeDefined();
 
+      const beforeConfirmPatchCount = updatedCards.length;
       const confirmToast = await coordinator.handleAction(
         {
           action: LARK_CONFIRM_ACTION_COMMENT,
@@ -360,7 +380,15 @@ describe('Lark Output Plugins Adapter Registry & Coordinator integration', () =>
         'ou_operator_1',
         { formValue: { decision: 'confirm', comment_text: '请先做快照备份再执行' } }
       );
-      expect(confirmToast).toEqual({ type: 'success', content: expect.any(String) });
+      expect(confirmToast).toMatchObject({
+        type: 'success',
+        content: expect.any(String),
+        card: expect.objectContaining({
+          schema: '2.0',
+          config: expect.objectContaining({ update_multi: true }),
+          header: expect.objectContaining({ template: 'green' })
+        })
+      });
       expect(dispatched).toHaveLength(2);
       expect(dispatched[1]!.origin).toBe(CONFIRM_ACTION_INTERACTION_ORIGIN);
       expect(parseConfirmActionInteraction(dispatched[1]!.prompt)).toMatchObject({
@@ -370,7 +398,11 @@ describe('Lark Output Plugins Adapter Registry & Coordinator integration', () =>
         comment: '请先做快照备份再执行',
         source: 'lark'
       });
-      expect((updatedCards.at(-1)!.card as any).header.template).toBe('green');
+      // ConfirmAction 表单提交同样不在回调返回前抢先 PATCH，而是在回调后异步 PATCH 兜底
+      expect(updatedCards.length).toBe(beforeConfirmPatchCount);
+      await vi.waitFor(() => {
+        expect(updatedCards.some(item => item.messageId === pushedConfirm!.messageId && (item.card as any).header.template === 'green')).toBe(true);
+      });
 
       const confirmDup = await coordinator.handleAction(
         {

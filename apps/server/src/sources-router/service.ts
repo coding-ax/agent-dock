@@ -20,7 +20,7 @@ export interface SourceRouterRuntime {
   getSession(id: string): Promise<Session | undefined>;
   getTasks(sessionId: string): Promise<TaskRecord[]>;
   start(input: StartSessionInput): Promise<Session>;
-  dispatch(id: string, prompt: string, mode?: 'queue' | 'interrupt'): Promise<{ id: string; status: string }>;
+  dispatch(id: string, prompt: string, mode?: 'queue' | 'interrupt', agentPrompt?: string, riskPolicy?: unknown, origin?: string): Promise<{ id: string; status: string }>;
   archive?(id: string): Promise<unknown>;
   interrupt?(id: string): Promise<unknown>;
   subscribe?(sessionId: string, listener: (event: AgentEvent) => void): () => void;
@@ -341,7 +341,7 @@ export class SourceRouterService {
             pendingActions: caseRecord ? this.store.actionsForCase(caseRecord.id).filter(action => ['pending', 'failed', 'throttled'].includes(action.status)).map(action => ({ id: action.id, status: action.status, actionType: action.actionType, target: action.target })) : []
           }),
           '=== 不可信 Inbox 结束 ==='
-        ].join('\n'));
+        ].join('\n'), 'queue', undefined, undefined, 'webhook');
         this.store.setInboxStatus(item.id, 'done', this.now());
         delivered++;
       } catch (error) {
@@ -674,7 +674,7 @@ export class SourceRouterService {
       return;
     }
     const prompt = `${task.prompt}\n\n[AgentDock idempotencyKey=${dispatchKey} caseId=${caseRecord.id}]`;
-    const dispatched = await this.runtime.dispatch(sessionId, prompt, task.mode ?? 'queue');
+    const dispatched = await this.runtime.dispatch(sessionId, prompt, task.mode ?? 'queue', undefined, undefined, 'webhook');
     this.appendCaseEvent(caseRecord, { kind: 'task.dispatched', summary: `派发 Task ${dispatched.id}`, data: { taskId: dispatched.id, sessionId, dispatchKey, sourceEventId: event.id } });
     this.store.saveCase({ ...this.store.case(caseRecord.id) ?? currentCase, primarySessionId: sessionId, routerSessionId, status: 'waiting', updatedAt: this.now() });
     if (decision.watch?.on.length) {

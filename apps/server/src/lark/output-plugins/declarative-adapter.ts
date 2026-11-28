@@ -10,6 +10,11 @@ import {
 } from '@agent-dock/agent-dock-shared';
 import { getActiveServerLocale } from '../../locale-service.js';
 import { webAccessSessionToken } from '../../web-access.js';
+import {
+  buildInteractionSourceLarkBadge,
+  buildLarkInteractiveDefaultSourceBadge,
+  buildLarkSourceBadgeElement
+} from '../service.js';
 import type { LarkOutputPluginAdapter } from './types.js';
 
 export const LARK_OUTPUT_PLUGIN_CARD_CHANNEL = 'output-plugin:lark-card';
@@ -117,7 +122,7 @@ export function createDeclarativeLarkAdapter(
       return action === LARK_OUTPUT_PLUGIN_ACTION_PREVIEW;
     },
 
-    buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, locale: explicitLocale }) {
+    buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, sourceBadge, locale: explicitLocale }) {
       const locale = explicitLocale ?? getActiveServerLocale();
       const baseTitle = spec.title?.trim() || plugin.name;
       const title = previewBanner ? `${previewBanner} ${baseTitle}` : baseTitle;
@@ -131,6 +136,11 @@ export function createDeclarativeLarkAdapter(
       const colon = locale === 'en-US' ? ': ' : '：';
 
       const elements: Array<Record<string, unknown>> = [];
+      const badgeEl = buildLarkSourceBadgeElement(
+        sourceBadge ?? buildLarkInteractiveDefaultSourceBadge(locale, Boolean(previewMode)),
+        { margin: '0px 0px 4px 0px' }
+      );
+      if (badgeEl) elements.push(badgeEl);
 
       if (spec.status?.trim()) {
         elements.push({
@@ -338,7 +348,7 @@ export function createDeclarativeLarkAdapter(
       };
     },
 
-    buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner, locale: explicitLocale }) {
+    buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner, sourceBadge, locale: explicitLocale }) {
       const locale = explicitLocale ?? getActiveServerLocale();
       const responder = payload.responderName?.trim() || payload.actedBy?.trim();
       const sourceLabel = formatInteractionSourceBadge(payload.source, locale, { responderName: responder, variant: 'lark' });
@@ -351,19 +361,27 @@ export function createDeclarativeLarkAdapter(
       const colon = locale === 'en-US' ? ':' : '：';
 
       const elements: Array<Record<string, unknown>> = [];
+      const answerBadgeEl = buildLarkSourceBadgeElement(
+        sourceBadge ?? buildInteractionSourceLarkBadge(payload.source, locale, { responderName: responder }),
+        {
+          note: payload.source === 'assistant' ? undefined : payload.actedBy?.trim() || undefined,
+          margin: '0px 0px 4px 0px'
+        }
+      );
+      if (answerBadgeEl) elements.push(answerBadgeEl);
       const lines: string[] = [];
       if (payload.actionLabel || payload.actionValue) {
         lines.push(`**${tShared(locale, 'lark.declarative.actionLabel')}${colon}** <text_tag color='green'>${escapeLarkTagText(payload.actionLabel || payload.actionValue!, locale)}</text_tag>`);
       }
       for (const field of payload.fields) {
-        lines.push(`**${escapeLarkInlineMd(field.label)}${colon}** ${escapeLarkInlineMd(field.displayValue || field.value)}`);
+        lines.push(`**${escapeLarkInlineMd(truncatePlain(field.label, 80))}${colon}** ${escapeLarkInlineMd(truncatePlain(field.displayValue || field.value, 400))}`);
       }
       if (payload.note?.trim()) {
-        lines.push(`> ${tShared(locale, 'lark.declarative.notePrefix', { text: escapeLarkInlineMd(payload.note) })}`);
+        lines.push(`> ${tShared(locale, 'lark.declarative.notePrefix', { text: escapeLarkInlineMd(truncatePlain(payload.note, 800)) })}`);
       }
       elements.push({
         tag: 'markdown',
-        content: lines.join('\n') || tShared(locale, 'lark.declarative.confirmedFallback'),
+        content: (lines.join('\n') || tShared(locale, 'lark.declarative.confirmedFallback')).slice(0, 12_000),
         text_size: 'normal_v2',
         margin: '0px'
       });

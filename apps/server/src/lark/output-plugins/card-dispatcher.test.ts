@@ -30,7 +30,7 @@ import {
   type LarkRuntime
 } from '../listener.js';
 import { registerLarkRoutes } from '../routes.js';
-import type { LarkCardService } from '../service.js';
+import { buildLarkOriginSourceBadge, LarkServiceError, type LarkCardService } from '../service.js';
 import { LarkTurnSyncService, type LarkTurnSyncCardPort } from '../turn-sync.js';
 import { LarkTurnTracker } from '../turn-tracker.js';
 import {
@@ -937,5 +937,75 @@ describe('Lark output plugin card strong idempotency & cross-path dedup', () => 
     expect(syncCardService.send).not.toHaveBeenCalled();
     expect(syncCardService.sendInteractiveCard).toHaveBeenCalledTimes(1);
     expect(await fixture.mappings.list(LARK_OUTPUT_PLUGIN_CARD_CHANNEL)).toHaveLength(1);
+  });
+
+  it('gracefully falls back to a minimal Schema 2.0 summary card when Lark OpenAPI rejects an AskUserQuestion card with 230099, and dispatches JSON-in-XML end-to-end', async () => {
+    const fixture = createLocalPluginFixture();
+    cleanups.push(() => rmSync(fixture.dir, { recursive: true, force: true }));
+    const adapters = createDefaultLarkOutputPluginAdapterRegistry();
+    const tracker = new LarkTurnTracker();
+
+    const parsedJsonAsk = askUserQuestionOutputPlugin.parseOutput(`请拍板：\n\n<agentdock-ask-user-question>
+{
+  "id": "rich_text_upgrade_plan",
+  "title": "原生富文本渲染升级范围确认",
+  "questions": [
+    {
+      "id": "scope",
+      "question": "这次落地范围选哪一档？",
+      "options": [
+        { "value": "full", "label": "全套原生富文本渲染（推荐）" },
+        { "value": "render_only", "label": "只做前端渲染器" }
+      ]
+    },
+    {
+      "id": "release_order",
+      "question": "发版顺序？",
+      "options": [
+        { "value": "ship_0331_first", "label": "先发 0.3.31" },
+        { "value": "bundle_together", "label": "合并发一版" }
+      ]
+    }
+  ]
+}
+</agentdock-ask-user-question>`);
+    expect(parsedJsonAsk).not.toBeNull();
+
+    const sentCards: Array<{ card: Record<string, unknown>; idempotencyKey?: string }> = [];
+    const replyInteractiveCard = vi.fn(async (input: { messageId: string; card: Record<string, unknown>; idempotencyKey?: string }) => {
+      sentCards.push({ card: input.card, idempotencyKey: input.idempotencyKey });
+      if (sentCards.length === 1) {
+        throw new LarkServiceError('LARK_API_ERROR', 'Failed to create card content', 502, { upstreamCode: 230099 });
+      }
+      return { messageId: 'om_ask_fallback_ok', chatId: 'oc_group_fb' };
+    });
+
+    const record = await dispatchLarkOutputPluginCard({
+      pluginRegistry: fixture.outputPlugins.registry,
+      larkPluginAdapters: adapters,
+      service: { replyInteractiveCard },
+      turnTracker: tracker,
+      cardMappings: fixture.mappings,
+      appId: 'cli_dedup_bot',
+      sessionId: 'ses_fb',
+      taskId: 'task_fb_1',
+      chatId: 'oc_group_fb',
+      chatType: 'group',
+      replyToMessageId: 'om_x100b7f987da0c8a0df8d4da59123c68',
+      webBaseUrl: 'http://127.0.0.1:4310',
+      pluginId: BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+      spec: parsedJsonAsk!.spec,
+      sourceBadge: buildLarkOriginSourceBadge('zh-CN')
+    });
+
+    expect(record?.messageId).toBe('om_ask_fallback_ok');
+    expect(replyInteractiveCard).toHaveBeenCalledTimes(2);
+    expect(sentCards[0]!.card.body).toBeDefined();
+    expect((sentCards[0]!.card.body as any).elements.some((el: any) => el.tag === 'form')).toBe(true);
+    // 降级重发不含 form，保留单一来源徽标并带 -fb 幂等键
+    expect((sentCards[1]!.card.body as any).elements.some((el: any) => el.tag === 'form')).toBe(false);
+    expect((sentCards[1]!.card.body as any).elements[0]?.element_id).toBe('task_source_badge');
+    expect(sentCards[1]!.idempotencyKey?.endsWith('-fb')).toBe(true);
+    expect((sentCards[1]!.idempotencyKey ?? '').length).toBeLessThanOrEqual(50);
   });
 });

@@ -9,7 +9,7 @@ import {
 } from '@agent-dock/agent-dock-shared';
 import { getActiveServerLocale } from '../../locale-service.js';
 import { LARK_ASK_CARD_CHANNEL } from '../ask-user-question-card.js';
-import type { LarkCardService } from '../service.js';
+import { LarkServiceError, type LarkCardService, type LarkCardSourceBadge } from '../service.js';
 import { LarkTurnTracker, type LarkOutputPluginCardDedupKey } from '../turn-tracker.js';
 import { LARK_OUTPUT_PLUGIN_CARD_CHANNEL } from './declarative-adapter.js';
 import type { LarkOutputPluginAdapterRegistry } from './registry.js';
@@ -44,6 +44,7 @@ export interface DispatchLarkOutputPluginCardInput {
   webBaseUrl?: string;
   pluginId: string;
   spec: unknown;
+  sourceBadge?: LarkCardSourceBadge;
   locale?: Locale;
 }
 
@@ -103,6 +104,13 @@ export async function hasPersistedLarkOutputPluginCard(
   });
 }
 
+function isLarkInteractiveCardSchemaRejected(error: unknown): boolean {
+  if (!(error instanceof LarkServiceError)) return false;
+  const code = Number(error.details?.upstreamCode);
+  if (!Number.isFinite(code)) return false;
+  return code === 230025 || code === 230028 || code === 230099 || (code >= 200600 && code < 201000);
+}
+
 /**
  * 统一的飞书纯 XML 交互插件卡片强幂等派发器（覆盖 AskUserQuestion、ConfirmAction 与全部声明式插件）：
  * 1. 先同步在共享 `LarkTurnTracker` 中按 `(sessionId, taskId, pluginId, widgetId, chatId)`
@@ -155,30 +163,49 @@ export async function dispatchLarkOutputPluginCard(
 
     const isAsk = canonicalId === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
     const cardId = `${isAsk ? 'askc' : 'outpc'}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-    const card = adapter.buildCard({
+    const cardBuildInput = {
       cardId,
       plugin,
       spec: input.spec,
       sessionId,
       webBaseUrl: input.webBaseUrl,
+      ...(input.sourceBadge ? { sourceBadge: input.sourceBadge } : {}),
       locale: input.locale ?? getActiveServerLocale()
-    });
+    };
+    const card = adapter.buildCard(cardBuildInput);
     const idempotencyKey = buildLarkOutputPluginCardIdempotencyKey(dedupKey);
 
-    const sent = canReply
-      ? await input.service.replyInteractiveCard!({
-          messageId: input.replyToMessageId!,
-          card,
-          replyInThread: Boolean(input.replyInThread),
-          idempotencyKey
-        })
-      : await input.service.sendInteractiveCard!({
-          ...(input.receiveIdType === 'open_id'
-            ? { receiveId: targetChatId, receiveIdType: 'open_id' as const }
-            : { chatId: targetChatId }),
-          card,
-          idempotencyKey
-        });
+    const deliverCard = (payloadCard: Record<string, unknown>, idemKey: string) => (
+      canReply
+        ? input.service.replyInteractiveCard!({
+            messageId: input.replyToMessageId!,
+            card: payloadCard,
+            ...(input.sourceBadge ? { sourceBadge: input.sourceBadge } : {}),
+            replyInThread: Boolean(input.replyInThread),
+            idempotencyKey: idemKey
+          })
+        : input.service.sendInteractiveCard!({
+            ...(input.receiveIdType === 'open_id'
+              ? { receiveId: targetChatId, receiveIdType: 'open_id' as const }
+              : { chatId: targetChatId }),
+            card: payloadCard,
+            ...(input.sourceBadge ? { sourceBadge: input.sourceBadge } : {}),
+            idempotencyKey: idemKey
+          })
+    );
+
+    let sent: { messageId: string; chatId?: string };
+    try {
+      sent = await deliverCard(card, idempotencyKey);
+    } catch (error) {
+      if (isLarkInteractiveCardSchemaRejected(error) && adapter.buildFallbackCard) {
+        const fallbackCard = adapter.buildFallbackCard(cardBuildInput);
+        const fallbackIdem = `${idempotencyKey.slice(0, 47)}-fb`;
+        sent = await deliverCard(fallbackCard, fallbackIdem);
+      } else {
+        throw error;
+      }
+    }
 
     sentMessageId = sent.messageId;
     claim.markSent();

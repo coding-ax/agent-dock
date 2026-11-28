@@ -7,6 +7,7 @@ import { eventsForRuntimeTask, isLarkMessageRateLimit, larkRateLimitBackoffMs, L
 import type { LarkListener, LarkLongConnectionListenerOptions } from './listener.js';
 import { setSessionReplyMode } from './agent-tools.js';
 import { LarkServiceError } from './service.js';
+import { setActiveServerLocaleForTest } from '../locale-service.js';
 
 const bindingRepositories: ReturnType<typeof createRepositories>[] = [];
 afterEach(() => bindingRepositories.splice(0).forEach(repo => repo.close()));
@@ -1777,6 +1778,145 @@ describe('Lark message coordinator', () => {
       const coordinator = new LarkMessageCoordinator(runtime as any, service as any, { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, Math.random, 'ou_bot');
       coordinator.handle(groupEvent('oc_nameless'), config);
       await vi.waitFor(() => expect(injectedPrompt(runtime) ?? '').toContain('当前群聊：名称未获取（chat_id: oc_nameless）'));
+      coordinator.stop();
+    });
+  });
+
+  describe('飞书发起来源徽标（sourceBadge）', () => {
+    afterEach(() => {
+      setActiveServerLocaleForTest(undefined);
+    });
+
+    const makeRuntime = () => {
+      let subscriber: ((event: AgentEvent) => void) | undefined;
+      return {
+        start: vi.fn(async () => session),
+        getSession: vi.fn(async () => session),
+        interrupt: vi.fn(async () => {}),
+        subscribe: vi.fn((_id: string, listener: (event: AgentEvent) => void) => { subscriber = listener; return vi.fn(); }),
+        send: vi.fn(async () => { subscriber?.(agentEvent(1, 'text', { role: 'assistant', text: '处理完成' })); })
+      };
+    };
+
+    const makeService = () => ({
+      addReaction: vi.fn(async () => ({ reactionId: 'r1' })),
+      deleteReaction: vi.fn(async () => {}),
+      send: vi.fn(async () => ({ messageId: 'om_card_send', chatId: 'oc_p2p' })),
+      reply: vi.fn(async () => ({ messageId: 'om_card_reply', chatId: 'oc_group' })),
+      update: vi.fn(async (input: any) => ({ messageId: input?.messageId ?? 'om_card_reply' })),
+      replyText: vi.fn(async () => ({ messageId: 'om_txt' })),
+      sendText: vi.fn(async () => ({ messageId: 'om_txt' })),
+      getChat: vi.fn(async () => ({ chatId: 'oc_group', name: '研发群' })),
+      listChats: vi.fn(async () => ({ items: [], hasMore: false }))
+    });
+
+    it('普通群聊、托管绑定群聊与飞书私聊轮次均在首帧与终态卡片携带「🕊️ 飞书发起」青绿 Tag', async () => {
+      // 1) 普通群聊
+      const groupRuntime = makeRuntime();
+      const groupService = makeService();
+      const groupCoord = new LarkMessageCoordinator(groupRuntime as any, groupService as any, { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, Math.random, 'ou_bot');
+      groupCoord.handle({
+        messageId: 'om_grp_1', chatId: 'oc_grp_1', chatType: 'group', messageType: 'text',
+        content: JSON.stringify({ text: '@bot 查一下日志' }), senderOpenId: 'ou_user',
+        mentions: [{ key: '@bot', name: 'AgentDock', openId: 'ou_bot' }]
+      }, config);
+      await vi.waitFor(() => expect(groupService.update).toHaveBeenCalled());
+      expect(groupService.reply.mock.calls[0]?.[0]).toMatchObject({
+        state: 'running',
+        sourceBadge: { label: '🕊️ 飞书发起', color: 'turquoise' }
+      });
+      expect(groupService.update.mock.calls.at(-1)?.[0]).toMatchObject({
+        state: 'completed',
+        sourceBadge: { label: '🕊️ 飞书发起', color: 'turquoise' }
+      });
+      groupCoord.stop();
+
+      // 2) 飞书私聊（p2p）
+      const dmRuntime = makeRuntime();
+      const dmService = makeService();
+      const dmCoord = new LarkMessageCoordinator(dmRuntime as any, dmService as any, { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, Math.random, 'ou_bot');
+      dmCoord.handle({
+        messageId: 'om_dm_1', chatId: 'oc_dm_1', chatType: 'p2p', messageType: 'text',
+        content: JSON.stringify({ text: '帮我汇总今日进展' }), senderOpenId: 'ou_user', mentions: []
+      }, config);
+      await vi.waitFor(() => expect(dmService.update).toHaveBeenCalled());
+      expect(dmService.send.mock.calls[0]?.[0]).toMatchObject({
+        chatId: 'oc_dm_1',
+        state: 'running',
+        sourceBadge: { label: '🕊️ 飞书发起', color: 'turquoise' }
+      });
+      expect(dmService.update.mock.calls.at(-1)?.[0]).toMatchObject({
+        state: 'completed',
+        sourceBadge: { label: '🕊️ 飞书发起', color: 'turquoise' }
+      });
+      dmCoord.stop();
+
+      // 3) 托管绑定群聊（handover）
+      const repos = createRepositories(':memory:'); bindingRepositories.push(repos);
+      await repos.channelMappings.save({
+        id: 'lark-handover:cli_test:oc_bound_badge', channel: 'lark-handover:cli_test', externalId: 'oc_bound_badge',
+        sessionId: session.id, extra: JSON.stringify({ name: '托管群' }), createdAt: ''
+      });
+      const boundRuntime = makeRuntime();
+      const boundService = makeService();
+      const boundCoord = new LarkMessageCoordinator(boundRuntime as any, boundService as any, { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, Math.random, 'ou_bot', undefined, repos.channelMappings as any);
+      boundCoord.handle({
+        messageId: 'om_bound_1', chatId: 'oc_bound_badge', chatType: 'group', messageType: 'text',
+        content: JSON.stringify({ text: '@bot 直接跟进一下任务' }), senderOpenId: 'ou_user',
+        mentions: [{ key: '@bot', name: 'AgentDock', openId: 'ou_bot' }]
+      }, config);
+      await vi.waitFor(() => expect(boundService.update).toHaveBeenCalled());
+      expect(boundService.reply.mock.calls[0]?.[0]).toMatchObject({
+        state: 'running',
+        sourceBadge: { label: '🕊️ 飞书发起', color: 'turquoise' }
+      });
+      expect(boundService.update.mock.calls.at(-1)?.[0]).toMatchObject({
+        state: 'completed',
+        sourceBadge: { label: '🕊️ 飞书发起', color: 'turquoise' }
+      });
+      boundCoord.stop();
+    });
+
+    it('英文服务端语言与重启终态对账卡片均保留「🕊️ From Lark」青绿 Tag', async () => {
+      setActiveServerLocaleForTest('en-US');
+      const repos = createRepositories(':memory:'); bindingRepositories.push(repos);
+      const startedAt = Date.now() - 5_000;
+      await repos.channelMappings.save({
+        id: 'lark-card:cli_test:om_reconcile_badge',
+        channel: 'lark-card:cli_test',
+        externalId: 'om_reconcile_badge',
+        sessionId: session.id,
+        extra: JSON.stringify({
+          app_id: 'cli_test',
+          chat_id: 'oc_rec_badge',
+          reply_message_id: 'om_reconcile_badge',
+          card_message_id: 'om_card_inflight',
+          runtime_task_id: 'rt_1',
+          task_name: 'Verify build',
+          prompt: 'Verify build',
+          state: 'running',
+          started_at: startedAt
+        }),
+        createdAt: new Date(startedAt).toISOString()
+      });
+
+      const runtime = {
+        ...makeRuntime(),
+        getTasks: vi.fn(async () => [{
+          id: 'rt_1', sessionId: session.id, prompt: 'Verify build', status: 'completed',
+          createdAt: new Date(startedAt).toISOString(), updatedAt: new Date().toISOString()
+        }]),
+        getEvents: vi.fn(async () => [agentEvent(1, 'text', { role: 'assistant', text: 'Build passed.' })])
+      };
+      const service = makeService();
+      const coordinator = new LarkMessageCoordinator(runtime as any, service as any, { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, Math.random, 'ou_bot', undefined, repos.channelMappings as any);
+      await coordinator.reconcile(config);
+      expect(service.update).toHaveBeenCalledTimes(1);
+      expect(service.update.mock.calls[0]?.[0]).toMatchObject({
+        messageId: 'om_card_inflight',
+        state: 'completed',
+        sourceBadge: { label: '🕊️ From Lark', color: 'turquoise' }
+      });
       coordinator.stop();
     });
   });

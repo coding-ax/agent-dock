@@ -1,6 +1,13 @@
 import {
+  ASK_USER_QUESTION_ANSWER_ORIGIN,
+  ASSISTANT_ANSWER_ORIGIN,
+  ASSISTANT_REPLY_ORIGIN,
   BUILTIN_ASK_USER_QUESTION_PLUGIN_ID,
+  CONFIRM_ACTION_INTERACTION_ORIGIN,
   defaultOutputPluginRegistry,
+  isAssistantReplyOrigin,
+  OUTPUT_PLUGIN_INTERACTION_ORIGIN_PREFIX,
+  parseAssistantReplyOrigin,
   pickFinalAssistantText,
   resolveOutputPluginEnabled,
   stripRecoveryVisiblePrefix,
@@ -42,6 +49,7 @@ import {
 import {
   boundLarkCardElements,
   type LarkCardService,
+  type LarkCardSourceBadge,
   type LarkCardSourceBadgeColor
 } from './service.js';
 import {
@@ -57,7 +65,7 @@ export type LarkSyncTurnCategory = 'supervision' | 'web' | 'schedule' | 'mainten
 
 export interface ClassifiedTurnSource {
   category: LarkSyncTurnCategory;
-  /** 飞书卡片/文本顶部展示的轻巧来源徽标，如「🐾 小猫督办」「💻 网页同步」「⏰ 定时任务」 */
+  /** 飞书卡片/文本顶部展示的轻巧来源徽标，如「🐾 小猫督办」「💻 网页同步」「⏰ 定时任务」「🕊️ 飞书表情」 */
   badge: string;
   /** 不含 emoji 的来源简称 */
   label: string;
@@ -67,13 +75,79 @@ export interface ClassifiedTurnSource {
   detailLabel?: string;
 }
 
+function sourceBadgeOf(source: ClassifiedTurnSource): LarkCardSourceBadge {
+  return {
+    label: source.badge,
+    color: source.tagColor
+  };
+}
+
 const SUPERVISION_PREFIX_RE = /^(?:📋\s*督办|⏸\s*用户已停止)/;
 const SUPERVISION_SENT_MARKER = '以下是 daemon 汇总的督办信号';
 const SCHEDULE_PROMPT_RE = /^\[AgentDock 定时任务\s+([^\]]+)\]/;
 
+/** 全仓所有已知的轮次 origin 枚举（供单测穷举守卫校验，确保无未映射遗漏）。 */
+export const KNOWN_TURN_ORIGINS = [
+  'handoff',
+  'maintenance',
+  'injected',
+  ASSISTANT_REPLY_ORIGIN,
+  ASSISTANT_ANSWER_ORIGIN,
+  'schedule',
+  TASK_RECOVERY_ORIGIN,
+  'board-mention',
+  'emoji',
+  'lark',
+  'feishu',
+  ASK_USER_QUESTION_ANSWER_ORIGIN,
+  CONFIRM_ACTION_INTERACTION_ORIGIN,
+  `${OUTPUT_PLUGIN_INTERACTION_ORIGIN_PREFIX}custom:demo`,
+  'cli',
+  'api',
+  'webhook',
+  'sources-router',
+  'system',
+  'web'
+] as const;
+
+function isOutputPluginInteractionOrigin(origin: string): boolean {
+  return origin === ASK_USER_QUESTION_ANSWER_ORIGIN
+    || origin === CONFIRM_ACTION_INTERACTION_ORIGIN
+    || origin.startsWith(OUTPUT_PLUGIN_INTERACTION_ORIGIN_PREFIX);
+}
+
+function parseInteractionPayloadSource(
+  origin: string,
+  prompt: string
+): { source?: 'web' | 'lark' | 'assistant'; responderName?: string } {
+  if (!prompt) return {};
+  const parsed = defaultOutputPluginRegistry.parseInteractionEvent(origin, prompt);
+  const candidate = (parsed?.payload && typeof parsed.payload === 'object'
+    ? parsed.payload
+    : (() => {
+        try {
+          const raw = JSON.parse(prompt);
+          return raw && typeof raw === 'object' ? raw : undefined;
+        } catch {
+          return undefined;
+        }
+      })()) as Record<string, unknown> | undefined;
+  if (!candidate) return {};
+  const source = candidate.source === 'lark' || candidate.source === 'web' || candidate.source === 'assistant'
+    ? candidate.source
+    : undefined;
+  const responderName = typeof candidate.responderName === 'string' && candidate.responderName.trim()
+    ? candidate.responderName.trim()
+    : typeof candidate.answeredBy === 'string' && candidate.answeredBy.trim()
+      ? candidate.answeredBy.trim()
+      : undefined;
+  return { ...(source ? { source } : {}), ...(responderName ? { responderName } : {}) };
+}
+
 /**
- * 归类一条非飞书触发轮次的来源，返回用于细粒度过滤的分类与卡片/文本徽标。
- * 分类优先级：整理维护（maintenance/handoff） > 系统督办（injected） > 定时任务（schedule） > Web/其他对话。
+ * 归类一条轮次的来源，返回用于细粒度过滤的分类与卡片/文本徽标。
+ * 覆盖全部已知 origin（整理/交接/系统、督办/小猫回复/小猫代答、定时任务、断点续跑、看板、飞书表情/飞书直发、
+ * 交互卡片响应、CLI、API、Webhook、网页同步）并对未来新增未知 origin 提供优雅兜底（绝不产出无 Tag 裸卡）。
  */
 export function classifyTurnSource(input: {
   taskOrigin?: string | null;
@@ -100,6 +174,30 @@ export function classifyTurnSource(input: {
       badge: tShared(locale, 'lark.sync.badge.maintenance'),
       label: tShared(locale, 'lark.sync.label.maintenance'),
       tagColor: 'neutral'
+    };
+  }
+  if (origin === 'system') {
+    return {
+      category: 'maintenance',
+      badge: tShared(locale, 'lark.sync.badge.system'),
+      label: tShared(locale, 'lark.sync.label.system'),
+      tagColor: 'neutral'
+    };
+  }
+
+  if (isAssistantReplyOrigin(origin)) {
+    const meta = parseAssistantReplyOrigin(origin);
+    const isAnswer = meta?.kind === 'answer';
+    const name = meta?.responderName?.trim();
+    const badge = isAnswer
+      ? (name ? tShared(locale, 'lark.sync.badge.assistantAnswerNamed', { name }) : tShared(locale, 'lark.sync.badge.assistantAnswer'))
+      : (name ? tShared(locale, 'lark.sync.badge.assistantReplyNamed', { name }) : tShared(locale, 'lark.sync.badge.assistantReply'));
+    const label = tShared(locale, isAnswer ? 'lark.sync.label.assistantAnswer' : 'lark.sync.label.assistantReply');
+    return {
+      category: 'supervision',
+      badge,
+      label,
+      tagColor: 'purple'
     };
   }
 
@@ -164,15 +262,90 @@ export function classifyTurnSource(input: {
       category: 'web',
       badge: tShared(locale, 'lark.sync.badge.emoji'),
       label: tShared(locale, 'lark.sync.label.emoji'),
+      tagColor: 'turquoise'
+    };
+  }
+
+  if (origin === 'lark' || origin === 'feishu') {
+    return {
+      category: 'web',
+      badge: tShared(locale, 'lark.sync.badge.lark'),
+      label: tShared(locale, 'lark.sync.label.lark'),
+      tagColor: 'turquoise'
+    };
+  }
+
+  if (isOutputPluginInteractionOrigin(origin)) {
+    const interaction = parseInteractionPayloadSource(origin, prompt);
+    if (interaction.source === 'assistant') {
+      const name = interaction.responderName;
+      return {
+        category: 'supervision',
+        badge: name
+          ? tShared(locale, 'lark.sync.badge.assistantAnswerNamed', { name })
+          : tShared(locale, 'lark.sync.badge.assistantAnswer'),
+        label: tShared(locale, 'lark.sync.label.assistantAnswer'),
+        tagColor: 'purple'
+      };
+    }
+    if (interaction.source === 'lark') {
+      return {
+        category: 'web',
+        badge: tShared(locale, 'lark.sync.badge.larkCardReply'),
+        label: tShared(locale, 'lark.sync.label.lark'),
+        tagColor: 'turquoise'
+      };
+    }
+    return {
+      category: 'web',
+      badge: tShared(locale, 'lark.sync.badge.webCardReply'),
+      label: tShared(locale, 'lark.sync.label.web'),
+      tagColor: 'blue'
+    };
+  }
+
+  if (origin === 'cli') {
+    return {
+      category: 'web',
+      badge: tShared(locale, 'lark.sync.badge.cli'),
+      label: tShared(locale, 'lark.sync.label.cli'),
+      tagColor: 'indigo'
+    };
+  }
+
+  if (origin === 'api') {
+    return {
+      category: 'web',
+      badge: tShared(locale, 'lark.sync.badge.api'),
+      label: tShared(locale, 'lark.sync.label.api'),
+      tagColor: 'indigo'
+    };
+  }
+
+  if (origin === 'webhook' || origin === 'sources-router') {
+    return {
+      category: 'web',
+      badge: tShared(locale, 'lark.sync.badge.webhook'),
+      label: tShared(locale, 'lark.sync.label.webhook'),
+      tagColor: 'violet'
+    };
+  }
+
+  if (!origin || origin === 'web') {
+    return {
+      category: 'web',
+      badge: tShared(locale, 'lark.sync.badge.web'),
+      label: tShared(locale, 'lark.sync.label.web'),
       tagColor: 'blue'
     };
   }
 
   return {
     category: 'web',
-    badge: tShared(locale, 'lark.sync.badge.web'),
-    label: tShared(locale, 'lark.sync.label.web'),
-    tagColor: 'blue'
+    badge: tShared(locale, 'lark.sync.badge.other'),
+    label: tShared(locale, 'lark.sync.label.other'),
+    tagColor: 'neutral',
+    detailLabel: origin
   };
 }
 
@@ -572,7 +745,8 @@ export class LarkTurnSyncService {
       chatType: input.turn.target.chatType,
       webBaseUrl: input.turn.botConfig.webBaseUrl,
       pluginId: input.pluginId,
-      spec: input.spec
+      spec: input.spec,
+      sourceBadge: sourceBadgeOf(input.turn.source)
     });
     return dispatched?.messageId;
   }
@@ -642,7 +816,7 @@ export class LarkTurnSyncService {
           ...this.recipientFor(turn.target),
           state: 'running',
           readOnly: true,
-          sourceBadge: { label: turn.source.badge, color: turn.source.tagColor },
+          sourceBadge: sourceBadgeOf(turn.source),
           taskId: turn.taskId,
           taskName: turn.taskName,
           elapsedSeconds,
@@ -671,7 +845,7 @@ export class LarkTurnSyncService {
         messageId: turn.cardMessageId,
         state: 'running',
         readOnly: true,
-        sourceBadge: { label: turn.source.badge, color: turn.source.tagColor },
+        sourceBadge: sourceBadgeOf(turn.source),
         taskId: turn.taskId,
         taskName: turn.taskName,
         elapsedSeconds,
@@ -1078,7 +1252,7 @@ export class LarkTurnSyncService {
           messageId: turn.cardMessageId,
           state,
           readOnly: true,
-          sourceBadge: { label: turn.source.badge, color: turn.source.tagColor },
+          sourceBadge: sourceBadgeOf(turn.source),
           taskId: turn.taskId,
           taskName: turn.taskName,
           elapsedSeconds,
@@ -1251,7 +1425,7 @@ export class LarkTurnSyncService {
           messageId: turn.cardMessageId,
           state,
           readOnly: true,
-          sourceBadge: { label: turn.source.badge, color: turn.source.tagColor },
+          sourceBadge: sourceBadgeOf(turn.source),
           taskId: turn.taskId,
           taskName: turn.taskName,
           elapsedSeconds,
@@ -1267,7 +1441,7 @@ export class LarkTurnSyncService {
         ...this.recipientFor(turn.target),
         state,
         readOnly: true,
-        sourceBadge: { label: turn.source.badge, color: turn.source.tagColor },
+        sourceBadge: sourceBadgeOf(turn.source),
         taskId: turn.taskId,
         taskName: turn.taskName,
         elapsedSeconds,

@@ -6,7 +6,9 @@ import {
 } from '@agent-dock/agent-dock-shared';
 import {
   buildLarkAskUserQuestionAnsweredCard,
+  buildLarkAskUserQuestionAnsweredFallbackCard,
   buildLarkAskUserQuestionCard,
+  buildLarkAskUserQuestionFallbackCard,
   isLarkAskUserQuestionAction,
   LARK_ASK_ACTION_PREVIEW,
   parseLarkAskUserQuestionAction
@@ -29,7 +31,7 @@ export const askUserQuestionLarkAdapter: LarkOutputPluginAdapter<
   isPreviewAction(action: string): boolean {
     return action === LARK_ASK_ACTION_PREVIEW;
   },
-  buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, locale }) {
+  buildCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, sourceBadge, locale }) {
     return buildLarkAskUserQuestionCard({
       cardId,
       spec,
@@ -37,15 +39,39 @@ export const askUserQuestionLarkAdapter: LarkOutputPluginAdapter<
       webBaseUrl,
       previewBanner,
       previewMode,
+      sourceBadge,
       locale
     });
   },
-  buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner, locale }) {
+  buildFallbackCard({ cardId, spec, sessionId, webBaseUrl, previewBanner, previewMode, sourceBadge, locale }) {
+    return buildLarkAskUserQuestionFallbackCard({
+      cardId,
+      spec,
+      sessionId,
+      webBaseUrl,
+      previewBanner,
+      previewMode,
+      sourceBadge,
+      locale
+    });
+  },
+  buildAnsweredCard({ payload, sessionId, webBaseUrl, previewBanner, sourceBadge, locale }) {
     return buildLarkAskUserQuestionAnsweredCard({
       payload,
       sessionId,
       webBaseUrl,
       previewBanner,
+      sourceBadge,
+      locale
+    });
+  },
+  buildAnsweredFallbackCard({ payload, sessionId, webBaseUrl, previewBanner, sourceBadge, locale }) {
+    return buildLarkAskUserQuestionAnsweredFallbackCard({
+      payload,
+      sessionId,
+      webBaseUrl,
+      previewBanner,
+      sourceBadge,
       locale
     });
   },

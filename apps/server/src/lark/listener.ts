@@ -6,11 +6,25 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { AgentConfig, AgentEvent, AskUserQuestionAnswerItem, AskUserQuestionAnswerPayload, AskUserQuestionSpec, ConfirmActionInteractionPayload, ConfirmActionSpec, ConfigRepository, ChannelMappingRepository, Locale, PermissionMode, Session, TaskRecord, ToolRiskPolicy } from '@agent-dock/agent-dock-shared';
-import { tShared } from '@agent-dock/agent-dock-shared';
+import { degradeRichMarkdownForLark, tShared } from '@agent-dock/agent-dock-shared';
 import { getActiveServerLocale } from '../locale-service.js';
 import { defaultHighRiskPattern, defaultLarkTraceLimit, readLarkConfig, type StoredLarkConfig } from './config.js';
 import { parseLarkMessageContent, type LarkMessageResource } from './message-content.js';
-import { boundLarkCardElements, createLarkCardService, larkIdentityPermissionHelp, LarkServiceError, type LarkCardActionButton, type LarkCardService } from './service.js';
+import {
+  boundLarkCardElements,
+  buildInteractionSourceLarkBadge,
+  buildLarkOriginSourceBadge,
+  createLarkCardService,
+  ensureLarkCardUpdateMulti,
+  larkIdentityPermissionHelp,
+  LarkServiceError,
+  updateInteractiveCardWithRetry,
+  withLarkCardSourceBadge,
+  type LarkCardActionButton,
+  type LarkCardService,
+  type LarkCardSourceBadge,
+  type LarkOriginBadgeVariant
+} from './service.js';
 import { clearSessionReplyMode, getSessionReplyMode, type AgentReplyMode } from './agent-tools.js';
 import { larkHandoverChannel } from './handover-binding.js';
 import { LarkTurnTracker } from './turn-tracker.js';
@@ -49,6 +63,7 @@ import {
   isCarriedOverToolCall,
   normalizeOutputPluginId,
   now,
+  OUTPUT_PLUGIN_INTERACTION_ORIGIN_PREFIX,
   pickFinalAssistantEntry,
   resolveOutputPluginEnabled,
   serializeAskUserQuestionAnswer,
@@ -226,6 +241,47 @@ export interface LarkCardActionContext {
   openChatId?: string;
   option?: string;
   inputValue?: string;
+  callbackToken?: string;
+}
+
+export interface LarkCardActionToast {
+  type: 'info' | 'success' | 'warning' | 'error';
+  content: string;
+}
+
+export interface LarkCardActionResult extends LarkCardActionToast {
+  /**
+   * 随 `card.action.trigger` 回调同步返回的 Schema 2.0 锁定卡片（`card: { type: 'raw', data }`）。
+   * 飞书表单/交互卡片在回调未结束前先调用 PATCH 且回调响应仅返回 toast（无 card）时，
+   * 飞书回调终态处理会把卡片覆盖回原表单快照；同步返回 card 可原子切换为完成锁定态。
+   */
+  card?: Record<string, unknown>;
+}
+
+export interface LarkCardCallbackResponse {
+  toast: LarkCardActionToast;
+  card?: {
+    type: 'raw';
+    data: Record<string, unknown>;
+  };
+}
+
+/** 回调返回后异步 PATCH 兜底延迟（毫秒）：必须晚于 WS 回调响应帧到达飞书，避免与回调终态写盘竞态。 */
+export const DEFAULT_POST_CALLBACK_CARD_PATCH_DELAY_MS = 800;
+
+/** 将内部卡片动作结果封装为飞书 Schema 2.0 `card.action.trigger` 标准回调响应体。 */
+export function toLarkCardCallbackResponse(result: LarkCardActionResult | undefined): LarkCardCallbackResponse | undefined {
+  if (!result) return undefined;
+  const response: LarkCardCallbackResponse = {
+    toast: { type: result.type, content: result.content }
+  };
+  if (result.card) {
+    response.card = {
+      type: 'raw',
+      data: ensureLarkCardUpdateMulti(result.card)
+    };
+  }
+  return response;
 }
 type PersistedLarkCardTask = {
   app_id: string;
@@ -238,6 +294,7 @@ type PersistedLarkCardTask = {
   runtime_task_id?: string;
   task_name: string;
   prompt: string;
+  badge_variant?: LarkOriginBadgeVariant;
   state: LarkTaskState;
   started_at: number;
   last_successful_elements?: LarkCardElement[];
@@ -1136,12 +1193,12 @@ export function renderLarkCardElements(
         ?? adapter?.trailingHintMarkdown
         ?? `<font color='grey'>${tShared(locale, 'lark.ask.trailingHint')}</font>`;
       finalText = extracted.proseText
-        ? `${truncate(extracted.proseText, 5_800)}\n\n${hintMd}`
+        ? `${truncate(degradeRichMarkdownForLark(extracted.proseText, locale), 5_800)}\n\n${hintMd}`
         : plugin?.capabilities.interactive === false
           ? tShared(locale, 'lark.declarative.trailingInfoFallback', { name: plugin.name })
           : tShared(locale, 'lark.ask.trailingFallback');
     } else {
-      finalText = truncate(rawText, 6_000);
+      finalText = truncate(degradeRichMarkdownForLark(rawText, locale), 6_000);
     }
   }
   let activityEntries = finalMessage ? entries.filter(entry => entry !== finalMessage) : entries;
@@ -1200,7 +1257,7 @@ export function renderLarkTrace(events: AgentEvent[], config: Pick<StoredLarkCon
   if (!entries.length) return tShared(locale, 'lark.card.thinkingPlaceholder');
   return entries.map(entry => {
     const data = entry.data;
-    if (entry.type === 'text') return `**Agent**\n\n${data.text ?? ''}`;
+    if (entry.type === 'text') return `**Agent**\n\n${degradeRichMarkdownForLark(String(data.text ?? ''), locale)}`;
     if (entry.type === 'thinking') return `**${tShared(locale, 'lark.card.thinkingShort')}**\n\n> ${String(data.text ?? '').replaceAll('\n', '\n> ')}`;
     if (entry.type === 'tool_call' || entry.type === 'tool_result') return `**工具 · ${data.name ?? 'tool'}** · ${data.status ?? (entry.type === 'tool_result' ? 'completed' : 'running')}${fenced(data.output ?? data.input)}`;
     if (entry.type === 'permission_request') return `**权限请求** · ${data.status ?? 'pending'}\n\n${data.title ?? ''}`;
@@ -1233,6 +1290,8 @@ export class LarkMessageCoordinator {
   private readonly localCardTracker = new LarkTurnTracker();
   /** 无 OutputPluginService 注入时的本地兜底幂等记录。 */
   private readonly localAnsweredPlugins = new Map<string, unknown>();
+  /** 回调返回后延迟执行的异步 PATCH 兜底定时器（stop 时统一清理，避免泄漏）。 */
+  private readonly postCallbackTimers = new Set<NodeJS.Timeout>();
 
   constructor(
     private readonly runtime: LarkRuntime,
@@ -1246,7 +1305,8 @@ export class LarkMessageCoordinator {
     private readonly askUserQuestion?: AskUserQuestionService,
     private readonly outputPlugins?: OutputPluginService,
     private readonly larkPluginAdapters: LarkOutputPluginAdapterRegistry = defaultLarkOutputPluginAdapterRegistry,
-    private readonly turnTracker?: LarkTurnTracker
+    private readonly turnTracker?: LarkTurnTracker,
+    private readonly postCallbackCardPatchDelayMs: number = DEFAULT_POST_CALLBACK_CARD_PATCH_DELAY_MS
   ) {}
 
   private get resolvedOutputPlugins(): OutputPluginService | undefined {
@@ -1347,6 +1407,7 @@ export class LarkMessageCoordinator {
     rootId?: string;
     pluginId: string;
     spec: unknown;
+    sourceBadge?: LarkCardSourceBadge;
   }): Promise<PersistedLarkOutputPluginCard | undefined> {
     return dispatchLarkOutputPluginCard({
       pluginRegistry: this.resolvedPluginRegistry,
@@ -1383,7 +1444,8 @@ export class LarkMessageCoordinator {
       rootId: input.rootId,
       webBaseUrl: input.config.webBaseUrl,
       pluginId: input.pluginId,
-      spec: input.spec
+      spec: input.spec,
+      ...(input.sourceBadge ? { sourceBadge: input.sourceBadge } : {})
     });
   }
 
@@ -1458,7 +1520,7 @@ export class LarkMessageCoordinator {
    * 都没有」混为一谈：前者必须让 Agent 知道信息缺失，后者才能说「机器人只在这个群」。
    * 注意「当前群聊」的名字不走这里——见 `resolveCurrentChatName`。
    */
-  private async resolveChatNames(config: StoredLarkConfig): Promise<Map<string, string> | undefined> {
+  private async resolveChatNames(config: StoredLarkConfig, timeoutMs = chatNamesTimeoutMs): Promise<Map<string, string> | undefined> {
     if (this.chatNames && Date.now() - this.chatNamesFetchedAt < 5 * 60_000) return this.chatNames;
     if (!this.chatNamesFetch) {
       this.chatNamesFetch = (async () => {
@@ -1478,7 +1540,7 @@ export class LarkMessageCoordinator {
     try {
       const names = await Promise.race([
         pending,
-        new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), chatNamesTimeoutMs); })
+        new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), timeoutMs); })
       ]);
       if (names) { this.chatNames = names; this.chatNamesFetchedAt = Date.now(); }
       else this.log.warn({ appId: config.appId }, '获取机器人所在群列表超时，本轮跳过群列表注入');
@@ -1602,12 +1664,26 @@ export class LarkMessageCoordinator {
     return actions;
   }
 
+  private larkOriginBadgeVariantForTask(task: LarkTask): LarkOriginBadgeVariant {
+    if (task.regexTrigger) return 'regex';
+    if (task.sideChat) return 'sideChat';
+    if (
+      task.origin === ASK_USER_QUESTION_ANSWER_ORIGIN
+      || task.origin === CONFIRM_ACTION_INTERACTION_ORIGIN
+      || Boolean(task.origin?.startsWith(OUTPUT_PLUGIN_INTERACTION_ORIGIN_PREFIX))
+    ) {
+      return 'cardReply';
+    }
+    return 'default';
+  }
+
   private async saveCardTask(task: LarkTask, state = task.state) {
     if (!this.cardMappings || !task.sessionId || !task.cardMessageId || !task.startedAt) return;
     const cardTaskName = task.regexTrigger
       ? `[${task.regexTrigger.ruleName}] ${task.regexTrigger.messagePreview}`.slice(0, 80)
       : task.prompt.slice(0, 80);
     const forceMainFromThread = task.regexTrigger?.replyMode === 'main' && Boolean(task.event.threadId?.trim());
+    const badgeVariant = this.larkOriginBadgeVariantForTask(task);
     const extra: PersistedLarkCardTask = {
       app_id: task.config.appId,
       chat_id: task.event.chatId,
@@ -1615,6 +1691,7 @@ export class LarkMessageCoordinator {
       ...(task.runtimeTaskId ? { runtime_task_id: task.runtimeTaskId } : {}),
       task_name: cardTaskName,
       prompt: task.prompt,
+      ...(badgeVariant !== 'default' ? { badge_variant: badgeVariant } : {}),
       state,
       ...(task.lastSuccessfulElements?.length ? { last_successful_elements: task.lastSuccessfulElements } : {}),
       ...(!forceMainFromThread && (task.event.chatType === 'group' || task.forceReplyInThread) ? {
@@ -1663,12 +1740,14 @@ export class LarkMessageCoordinator {
       let lastError: unknown;
       let contentRejected = false;
       const currentElements = boundLarkCardElements(renderLarkCardElements(events, config, completed));
+      const reconcileSourceBadge = buildLarkOriginSourceBadge(undefined, persisted.badge_variant ?? 'default');
       let deliveredElements = currentElements;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           await this.service.update({
             messageId: persisted.card_message_id,
             state,
+            sourceBadge: reconcileSourceBadge,
             taskId: mapping.externalId,
             taskName: persisted.task_name,
             elapsedSeconds,
@@ -1693,6 +1772,7 @@ export class LarkMessageCoordinator {
           await this.service.update({
             messageId: persisted.card_message_id,
             state,
+            sourceBadge: reconcileSourceBadge,
             taskId: mapping.externalId,
             taskName: persisted.task_name,
             elapsedSeconds,
@@ -1731,6 +1811,7 @@ export class LarkMessageCoordinator {
             : boundLarkCardElements(renderLarkCardElements(events, config, completed, true));
           const replacement = await sendPersistedTaskCard(this.service, persisted, {
             state,
+            sourceBadge: reconcileSourceBadge,
             taskId: mapping.externalId,
             taskName: persisted.task_name,
             elapsedSeconds,
@@ -1747,6 +1828,7 @@ export class LarkMessageCoordinator {
               const patchedElements = patchRejectedCardDelta(persisted.last_successful_elements, currentElements);
               const minimal = await sendPersistedTaskCard(this.service, persisted, {
                 state,
+                sourceBadge: reconcileSourceBadge,
                 taskId: mapping.externalId,
                 taskName: persisted.task_name,
                 elapsedSeconds,
@@ -2292,7 +2374,7 @@ export class LarkMessageCoordinator {
     });
   }
 
-  async handleAction(value: unknown, operatorOpenId?: string, context?: LarkCardActionContext) {
+  async handleAction(value: unknown, operatorOpenId?: string, context?: LarkCardActionContext): Promise<LarkCardActionResult> {
     const locale = getActiveServerLocale();
     let parsed = value;
     if (typeof parsed === 'string') {
@@ -2399,7 +2481,7 @@ export class LarkMessageCoordinator {
     value: Record<string, unknown>,
     operatorOpenId?: string,
     context?: LarkCardActionContext
-  ): Promise<{ type: 'success' | 'warning' | 'error' | 'info'; content: string }> {
+  ): Promise<LarkCardActionResult> {
     const locale = getActiveServerLocale();
     const hintedPluginId = typeof value.plugin_id === 'string' && value.plugin_id.trim()
       ? normalizeOutputPluginId(value.plugin_id)
@@ -2465,30 +2547,157 @@ export class LarkMessageCoordinator {
       return { type: 'warning', content: parsedAction.error };
     }
 
-    const actedBy = operatorOpenId && typeof this.service.getUserName === 'function'
-      ? (await this.service.getUserName(operatorOpenId).catch(() => '')) || undefined
-      : undefined;
+    // 限制联系人姓名查询在回调关键路径上的最大等待时长（1s），避免冷缓存超时拖垮飞书 3s 回调窗口。
+    let actedBy: string | undefined;
+    if (operatorOpenId && typeof this.service.getUserName === 'function') {
+      let nameTimer: NodeJS.Timeout | undefined;
+      try {
+        const resolved = await Promise.race([
+          this.service.getUserName(operatorOpenId).catch(() => ''),
+          new Promise<string>(resolve => {
+            nameTimer = setTimeout(() => resolve(''), 1_000);
+            nameTimer.unref?.();
+          })
+        ]);
+        actedBy = resolved.trim() || undefined;
+      } finally {
+        if (nameTimer) clearTimeout(nameTimer);
+      }
+    }
+    if (!actedBy && operatorOpenId) {
+      actedBy = botConfig.allowedUsers.find(user => user.openId === operatorOpenId)?.name?.trim() || undefined;
+    }
 
     const cardMessageId = context?.openMessageId?.trim() || record.messageId;
     const webBaseUrl = record.webBaseUrl ?? botConfig.webBaseUrl;
     const isAsk = plugin.id === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID;
 
-    const updateCardToAnswered = async (payload: unknown) => {
-      if (!cardMessageId || typeof this.service.updateInteractiveCard !== 'function' || !adapter.buildAnsweredCard) return;
-      try {
-        await this.service.updateInteractiveCard({
-          messageId: cardMessageId,
-          card: adapter.buildAnsweredCard({
-            plugin,
-            payload,
-            sessionId: record.sessionId,
-            webBaseUrl,
-            locale
-          })
-        });
-      } catch (error) {
-        this.log.warn({ error, cardId, pluginId: plugin.id, messageId: cardMessageId }, '更新飞书交互插件锁定卡片失败');
+    const buildAnsweredCardBundle = (payload: unknown): {
+      card: Record<string, unknown>;
+      badge: LarkCardSourceBadge;
+      fallbackCard?: () => Record<string, unknown>;
+    } | undefined => {
+      if (!adapter.buildAnsweredCard) return undefined;
+      const p = payload && typeof payload === 'object' ? payload as Record<string, unknown> : undefined;
+      const answerSource = p?.source === 'web' || p?.source === 'lark' || p?.source === 'assistant' ? p.source : 'lark';
+      const responderName = typeof p?.responderName === 'string' && p.responderName.trim()
+        ? p.responderName.trim()
+        : typeof p?.answeredBy === 'string' && p.answeredBy.trim()
+          ? p.answeredBy.trim()
+          : typeof p?.decidedBy === 'string' && p.decidedBy.trim()
+            ? p.decidedBy.trim()
+            : typeof p?.actedBy === 'string' && p.actedBy.trim()
+              ? p.actedBy.trim()
+              : undefined;
+      const answerBadge = buildInteractionSourceLarkBadge(answerSource, locale, { responderName });
+      const cardInput = {
+        plugin,
+        payload,
+        sessionId: record.sessionId,
+        webBaseUrl,
+        sourceBadge: answerBadge,
+        locale
+      };
+      const card = ensureLarkCardUpdateMulti(
+        withLarkCardSourceBadge(adapter.buildAnsweredCard(cardInput), answerBadge)
+      );
+      const fallbackCard = adapter.buildAnsweredFallbackCard
+        ? () => ensureLarkCardUpdateMulti(
+            withLarkCardSourceBadge(adapter.buildAnsweredFallbackCard!(cardInput), answerBadge)
+          )
+        : undefined;
+      return { card, badge: answerBadge, ...(fallbackCard ? { fallbackCard } : {}) };
+    };
+
+    const collectTargetCardMessageIds = async (): Promise<string[]> => {
+      const ids = new Set<string>();
+      if (cardMessageId) ids.add(cardMessageId);
+      for (const local of this.pluginCards.values()) {
+        if (
+          local.appId === record.appId
+          && local.sessionId === record.sessionId
+          && local.pluginId === record.pluginId
+          && local.instanceId === record.instanceId
+          && local.messageId?.trim()
+        ) {
+          ids.add(local.messageId.trim());
+        }
       }
+      if (this.cardMappings) {
+        const channel = this.cardChannelForPlugin(record.pluginId);
+        const persisted = await this.cardMappings.list(channel).catch(() => []);
+        for (const mapping of persisted) {
+          if (mapping.sessionId !== record.sessionId || !mapping.extra) continue;
+          try {
+            const parsed = this.normalizePersistedCard(JSON.parse(mapping.extra) as Record<string, unknown>);
+            if (
+              parsed
+              && parsed.appId === record.appId
+              && parsed.pluginId === record.pluginId
+              && parsed.instanceId === record.instanceId
+              && parsed.messageId?.trim()
+            ) {
+              ids.add(parsed.messageId.trim());
+            }
+          } catch { /* ignore malformed */ }
+        }
+      }
+      return [...ids];
+    };
+
+    // 关键修复：绝对不要在 `card.action.trigger` 同步返回前直接 await PATCH！
+    // 1) 主路径：由 `card.action.trigger` 回调响应直接返回 `{ toast, card: { type: 'raw', data } }`，
+    //    让飞书原子切换卡片至锁定完成态，彻底消除「先 PATCH 再返回仅 toast 被飞书表单提交终态覆盖回原卡片」的时序 Bug；
+    // 2) 兜底路径：在回调返回后延迟异步执行 PATCH（带退避重试与极简兜底卡），覆盖 3 秒超时丢弃同步响应以及同题多卡同步锁定场景。
+    const schedulePostCallbackCardPatch = (bundle: ReturnType<typeof buildAnsweredCardBundle>) => {
+      if (!bundle || typeof this.service.updateInteractiveCard !== 'function' || this.stopped) return;
+      const runPatch = async () => {
+        if (this.stopped) return;
+        const targetIds = await collectTargetCardMessageIds();
+        for (const targetMessageId of targetIds) {
+          if (this.stopped) return;
+          const patchResult = await updateInteractiveCardWithRetry({
+            service: this.service,
+            messageId: targetMessageId,
+            card: bundle.card,
+            sourceBadge: bundle.badge,
+            ...(bundle.fallbackCard ? { fallbackCard: bundle.fallbackCard } : {}),
+            onRetryWarning: details => {
+              this.log.warn(
+                { ...details, cardId, pluginId: plugin.id, instanceId: record.instanceId, sessionId: record.sessionId },
+                '飞书交互插件锁定卡片异步兜底 PATCH 遇到瞬态错误，准备重试'
+              );
+            }
+          });
+          if (!patchResult.ok) {
+            this.log.warn(
+              {
+                error: patchResult.error,
+                ...patchResult.telemetry,
+                cardId,
+                pluginId: plugin.id,
+                instanceId: record.instanceId,
+                sessionId: record.sessionId,
+                messageId: targetMessageId
+              },
+              '更新飞书交互插件锁定卡片失败'
+            );
+          } else if (patchResult.usedFallback) {
+            this.log.warn(
+              { cardId, pluginId: plugin.id, instanceId: record.instanceId, sessionId: record.sessionId, messageId: targetMessageId },
+              '飞书交互插件锁定卡片触发 Schema 降级，已通过极简锁定卡完成更新'
+            );
+          }
+        }
+      };
+
+      const delayMs = Math.max(0, this.postCallbackCardPatchDelayMs);
+      const timer = setTimeout(() => {
+        this.postCallbackTimers.delete(timer);
+        void runPatch();
+      }, delayMs);
+      timer.unref?.();
+      this.postCallbackTimers.add(timer);
     };
 
     const dispatchFollowUp = async (params: {
@@ -2573,19 +2782,34 @@ export class LarkMessageCoordinator {
           dispatchTurn: dispatchFollowUp
         });
         if (result.status === 'already_submitted') {
-          await updateCardToAnswered(result.existing);
-          return { type: 'info', content: tShared(locale, isAsk ? 'lark.plugin.info.alreadyAnsweredAsk' : 'lark.plugin.info.alreadyResponded') };
+          const bundle = buildAnsweredCardBundle(result.existing);
+          schedulePostCallbackCardPatch(bundle);
+          return {
+            type: 'info',
+            content: tShared(locale, isAsk ? 'lark.plugin.info.alreadyAnsweredAsk' : 'lark.plugin.info.alreadyResponded'),
+            ...(bundle ? { card: bundle.card } : {})
+          };
         }
-        await updateCardToAnswered(result.payload);
-        return { type: 'success', content: tShared(locale, isAsk ? 'lark.plugin.success.submittedAsk' : 'lark.plugin.success.submittedGeneric') };
+        const bundle = buildAnsweredCardBundle(result.payload);
+        schedulePostCallbackCardPatch(bundle);
+        return {
+          type: 'success',
+          content: tShared(locale, isAsk ? 'lark.plugin.success.submittedAsk' : 'lark.plugin.success.submittedGeneric'),
+          ...(bundle ? { card: bundle.card } : {})
+        };
       }
 
       // 独立单测 / 未注入 OutputPluginService 时的本地幂等兜底
       const localKey = `${plugin.id}:${record.sessionId}:${record.instanceId}`;
       const existing = this.localAnsweredPlugins.get(localKey);
       if (existing) {
-        await updateCardToAnswered(existing);
-        return { type: 'info', content: tShared(locale, isAsk ? 'lark.plugin.info.alreadyAnsweredAsk' : 'lark.plugin.info.alreadyResponded') };
+        const bundle = buildAnsweredCardBundle(existing);
+        schedulePostCallbackCardPatch(bundle);
+        return {
+          type: 'info',
+          content: tShared(locale, isAsk ? 'lark.plugin.info.alreadyAnsweredAsk' : 'lark.plugin.info.alreadyResponded'),
+          ...(bundle ? { card: bundle.card } : {})
+        };
       }
 
       if (isAsk) {
@@ -2606,8 +2830,13 @@ export class LarkMessageCoordinator {
           clientMessageId: `askq:${record.sessionId}:${record.instanceId}`,
           payload
         });
-        await updateCardToAnswered(payload);
-        return { type: 'success', content: tShared(locale, 'lark.plugin.success.submittedAsk') };
+        const bundle = buildAnsweredCardBundle(payload);
+        schedulePostCallbackCardPatch(bundle);
+        return {
+          type: 'success',
+          content: tShared(locale, 'lark.plugin.success.submittedAsk'),
+          ...(bundle ? { card: bundle.card } : {})
+        };
       }
 
       if (plugin.id === BUILTIN_CONFIRM_ACTION_PLUGIN_ID) {
@@ -2638,8 +2867,13 @@ export class LarkMessageCoordinator {
           clientMessageId: `outp:${plugin.id}:${record.sessionId}:${record.instanceId}`,
           payload
         });
-        await updateCardToAnswered(payload);
-        return { type: 'success', content: tShared(locale, 'lark.plugin.success.submittedConfirm') };
+        const bundle = buildAnsweredCardBundle(payload);
+        schedulePostCallbackCardPatch(bundle);
+        return {
+          type: 'success',
+          content: tShared(locale, 'lark.plugin.success.submittedConfirm'),
+          ...(bundle ? { card: bundle.card } : {})
+        };
       }
 
       const fallbackPayload = {
@@ -2664,8 +2898,13 @@ export class LarkMessageCoordinator {
         clientMessageId: `outp:${plugin.id}:${record.sessionId}:${record.instanceId}`,
         payload: fallbackPayload
       });
-      await updateCardToAnswered(fallbackPayload);
-      return { type: 'success', content: tShared(locale, 'lark.plugin.success.submittedGeneric') };
+      const bundle = buildAnsweredCardBundle(fallbackPayload);
+      schedulePostCallbackCardPatch(bundle);
+      return {
+        type: 'success',
+        content: tShared(locale, 'lark.plugin.success.submittedGeneric'),
+        ...(bundle ? { card: bundle.card } : {})
+      };
     } catch (error) {
       this.log.error({ error, cardId, pluginId: plugin.id, sessionId: record.sessionId }, '处理飞书交互插件提交失败');
       return { type: 'error', content: tShared(locale, 'lark.plugin.error.submitFailed', { message: error instanceof Error ? error.message : String(error) }) };
@@ -2676,6 +2915,8 @@ export class LarkMessageCoordinator {
     this.stopped = true;
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer);
     this.reconcileTimer = undefined;
+    for (const timer of this.postCallbackTimers) clearTimeout(timer);
+    this.postCallbackTimers.clear();
     this.reconcileConfig = undefined;
     this.groups.clear();
     this.tasks.clear();
@@ -2809,6 +3050,7 @@ export class LarkMessageCoordinator {
       ?? (task.regexTrigger
         ? `[${task.regexTrigger.ruleName}] ${task.regexTrigger.messagePreview}`.slice(0, 80)
         : prompt.slice(0, 80));
+    const larkSourceBadge = () => buildLarkOriginSourceBadge(undefined, this.larkOriginBadgeVariantForTask(task));
     const firstAttempt = !task.cardMessageId;
     const emojiType = acknowledgementEmojis[Math.floor(this.random() * acknowledgementEmojis.length)] ?? acknowledgementEmojis[0];
     let reactionId: string | undefined;
@@ -2829,7 +3071,7 @@ export class LarkMessageCoordinator {
       } catch (error) {
         task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
         task.failureReason = error instanceof Error ? error.message : String(error);
-        const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: '白名单身份解析失败', markdown: `**暂时无法验证白名单身份。**\n\n${error instanceof Error ? error.message : String(error)}\n\n请确认机器人与名单中的成员在同一群中，且具备读取群成员权限；修正后重新发送消息。`, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
+        const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, sourceBadge: larkSourceBadge(), taskId: task.id, taskName: '白名单身份解析失败', markdown: `**暂时无法验证白名单身份。**\n\n${error instanceof Error ? error.message : String(error)}\n\n请确认机器人与名单中的成员在同一群中，且具备读取群成员权限；修正后重新发送消息。`, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
         if (card.messageId) task.cardMessageId = card.messageId;
         if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
         return;
@@ -2852,7 +3094,7 @@ export class LarkMessageCoordinator {
         } catch (error) {
           task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
           task.failureReason = error instanceof Error ? error.message : String(error);
-          const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: 'Agent 协作身份校验失败', markdown: `**无法验证发起交接的 Agent。**\n\n${error instanceof Error ? error.message : String(error)}`, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
+          const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, sourceBadge: larkSourceBadge(), taskId: task.id, taskName: 'Agent 协作身份校验失败', markdown: `**无法验证发起交接的 Agent。**\n\n${error instanceof Error ? error.message : String(error)}`, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
           if (card.messageId) task.cardMessageId = card.messageId;
           if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
           return;
@@ -2865,7 +3107,7 @@ export class LarkMessageCoordinator {
         } catch (error) {
           task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
           task.failureReason = error instanceof Error ? error.message : String(error);
-          const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: '身份解析权限缺失', markdown: larkIdentityPermissionHelp(error, config.appId), ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
+          const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, sourceBadge: larkSourceBadge(), taskId: task.id, taskName: '身份解析权限缺失', markdown: larkIdentityPermissionHelp(error, config.appId), ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
           if (card.messageId) task.cardMessageId = card.messageId;
           if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
           return;
@@ -2885,7 +3127,7 @@ export class LarkMessageCoordinator {
     if (!allowed) {
       task.state = 'failed'; task.retryable = false; task.startedAt = Date.now();
       task.failureReason = '当前账号不在机器人白名单中';
-      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, taskId: task.id, taskName: '访问被拒绝', markdown: '**当前账号不在机器人白名单中。**\n\n如需使用，请联系机器人管理员添加你。', ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
+      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', retryable: false, sourceBadge: larkSourceBadge(), taskId: task.id, taskName: '访问被拒绝', markdown: '**当前账号不在机器人白名单中。**\n\n如需使用，请联系机器人管理员添加你。', ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
       if (card.messageId) task.cardMessageId = card.messageId;
       if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
       return;
@@ -2918,7 +3160,7 @@ export class LarkMessageCoordinator {
       task.state = 'failed'; task.startedAt = Date.now();
       task.failureReason = error instanceof Error ? error.message : String(error);
       const markdown = `**Agent 启动失败**\n\n${task.failureReason}`;
-      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', taskId: task.id, taskName: cardTaskName, markdown, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
+      const card = await deliverTaskFailure(this.service, event, config, { state: 'failed', sourceBadge: larkSourceBadge(), taskId: task.id, taskName: cardTaskName, markdown, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
       if (card.messageId) task.cardMessageId = card.messageId;
       if (reactionId && !config.quietReply) await this.service.deleteReaction(event.messageId, reactionId).catch(() => undefined);
       return;
@@ -2934,9 +3176,9 @@ export class LarkMessageCoordinator {
     } else {
       const initialElements = boundLarkCardElements(renderLarkCardElements([], config));
       if (task.cardMessageId) {
-        await this.service.update({ messageId: task.cardMessageId, state: 'running', taskId: task.id, taskName: cardTaskName, markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
+        await this.service.update({ messageId: task.cardMessageId, state: 'running', sourceBadge: larkSourceBadge(), taskId: task.id, taskName: cardTaskName, markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
       } else {
-        const card = await sendTaskCard(this.service, event, { state: 'running', taskId: task.id, taskName: cardTaskName, markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
+        const card = await sendTaskCard(this.service, event, { state: 'running', sourceBadge: larkSourceBadge(), taskId: task.id, taskName: cardTaskName, markdown: '正在思考中…', sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}), ...replyDeliveryOpt }, this.log);
         task.cardMessageId = card.messageId;
       }
       task.lastSuccessfulElements = initialElements;
@@ -3021,6 +3263,7 @@ export class LarkMessageCoordinator {
                   : boundLarkCardElements(renderLarkCardElements(task.events, config, pending.completed, true));
               const replacement = await sendTaskCard(this.service, event, {
                 state: pending.input.state,
+                sourceBadge: pending.input.sourceBadge ?? larkSourceBadge(),
                 taskId: task.id,
                 taskName: cardTaskName,
                 elapsedSeconds: pending.input.elapsedSeconds,
@@ -3042,6 +3285,7 @@ export class LarkMessageCoordinator {
                   const minimalActions = pending.input.state === 'failed' ? this.sessionReopenActions(task, 'failed') : undefined;
                   const minimal = await sendTaskCard(this.service, event, {
                     state: pending.input.state,
+                    sourceBadge: pending.input.sourceBadge ?? larkSourceBadge(),
                     taskId: task.id,
                     taskName: cardTaskName,
                     elapsedSeconds: pending.input.elapsedSeconds,
@@ -3090,6 +3334,7 @@ export class LarkMessageCoordinator {
         input: {
           messageId: task.cardMessageId!,
           state,
+          sourceBadge: larkSourceBadge(),
           taskId: task.id,
           taskName: cardTaskName,
           elapsedSeconds: (Date.now() - task.startedAt!) / 1_000,
@@ -3163,7 +3408,8 @@ export class LarkMessageCoordinator {
             threadId: event.threadId,
             rootId: event.rootId,
             pluginId: extractedPlugin.pluginId,
-            spec: extractedPlugin.spec
+            spec: extractedPlugin.spec,
+            sourceBadge: larkSourceBadge()
           }).catch(error => {
             this.log.warn({ error, sessionId, pluginId: extractedPlugin.pluginId }, '静默模式发送飞书交互插件卡片失败');
           });
@@ -3180,6 +3426,7 @@ export class LarkMessageCoordinator {
           input: {
             messageId: task.cardMessageId!,
             state,
+            sourceBadge: larkSourceBadge(),
             taskId: task.id,
             taskName: cardTaskName,
             elapsedSeconds: (Date.now() - task.startedAt!) / 1_000,
@@ -3192,6 +3439,7 @@ export class LarkMessageCoordinator {
         const replyActions = this.sessionReopenActions(task, state);
         const replacement = await sendTaskCard(this.service, event, {
           state,
+          sourceBadge: larkSourceBadge(),
           taskId: task.id,
           taskName: cardTaskName,
           elapsedSeconds: (Date.now() - task.startedAt!) / 1_000,
@@ -3223,7 +3471,8 @@ export class LarkMessageCoordinator {
           threadId: event.threadId,
           rootId: event.rootId,
           pluginId: extractedPlugin.pluginId,
-          spec: extractedPlugin.spec
+          spec: extractedPlugin.spec,
+          sourceBadge: larkSourceBadge()
         }).catch(error => {
           this.log.warn({ error, sessionId, pluginId: extractedPlugin.pluginId }, '发送飞书交互插件卡片失败');
         });
@@ -3239,8 +3488,13 @@ export class LarkMessageCoordinator {
     };
     task.requestUpdate = update;
     const isGroup = event.chatType === 'group';
-    const chatNames = isGroup ? await this.resolveChatNames(config) : undefined;
-    const currentChatName = isGroup ? await this.resolveCurrentChatName(config, event) : undefined;
+    const isCardReplyTurn = this.larkOriginBadgeVariantForTask(task) === 'cardReply';
+    const [chatNames, currentChatName] = isGroup
+      ? await Promise.all([
+          this.resolveChatNames(config, isCardReplyTurn ? 300 : chatNamesTimeoutMs),
+          this.resolveCurrentChatName(config, event)
+        ])
+      : [undefined, undefined];
     const otherChats = [...chatNames?.entries() ?? []].filter(([chatId]) => chatId !== event.chatId);
     // 当前群永远注入（名字取不到也要留 chat_id）：Agent 判断「我在哪个群」只能靠这一行，
     // 名字缺失时整行消失会让它把下面「其他群」里的名字当成自己在的群。
@@ -3378,7 +3632,7 @@ export class LarkMessageCoordinator {
           if (config.quietReply) {
             await sendQuietFinalReply(this.service, event, `已收到请求，前面还有 ${runtimeTask.queuedAhead} 个任务，完成后我会把结果发到这里。`, this.log, task.forceReplyInThread, forceMainThread);
           } else {
-            await this.service.update({ messageId: task.cardMessageId!, state: 'queued', taskId: task.id, taskName: cardTaskName, markdown: `正在排队，前面还有 ${runtimeTask.queuedAhead} 个任务…`, sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
+            await this.service.update({ messageId: task.cardMessageId!, state: 'queued', sourceBadge: larkSourceBadge(), taskId: task.id, taskName: cardTaskName, markdown: `正在排队，前面还有 ${runtimeTask.queuedAhead} 个任务…`, sessionId: task.sessionId, ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {}) });
           }
           await this.saveCardTask(task, 'queued');
         }
@@ -3478,11 +3732,15 @@ export interface LarkLongConnectionListenerOptions {
    */
   onReaction?: (event: LarkReactionEvent, config: StoredLarkConfig) => void | Promise<void>;
   /**
-   * 卡片操作的第一处理人。返回 toast 结果表示已处理；返回 undefined 时交回原有 coordinator。
-   * 用于 AI 替身的「询问」卡片按钮。
+   * 卡片操作的第一处理人。返回动作结果（含 toast 与可选同步替换的 Schema 2.0 卡片）表示已处理；
+   * 返回 undefined 时交回原有 coordinator。用于断点恢复确认卡与 AI 替身的「询问」卡片按钮。
    */
-  onCardAction?: (value: unknown, operatorOpenId: string | undefined, config: StoredLarkConfig) =>
-    Promise<{ type: 'info' | 'success' | 'warning' | 'error'; content: string } | undefined> | { type: 'info' | 'success' | 'warning' | 'error'; content: string } | undefined;
+  onCardAction?: (
+    value: unknown,
+    operatorOpenId: string | undefined,
+    config: StoredLarkConfig,
+    context?: LarkCardActionContext
+  ) => Promise<LarkCardActionResult | undefined> | LarkCardActionResult | undefined;
   /**
    * 监听在后台耗尽重连次数（或遇到不可恢复错误）后回调。
    * 注意：正常 stop() 不触发。由上层（pool）决定是否冷却后重建，listener 自身不自愈。
@@ -3598,25 +3856,38 @@ export class LarkLongConnectionListener implements LarkListener {
         });
       },
       'card.action.trigger': async (event: any) => {
+        const startedAt = Date.now();
         const operatorOpenId = event.operator?.open_id;
+        const openMessageId = event.context?.open_message_id ?? event.open_message_id;
+        const openChatId = event.context?.open_chat_id ?? event.open_chat_id;
+        const actionContext: LarkCardActionContext = {
+          ...(event.action?.form_value && typeof event.action.form_value === 'object' ? { formValue: event.action.form_value } : {}),
+          ...(openMessageId ? { openMessageId: String(openMessageId) } : {}),
+          ...(openChatId ? { openChatId: String(openChatId) } : {}),
+          ...(typeof event.action?.option === 'string' ? { option: event.action.option } : {}),
+          ...(typeof event.action?.input_value === 'string' ? { inputValue: event.action.input_value } : {}),
+          ...(typeof event.token === 'string' && event.token.trim() ? { callbackToken: event.token.trim() } : {})
+        };
+        const finalizeCallback = (result: LarkCardActionResult | undefined): LarkCardCallbackResponse | undefined => {
+          const elapsedMs = Date.now() - startedAt;
+          if (elapsedMs >= 2_500) {
+            this.log.warn(
+              { elapsedMs, operatorOpenId, openMessageId: actionContext.openMessageId, hasCardUpdate: Boolean(result?.card) },
+              '飞书 card.action.trigger 回调处理耗时接近 3 秒阈值，同步卡片响应可能被飞书丢弃（已依赖异步 PATCH 兜底）'
+            );
+          }
+          return toLarkCardCallbackResponse(result);
+        };
         if (this.options.onCardAction) {
           try {
-            const routed = await this.options.onCardAction(event.action?.value, operatorOpenId, this.config ?? config);
-            if (routed) return { toast: routed };
+            const routed = await this.options.onCardAction(event.action?.value, operatorOpenId, this.config ?? config, actionContext);
+            if (routed) return finalizeCallback(routed);
           } catch (error) {
             this.log.error({ error, operatorOpenId }, '处理飞书卡片旁路操作失败');
           }
         }
-        const actionContext: LarkCardActionContext = {
-          ...(event.action?.form_value && typeof event.action.form_value === 'object' ? { formValue: event.action.form_value } : {}),
-          ...(event.context?.open_message_id ? { openMessageId: String(event.context.open_message_id) } : {}),
-          ...(event.context?.open_chat_id ? { openChatId: String(event.context.open_chat_id) } : {}),
-          ...(typeof event.action?.option === 'string' ? { option: event.action.option } : {}),
-          ...(typeof event.action?.input_value === 'string' ? { inputValue: event.action.input_value } : {})
-        };
         const result = await coordinator?.handleAction(event.action?.value, operatorOpenId, actionContext);
-        if (!result) return;
-        return { toast: result };
+        return finalizeCallback(result);
       }
     });
     const client = new WSClient({

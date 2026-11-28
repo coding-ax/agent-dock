@@ -290,10 +290,11 @@ describe('Lark group regex triggers', () => {
         model: 'claude-sonnet-4-5',
         reasoningEffort: 'high'
       });
-      // 话题模式强制 replyInThread: true 回复原消息
+      // 话题模式强制 replyInThread: true 回复原消息，并携带「🕊️ 飞书 · 正则唤起」青绿 Tag
       expect(reply).toHaveBeenCalledWith(expect.objectContaining({
         messageId: 'om_msg_1',
-        replyInThread: true
+        replyInThread: true,
+        sourceBadge: { label: '🕊️ 飞书 · 正则唤起', color: 'turquoise' }
       }));
       expect(send).not.toHaveBeenCalled();
       // Prompt 包含模板 + 基础群聊上下文 + 机器人自身 preInjectPrompt

@@ -8,7 +8,7 @@ import {
   type TaskRecoveryRecord
 } from '@agent-dock/agent-dock-shared';
 import { setActiveServerLocaleForTest } from '../locale-service.js';
-import { buildLarkCard } from './service.js';
+import { buildLarkCard, buildLarkOriginSourceBadge } from './service.js';
 import { classifyTurnSource, formatSyncedTaskName } from './turn-sync.js';
 import { renderLarkCardElements } from './listener.js';
 import { buildLarkAskUserQuestionAnsweredCard, buildLarkAskUserQuestionCard, parseLarkAskUserQuestionAction } from './ask-user-question-card.js';
@@ -24,16 +24,44 @@ afterEach(() => {
 
 describe('Lark cards & badges bilingual rendering (zh-CN & en-US)', () => {
   it('localizes turn-sync source badges and detail labels in both languages', () => {
+    expect(buildLarkOriginSourceBadge('zh-CN')).toEqual({ label: '🕊️ 飞书发起', color: 'turquoise' });
+    expect(buildLarkOriginSourceBadge('en-US')).toEqual({ label: '🕊️ From Lark', color: 'turquoise' });
+
+    expect(classifyTurnSource({ taskOrigin: 'emoji', locale: 'zh-CN' }))
+      .toMatchObject({ category: 'web', badge: '🕊️ 飞书表情', tagColor: 'turquoise' });
+    expect(classifyTurnSource({ taskOrigin: 'emoji', locale: 'en-US' }))
+      .toMatchObject({ category: 'web', badge: '🕊️ Lark Reaction', tagColor: 'turquoise' });
+
     expect(classifyTurnSource({ taskOrigin: 'injected', prompt: '📋 督办 [review] 等待验收', locale: 'zh-CN' }))
       .toMatchObject({ badge: '🐾 小猫督办', detailLabel: '验收督办' });
     expect(classifyTurnSource({ taskOrigin: 'injected', prompt: '📋 督办 [review] 等待验收', locale: 'en-US' }))
       .toMatchObject({ badge: '🐾 Companion', detailLabel: 'Review' });
 
+    expect(classifyTurnSource({ taskOrigin: 'web', locale: 'zh-CN' }).badge).toBe('💻 网页同步');
     expect(classifyTurnSource({ taskOrigin: 'web', locale: 'en-US' }).badge).toBe('💻 Web Sync');
+    expect(classifyTurnSource({ taskOrigin: 'board-mention', locale: 'zh-CN' }).badge).toBe('💻 网页同步 · 看板');
+    expect(classifyTurnSource({ taskOrigin: 'board-mention', locale: 'en-US' }).badge).toBe('💻 Web Sync · Board');
+    expect(classifyTurnSource({ taskOrigin: 'schedule', locale: 'zh-CN' }).badge).toBe('⏰ 定时任务');
     expect(classifyTurnSource({ taskOrigin: 'schedule', locale: 'en-US' }).badge).toBe('⏰ Schedule');
+    expect(classifyTurnSource({ taskOrigin: TASK_RECOVERY_ORIGIN, locale: 'zh-CN' }).badge).toBe('🔄 断点续跑');
     expect(classifyTurnSource({ taskOrigin: TASK_RECOVERY_ORIGIN, locale: 'en-US' }).badge).toBe('🔄 Auto-Recovery');
+    expect(classifyTurnSource({ taskOrigin: 'maintenance', locale: 'zh-CN' }).badge).toBe('🧹 整理维护');
     expect(classifyTurnSource({ taskOrigin: 'maintenance', locale: 'en-US' }).badge).toBe('🧹 Maintenance');
+    expect(classifyTurnSource({ taskOrigin: 'handoff', locale: 'zh-CN' }).badge).toBe('🧹 交接说明');
     expect(classifyTurnSource({ taskOrigin: 'handoff', locale: 'en-US' }).badge).toBe('🧹 Handover');
+
+    const larkCardEn = JSON.stringify(buildLarkCard({
+      state: 'completed',
+      taskName: 'Verify Lark Tag',
+      taskId: '99',
+      elapsedSeconds: 5,
+      sourceBadge: buildLarkOriginSourceBadge('en-US'),
+      markdown: 'Done.',
+      locale: 'en-US'
+    }));
+    expect(larkCardEn).toContain("<text_tag color='turquoise'>🕊️ From Lark</text_tag>");
+    expect(larkCardEn).not.toContain('custom_icon');
+    expect(CJK_RE.test(larkCardEn), `English Lark-origin card leaked CJK: ${larkCardEn}`).toBe(false);
   });
 
   it('renders Lark Trace card with zero CJK chrome when server locale is en-US', () => {

@@ -150,11 +150,12 @@ describe('飞书机器人侧边对话（/btw 与话题续聊）', () => {
     expect(sideSessionId).toBe('ses_2');
     expect(runtime.send.mock.calls[1]?.[1]).toBe('小明: remind 灰度是什么，是本次新增的吗');
 
-    // 验证飞书回复强制使用话题回复 replyInThread: true
+    // 验证飞书回复强制使用话题回复 replyInThread: true，并携带「🕊️ 飞书 · 侧边对话」青绿 Tag
     expect(service.reply).toHaveBeenLastCalledWith(expect.objectContaining({
       messageId: 'om_btw_root',
       replyInThread: true,
-      sessionId: sideSessionId
+      sessionId: sideSessionId,
+      sourceBadge: { label: '🕊️ 飞书 · 侧边对话', color: 'turquoise' }
     }));
 
     // 验证话题映射已持久化到 channelMappings

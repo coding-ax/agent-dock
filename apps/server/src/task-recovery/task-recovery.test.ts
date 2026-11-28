@@ -525,6 +525,7 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
       repos,
       runtime,
       larkPort,
+      postCallbackLarkSyncDelayMs: 20,
       nowMs: () => baseMs
     });
     cleanupCallbacks.push(() => service.close());
@@ -560,23 +561,40 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
     expect(winners).toHaveLength(1);
     await vi.waitFor(() => expect(sentPrompts).toHaveLength(1));
     expect(sentPrompts[0]?.sessionId).toBe('ses_confirm_resume');
-    expect(updatedCards.some(card => card.id === recResume.id && card.status === 'resumed')).toBe(true);
+    expect((larkToast?.card as any)?.schema).toBe('2.0');
+    expect((larkToast?.card as any)?.config?.update_multi).toBe(true);
+    expect((larkToast?.card as any)?.header?.template).toBe('green');
+    await vi.waitFor(() => {
+      expect(updatedCards.some(card => card.id === recResume.id && card.status === 'resumed')).toBe(true);
+    });
 
-    // Duplicate click on Lark returns info toast without dispatching again
+    // Duplicate click on Lark returns info toast + locked card without dispatching again
     const dupToast = await service.handleLarkCardAction({
       value: { action: LARK_TASK_RECOVERY_DECIDE_ACTION, recovery_id: recResume.id, decision: 'resume' },
       operatorOpenId: 'ou_bob'
     });
-    expect(dupToast).toMatchObject({ type: 'info', content: expect.stringContaining('无需重复操作') });
+    expect(dupToast).toMatchObject({
+      type: 'info',
+      content: expect.stringContaining('无需重复操作'),
+      card: expect.objectContaining({ schema: '2.0', header: expect.objectContaining({ template: 'green' }) })
+    });
     expect(sentPrompts).toHaveLength(1);
 
-    // 2) Dismiss from Lark -> locks record as dismissed, updates card, zero dispatch
+    // 2) Dismiss from Lark -> locks record as dismissed, returns sync locked grey card without premature PATCH, then runs deferred PATCH fallback
     const dismissToast = await service.handleLarkCardAction({
       value: { action: LARK_TASK_RECOVERY_DECIDE_ACTION, recovery_id: recDismiss.id, decision: 'dismiss' },
       operatorOpenId: 'ou_alice',
       operatorName: '暮雪离歌'
     });
-    expect(dismissToast).toMatchObject({ type: 'info', content: expect.stringContaining('已放弃') });
+    expect(dismissToast).toMatchObject({
+      type: 'info',
+      content: expect.stringContaining('已放弃'),
+      card: expect.objectContaining({
+        schema: '2.0',
+        config: expect.objectContaining({ update_multi: true }),
+        header: expect.objectContaining({ template: 'grey' })
+      })
+    });
     const dismissedRecord = await repos.taskRecoveries.get(recDismiss.id);
     expect(dismissedRecord).toMatchObject({
       status: 'dismissed',
@@ -584,7 +602,11 @@ describe('TaskRecoveryService — cold-start audit, guardrails, auto & confirm m
       decidedBy: '暮雪离歌',
       recoveryTaskId: null
     });
-    expect(updatedCards.some(card => card.id === recDismiss.id && card.status === 'dismissed')).toBe(true);
+    // 同步回调返回瞬间不抢先 PATCH，随后由延迟兜底更新卡片
+    expect(updatedCards.some(card => card.id === recDismiss.id && card.status === 'dismissed')).toBe(false);
+    await vi.waitFor(() => {
+      expect(updatedCards.some(card => card.id === recDismiss.id && card.status === 'dismissed')).toBe(true);
+    });
     expect(changeEvents.some(e => e.id === recDismiss.id && e.status === 'dismissed')).toBe(true);
     expect(sentPrompts).toHaveLength(1);
   });

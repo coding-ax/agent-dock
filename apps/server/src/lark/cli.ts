@@ -1,4 +1,4 @@
-import { createLarkCardService, larkCardStates, larkReceiveIdTypes, type LarkBotConfigInput, type LarkCardInput, type LarkCardState, type LarkReceiveIdType } from './service.js';
+import { buildLarkCliSourceBadge, createLarkCardService, larkCardStates, larkReceiveIdTypes, type LarkBotConfigInput, type LarkCardInput, type LarkCardState, type LarkReceiveIdType } from './service.js';
 import type { LarkCliOptions } from '../cli-program.js';
 
 const numberOption = (value: string | undefined, name: string, fallback: number) => {
@@ -19,6 +19,7 @@ export function cardInputFromCli(markdown: string | undefined, options: LarkCliO
     agentName: options.agentName,
     state,
     readOnly: options.readOnly,
+    sourceBadge: buildLarkCliSourceBadge(),
     taskName: options.taskName,
     taskId: options.taskId,
     elapsedSeconds: numberOption(options.elapsedSeconds, 'elapsed-seconds', 0),

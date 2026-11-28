@@ -11,7 +11,24 @@ import {
   type ConfigRepository
 } from '@agent-dock/agent-dock-shared';
 import type { AgentDockRuntime } from '@agent-dock/agent-dock-runtime';
-import { createLarkCardService, LarkServiceError, larkConfigurationStatus, type LarkBotConfigInput, type LarkCardService, type LarkSendInput, type LarkUpdateInput } from './service.js';
+import {
+  buildChoiceResolvedCard,
+  buildInteractionSourceLarkBadge,
+  buildLarkApiSourceBadge,
+  buildLarkOriginSourceBadge,
+  createLarkCardService,
+  ensureLarkCardUpdateMulti,
+  LarkServiceError,
+  larkConfigurationStatus,
+  updateInteractiveCardWithRetry,
+  withLarkCardSourceBadge,
+  type LarkBotConfigInput,
+  type LarkCardService,
+  type LarkSendInput,
+  type LarkUpdateInput
+} from './service.js';
+import { getActiveServerLocale } from '../locale-service.js';
+import { sleep } from '../daemon/time.js';
 import { parseLarkMessageContent } from './message-content.js';
 import { isLarkOperatorAllowed, type OperatorAccessInput } from './access-config.js';
 import { defaultHighRiskPattern, deleteLarkConfig, normalizeLarkTurnSyncConfig, publicLarkConfigs, readLarkConfig, readLarkConfigs, saveLarkConfig, type LarkTurnSyncConfigInput, type SaveLarkConfigInput } from './config.js';
@@ -243,6 +260,7 @@ const avatarReactionPort = (
       chatId: input.chatId,
       replyTo: input.replyTo,
       title: 'AI 替身 · 表情触发',
+      sourceBadge: buildLarkOriginSourceBadge(undefined, 'emoji'),
       markdown: [
         `你在一条消息上添加了「${input.emoji}」。`,
         '',
@@ -258,7 +276,13 @@ const avatarReactionPort = (
     });
   },
   async updateAskCard(input) {
-    await service.updateChoiceCard({ messageId: input.messageId, text: input.ok ? `✅ ${input.text}` : `⚠️ ${input.text}` });
+    // 回调返回后稍延再执行 PATCH 兜底，避免与 `card.action.trigger` 同步响应竞争写盘。
+    await sleep(800);
+    await service.updateChoiceCard({
+      messageId: input.messageId,
+      text: input.ok ? `✅ ${input.text}` : `⚠️ ${input.text}`,
+      sourceBadge: buildLarkOriginSourceBadge(undefined, 'emoji')
+    });
   }
   };
 };
@@ -325,12 +349,13 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
         return options.taskRecovery.handleLarkCardAction({
           value,
           ...(operatorOpenId ? { operatorOpenId } : {}),
-          ...(operatorName ? { operatorName } : {})
+          ...(operatorName ? { operatorName } : {}),
+          ...(config.webBaseUrl ? { webBaseUrl: config.webBaseUrl } : {})
         });
       }
       if (!options.larkAvatar) return undefined;
       const avatarService = await resolveService(undefined, config.appId);
-      return options.larkAvatar.resolveReactionRoute({
+      const routed = await options.larkAvatar.resolveReactionRoute({
         value,
         ...(operatorOpenId ? { operatorId: operatorOpenId } : {}),
         authorize: () => authorizeCardOperator({
@@ -341,6 +366,18 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
           log: app.log
         })
       });
+      if (!routed) return undefined;
+      if (routed.type === 'success') {
+        const text = routed.content.endsWith('。') ? `✅ ${routed.content}` : `✅ ${routed.content}。`;
+        return {
+          ...routed,
+          card: buildChoiceResolvedCard({
+            text,
+            sourceBadge: buildLarkOriginSourceBadge(undefined, 'emoji')
+          })
+        };
+      }
+      return routed;
     }
   });
   const syncListeners = async (configs: Awaited<ReturnType<typeof readLarkConfigs>>) => {
@@ -406,13 +443,14 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
       fallbackCoordinators.delete(appId);
     }
   };
-  // Web 端提交任意交互插件响应后，同步把该会话对应的未锁定飞书插件卡片更新为「✅ 已响应（网页端）」。
+  // Web 端或小猫代答（assistant）提交任意交互插件响应后，同步把该会话对应的未锁定飞书插件卡片更新为只读锁定态。
   const unsubscribePluginInteraction = resolvedOutputPlugins?.onInteraction(async event => {
-    if (event.source !== 'web' || !options.cardMappings) return;
+    if (event.source === 'lark' || !options.cardMappings) return;
     const plugin = resolvedPluginRegistry.get(event.pluginId);
     if (!plugin) return;
     const adapter = resolvedPluginAdapters.resolve(plugin);
     if (!adapter?.buildAnsweredCard) return;
+    const locale = getActiveServerLocale();
     const channel = event.pluginId === BUILTIN_ASK_USER_QUESTION_PLUGIN_ID
       ? LARK_ASK_CARD_CHANNEL
       : LARK_OUTPUT_PLUGIN_CARD_CHANNEL;
@@ -426,17 +464,59 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
       if (!record || recordPluginId !== event.pluginId || recordInstanceId !== event.instanceId || !record.messageId) continue;
       try {
         const botService = await resolveService(undefined, record.appId);
-        await botService.updateInteractiveCard({
+        const payloadObj = event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : undefined;
+        const answerSource = payloadObj?.source === 'lark' || payloadObj?.source === 'web' || payloadObj?.source === 'assistant'
+          ? payloadObj.source
+          : (event.source === 'assistant' ? 'assistant' : 'web');
+        const responderName = typeof payloadObj?.responderName === 'string' && payloadObj.responderName.trim()
+          ? payloadObj.responderName.trim()
+          : typeof payloadObj?.answeredBy === 'string' && payloadObj.answeredBy.trim()
+            ? payloadObj.answeredBy.trim()
+            : typeof payloadObj?.decidedBy === 'string' && payloadObj.decidedBy.trim()
+              ? payloadObj.decidedBy.trim()
+              : typeof payloadObj?.actedBy === 'string' && payloadObj.actedBy.trim()
+                ? payloadObj.actedBy.trim()
+                : undefined;
+        const answerBadge = buildInteractionSourceLarkBadge(answerSource, locale, { responderName });
+        const cardInput = {
+          plugin,
+          payload: event.payload,
+          sessionId: event.sessionId,
+          webBaseUrl: record.webBaseUrl,
+          sourceBadge: answerBadge,
+          locale
+        };
+        const patchResult = await updateInteractiveCardWithRetry({
+          service: botService,
           messageId: record.messageId,
-          card: adapter.buildAnsweredCard({
-            plugin,
-            payload: event.payload,
-            sessionId: event.sessionId,
-            webBaseUrl: record.webBaseUrl
-          })
+          sourceBadge: answerBadge,
+          card: adapter.buildAnsweredCard(cardInput),
+          ...(adapter.buildAnsweredFallbackCard
+            ? { fallbackCard: () => adapter.buildAnsweredFallbackCard!(cardInput) }
+            : {}),
+          onRetryWarning: details => {
+            app.log.warn(
+              { ...details, sessionId: event.sessionId, pluginId: event.pluginId, instanceId: event.instanceId, source: event.source },
+              '跨端响应同步更新飞书交互插件卡片遇到瞬态错误，准备重试'
+            );
+          }
         });
+        if (!patchResult.ok) {
+          app.log.warn(
+            {
+              error: patchResult.error,
+              ...patchResult.telemetry,
+              sessionId: event.sessionId,
+              pluginId: event.pluginId,
+              instanceId: event.instanceId,
+              source: event.source,
+              messageId: record.messageId
+            },
+            '网页端/小猫响应后同步更新飞书交互插件卡片失败'
+          );
+        }
       } catch (error) {
-        app.log.warn({ error, sessionId: event.sessionId, pluginId: event.pluginId, instanceId: event.instanceId, messageId: record.messageId }, '网页端响应后同步更新飞书交互插件卡片失败');
+        app.log.warn({ error, sessionId: event.sessionId, pluginId: event.pluginId, instanceId: event.instanceId, source: event.source, messageId: record.messageId }, '网页端/小猫响应后同步更新飞书交互插件卡片失败');
       }
     }
   });
@@ -485,13 +565,31 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
         if (!record.larkAppId || !record.larkMessageId) return;
         const botConfig = await readLarkConfig(options.config!, record.larkAppId);
         const botService = await resolveService(undefined, record.larkAppId);
-        await botService.updateInteractiveCard({
+        const locale = getActiveServerLocale();
+        const resolvedBadge = buildInteractionSourceLarkBadge(record.decidedSource ?? 'auto', locale);
+        const card = ensureLarkCardUpdateMulti(
+          withLarkCardSourceBadge(
+            buildTaskRecoveryResolvedCard({
+              record,
+              sourceBadge: resolvedBadge,
+              locale,
+              ...(botConfig?.webBaseUrl ? { webBaseUrl: botConfig.webBaseUrl } : {})
+            }),
+            resolvedBadge
+          )
+        );
+        const patchResult = await updateInteractiveCardWithRetry({
+          service: botService,
           messageId: record.larkMessageId,
-          card: buildTaskRecoveryResolvedCard({
-            record,
-            ...(botConfig?.webBaseUrl ? { webBaseUrl: botConfig.webBaseUrl } : {})
-          })
+          sourceBadge: resolvedBadge,
+          card,
+          onRetryWarning: details => {
+            app.log.warn({ ...details, recoveryId: record.id }, '更新断点恢复飞书锁定卡片遇到瞬态错误，准备重试');
+          }
         });
+        if (!patchResult.ok) {
+          app.log.warn({ error: patchResult.error, ...patchResult.telemetry, recoveryId: record.id, messageId: record.larkMessageId }, '同步更新断点恢复飞书锁定卡片失败');
+        }
       }
     });
   }
@@ -1060,7 +1158,7 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
   });
   app.post<{ Body: LarkSendRequest }>('/api/lark/send', async (request, reply) => {
     const { bot, botAppId, ...input } = request.body ?? {};
-    try { return await (await resolveService(bot, botAppId)).send(input); }
+    try { return await (await resolveService(bot, botAppId)).send({ ...input, sourceBadge: input.sourceBadge ?? buildLarkApiSourceBadge() }); }
     catch (error) {
       if (error instanceof LarkServiceError) return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
       throw error;
@@ -1068,7 +1166,7 @@ export async function registerLarkRoutes(app: FastifyInstance, options: LarkRout
   });
   app.post<{ Body: LarkUpdateRequest }>('/api/lark/update', async (request, reply) => {
     const { bot, botAppId, ...input } = request.body ?? ({} as LarkUpdateRequest);
-    try { return await (await resolveService(bot, botAppId)).update(input as LarkUpdateInput); }
+    try { return await (await resolveService(bot, botAppId)).update({ ...(input as LarkUpdateInput), sourceBadge: input.sourceBadge ?? buildLarkApiSourceBadge() }); }
     catch (error) {
       if (error instanceof LarkServiceError) return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
       throw error;

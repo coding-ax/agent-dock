@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { boundLarkCardElements, buildLarkCard, createLarkCardService, larkCardSafeLimits, larkCardSnapshotLimits, larkConfigurationStatus, larkIdentityPermissionHelp, LarkServiceError, loadLarkBotConfig } from './service.js';
+import { boundLarkCardElements, buildChoiceResolvedCard, buildLarkCard, buildLarkOriginSourceBadge, createLarkCardService, ensureLarkCardUpdateMulti, larkCardSafeLimits, larkCardSnapshotLimits, larkConfigurationStatus, larkIdentityPermissionHelp, LarkServiceError, loadLarkBotConfig, updateInteractiveCardWithRetry } from './service.js';
 
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const configured = {
@@ -629,5 +629,133 @@ describe('Lark card service', () => {
     await expect(service.createChat({ name: '自定义头像群', avatar: 'img_v3_custom' })).resolves.toEqual({ chatId: 'oc_custom' });
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ avatar: 'img_v3_custom' });
+  });
+
+  it('renders unified inline-emoji Lark turquoise source badge in both running and completed cards without outer div.icon', () => {
+    const runningCard: any = buildLarkCard({
+      state: 'running',
+      taskId: 'lark_1',
+      taskName: '查一下最新构建日志',
+      sourceBadge: buildLarkOriginSourceBadge('zh-CN'),
+      locale: 'zh-CN'
+    });
+    const runningBadge = byId(runningCard, 'task_source_badge');
+    expect(runningCard.schema).toBe('2.0');
+    expect(runningCard.body.elements[0]).toMatchObject({ tag: 'column_set', element_id: 'task_action_row' });
+    expect(runningBadge).toMatchObject({
+      tag: 'div',
+      element_id: 'task_source_badge'
+    });
+    expect(runningBadge.icon).toBeUndefined();
+    expect(runningBadge.text.content).toContain("<text_tag color='turquoise'>🕊️ 飞书发起</text_tag>");
+    expect(runningBadge.text.content).toContain('查一下最新构建日志');
+    expect(runningCard.config.summary.content).toBe('[🕊️ 飞书发起] 查一下最新构建日志 · 执行中');
+
+    const completedEn: any = buildLarkCard({
+      state: 'completed',
+      taskId: 'lark_2',
+      taskName: 'Check latest build logs',
+      sourceBadge: buildLarkOriginSourceBadge('en-US'),
+      markdown: 'All checks passed.',
+      locale: 'en-US'
+    });
+    const completedBadge = byId(completedEn, 'task_source_badge');
+    expect(completedBadge).toMatchObject({
+      tag: 'div',
+      element_id: 'task_source_badge'
+    });
+    expect(completedBadge.icon).toBeUndefined();
+    expect(completedBadge.text.content).toContain("<text_tag color='turquoise'>🕊️ From Lark</text_tag>");
+    expect(completedEn.config.summary.content).toContain('[🕊️ From Lark] Check latest build logs · Completed');
+  });
+
+  it('sends Lark-origin cards directly with inline 🕊️ turquoise tag and zero extra image upload round-trips', async () => {
+    const fetcher = vi.fn()
+      // token -> send card -> update card (zero /im/v1/images upload!)
+      .mockResolvedValueOnce(response({ code: 0, tenant_access_token: 'token_1', expire: 7200 }))
+      .mockResolvedValueOnce(response({ code: 0, data: { message_id: 'om_send_1', chat_id: 'oc_1' } }))
+      .mockResolvedValueOnce(response({ code: 0, data: { message_id: 'om_send_1', chat_id: 'oc_1' } }));
+
+    const service = createLarkCardService({ LARK_APP_ID: 'cli_lark_badge', LARK_APP_SECRET: 'secret_test' }, fetcher as typeof fetch);
+    await service.send({
+      chatId: 'oc_1',
+      state: 'completed',
+      taskId: 't_1',
+      taskName: '飞书提问',
+      markdown: '已处理完成',
+      sourceBadge: buildLarkOriginSourceBadge('zh-CN')
+    });
+    await service.update({
+      messageId: 'om_send_1',
+      state: 'completed',
+      taskId: 't_1',
+      taskName: '表情触发',
+      markdown: '同步完成',
+      sourceBadge: buildLarkOriginSourceBadge('zh-CN', 'emoji')
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher.mock.calls.some(call => String(call[0]).includes('/open-apis/im/v1/images'))).toBe(false);
+
+    const sendCard = JSON.parse(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body)).content);
+    const updateCard = JSON.parse(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body)).content);
+    expect(byId(sendCard, 'task_source_badge')?.icon).toBeUndefined();
+    expect(byId(sendCard, 'task_source_badge')?.text?.content).toContain("<text_tag color='turquoise'>🕊️ 飞书发起</text_tag>");
+    expect(byId(updateCard, 'task_source_badge')?.icon).toBeUndefined();
+    expect(byId(updateCard, 'task_source_badge')?.text?.content).toContain("<text_tag color='turquoise'>🕊️ 飞书表情</text_tag>");
+  });
+
+  it('retries transient/rate-limit errors in updateInteractiveCardWithRetry, stops immediately on 230012/230030 with telemetry, and preserves update_multi', async () => {
+    const normalized = ensureLarkCardUpdateMulti({ header: { template: 'green' }, body: { elements: [] } });
+    expect(normalized).toMatchObject({ schema: '2.0', config: { update_multi: true } });
+
+    const choiceResolved = buildChoiceResolvedCard({ text: '✅ 已发到主会话。', sourceBadge: buildLarkOriginSourceBadge('zh-CN', 'emoji') });
+    expect(choiceResolved).toMatchObject({ schema: '2.0', config: { update_multi: true } });
+
+    // 1) 瞬时限频（230020）自动退避重试成功
+    let calls = 0;
+    const retryWarnings: Array<Record<string, unknown>> = [];
+    const flakyService = {
+      updateInteractiveCard: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new LarkServiceError('LARK_OPENAPI_ERROR', 'rate limited', 502, { upstreamCode: 230020, httpStatus: 400 });
+        }
+        return { messageId: 'om_retry_ok' };
+      })
+    };
+    const resOk = await updateInteractiveCardWithRetry({
+      service: flakyService,
+      messageId: 'om_retry_ok',
+      card: { schema: '2.0', body: { elements: [] } },
+      baseDelayMs: 0,
+      onRetryWarning: details => retryWarnings.push(details)
+    });
+    expect(resOk).toEqual({ ok: true, usedFallback: false });
+    expect(calls).toBe(2);
+    expect(retryWarnings).toHaveLength(1);
+    expect(retryWarnings[0]).toMatchObject({ upstreamCode: 230020, httpStatus: 400, attempt: 1 });
+
+    // 2) 不可更新错误（230012）立刻停止，不浪费重试，并返回结构化诊断字段
+    const unupdatableService = {
+      updateInteractiveCard: vi.fn(async () => {
+        throw new LarkServiceError('LARK_OPENAPI_ERROR', 'message cannot be updated', 502, { upstreamCode: 230012, httpStatus: 400 });
+      })
+    };
+    const resFail = await updateInteractiveCardWithRetry({
+      service: unupdatableService,
+      messageId: 'om_expired',
+      card: { schema: '2.0', body: { elements: [] } },
+      baseDelayMs: 0
+    });
+    expect(resFail.ok).toBe(false);
+    expect(unupdatableService.updateInteractiveCard).toHaveBeenCalledTimes(1);
+    if (!resFail.ok) {
+      expect(resFail.telemetry).toMatchObject({
+        errorCode: 'LARK_OPENAPI_ERROR',
+        upstreamCode: 230012,
+        httpStatus: 400
+      });
+    }
   });
 });

@@ -7,6 +7,7 @@ describe('Lark CLI card input', () => {
       state: 'running', agentName: 'My Agent', taskName: 'Debug', taskId: '1', elapsedSeconds: '12', readOnly: true
     })).toEqual({
       state: 'running', agentName: 'My Agent', taskName: 'Debug', taskId: '1', elapsedSeconds: 12, readOnly: true,
+      sourceBadge: { label: '⌨️ CLI 触发', color: 'indigo' },
       markdown: '### 业务自定义\n\n🟡 执行中'
     });
   });

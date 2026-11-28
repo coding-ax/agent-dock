@@ -7,6 +7,11 @@ import {
 } from '@agent-dock/agent-dock-shared';
 import { getActiveServerLocale } from '../locale-service.js';
 import { webAccessSessionToken } from '../web-access.js';
+import {
+  buildInteractionSourceLarkBadge,
+  buildLarkSourceBadgeElement,
+  type LarkCardSourceBadge
+} from '../lark/service.js';
 
 export const LARK_TASK_RECOVERY_DECIDE_ACTION = 'task_recovery_decide';
 
@@ -106,6 +111,7 @@ export function buildTaskRecoveryConfirmCard(input: {
   record: TaskRecoveryRecord;
   cardId: string;
   webBaseUrl?: string;
+  sourceBadge?: LarkCardSourceBadge;
   locale?: Locale;
 }): Record<string, unknown> {
   const { record, cardId, webBaseUrl } = input;
@@ -113,8 +119,13 @@ export function buildTaskRecoveryConfirmCard(input: {
   const excerpt = truncatePlain(stripRecoveryVisiblePrefix(record.originalPrompt) || tShared(locale, 'lark.recovery.noOriginalPrompt'), 160);
   const interruptedLabel = formatTimestamp(record.interruptedAt, locale);
   const colon = locale === 'en-US' ? ': ' : '：';
+  const badgeEl = buildLarkSourceBadgeElement(
+    input.sourceBadge ?? { label: tShared(locale, 'lark.sync.badge.recovery'), color: 'wathet' },
+    { margin: '0px 0px 4px 0px' }
+  );
 
   const elements: Array<Record<string, unknown>> = [
+    ...(badgeEl ? [badgeEl] : []),
     {
       tag: 'markdown',
       content: `<text_tag color='orange'>${tShared(locale, 'lark.recovery.tagInterrupted')}</text_tag>  ${tShared(locale, 'lark.recovery.bodyPrompt', { time: escapeLarkInlineMd(interruptedLabel) })}`,
@@ -195,6 +206,7 @@ export function buildTaskRecoveryConfirmCard(input: {
 export function buildTaskRecoveryResolvedCard(input: {
   record: TaskRecoveryRecord;
   webBaseUrl?: string;
+  sourceBadge?: LarkCardSourceBadge;
   locale?: Locale;
 }): Record<string, unknown> {
   const { record, webBaseUrl } = input;
@@ -204,8 +216,13 @@ export function buildTaskRecoveryResolvedCard(input: {
   const actor = formatSourceActor(locale, record.decidedSource, record.decidedBy);
   const decidedAt = formatTimestamp(record.decidedAt ?? record.updatedAt, locale);
   const colon = locale === 'en-US' ? ': ' : '：';
+  const badgeEl = buildLarkSourceBadgeElement(
+    input.sourceBadge ?? buildInteractionSourceLarkBadge(record.decidedSource ?? 'auto', locale),
+    { note: record.decidedBy?.trim() || undefined, margin: '0px 0px 4px 0px' }
+  );
 
   const elements: Array<Record<string, unknown>> = [
+    ...(badgeEl ? [badgeEl] : []),
     {
       tag: 'markdown',
       content: resumed

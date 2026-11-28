@@ -28,6 +28,11 @@ import {
   parseTaskRecoveryCardAction
 } from './lark-card.js';
 import { getActiveServerLocale } from '../locale-service.js';
+import {
+  buildInteractionSourceLarkBadge,
+  ensureLarkCardUpdateMulti,
+  withLarkCardSourceBadge
+} from '../lark/service.js';
 
 /** 内部临时会话（runOnce 替身分析等）绝不纳入普通会话自动恢复。 */
 const EPHEMERAL_SESSION_SOURCES = new Set(['lark-avatar', 'lark-avatar-reaction']);
@@ -76,6 +81,8 @@ export interface TaskRecoveryServiceOptions {
   initialDelayMs?: number;
   /** 测试可覆盖 stagger 秒到毫秒的换算基数（默认 1000ms）。 */
   staggerUnitMs?: number;
+  /** 飞书卡片回调返回后异步 PATCH 兜底延迟（毫秒），默认 800ms；测试可覆盖。 */
+  postCallbackLarkSyncDelayMs?: number;
   nowMs?: () => number;
   log?: TaskRecoveryLog;
 }
@@ -151,6 +158,7 @@ export class TaskRecoveryService {
   private readonly nowMs: () => number;
   private readonly initialDelayMs: number;
   private readonly staggerUnitMs: number;
+  private readonly postCallbackLarkSyncDelayMs: number;
   private readonly log: TaskRecoveryLog;
 
   constructor(private readonly options: TaskRecoveryServiceOptions) {
@@ -158,6 +166,7 @@ export class TaskRecoveryService {
     this.nowMs = options.nowMs ?? (() => Date.now());
     this.initialDelayMs = options.initialDelayMs ?? 400;
     this.staggerUnitMs = options.staggerUnitMs ?? 1_000;
+    this.postCallbackLarkSyncDelayMs = options.postCallbackLarkSyncDelayMs ?? 800;
     this.log = options.log ?? {
       info: () => undefined,
       warn: message => console.warn(message)
@@ -569,6 +578,22 @@ export class TaskRecoveryService {
   }
 
   /**
+   * 在飞书 `card.action.trigger` 回调响应发出后延迟异步 PATCH 兜底，
+   * 避免回调未返回前先调 PATCH 与回调终态产生写盘竞态。
+   */
+  private scheduleDeferredLarkCardSync(record: TaskRecoveryRecord): void {
+    if (this.closed || !this.larkPort || !record.larkMessageId || !record.larkAppId) return;
+    const delayMs = Math.max(0, this.postCallbackLarkSyncDelayMs);
+    const timer = setTimeout(() => {
+      this.timers.delete(timer);
+      if (this.closed) return;
+      void this.track(this.syncLarkCard(record));
+    }, delayMs);
+    timer.unref?.();
+    this.timers.add(timer);
+  }
+
+  /**
    * 交互确认卡决策入口（Web 与飞书共用，依赖 SQLite claimTransition 原子双端幂等锁定）：
    * - 首次确认 `resume`：锁定记录为 `resumed`，立即注入断点自检续跑轮次，并同步锁定飞书卡片；
    * - 首次放弃 `dismiss`：锁定记录为 `dismissed`，归档锁定，不驱动 Agent，并同步锁定飞书卡片；
@@ -580,6 +605,8 @@ export class TaskRecoveryService {
     decision: 'resume' | 'dismiss';
     source: Exclude<TaskRecoveryDecisionSource, 'auto'>;
     decidedBy?: string;
+    /** 为 true 时跳过同步 PATCH（由飞书 `card.action.trigger` 同步返回 card + 回调后异步 PATCH 兜底）。 */
+    deferLarkCardSync?: boolean;
   }): Promise<TaskRecoveryDecisionResult> {
     const existing = await this.options.repos.taskRecoveries.get(input.recoveryId);
     if (!existing) {
@@ -627,7 +654,9 @@ export class TaskRecoveryService {
 
     if (input.decision === 'dismiss') {
       this.emitChange(claimed);
-      await this.syncLarkCard(claimed);
+      if (!input.deferLarkCardSync) {
+        await this.syncLarkCard(claimed);
+      }
       return { record: claimed, alreadyDecided: false };
     }
 
@@ -659,7 +688,9 @@ export class TaskRecoveryService {
       };
       await this.options.repos.taskRecoveries.save(finalized);
       this.emitChange(finalized);
-      await this.syncLarkCard(finalized);
+      if (!input.deferLarkCardSync) {
+        await this.syncLarkCard(finalized);
+      }
       return { record: finalized, alreadyDecided: false, dispatchedTaskId: dispatched.id };
     } catch (error) {
       // 若派发失败（例如底层临时故障），回滚到 pending_confirm 允许用户稍后重试。
@@ -678,12 +709,17 @@ export class TaskRecoveryService {
     }
   }
 
-  /** 处理飞书 Schema 2.0 确认卡按钮点击回调，返回飞书 Toast 文案并原地锁定卡片。 */
+  /**
+   * 处理飞书 Schema 2.0 确认卡按钮点击回调：
+   * - 同步返回 Toast 与锁定态 Schema 2.0 卡片（`card`），供 `card.action.trigger` 原子更新；
+   * - 同时调度回调后的异步 PATCH 兜底，防止 3 秒回调超时导致锁定态丢失。
+   */
   async handleLarkCardAction(input: {
     value: unknown;
     operatorOpenId?: string;
     operatorName?: string;
-  }): Promise<{ type: 'success' | 'info' | 'warning' | 'error'; content: string } | undefined> {
+    webBaseUrl?: string;
+  }): Promise<{ type: 'success' | 'info' | 'warning' | 'error'; content: string; card?: Record<string, unknown> } | undefined> {
     const parsed = parseTaskRecoveryCardAction(input.value);
     if (!parsed) return undefined;
     try {
@@ -691,9 +727,23 @@ export class TaskRecoveryService {
         recoveryId: parsed.recoveryId,
         decision: parsed.decision,
         source: 'lark',
-        decidedBy: input.operatorName?.trim() || input.operatorOpenId?.trim() || undefined
+        decidedBy: input.operatorName?.trim() || input.operatorOpenId?.trim() || undefined,
+        deferLarkCardSync: true
       });
       const locale = getActiveServerLocale();
+      const resolvedBadge = buildInteractionSourceLarkBadge(result.record.decidedSource ?? 'auto', locale);
+      const resolvedCard = ensureLarkCardUpdateMulti(
+        withLarkCardSourceBadge(
+          buildTaskRecoveryResolvedCard({
+            record: result.record,
+            sourceBadge: resolvedBadge,
+            locale,
+            ...(input.webBaseUrl ? { webBaseUrl: input.webBaseUrl } : {})
+          }),
+          resolvedBadge
+        )
+      );
+      this.scheduleDeferredLarkCardSync(result.record);
       if (result.alreadyDecided) {
         const statusText = result.record.status === 'resumed'
           ? tShared(locale, 'lark.recovery.toast.resumedStatus')
@@ -703,12 +753,15 @@ export class TaskRecoveryService {
           : result.record.decidedSource === 'lark'
             ? tShared(locale, 'lark.recovery.toast.viaLark')
             : '';
-        await this.syncLarkCard(result.record);
-        return { type: 'info', content: tShared(locale, 'lark.recovery.toast.alreadyDecided', { status: statusText, via }) };
+        return {
+          type: 'info',
+          content: tShared(locale, 'lark.recovery.toast.alreadyDecided', { status: statusText, via }),
+          card: resolvedCard
+        };
       }
       return parsed.decision === 'resume'
-        ? { type: 'success', content: tShared(locale, 'lark.recovery.toast.resumedNow') }
-        : { type: 'info', content: tShared(locale, 'lark.recovery.toast.dismissedNow') };
+        ? { type: 'success', content: tShared(locale, 'lark.recovery.toast.resumedNow'), card: resolvedCard }
+        : { type: 'info', content: tShared(locale, 'lark.recovery.toast.dismissedNow'), card: resolvedCard };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { type: 'warning', content: message };
